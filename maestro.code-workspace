@@ -1,0 +1,13 @@
+{
+  "folders": [
+    {
+      "path": "packages/maestro-indesign",
+      "name": "Maestro InDesign Plugin"
+    },
+    {
+      "path": "packages/maestro-proxy",
+      "name": "Maestro Proxy Server"
+    }
+  ],
+  "settings": {}
+}

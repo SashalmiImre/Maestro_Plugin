@@ -1,0 +1,30 @@
+# CodeRabbit Configuration File
+# Documentation: https://coderabbit.ai/docs/configure-coderabbit
+
+language: "hu-HU" # Magyar nyelvű visszajelzés
+early_access: false # Kísérleti funkciók kikapcsolva a stabilitás érdekében
+reviews:
+  profile: "chill" # 'assertive' vagy 'chill' - a chill lazább hangvételű, csak a fontos dolgokra fókuszál
+  request_changes_workflow: false # Ne kérjen változtatást automatikusan, csak kommenteljen
+  high_level_summary: true # Legyen magas szintű összefoglaló
+  poem: true # Egy kis vers a végére (opcionális, kikapcsolható)
+  auto_review:
+    enabled: true
+    drafts: false # Draft PR-eket ne nézze át automatikusan
+    base_branches: ["main", "master"] # Mely branch-ekre menő PR-eket figyelje
+
+chat:
+  auto_reply: true # Válaszoljon a kommentekre a PR-ben
+
+includes:
+  - "**/*.js"
+  - "**/*.jsx"
+  - "**/*.css"
+  - "**/*.html"
+  - "**/*.md"
+
+excludes:
+  - "**/node_modules/**"
+  - "**/*.min.js"
+  - "**/dist/**"
+  - "**/build/**"

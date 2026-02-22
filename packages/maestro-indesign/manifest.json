@@ -1,0 +1,62 @@
+{
+  "name": "Maestro",
+  "id": "com.sashalmiimre.maestro",
+  "version": "1.0.0",
+  "main": "index.html",
+  "manifestVersion": 5,
+  "requiredPermissions": {
+    "localFileSystem": "fullAccess",
+    "network": {
+      "domains": "all"
+    },
+    "launchProcess": {
+      "extensions": [],
+      "schemes": []
+    }
+  },
+  "featureFlags": {
+    "enableSWCSupport": true
+  },
+  "entrypoints": [
+    {
+      "type": "panel",
+      "id": "main",
+      "label": {
+        "default": "Maestro"
+      },
+      "minimumSize": {
+        "width": 500,
+        "height": 600
+      },
+      "maximumSize": {
+        "width": 2000,
+        "height": 2000
+      },
+      "preferredDockedSize": {
+        "width": 500,
+        "height": 600
+      },
+      "preferredFloatingSize": {
+        "width": 500,
+        "height": 600
+      },
+      "menuItems": [
+        {
+          "id": "signOut",
+          "label": {
+            "default": "Kijelentkezés"
+          }
+        }
+      ]
+    }
+  ],
+  "host": [
+    {
+      "app": "ID",
+      "minVersion": "20.0.0",
+      "data": {
+        "apiVersion": 2
+      }
+    }
+  ]
+}

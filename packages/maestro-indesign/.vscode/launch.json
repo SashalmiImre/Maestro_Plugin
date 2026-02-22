@@ -1,0 +1,22 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "type": "node",
+            "request": "attach",
+            "name": "Attach to InDesign (UXP)",
+            "port": 14001,
+            "sourceMaps": true,
+            "localRoot": "${workspaceFolder}/dist",
+            "remoteRoot": "/dist",
+            "skipFiles": [
+                "<node_internals>/**"
+            ],
+            "sourceMapPathOverrides": {
+                "webpack:///./*": "${workspaceFolder}/*",
+                "webpack-internal:///./*": "${workspaceFolder}/*",
+                "webpack-internal:///*": "${workspaceFolder}/*"
+            }
+        }
+    ]
+}

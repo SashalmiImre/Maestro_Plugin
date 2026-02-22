@@ -1,0 +1,20 @@
+# --- Build output és függőségek ---
+dist/               # Webpack által generált kód
+node_modules/       # Kritikus: ez emészti fel a legtöbb tokent
+yarn.lock
+package-lock.json
+
+# --- Ritkán szükséges konfigurációk ---
+.vscode/
+.git/
+.babelrc
+.coderabbit.yaml
+webpack.config.js   # Csak build config változásnál kell
+
+# --- Bináris / statikus ---
+src/assets/         # Ikonok, képek (bináris)
+
+# --- Dokumentáció, amit a CLAUDE.md már lefed ---
+README.md
+CONTRIBUTING.md
+appwrite_functions/ # Felhő kódok, nem a plugin része

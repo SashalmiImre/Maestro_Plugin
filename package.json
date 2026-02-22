@@ -1,0 +1,12 @@
+{
+  "name": "maestro-workspace",
+  "private": true,
+  "workspaces": {
+    "packages": [
+      "packages/*"
+    ],
+    "nohoist": [
+      "**/Maestro/**"
+    ]
+  }
+}

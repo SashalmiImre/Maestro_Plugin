@@ -1,0 +1,36 @@
+:root {
+    /* Dark Mode (Default) - Lighter colors for contrast */
+    --status-designing: #FFEA00;
+    --status-design-approval: #A4E700;
+    --status-waiting-for-start: #FF9F1C;
+    --status-editorial-approval: #FF3300;
+    --status-content-revision: #00E5FF;
+    --status-final-approval: #4096EE;
+    --status-printable: #FF40B0;
+    --status-archivable: #B366FF;
+
+    --marker-image: #FFEA00;
+    --marker-design: #FF8800;
+    --marker-ignore: #9E9E9E;
+    
+    --message-box-bg: rgba(0, 0, 0, 0.2);
+}
+
+/* Light Mode - Darker colors for contrast */
+/* sp-theme[color] attribútumot a UXP runtime frissíti az InDesign témáváltáskor */
+sp-theme[color="light"] {
+    --status-designing: #D5B600;
+    --status-design-approval: #6B8E23;
+    --status-waiting-for-start: #E67E22;
+    --status-editorial-approval: #FF3300;
+    --status-content-revision: #008B8B;
+    --status-final-approval: #104E8B;
+    --status-printable: #C71585;
+    --status-archivable: #6A5ACD;
+
+    --marker-image: #D5B600;
+    --marker-design: #D35400;
+    --marker-ignore: #505050;
+
+    --message-box-bg: rgba(0, 0, 0, 0.1);
+}
