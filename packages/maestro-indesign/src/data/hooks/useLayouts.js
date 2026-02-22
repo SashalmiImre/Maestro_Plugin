@@ -45,7 +45,6 @@ export const useLayouts = () => {
             const result = await dataCreateLayout({
                 publicationId,
                 name,
-                exportId: name,
                 order: maxOrder + 1
             });
             setConnected();
@@ -87,33 +86,6 @@ export const useLayouts = () => {
                 setOffline(error, attempts);
             } else {
                 showToast('Az elrendezés átnevezése sikertelen', 'warning', getAPIErrorMessage(error, 'Elrendezés átnevezése'));
-            }
-            throw error;
-        }
-    }, [dataUpdateLayout, setConnected, incrementAttempts, setOffline, showToast]);
-
-    /**
-     * Layout export ID frissítése.
-     *
-     * @param {string} layoutId - A módosítandó layout azonosítója
-     * @param {string} newExportId - Az új export ID
-     * @returns {Promise<Object>} A frissített layout dokumentum
-     */
-    const updateExportId = useCallback(async (layoutId, newExportId) => {
-        try {
-            const result = await dataUpdateLayout(layoutId, { exportId: newExportId });
-            setConnected();
-            return result;
-        } catch (error) {
-            logError('[useLayouts] Update exportId failed:', error);
-
-            if (isAuthError(error)) {
-                dispatchMaestroEvent(MaestroEvent.sessionExpired);
-            } else if (isNetworkError(error)) {
-                const attempts = incrementAttempts();
-                setOffline(error, attempts);
-            } else {
-                showToast('Az export ID mentése sikertelen', 'warning', getAPIErrorMessage(error, 'Export ID mentése'));
             }
             throw error;
         }
@@ -179,7 +151,6 @@ export const useLayouts = () => {
         layouts,
         createLayout,
         renameLayout,
-        updateExportId,
         deleteLayout
     };
 };

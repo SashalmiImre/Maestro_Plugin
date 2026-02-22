@@ -33,6 +33,7 @@ export {
 // Export & képgyűjtés
 export {
     generateExportPdfScript,
+    generatePrintPdfScript,
     generateCollectImagesScript
 } from "./exportScripts.js";
 

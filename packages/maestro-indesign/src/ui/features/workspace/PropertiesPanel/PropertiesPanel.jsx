@@ -5,12 +5,14 @@ import { WORKFLOW_CONFIG, MARKERS } from "../../../../core/utils/workflow/workfl
 import { CustomCheckbox } from "../../../common/CustomCheckbox.jsx";
 import { WorkflowEngine } from "../../../../core/utils/workflow/workflowEngine.js";
 import { useUser } from "../../../../core/contexts/UserContext.jsx";
+import { useData } from "../../../../core/contexts/DataContext.jsx";
 import { useToast } from "../../../common/Toast/ToastContext.jsx";
 import { executeCommand } from "../../../../core/commands/index.js";
 
 export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onPublicationUpdate, onBack, onOpen, runAndPersistPreflight }) => {
     // Hooks
     const { user } = useUser();
+    const { layouts } = useData();
     const { showToast } = useToast();
     const [isSyncing, setIsSyncing] = useState(false);
     const [hasDeadlineErrors, setHasDeadlineErrors] = useState(false);
@@ -47,7 +49,7 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
 
         setIsSyncing(true);
         try {
-            const context = { item, user, publication, runAndPersistPreflight };
+            const context = { item, user, publication, layouts, runAndPersistPreflight };
             const result = await executeCommand(commandId, context);
 
             // silent: a handler már megjelenítette a visszajelzést (pl. toast a hook-ból)

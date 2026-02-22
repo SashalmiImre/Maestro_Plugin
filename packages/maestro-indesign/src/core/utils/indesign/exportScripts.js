@@ -119,6 +119,206 @@ export function generateExportPdfScript(sourcePath, outputPath, presetName) {
  * @param {string|null} [sourceFilePath=null] - Ha meg van adva, háttérben nyitja meg.
  * @returns {string} ExtendScript kód.
  */
+/**
+ * Generál egy scriptet levilágítás (print-ready) PDF exportáláshoz.
+ * Oldalanként egyedi PDF-eket hoz létre PDF/X-1a:2001 beállításokkal.
+ * Támogatja a zöld oldal-szín alapú szelektív exportot:
+ * ha vannak zöld oldalak, csak azokat exportálja; ha nincs, az összeset.
+ *
+ * @param {string} sourcePath - A forrás INDD fájl útvonala (null ha nyitott dokumentum).
+ * @param {string} outputFolderPath - A __PRINT_PDF__ mappa útvonala.
+ * @param {string} layoutExportId - A layout export azonosítója (fájlnévhez).
+ * @param {number} maxPage - A publikáció végoldalszáma (padding számításhoz).
+ * @returns {string} ExtendScript kód.
+ */
+export function generatePrintPdfScript(sourcePath, outputFolderPath, layoutExportId, maxPage) {
+    const escapedOutputFolder = escapePathForExtendScript(outputFolderPath);
+    const escapedLayoutId = escapePathForExtendScript(layoutExportId);
+    const paddingLength = (maxPage || 999).toString().length;
+
+    // Logika modulok generálása — háttérben vagy előtérben
+    const openLogic = sourcePath ? getBackgroundOpenLogic(sourcePath, "doc", "openedInBackground") : "";
+    const docTargetLogic = sourcePath ? "" : getDocumentTargetLogic("doc", null);
+    const linkCheckLogic = getLinkCheckLogic("doc", "openedInBackground");
+    const closeLogic = getSafeCloseLogic("doc", "openedInBackground", "SaveOptions.NO");
+
+    return `
+        (function() {
+            var doc = null;
+            var openedInBackground = false;
+
+            try {
+                // 1. DOKUMENTUM ELÉRÉSE
+                ${sourcePath ? openLogic : docTargetLogic}
+
+                // 2. LINK ELLENŐRZÉS
+                ${linkCheckLogic}
+
+                // 3. ZÖLD OLDAL DETEKCIÓ
+                var pagesToExport = [];
+                var hasGreenPages = false;
+
+                for (var i = 0; i < doc.pages.length; i++) {
+                    var page = doc.pages[i];
+                    if (page.pageColor.toString() === UIColors.GREEN.toString()) {
+                        hasGreenPages = true;
+                    }
+                }
+
+                if (hasGreenPages) {
+                    // Csak zöld oldalak
+                    for (var i = 0; i < doc.pages.length; i++) {
+                        if (doc.pages[i].pageColor.toString() === UIColors.GREEN.toString()) {
+                            pagesToExport.push(doc.pages[i]);
+                        }
+                    }
+                } else {
+                    // Az összes oldal
+                    for (var i = 0; i < doc.pages.length; i++) {
+                        pagesToExport.push(doc.pages[i]);
+                    }
+                }
+
+                if (pagesToExport.length === 0) {
+                    ${closeLogic}
+                    return "ERROR:Nincsenek exportálandó oldalak.";
+                }
+
+                // 4. MAPPA LÉTREHOZÁSA
+                var outputFolder = new Folder("${escapedOutputFolder}");
+                if (!outputFolder.exists) outputFolder.create();
+
+                // 5. PDF EXPORT BEÁLLÍTÁSOK (Levilágítás — PDF/X-1a:2001)
+                var prefs = app.pdfExportPreferences;
+
+                prefs.viewPDF = false;
+
+                // PDF/X-1a:2001 szabvány
+                try { prefs.standardsCompliance = PDFXStandards.PDFX1A2001_STANDARD; } catch(e) {}
+                try { prefs.acrobatCompatibility = AcrobatCompatibility.ACROBAT_4; } catch(e) {}
+
+                // Szín: CMYK konverzió
+                try { prefs.pdfColorSpace = PDFColorSpace.CMYK; } catch(e) {}
+
+                // Color Images: 300 DPI, JPEG, Maximum minőség
+                try { prefs.colorBitmapSampling = Sampling.BICUBIC_DOWNSAMPLING; } catch(e) {}
+                prefs.colorBitmapSamplingDPI = 300;
+                prefs.thresholdToCompressColor = 450;
+                try { prefs.colorBitmapCompression = BitmapCompression.JPEG; } catch(e) {}
+                try { prefs.colorBitmapQuality = CompressionQuality.MAXIMUM; } catch(e) {}
+
+                // Gray Images: 300 DPI, JPEG, Maximum minőség
+                try { prefs.grayscaleBitmapSampling = Sampling.BICUBIC_DOWNSAMPLING; } catch(e) {}
+                prefs.grayscaleBitmapSamplingDPI = 300;
+                prefs.thresholdToCompressGray = 450;
+                try { prefs.grayBitmapCompression = BitmapCompression.JPEG; } catch(e) {}
+                try { prefs.grayBitmapQuality = CompressionQuality.MAXIMUM; } catch(e) {}
+
+                // Mono Images: 1200 DPI, CCITT Group 4
+                try { prefs.monochromeBitmapSampling = Sampling.BICUBIC_DOWNSAMPLING; } catch(e) {}
+                prefs.monochromeBitmapSamplingDPI = 1200;
+                prefs.thresholdToCompressMonochrome = 1800;
+                try { prefs.monochromeBitmapCompression = MonoBitmapCompression.CCITT4; } catch(e) {}
+
+                // Általános beállítások
+                prefs.compressTextAndLineArt = true;
+                prefs.cropImagesToFrames = true;
+                try { prefs.includeICCProfiles = true; } catch(e) {}
+                try { prefs.subsetFontsBelow = 100; } catch(e) {}
+
+                // Bleed: 5mm (14.17323pt) minden oldalon
+                try { prefs.useDocumentBleedWithPDF = false; } catch(e) {}
+                try {
+                    prefs.pageMarksAndBleed.bleedTop = "5mm";
+                    prefs.pageMarksAndBleed.bleedBottom = "5mm";
+                    prefs.pageMarksAndBleed.bleedInside = "5mm";
+                    prefs.pageMarksAndBleed.bleedOutside = "5mm";
+                } catch(e) {
+                    // Alternatív bleed beállítás
+                    try {
+                        prefs.bleedTop = "5mm";
+                        prefs.bleedBottom = "5mm";
+                        prefs.bleedInside = "5mm";
+                        prefs.bleedOutside = "5mm";
+                    } catch(e2) {}
+                }
+
+                // Transparency flattener
+                try { prefs.transparencyFlattenerPresetName = "[High Resolution]"; } catch(e) {}
+
+                // 6. OLDALANKÉNTI EXPORT
+                var paddingLen = ${paddingLength};
+                var layoutId = "${escapedLayoutId}";
+                var exportedCount = 0;
+                var errors = [];
+
+                for (var p = 0; p < pagesToExport.length; p++) {
+                    try {
+                        var page = pagesToExport[p];
+                        var pageName = page.name;
+
+                        // Oldalszám padding
+                        var paddedNum = String(pageName);
+                        while (paddedNum.length < paddingLen) {
+                            paddedNum = "0" + paddedNum;
+                        }
+
+                        // Fájlnév: {paddedPage}_{layoutExportId}_1.pdf
+                        var fileName = paddedNum + "_" + layoutId + "_1.pdf";
+                        var exportFile = new File(outputFolder.fsName + "/" + fileName);
+
+                        // Oldaltartomány beállítása
+                        prefs.pageRange = pageName;
+
+                        // Exportálás
+                        doc.exportFile(ExportFormat.PDF_TYPE, exportFile, false);
+                        exportedCount++;
+                    } catch(pageErr) {
+                        errors.push(pageName + ": " + pageErr.message);
+                    }
+                }
+
+                // 7. ZÖLD JELÖLÉS TÖRLÉSE az exportált oldalakról
+                if (hasGreenPages) {
+                    for (var g = 0; g < pagesToExport.length; g++) {
+                        try {
+                            pagesToExport[g].pageColor = PageColorOptions.USE_MASTER_COLOR;
+                        } catch(colorErr) {}
+                    }
+                    // Mentés a szín törlés után
+                    try { doc.save(); } catch(saveErr) {}
+                }
+
+                // 8. BEZÁRÁS
+                ${closeLogic}
+
+                if (exportedCount === 0) {
+                    return "ERROR:Egyetlen oldal sem exportálódott." + (errors.length > 0 ? " Hibák: " + errors.join("; ") : "");
+                }
+
+                var resultMsg = exportedCount + " oldal exportálva";
+                if (hasGreenPages) resultMsg += " (kijelölt oldalak)";
+                if (errors.length > 0) resultMsg += ". Hibák: " + errors.join("; ");
+
+                return "SUCCESS:" + resultMsg;
+
+            } catch(e) {
+                ${closeLogic}
+                return "ERROR:" + e.message;
+            }
+        })();
+    `;
+}
+
+/**
+ * Generál egy scriptet a képek összegyűjtéséhez.
+ *
+ * @param {string} targetFolderPath - A mappa útvonala, ahová másolni kell.
+ * @param {string} publicationRootPath - A publikáció gyökér útvonala (szűréshez).
+ * @param {boolean} onlySelected - Ha true, csak a kijelöltekkel foglalkozik.
+ * @param {string|null} [sourceFilePath=null] - Ha meg van adva, háttérben nyitja meg.
+ * @returns {string} ExtendScript kód.
+ */
 export function generateCollectImagesScript(targetFolderPath, publicationRootPath, onlySelected, sourceFilePath = null) {
     const escapedTarget = escapePathForExtendScript(targetFolderPath);
     const escapedPubRoot = escapePathForExtendScript(publicationRootPath);

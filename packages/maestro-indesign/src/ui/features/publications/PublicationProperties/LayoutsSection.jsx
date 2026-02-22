@@ -14,17 +14,15 @@ import { STORAGE_KEYS } from "../../../../core/utils/constants.js";
 
 // Utils
 import { logError } from "../../../../core/utils/logger.js";
-import { isValidFileName } from "../../../../core/utils/pathUtils.js";
 
 /**
  * LayoutsSection Component
  *
  * A kiadvány elrendezéseinek (layoutok) kezelése.
  * Funkciók:
- * - Layout lista megjelenítése (szerkeszthető név + export ID + törlés gomb)
+ * - Layout lista megjelenítése (szerkeszthető név + törlés gomb)
  * - Új layout hozzáadása
  * - Layout átnevezése (Enter/blur mentés)
- * - Layout export ID szerkesztése (Enter/blur mentés, fájlnév-validációval)
  * - Layout törlése (megerősítés szükséges, ha cikkek vannak rajta)
  * - Az utolsó layout nem törölhető
  *
@@ -32,14 +30,11 @@ import { isValidFileName } from "../../../../core/utils/pathUtils.js";
  * @param {Object} props.publication - A kiadvány objektum
  */
 export const LayoutsSection = ({ publication }) => {
-    const { layouts, createLayout, renameLayout, updateExportId, deleteLayout } = useLayouts();
+    const { layouts, createLayout, renameLayout, deleteLayout } = useLayouts();
     const { showToast } = useToast();
 
     // Lokális state a layout nevekhez (Enter/blur mentéshez)
     const [localNames, setLocalNames] = useState({});
-
-    // Lokális state az export ID-khoz (Enter/blur mentéshez)
-    const [localExportIds, setLocalExportIds] = useState({});
 
     // Művelet folyamatban (dupla kattintás elleni védelem)
     const [isBusy, setIsBusy] = useState(false);
@@ -94,60 +89,6 @@ export const LayoutsSection = ({ publication }) => {
             });
         } catch (error) {
             logError('[LayoutsSection] Rename failed:', error);
-        }
-    };
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Export ID kezelés
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /**
-     * Lokális export ID frissítése egy adott layouthoz.
-     */
-    const handleExportIdInput = (layoutId, value) => {
-        setLocalExportIds(prev => ({ ...prev, [layoutId]: value }));
-    };
-
-    /**
-     * Lokális export ID lekérése (ha van), egyébként a szerver érték.
-     * Ha a szerver érték sem létezik, a layout neve az alapérték.
-     */
-    const getDisplayExportId = (layout) => {
-        if (localExportIds[layout.$id] !== undefined) return localExportIds[layout.$id];
-        return layout.exportId ?? layout.name;
-    };
-
-    /**
-     * Export ID mentése Enter/blur-kor.
-     */
-    const handleExportIdSave = async (layoutId, originalExportId) => {
-        const newExportId = localExportIds[layoutId];
-        // Ha nincs lokális módosítás vagy ugyanaz, nem kell menteni
-        if (newExportId === undefined || newExportId === originalExportId) return;
-
-        const trimmed = (newExportId || "").trim();
-
-        if (!trimmed || !isValidFileName(trimmed)) {
-            // Üres vagy érvénytelen → visszaállítás
-            setLocalExportIds(prev => {
-                const next = { ...prev };
-                delete next[layoutId];
-                return next;
-            });
-            return;
-        }
-
-        try {
-            await updateExportId(layoutId, trimmed);
-            showToast('Export ID mentve', 'success');
-            // Lokális state törlése (a szerver érték frissül Realtime-on)
-            setLocalExportIds(prev => {
-                const next = { ...prev };
-                delete next[layoutId];
-                return next;
-            });
-        } catch (error) {
-            logError('[LayoutsSection] Export ID save failed:', error);
         }
     };
 
@@ -249,18 +190,6 @@ export const LayoutsSection = ({ publication }) => {
                                     value={getDisplayName(layout)}
                                     onInput={(e) => handleNameInput(layout.$id, e.target.value)}
                                     onValidate={() => handleRenameSave(layout.$id, layout.name)}
-                                    style={{ width: "100%" }}
-                                />
-                            </div>
-                            <div style={{ flex: 1, marginRight: "8px" }}>
-                                <sp-label>Export ID</sp-label>
-                                <ValidatedTextField
-                                    id={`layout-export-id-${layout.$id}`}
-                                    type="text"
-                                    value={getDisplayExportId(layout)}
-                                    onInput={(e) => handleExportIdInput(layout.$id, e.target.value)}
-                                    onValidate={() => handleExportIdSave(layout.$id, layout.exportId ?? layout.name)}
-                                    invalid={getDisplayExportId(layout).length > 0 && !isValidFileName(getDisplayExportId(layout))}
                                     style={{ width: "100%" }}
                                 />
                             </div>
