@@ -12,6 +12,7 @@ import { useUser } from "../../../../core/contexts/UserContext.jsx";
 
 // Utils
 import { WORKFLOW_STATES, MARKERS } from "../../../../core/utils/workflow/workflowConstants.js";
+import { DRIVE_CHECK_INTERVAL_MS } from "../../../../core/utils/constants.js";
 import { log } from "../../../../core/utils/logger.js";
 import { checkPathAccessible, resolvePlatformPath } from "../../../../core/utils/pathUtils.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../../core/config/maestroEvents.js";
@@ -63,6 +64,34 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
             window.removeEventListener(MaestroEvent.dataRefreshRequested, handleFocus);
         };
     }, [isExpanded, publication.rootPath]);
+
+    // Feltételes polling: ha a meghajtó nem elérhető, rendszeresen újra ellenőrizzük
+    useEffect(() => {
+        if (!isExpanded || isDriveAccessible) return;
+
+        let mounted = true;
+        let isChecking = false;
+
+        const checkAccess = async () => {
+            if (isChecking) return;
+            isChecking = true;
+            try {
+                const accessible = await checkPathAccessible(
+                    resolvePlatformPath(publication.rootPath)
+                );
+                if (mounted) setIsDriveAccessible(accessible);
+            } finally {
+                isChecking = false;
+            }
+        };
+
+        const pollIntervalId = setInterval(checkAccess, DRIVE_CHECK_INTERVAL_MS);
+
+        return () => {
+            mounted = false;
+            clearInterval(pollIntervalId);
+        };
+    }, [isExpanded, isDriveAccessible, publication.rootPath]);
 
     // Dialog state
     const [dialogOpen, setDialogOpen] = useState(false);
@@ -323,7 +352,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                                 {publication.rootPath}
                             </div>
                             <div style={{ fontSize: "11px", opacity: 0.85 }}>
-                                Csatlakoztasd a szükséges meghajtót. Az ellenőrzés automatikusan újraindul, ha visszaváltasz erre az ablakra.
+                                Csatlakoztasd a szükséges meghajtót. Az ellenőrzés automatikusan fut.
                             </div>
                         </div>
                     </div>

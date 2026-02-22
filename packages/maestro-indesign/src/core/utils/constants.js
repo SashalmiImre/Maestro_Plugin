@@ -110,6 +110,17 @@ export const RETRY_CONFIG = {
 };
 
 // =============================================================================
+// Meghajtó-elérhetőség Ellenőrzés
+// =============================================================================
+
+/**
+ * Ha a kiadvány rootPath mappája nem elérhető (pl. VPN lekapcsolódott),
+ * ennyi időnként ellenőrizzük újra, hogy visszajött-e.
+ * A polling automatikusan leáll, ha a meghajtó elérhető.
+ */
+export const DRIVE_CHECK_INTERVAL_MS = 2000; // 2 másodperc
+
+// =============================================================================
 // Központi Recovery Konfiguráció
 // =============================================================================
 
