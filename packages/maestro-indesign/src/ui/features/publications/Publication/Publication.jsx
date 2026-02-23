@@ -299,20 +299,6 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                 )}
             </div>
 
-            {/* Inline szűrősáv */}
-            {
-                filterOpen && isExpanded && (
-                    <FilterBar
-                        statusFilters={statusFilters}
-                        onStatusFiltersChange={setStatusFilters}
-                        showIgnored={showIgnored}
-                        onShowIgnoredChange={setShowIgnored}
-                        isFilterActive={isFilterActive}
-                        onReset={resetFilters}
-                    />
-                )
-            }
-
             {
                 isExpanded && !isDriveAccessible && (
                     <div style={{
@@ -341,6 +327,20 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                             </div>
                         </div>
                     </div>
+                )
+            }
+
+            {/* Inline szűrősáv */}
+            {
+                filterOpen && isExpanded && (
+                    <FilterBar
+                        statusFilters={statusFilters}
+                        onStatusFiltersChange={setStatusFilters}
+                        showIgnored={showIgnored}
+                        onShowIgnoredChange={setShowIgnored}
+                        isFilterActive={isFilterActive}
+                        onReset={resetFilters}
+                    />
                 )
             }
 

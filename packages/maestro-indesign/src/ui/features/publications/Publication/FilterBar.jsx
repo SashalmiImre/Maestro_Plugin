@@ -41,22 +41,36 @@ const FilterBar = React.memo(({
     }, [statusFilters, onStatusFiltersChange]);
 
     /** Összes szűrő opció: státuszok + Kimarad */
-    const allItems = useMemo(() => [
-        ...statusOptions.map(opt => ({
-            key: `status-${opt.value}`,
-            label: opt.label,
-            color: opt.color,
-            checked: statusFilters.includes(opt.value),
-            onChange: () => toggleStatus(opt.value)
-        })),
-        {
-            key: "ignored",
-            label: "Kimarad",
-            color: "var(--spectrum-global-color-gray-500)",
-            checked: showIgnored,
-            onChange: () => onShowIgnoredChange(!showIgnored)
+    const allItems = useMemo(() => {
+        const items = [
+            ...statusOptions.map(opt => ({
+                key: `status-${opt.value}`,
+                label: opt.label,
+                color: opt.color,
+                checked: statusFilters.includes(opt.value),
+                onChange: () => toggleStatus(opt.value)
+            })),
+            {
+                key: "ignored",
+                label: "Kimarad",
+                color: "var(--spectrum-global-color-gray-500)",
+                checked: showIgnored,
+                onChange: () => onShowIgnoredChange(!showIgnored)
+            }
+        ];
+
+        /** Oszlop-alapú sorrend: fentről lefelé, balról jobbra (3 oszlop) */
+        const cols = 3;
+        const rows = Math.ceil(items.length / cols);
+        const reordered = [];
+        for (let row = 0; row < rows; row++) {
+            for (let col = 0; col < cols; col++) {
+                const idx = col * rows + row;
+                if (idx < items.length) reordered.push(items[idx]);
+            }
         }
-    ], [statusFilters, toggleStatus, showIgnored, onShowIgnoredChange]);
+        return reordered;
+    }, [statusFilters, showIgnored, onShowIgnoredChange]);
 
     return (
         <div style={{
@@ -98,7 +112,7 @@ const FilterBar = React.memo(({
                 </div>
             )}
 
-            {/* Checkbox rács — 3 oszlop */}
+            {/* Checkbox rács — 3 oszlop, fentről lefelé */}
             <div style={{
                 display: "flex",
                 flexWrap: "wrap"
