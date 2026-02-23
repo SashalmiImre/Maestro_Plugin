@@ -73,6 +73,14 @@ export const getTeamMembers = async (teamId) => {
 const CACHE = {};
 const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 
+/**
+ * A csapattag-cache invalidálása.
+ * A következő useTeamMembers hívás friss adatot kér a szervertől.
+ */
+export function invalidateTeamMembersCache() {
+    Object.keys(CACHE).forEach(key => delete CACHE[key]);
+}
+
 export const useTeamMembers = (teamId) => {
     const [members, setMembers] = useState([]);
     const [loading, setLoading] = useState(true);

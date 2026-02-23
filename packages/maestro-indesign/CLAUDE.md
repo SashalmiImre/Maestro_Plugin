@@ -118,7 +118,15 @@
     - **Dokumentáció**: `docs/VALIDATION_MECHANISM.md`
     - Ld. `docs/diagrams/data-flow-architecture.md`
 
-5. **Kapcsolat-helyreállítás (RecoveryManager)**
+5. **Jogosultsági Rendszer (Workflow Permissions)**
+    - **Állapot-alapú**: Minden workflow állapothoz csapatok vannak rendelve (`STATE_PERMISSIONS`), amelyek mozgathatják a cikkeket onnan.
+    - **Fallback**: Ha nincs senki hozzárendelve a releváns csapatok contributor mezőiből → csak a releváns csapatok tagjai mozgathatják (labels ellenőrzés).
+    - **Label override**: Appwrite user `labels` tömb felülírja a jogosultságot (team slug = label).
+    - **Háromszintű védelem**: UI gomb disabled → handler toast → engine guard.
+    - **Konfiguráció**: `workflowConstants.js` (`STATE_PERMISSIONS`, `TEAM_ARTICLE_FIELD`), `workflowPermissions.js` (`canUserMoveArticle`).
+    - Ld. `docs/WORKFLOW_PERMISSIONS.md`
+
+6. **Kapcsolat-helyreállítás (RecoveryManager)**
     - **Központi RecoveryManager** (`recoveryManager.js`): Egyetlen belépési pont az összes recovery trigger (online, sleep, focus, realtime disconnect) számára.
     - Lock + debounce védelemmel a párhuzamos és gyors egymás utáni recovery kérések ellen.
     - **Debounce végponttól**: A `lastRecoveryAt` a recovery VÉGÉN is frissül (`finally` blokk), megakadályozva, hogy egy hosszú recovery lejárja a debounce-t.
@@ -153,6 +161,7 @@ Maestro/
 │   ├── NAMING_CONVENTIONS.md
 │   ├── EVENT_ARCHITECTURE.md
 │   ├── REALTIME_ARCHITECTURE.md
+│   ├── WORKFLOW_PERMISSIONS.md
 │   ├── PROXY_SERVER.md
 │   └── diagrams/
 │       ├── data-flow-architecture.md
@@ -213,8 +222,9 @@ Maestro/
 │   │       │   ├── scriptHelpers.js    ← Közös script építőelemek
 │   │       │   └── index.js
 │   │       └── workflow/               ← Cikk állapotgép
-│   │           ├── workflowConstants.js ← Állapotok, átmenetek, jogosultságok
-│   │           ├── workflowEngine.js    ← executeTransition, lockDocument, unlockDocument
+│   │           ├── workflowConstants.js  ← Állapotok, átmenetek, jogosultságok, STATE_PERMISSIONS
+│   │           ├── workflowEngine.js     ← executeTransition, lockDocument, unlockDocument
+│   │           ├── workflowPermissions.js ← canUserMoveArticle, hasTransitionPermission
 │   │           └── index.js
 │   │
 │   ├── data/                     ← Adat hook-ok réteg (Context ↔ UI híd)
@@ -321,6 +331,7 @@ Appwrite DB változás → WebSocket esemény → `realtimeClient.js` → `DataC
 | `docs/diagrams/open-file-flow.md`         | Fájl megnyitás lépésről lépésre (kattintástól a UI frissülésig)     |
 | `docs/diagrams/network-architecture.md`   | Hálózati kapcsolatkezelés, sleep recovery, auto-retry               |
 | `docs/WORKFLOW_CONFIGURATION.md`          | Munkafolyamat konfiguráció, állapotátmenetek és validációs szabályok |
+| `docs/WORKFLOW_PERMISSIONS.md`            | Jogosultsági rendszer: csapat-alapú állapotátmenet-védelem          |
 | `docs/VALIDATION_MECHANISM.md`            | Egységes validációs és üzenetküldő rendszer működése                |
 | `CONTRIBUTING.md`                         | Fejlesztési szabályok, JSDoc policy, import sorrend, PR workflow    |
 
@@ -354,6 +365,8 @@ index.jsx
 - `user` — aktuális felhasználó objektum (vagy `null`)
 - `login(email, password)`, `logout()`
 - `loading` — hitelesítés folyamatban
+- **Realtime szinkron**: Az Appwrite `account` csatornára feliratkozva a `user` objektum (beleértve `labels`, `name`, `prefs`) automatikusan frissül, ha a szerveren módosítják
+- **Korlátozás**: Az Appwrite Realtime `account` csatorna **nem tüzel** szerver-oldali (Console/Server SDK) label módosításra — a felhasználónak újra be kell töltenie a plugint
 
 ### ConnectionContext API
 - `isOnline`, `isConnecting` — UI indikátorokhoz (spinner, overlay)
@@ -371,7 +384,7 @@ A konfigurációs konstansok: `src/core/config/appwriteConfig.js`
 
 - **Endpoint**: A proxy-n keresztül (`APPWRITE_ENDPOINT`), nem közvetlenül az Appwrite Cloud-ra.
 - **Project ID**, **Database ID**, **Collection ID-k** (Articles, Publications, Messages), **Bucket ID** (Storage).
-- **Team ID**: Team-alapú hozzáférés-kezelés.
+- **Team ID-k**: Team-alapú hozzáférés-kezelés és jogosultságkezelés. Csapatok: `editors`, `designers`, `writers`, `image_editors`, `art_directors`, `managing_editors`, `proofwriters`.
 
 ### Session Kezelés (UXP Sajátosság)
 A UXP nem kezeli normálisan a cookie-kat. A session a `localStorage`-ban van tárolva (`cookieFallback` kulcs), és kézzel injektáljuk a requestekbe. Ld. `docs/REALTIME_ARCHITECTURE.md`.

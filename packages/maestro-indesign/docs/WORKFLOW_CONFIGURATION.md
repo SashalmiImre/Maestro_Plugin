@@ -77,3 +77,7 @@ A `requiredToEnter` és `requiredToExit` listákban kétféle módon hivatkozhat
     - Ebben az esetben a rendszer ellenőrzi, hogy a validáció **ezekkel a paraméterekkel** futott-e le sikeresen.
 
 > **Megjegyzés:** Ha egy validátort objektumként adunk meg, az felülbírálja az esetleges `onEntry`-ben definiált alapértelmezéseket az ellenőrzés során.
+
+## Jogosultsági Rendszer
+
+Az állapotátmenetek csapat-alapú jogosultsági rendszerrel vannak védve. Részletes dokumentáció: **[WORKFLOW_PERMISSIONS.md](./WORKFLOW_PERMISSIONS.md)**

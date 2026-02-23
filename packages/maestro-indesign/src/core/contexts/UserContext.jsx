@@ -9,6 +9,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useConnection } from "../contexts/ConnectionContext.jsx";
 import { account, executeLogin, handleSignOut, clearLocalSession } from "../config/appwriteConfig.js";
+import { realtime } from "../config/realtimeClient.js";
 import { MaestroEvent } from "../config/maestroEvents.js";
 import { log } from "../utils/logger.js";
 
@@ -160,6 +161,23 @@ export function AuthorizationProvider({ children }) {
             window.removeEventListener(MaestroEvent.sessionExpired, handleSessionExpired);
         };
     }, []);
+
+    // Felhasználói adatok valós idejű szinkronizálása (pl. labels módosítás a szerveren)
+    useEffect(() => {
+        if (!user) return;
+
+        const unsubscribe = realtime.subscribe('account', (response) => {
+            const { payload } = response;
+            if (!payload || !payload.$id) return;
+
+            log('[UserContext] Felhasználói adat frissítve (Realtime)');
+            setUser(payload);
+        });
+
+        return () => {
+            if (typeof unsubscribe === 'function') unsubscribe();
+        };
+    }, [user?.$id]);
 
     // Kezdeti állapot ellenőrzése (pl. oldal újratöltés után)
     useEffect(() => {

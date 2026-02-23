@@ -20,6 +20,7 @@ import { ValidationSection } from "./ValidationSection.jsx";
 // Utils
 import { isValidFileName } from "../../../../core/utils/pathUtils.js";
 import { WorkflowEngine } from "../../../../core/utils/workflow/workflowEngine.js";
+import { canUserMoveArticle } from "../../../../core/utils/workflow/workflowPermissions.js";
 import { SCRIPT_LANGUAGE_JAVASCRIPT } from "../../../../core/utils/constants.js";
 import { WORKFLOW_CONFIG, MARKERS } from "../../../../core/utils/workflow/workflowConstants.js";
 import { log, logError, logWarn } from "../../../../core/utils/logger.js";
@@ -272,6 +273,18 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
             return;
         }
 
+        // Jogosultsági ellenőrzés (a validáció előtt — a drága preflight ne fusson feleslegesen)
+        const permission = canUserMoveArticle(article, article.state, user);
+        if (!permission.allowed) {
+            showToast(
+                'Nincs jogosultságod az állapotváltáshoz',
+                'error',
+                permission.reason
+            );
+            setIsSyncing(false);
+            return;
+        }
+
         if (!article.filePath && !article.FilePath) {
             logError("[ArticleProperties] Missing file path for article:", article);
             showToast('Az állapotváltás nem lehetséges', 'error', 'A cikkhez nem tartozik fájl útvonal. Próbáld frissíteni az adatokat.');
@@ -373,6 +386,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
 
                 <GeneralSection
                     article={article}
+                    user={user}
                     onFieldUpdate={handleFieldUpdate}
                     onPageNumberChange={handlePageNumberChange}
                     onStateTransition={handleStateTransition}

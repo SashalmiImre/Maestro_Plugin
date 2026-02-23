@@ -186,3 +186,40 @@ export const WORKFLOW_CONFIG = {
         ]
     }
 };
+
+/**
+ * Állapot-jogosultsági leképezés.
+ * Meghatározza, mely csapatok mozgathatják a cikkeket az adott állapotBÓL
+ * (előre és hátra egyaránt).
+ *
+ * Ha az adott állapothoz nincs bejegyzés (pl. ARCHIVABLE), az állapotváltás
+ * nem jogosultságfüggő (végállapot, transitions sincs definiálva).
+ *
+ * @type {Object.<number, string[]>}
+ */
+export const STATE_PERMISSIONS = {
+    [WORKFLOW_STATES.DESIGNING]:           ["designers", "art_directors"],
+    [WORKFLOW_STATES.DESIGN_APPROVAL]:     ["art_directors"],
+    [WORKFLOW_STATES.WAITING_FOR_START]:   ["designers", "art_directors"],
+    [WORKFLOW_STATES.EDITORIAL_APPROVAL]:  ["editors", "managing_editors"],
+    [WORKFLOW_STATES.CONTENT_REVISION]:    ["proofwriters"],
+    [WORKFLOW_STATES.FINAL_APPROVAL]:      ["editors", "managing_editors"],
+    [WORKFLOW_STATES.PRINTABLE]:           ["designers", "art_directors"]
+};
+
+/**
+ * Csapat → cikkmező leképezés.
+ * Meghatározza, melyik csapat slug melyik cikk-mezőhöz van kötve
+ * a jogosultsági ellenőrzésben (a hozzárendelt felhasználó userId-ja).
+ *
+ * @type {Object.<string, string>}
+ */
+export const TEAM_ARTICLE_FIELD = {
+    "designers":        "designerId",
+    "art_directors":    "artDirectorId",
+    "editors":          "editorId",
+    "managing_editors": "managingEditorId",
+    "proofwriters":     "proofwriterId",
+    "writers":          "writerId",
+    "image_editors":    "imageEditorId"
+};

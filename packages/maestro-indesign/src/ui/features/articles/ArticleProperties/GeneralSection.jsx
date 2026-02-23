@@ -12,6 +12,7 @@ import { useData } from "../../../../core/contexts/DataContext.jsx";
 // Utils
 import { WorkflowEngine } from "../../../../core/utils/workflow/workflowEngine.js";
 import { WORKFLOW_STATES, WORKFLOW_CONFIG, MARKERS } from "../../../../core/utils/workflow/workflowConstants.js";
+import { hasTransitionPermission } from "../../../../core/utils/workflow/workflowPermissions.js";
 import { STORAGE_KEYS } from "../../../../core/utils/constants.js";
 import { isValidFileName } from "../../../../core/utils/pathUtils.js";
 
@@ -48,7 +49,7 @@ import { isValidFileName } from "../../../../core/utils/pathUtils.js";
  * @param {boolean} props.isSyncing - Whether an update is in progress (disables controls)
  * @returns {JSX.Element} The GeneralSection component
  */
-export const GeneralSection = ({ article, onFieldUpdate, onPageNumberChange, onStateTransition, isSyncing }) => {
+export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChange, onStateTransition, isSyncing }) => {
     const { layouts } = useData();
 
     /**
@@ -88,6 +89,9 @@ export const GeneralSection = ({ article, onFieldUpdate, onPageNumberChange, onS
 
         return { activeMarkersMask: markers, currentState: state, currentConfig: config, availableTransitions: transitions };
     })();
+
+    // Jogosultsági ellenőrzés: a felhasználó mozgathatja-e a cikket?
+    const canTransition = user ? hasTransitionPermission(article, currentState, user) : false;
 
     // Local state for Name field to allow "Enter to save" behavior
     const [localName, setLocalName] = useState(article.name || "");
@@ -349,7 +353,8 @@ export const GeneralSection = ({ article, onFieldUpdate, onPageNumberChange, onS
                                             size="m"
                                             style={{ borderRadius: "12px 0 0 12px", width: "100%" }}
                                             onClick={() => onStateTransition(backwardTransition.target)}
-                                            disabled={isIgnored || isSyncing ? true : undefined}
+                                            disabled={isIgnored || isSyncing || !canTransition ? true : undefined}
+                                            title={!canTransition ? "Nincs jogosultságod az állapotváltáshoz" : undefined}
                                         >
                                             ← {backwardTransition.label}
                                         </sp-button>
@@ -388,7 +393,8 @@ export const GeneralSection = ({ article, onFieldUpdate, onPageNumberChange, onS
                                             size="m"
                                             style={{ borderRadius: "0 12px 12px 0", width: "100%" }}
                                             onClick={() => onStateTransition(forwardTransition.target)}
-                                            disabled={isIgnored || isSyncing ? true : undefined}
+                                            disabled={isIgnored || isSyncing || !canTransition ? true : undefined}
+                                            title={!canTransition ? "Nincs jogosultságod az állapotváltáshoz" : undefined}
                                         >
                                             {forwardTransition.label} →
                                         </sp-button>

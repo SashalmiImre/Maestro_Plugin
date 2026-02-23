@@ -8,6 +8,7 @@
 import { tables, Query, DATABASE_ID, ARTICLES_COLLECTION_ID } from "../../config/appwriteConfig.js";
 import { withTimeout } from "../promiseUtils.js";
 import { WORKFLOW_CONFIG, MARKERS } from "./workflowConstants.js";
+import { canUserMoveArticle } from "./workflowPermissions.js";
 import { LOCK_TYPE } from "../constants.js";
 import { validateArticle, validate } from "../validationRunner.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../config/maestroEvents.js";
@@ -148,7 +149,13 @@ export class WorkflowEngine {
      */
     static async executeTransition(article, targetState, user) {
         try {
-            // 0. Átmenet validálása
+            // 0. Jogosultsági ellenőrzés (a validáció ELŐTT — a drága preflight ne fusson feleslegesen)
+            const permission = canUserMoveArticle(article, article.state, user);
+            if (!permission.allowed) {
+                return { success: false, error: permission.reason, permissionDenied: true };
+            }
+
+            // 1. Átmenet validálása
             const validation = await WorkflowEngine.validateTransition(article, targetState);
             if (!validation.isValid) {
                 return { success: false, error: validation.errors.join(", ") };

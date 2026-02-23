@@ -119,7 +119,10 @@ export const TEAMS = {
     EDITORS: "editors",
     DESIGNERS: "designers",
     WRITERS: "writers",
-    IMAGE_EDITORS: "image_editors"
+    IMAGE_EDITORS: "image_editors",
+    ART_DIRECTORS: "art_directors",
+    MANAGING_EDITORS: "managing_editors",
+    PROOFWRITERS: "proofwriters"
 };
 
 export const GET_TEAM_MEMBERS_FUNCTION_ID = "69599cf9000a865db98a";
