@@ -133,7 +133,7 @@
     - **API Ellenállóképesség**: Centralizált `withRetry` segédfüggvény (`promiseUtils.js`) exponenciális backoff-fal (1s→2s→4s) az átmeneti szerverhibák (502, 503, 504) és hálózati hibák kezelésére.
     - **Szerverhiba Ellenállóképesség (Realtime)**: Speciális exponenciális backoff (5s→60s) + cooldown (5 hiba után 60s szünet) a Realtime WebSocket kapcsolatok védelmére.
     - **Proxy Server Keep-Alive**: A ProxyServer `server.js` TCP Keep-Alive (`keepAliveTimeout: 65s`) + 15s WebSocket ping frame-eket küld az aktív socket-ekre, megakadályozva az Apache/Passenger idle timeout-ot. EPIPE/ECONNRESET zajszűréssel és graceful shutdown-nal.
-    - **Meghajtó-elérhetőség Polling**: A `Publication.jsx` feltételes `setInterval` pollingja (2s, `DRIVE_CHECK_INTERVAL_MS`) ellenőrzi a `rootPath` mappát, ha az nem elérhető. A polling csak a kinyitott (`isExpanded`) kiadványnál fut, és automatikusan leáll, ha a meghajtó visszajön vagy a felhasználó másik kiadványra vált.
+    - **Mappa-elérhetőség Polling**: A `Publication.jsx` kétszintű ellenőrzést végez a `rootPath` mappára: (1) egyszeri ellenőrzés mount-kor (összecsukott állapotban is, a fejléc színéhez), (2) folyamatos `setInterval` polling (2s, `DRIVE_CHECK_INTERVAL_MS`) a kinyitott (`isExpanded`) kiadványnál. A fejléc (név + chevron) kék (`--spectrum-global-color-blue-400`) alapállapotban, piros (`--spectrum-global-color-red-400`) ha a mappa nem elérhető. Kinyitott állapotban piros figyelmeztető banner jelenik meg. A banner szövege lefedi a törölt mappa és a nem csatlakoztatott meghajtó esetét is.
     - Ld. `docs/diagrams/network-architecture.md`, `docs/REALTIME_ARCHITECTURE.md`, `docs/PROXY_SERVER.md`
 
 ---

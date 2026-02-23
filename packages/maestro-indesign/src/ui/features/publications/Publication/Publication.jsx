@@ -5,7 +5,6 @@ import React, { useState, useCallback, useEffect } from "react";
 import { ArticleTable } from "../../articles/ArticleTable.jsx";
 import { ConfirmDialog } from "../../../common/ConfirmDialog.jsx";
 import { FilterBar } from "./FilterBar.jsx";
-
 // Custom Hooks
 import { useArticles } from "../../../../data/hooks/useArticles.js";
 import { useUser } from "../../../../core/contexts/UserContext.jsx";
@@ -19,7 +18,6 @@ import { MaestroEvent, dispatchMaestroEvent } from "../../../../core/config/maes
 
 export const Publication = React.memo(({ publication, onDelete, onRename, onShowProperties, isExpanded, onToggle }) => {
     const { user } = useUser();
-
     const {
         articles,
         fetchArticles,
@@ -29,9 +27,17 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
 
     const [isHovered, setIsHovered] = useState(false);
 
-    // Meghajtó elérhetőség ellenőrzése (rootPath)
+    // Meghajtó/mappa elérhetőség ellenőrzése (rootPath)
     const [isDriveAccessible, setIsDriveAccessible] = useState(true);
+    // Egyszeri elérhetőség-ellenőrzés mount-kor (összecsukott állapotban is fusson)
+    useEffect(() => {
+        let mounted = true;
+        checkPathAccessible(resolvePlatformPath(publication.rootPath))
+            .then(accessible => { if (mounted) setIsDriveAccessible(accessible); });
+        return () => { mounted = false; };
+    }, [publication.rootPath]);
 
+    // Folyamatos polling (2s) + event listenerek — ha a kiadvány ki van nyitva
     useEffect(() => {
         if (!isExpanded) return;
 
@@ -53,45 +59,20 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
 
         checkAccess();
 
+        const pollIntervalId = setInterval(checkAccess, DRIVE_CHECK_INTERVAL_MS);
+
         const handleFocus = () => checkAccess();
         window.addEventListener('focus', handleFocus);
         window.addEventListener(MaestroEvent.panelShown, handleFocus);
         window.addEventListener(MaestroEvent.dataRefreshRequested, handleFocus);
         return () => {
             mounted = false;
+            clearInterval(pollIntervalId);
             window.removeEventListener('focus', handleFocus);
             window.removeEventListener(MaestroEvent.panelShown, handleFocus);
             window.removeEventListener(MaestroEvent.dataRefreshRequested, handleFocus);
         };
     }, [isExpanded, publication.rootPath]);
-
-    // Feltételes polling: ha a meghajtó nem elérhető, rendszeresen újra ellenőrizzük
-    useEffect(() => {
-        if (!isExpanded || isDriveAccessible) return;
-
-        let mounted = true;
-        let isChecking = false;
-
-        const checkAccess = async () => {
-            if (isChecking) return;
-            isChecking = true;
-            try {
-                const accessible = await checkPathAccessible(
-                    resolvePlatformPath(publication.rootPath)
-                );
-                if (mounted) setIsDriveAccessible(accessible);
-            } finally {
-                isChecking = false;
-            }
-        };
-
-        const pollIntervalId = setInterval(checkAccess, DRIVE_CHECK_INTERVAL_MS);
-
-        return () => {
-            mounted = false;
-            clearInterval(pollIntervalId);
-        };
-    }, [isExpanded, isDriveAccessible, publication.rootPath]);
 
     // Dialog state
     const [dialogOpen, setDialogOpen] = useState(false);
@@ -248,19 +229,25 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                 onMouseLeave={() => setIsHovered(false)}
             >
                 <div style={{ display: "flex", alignItems: "center" }}>
-                    <div onClick={handleChevronClick} style={{ cursor: "pointer", display: "flex", alignItems: "center", marginRight: "8px" }}>
-                        <sp-body style={{ margin: 0 }}>
+                    <div onClick={handleChevronClick} style={{
+                        cursor: "pointer", display: "flex", alignItems: "center", marginRight: "8px",
+                        color: isDriveAccessible ? "var(--spectrum-global-color-blue-400)" : "var(--spectrum-global-color-red-400)"
+                    }}>
+                        <sp-body style={{ margin: 0, color: isDriveAccessible ? "var(--spectrum-global-color-blue-400)" : "var(--spectrum-global-color-red-400)" }}>
                             {isExpanded ?
                                 <sp-icon-chevron-down size="s" style={{ width: "14px", height: "14px", display: "inline-block", verticalAlign: "middle" }}></sp-icon-chevron-down> :
                                 <sp-icon-chevron-right size="s" style={{ width: "14px", height: "14px", display: "inline-block", verticalAlign: "middle" }}></sp-icon-chevron-right>
                             }
                         </sp-body>
                     </div>
-                    <sp-body
+                    <sp-heading size="xxs"
                         onDoubleClick={handlePublicationDoubleClick}
-                        style={{ cursor: "pointer", margin: 0 }}>
+                        style={{
+                            cursor: "pointer", margin: 0,
+                            color: isDriveAccessible ? "var(--spectrum-global-color-blue-400)" : "var(--spectrum-global-color-red-400)"
+                        }}>
                         {publication.name?.toUpperCase()}
-                    </sp-body>
+                    </sp-heading>
                 </div>
 
                 {(isHovered || isFilterActive) && (
@@ -331,9 +318,10 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                     <div style={{
                         backgroundColor: "var(--spectrum-global-color-red-400)",
                         color: "white",
-                        padding: "8px 12px",
+                        padding: "8px 12px 18px 12px",
                         borderRadius: "4px",
-                        margin: "8px",
+                        marginTop: "8px",
+                        marginBottom: "4px",
                         display: "flex",
                         alignItems: "flex-start"
                     }}>
@@ -344,15 +332,12 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                                 <circle cx="12" cy="16" r="1.2" fill="white" />
                             </svg>
                         </div>
-                        <div style={{ flex: 1 }}>
+                        <div style={{ flex: 1, minWidth: 0 }}>
                             <div style={{ fontSize: "12px", fontWeight: "bold", marginBottom: "2px" }}>
                                 A kiadvány mappája nem érhető el
                             </div>
-                            <div style={{ fontSize: "11px", opacity: 0.9, marginBottom: "4px" }}>
-                                {publication.rootPath}
-                            </div>
                             <div style={{ fontSize: "11px", opacity: 0.85 }}>
-                                Csatlakoztasd a szükséges meghajtót. Az ellenőrzés automatikusan fut.
+                                Ellenőrizd, hogy a mappa létezik-e, és a szükséges meghajtó csatlakoztatva van-e. Az ellenőrzés automatikusan fut.
                             </div>
                         </div>
                     </div>
@@ -360,7 +345,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
             }
 
             {
-                isExpanded && isDriveAccessible && (
+                isExpanded && (
                     <ArticleTable
                         articles={filteredArticles}
                         publication={publication}
