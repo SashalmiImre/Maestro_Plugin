@@ -96,24 +96,10 @@ export const GeneralSection = ({ publication, onFieldUpdate }) => {
                 {/* Gyökérkönyvtár */}
                 {publication.rootPath && (
                     <div style={{ marginTop: "12px" }}>
-                        <sp-label>Gyökérkönyvtár</sp-label>
-                        <sp-body style={{ wordBreak: "break-all", fontSize: "11px" }}>{publication.rootPath}</sp-body>
+                        <sp-detail style={{ marginBottom: "4px" }}>GYÖKÉRKÖNYVTÁR</sp-detail>
+                        <sp-body style={{ wordBreak: "break-all" }}>{publication.rootPath}</sp-body>
                     </div>
                 )}
-
-                {/* Létrehozva + ID sor */}
-                <div style={{ display: "flex", marginTop: "12px" }}>
-                    {publication.$createdAt && (
-                        <div style={{ flex: 1, marginRight: "8px" }}>
-                            <sp-label>Létrehozva</sp-label>
-                            <sp-body style={{ fontSize: "11px" }}>{new Date(publication.$createdAt).toLocaleString('hu-HU')}</sp-body>
-                        </div>
-                    )}
-                    <div style={{ flex: 1 }}>
-                        <sp-label>ID</sp-label>
-                        <sp-body style={{ fontFamily: "monospace", fontSize: "10px" }}>{publication.$id}</sp-body>
-                    </div>
-                </div>
             </div>
         </CollapsibleSection>
     );

@@ -1,5 +1,5 @@
 // React
-import { useCallback, useMemo } from "react";
+import { useCallback, useMemo, useRef } from "react";
 
 // Contextusok és Egyedi Hook-ok
 import { useConnection } from "../../core/contexts/ConnectionContext.jsx";
@@ -42,7 +42,12 @@ export const useArticles = (publicationId, publicationRoot) => {
     const { setOffline, incrementAttempts } = useConnection();
     
     // Globális adatok és write-through API a DataContext-ből
-    const { articles: allArticles, layouts, createArticle, updateArticle } = useData();
+    const { articles: allArticles, layouts, publications, createArticle, updateArticle } = useData();
+
+    // A kiadvány objektum az alapértelmezett munkatársak kiolvasásához
+    const publication = useMemo(() => publications.find(p => p.$id === publicationId), [publications, publicationId]);
+    const publicationRef = useRef(publication);
+    publicationRef.current = publication;
     
     // Értesítések kezelése (Toast üzenetek)
     const { showToast } = useToast();
@@ -188,6 +193,9 @@ export const useArticles = (publicationId, publicationRoot) => {
 
         // --- 7. Adatbázis rekord létrehozása ---
         try {
+            // Alapértelmezett munkatársak a kiadvány beállításaiból
+            const pub = publicationRef.current;
+
             await createArticle({
                 name: file.name.replace(/\.[^/.]+$/, ""), // Kiterjesztés levágása a névből
                 layout: layouts[0]?.$id ?? null,
@@ -196,7 +204,14 @@ export const useArticles = (publicationId, publicationRoot) => {
                 state: 0,
                 startPage: startPage,
                 endPage: endPage,
-                pageRanges: pageRanges
+                pageRanges: pageRanges,
+                writerId: pub?.defaultWriterId ?? null,
+                editorId: pub?.defaultEditorId ?? null,
+                imageEditorId: pub?.defaultImageEditorId ?? null,
+                designerId: pub?.defaultDesignerId ?? null,
+                proofwriterId: pub?.defaultProofwriterId ?? null,
+                artDirectorId: pub?.defaultArtDirectorId ?? null,
+                managingEditorId: pub?.defaultManagingEditorId ?? null
             });
             return { status: "success", fileName: file.name };
         } catch (error) {

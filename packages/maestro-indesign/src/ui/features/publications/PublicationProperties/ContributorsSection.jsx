@@ -1,50 +1,144 @@
 // React
-import React, { useEffect } from "react";
+import React, { useEffect, useState, useCallback } from "react";
 
-// Custom Hooks
+// Contexts & Custom Hooks
 import { useTeamMembers, invalidateTeamMembersCache } from "../../../../data/hooks/useTeamMembers.js";
+import { useData } from "../../../../core/contexts/DataContext.jsx";
+import { useToast } from "../../../common/Toast/ToastContext.jsx";
 import { TEAMS } from "../../../../core/config/appwriteConfig.js";
 
 // Components
 import { CollapsibleSection } from "../../../common/CollapsibleSection.jsx";
 import { CustomDropdown } from "../../../common/CustomDropdown.jsx";
+import { ConfirmDialog } from "../../../common/ConfirmDialog.jsx";
 
 // Utils
 import { STORAGE_KEYS } from "../../../../core/utils/constants.js";
+import { logError } from "../../../../core/utils/logger.js";
 
 /**
- * ContributorsSection Component
- * 
- * Displays and manages team member assignments for article roles.
- * Each role is represented by a dropdown that allows selecting a team member
- * from the appropriate team. The component fetches team member lists using
- * the useTeamMembers hook for each role.
- * 
- * Támogatott szerepkörök:
- * - **Szerző (Writer)**: Tartalomkészítő a Writers csapatból
- * - **Szerkesztő (Editor)**: Tartalomellenőr az Editors csapatból
- * - **Képszerkesztő (Image Editor)**: Képfeldolgozó az Image Editors csapatból
- * - **Tervező (Designer)**: Tördelő a Designers csapatból
- * - **Korrektor (Proofwriter)**: Korrektúrázó a Proofwriters csapatból
- * - **Művészeti vezető (Art Director)**: Vizuális jóváhagyó az Art Directors csapatból
- * - **Vezetőszerkesztő (Managing Editor)**: Szerkesztőségi jóváhagyó a Managing Editors csapatból
- *
- * @param {Object} props - Component props
- * @param {Object} props.article - The article object containing contributor assignments
- * @param {string} [props.article.writerId] - ID of the assigned writer
- * @param {string} [props.article.editorId] - ID of the assigned editor
- * @param {string} [props.article.imageEditorId] - ID of the assigned image editor
- * @param {string} [props.article.designerId] - ID of the assigned designer
- * @param {string} [props.article.proofwriterId] - ID of the assigned proofwriter
- * @param {string} [props.article.artDirectorId] - ID of the assigned art director
- * @param {string} [props.article.managingEditorId] - ID of the assigned managing editor
- * @param {Function} props.onFieldUpdate - Callback to update article field: (fieldName, userId) => void
- * @returns {JSX.Element} The ContributorsSection component
+ * Leképezés: kiadvány default mező → cikk mező.
+ * Pl. defaultWriterId → writerId
  */
-export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
+const DEFAULT_TO_ARTICLE_FIELD = {
+    defaultWriterId: 'writerId',
+    defaultEditorId: 'editorId',
+    defaultImageEditorId: 'imageEditorId',
+    defaultDesignerId: 'designerId',
+    defaultProofwriterId: 'proofwriterId',
+    defaultArtDirectorId: 'artDirectorId',
+    defaultManagingEditorId: 'managingEditorId'
+};
+
+/**
+ * Szerepkör nevek a megerősítő dialógushoz.
+ */
+const ROLE_LABELS = {
+    defaultWriterId: 'Szerző',
+    defaultEditorId: 'Szerkesztő',
+    defaultImageEditorId: 'Képszerkesztő',
+    defaultDesignerId: 'Tervező',
+    defaultProofwriterId: 'Korrektor',
+    defaultArtDirectorId: 'Művészeti vezető',
+    defaultManagingEditorId: 'Vezetőszerkesztő'
+};
+
+/**
+ * ContributorsSection Component (Publication)
+ *
+ * A kiadvány alapértelmezett munkatársainak kezelése.
+ * Az itt beállított személyek lesznek az alapértelmezettek az újonnan létrehozott cikkeknél.
+ * Ha a kiadványnak már vannak cikkjei, és az adott szerepkör a cikken nincs kitöltve (null),
+ * a rendszer felajánlja, hogy a meglévő cikkeket is frissíti.
+ *
+ * @param {Object} props
+ * @param {Object} props.publication - A kiadvány objektum
+ * @param {Function} props.onFieldUpdate - Mező frissítés callback: (fieldName, value) => void
+ */
+export const ContributorsSection = ({ publication, onFieldUpdate }) => {
     // Mount-kor a cache invalidálása, hogy friss csapattaglistát kérjünk
     useEffect(() => {
         invalidateTeamMembersCache();
+    }, []);
+
+    const { articles, updateArticle } = useData();
+    const { showToast } = useToast();
+
+    // Megerősítő dialógus állapota
+    const [confirmState, setConfirmState] = useState({
+        isOpen: false,
+        defaultField: null,     // pl. 'defaultWriterId'
+        selectedUserId: null,   // az új userId
+        affectedCount: 0        // érintett cikkek száma
+    });
+
+    /**
+     * Dropdown változás kezelése.
+     * Ha nem null értéket választ és vannak érintett cikkek, megerősítést kér.
+     */
+    const handleDropdownChange = useCallback((defaultField, val) => {
+        const userId = val || null;
+
+        // Mindig mentjük a kiadvány default mezőt
+        onFieldUpdate(defaultField, userId);
+
+        // Ha null-ra állítja (törlés), nem kérdezünk rá
+        if (!userId) return;
+
+        // Megnézzük, hány cikkben null az adott szerepkör
+        const articleField = DEFAULT_TO_ARTICLE_FIELD[defaultField];
+        const pubArticles = articles.filter(a => a.publicationId === publication.$id);
+        const nullArticles = pubArticles.filter(a => !a[articleField]);
+
+        if (nullArticles.length === 0) return;
+
+        setConfirmState({
+            isOpen: true,
+            defaultField,
+            selectedUserId: userId,
+            affectedCount: nullArticles.length
+        });
+    }, [articles, publication.$id, onFieldUpdate]);
+
+    /**
+     * Megerősítés: a null értékű cikkek frissítése az új alapértelmezettvel.
+     */
+    const handleConfirm = useCallback(async () => {
+        const { defaultField, selectedUserId } = confirmState;
+        const articleField = DEFAULT_TO_ARTICLE_FIELD[defaultField];
+        const pubArticles = articles.filter(a => a.publicationId === publication.$id);
+        const nullArticles = pubArticles.filter(a => !a[articleField]);
+
+        setConfirmState(prev => ({ ...prev, isOpen: false }));
+
+        let successCount = 0;
+        for (const article of nullArticles) {
+            try {
+                await updateArticle(article.$id, { [articleField]: selectedUserId });
+                successCount++;
+            } catch (error) {
+                logError(`[ContributorsSection] Cikk frissítése sikertelen (${article.name}):`, error);
+            }
+        }
+
+        if (successCount > 0) {
+            showToast(
+                `${successCount} cikk frissítve`,
+                'success',
+                `A(z) ${ROLE_LABELS[defaultField]} szerepkör beállítva ${successCount} cikkben.`
+            );
+        }
+        if (successCount < nullArticles.length) {
+            showToast(
+                'Néhány cikk frissítése sikertelen',
+                'warning',
+                `${nullArticles.length - successCount} cikk frissítése nem sikerült.`
+            );
+        }
+    }, [confirmState, articles, publication.$id, updateArticle, showToast]);
+
+    const handleCancel = useCallback(() => {
+        setConfirmState(prev => ({ ...prev, isOpen: false }));
     }, []);
 
     // Fetch team members for each role
@@ -56,12 +150,11 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
     const { members: managingEditors } = useTeamMembers(TEAMS.MANAGING_EDITORS);
     const { members: proofwriters } = useTeamMembers(TEAMS.PROOFWRITERS);
 
-
     return (
         <CollapsibleSection
-            title="MUNKATÁRSAK"
+            title="ALAPÉRTELMEZETT MUNKATÁRSAK"
             showDivider={true}
-            storageKey={STORAGE_KEYS.SECTION_CONTRIBUTORS_COLLAPSED}
+            storageKey={STORAGE_KEYS.SECTION_PUB_CONTRIBUTORS_COLLAPSED}
         >
             <div style={{ display: "flex", flexDirection: "column" }}>
 
@@ -70,11 +163,10 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
                     <div style={{ flex: 1, marginRight: "12px" }}>
                         <sp-label>Szerző</sp-label>
                         <CustomDropdown
-                            id="writer-dropdown"
+                            id="pub-default-writer-dropdown"
                             emptyLabel="Nincs hozzárendelve"
-                            value={article.writerId}
-                            onChange={(val) => onFieldUpdate('writerId', val || null)}
-                            disabled={disabled || undefined}
+                            value={publication.defaultWriterId}
+                            onChange={(val) => handleDropdownChange('defaultWriterId', val)}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -90,11 +182,10 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
                     <div style={{ flex: 1 }}>
                         <sp-label>Képszerkesztő</sp-label>
                         <CustomDropdown
-                            id="image-editor-dropdown"
+                            id="pub-default-image-editor-dropdown"
                             emptyLabel="Nincs hozzárendelve"
-                            value={article.imageEditorId}
-                            onChange={(val) => onFieldUpdate('imageEditorId', val || null)}
-                            disabled={disabled || undefined}
+                            value={publication.defaultImageEditorId}
+                            onChange={(val) => handleDropdownChange('defaultImageEditorId', val)}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -114,11 +205,10 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
                     <div style={{ flex: 1, marginRight: "12px" }}>
                         <sp-label>Szerkesztő</sp-label>
                         <CustomDropdown
-                            id="editor-dropdown"
+                            id="pub-default-editor-dropdown"
                             emptyLabel="Nincs hozzárendelve"
-                            value={article.editorId}
-                            onChange={(val) => onFieldUpdate('editorId', val || null)}
-                            disabled={disabled || undefined}
+                            value={publication.defaultEditorId}
+                            onChange={(val) => handleDropdownChange('defaultEditorId', val)}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -134,11 +224,10 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
                     <div style={{ flex: 1 }}>
                         <sp-label>Tervező</sp-label>
                         <CustomDropdown
-                            id="designer-dropdown"
+                            id="pub-default-designer-dropdown"
                             emptyLabel="Nincs hozzárendelve"
-                            value={article.designerId}
-                            onChange={(val) => onFieldUpdate('designerId', val || null)}
-                            disabled={disabled || undefined}
+                            value={publication.defaultDesignerId}
+                            onChange={(val) => handleDropdownChange('defaultDesignerId', val)}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -158,11 +247,10 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
                     <div style={{ flex: 1, marginRight: "12px" }}>
                         <sp-label>Vezetőszerkesztő</sp-label>
                         <CustomDropdown
-                            id="managing-editor-dropdown"
+                            id="pub-default-managing-editor-dropdown"
                             emptyLabel="Nincs hozzárendelve"
-                            value={article.managingEditorId}
-                            onChange={(val) => onFieldUpdate('managingEditorId', val || null)}
-                            disabled={disabled || undefined}
+                            value={publication.defaultManagingEditorId}
+                            onChange={(val) => handleDropdownChange('defaultManagingEditorId', val)}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -178,11 +266,10 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
                     <div style={{ flex: 1 }}>
                         <sp-label>Művészeti vezető</sp-label>
                         <CustomDropdown
-                            id="art-director-dropdown"
+                            id="pub-default-art-director-dropdown"
                             emptyLabel="Nincs hozzárendelve"
-                            value={article.artDirectorId}
-                            onChange={(val) => onFieldUpdate('artDirectorId', val || null)}
-                            disabled={disabled || undefined}
+                            value={publication.defaultArtDirectorId}
+                            onChange={(val) => handleDropdownChange('defaultArtDirectorId', val)}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -202,11 +289,10 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
                     <div style={{ flex: 1, marginRight: "12px" }}>
                         <sp-label>Korrektor</sp-label>
                         <CustomDropdown
-                            id="proofwriter-dropdown"
+                            id="pub-default-proofwriter-dropdown"
                             emptyLabel="Nincs hozzárendelve"
-                            value={article.proofwriterId}
-                            onChange={(val) => onFieldUpdate('proofwriterId', val || null)}
-                            disabled={disabled || undefined}
+                            value={publication.defaultProofwriterId}
+                            onChange={(val) => handleDropdownChange('defaultProofwriterId', val)}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -224,6 +310,19 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
                     </div>
                 </div>
             </div>
+
+            {/* Megerősítő dialógus: meglévő cikkek frissítése */}
+            <ConfirmDialog
+                isOpen={confirmState.isOpen}
+                title="Meglévő cikkek frissítése"
+                message={confirmState.defaultField
+                    ? `A kiadvány ${confirmState.affectedCount} cikkében nincs még ${ROLE_LABELS[confirmState.defaultField]} hozzárendelve. Szeretnéd ezeket is beállítani az új alapértelmezett személyre?`
+                    : ''
+                }
+                confirmLabel="Frissítés"
+                onConfirm={handleConfirm}
+                onCancel={handleCancel}
+            />
         </CollapsibleSection>
     );
 };

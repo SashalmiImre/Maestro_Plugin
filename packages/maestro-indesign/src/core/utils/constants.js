@@ -20,6 +20,7 @@ export const STORAGE_KEYS = {
     SECTION_VALIDATION_COLLAPSED: "maestro.section.validation.collapsed",     // Validáció szekció állapota
     SECTION_PUB_GENERAL_COLLAPSED: "maestro.section.pub.general.collapsed",         // Kiadvány általános szekció
     SECTION_PUB_LAYOUTS_COLLAPSED: "maestro.section.pub.layouts.collapsed",         // Kiadvány elrendezések szekció
+    SECTION_PUB_CONTRIBUTORS_COLLAPSED: "maestro.section.pub.contributors.collapsed", // Kiadvány munkatársak szekció
     SECTION_PUB_DEADLINES_COLLAPSED: "maestro.section.pub.deadlines.collapsed"      // Kiadvány határidők szekció
 };
 

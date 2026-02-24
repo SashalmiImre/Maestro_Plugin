@@ -2,6 +2,7 @@ import React, { useState } from "react";
 
 // Feature Components
 import { GeneralSection } from "./GeneralSection.jsx";
+import { ContributorsSection } from "./ContributorsSection.jsx";
 import { LayoutsSection } from "./LayoutsSection.jsx";
 import { DeadlinesSection } from "./DeadlinesSection.jsx";
 
@@ -50,6 +51,11 @@ export const PublicationProperties = ({ publication, onFieldUpdate, onValidation
                 <DeadlinesSection
                     publication={publication}
                     onValidationChange={onValidationChange}
+                />
+
+                <ContributorsSection
+                    publication={publication}
+                    onFieldUpdate={onFieldUpdate}
                 />
             </div>
         </div>
