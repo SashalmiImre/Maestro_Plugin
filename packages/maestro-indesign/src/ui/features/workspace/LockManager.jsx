@@ -352,6 +352,7 @@ export const LockManager = () => {
                         const result = await WorkflowEngine.lockDocument(article, LOCK_TYPE.USER, user);
                         if (result.success) {
                             console.log('[LockManager] Fájl zárolva:', article.name, '-', user.name);
+                            if (isMountedRef.current) dispatchMaestroEvent(MaestroEvent.dataRefreshRequested);
                         } else {
                             console.warn(`[LockManager] Zárolás sikertelen (${article.name}, ${article.$id}):`, result.error);
                         }
@@ -360,6 +361,7 @@ export const LockManager = () => {
                         const result = await WorkflowEngine.unlockDocument(article, user);
                         if (result.success) {
                             console.log('[LockManager] Fájl feloldva:', article.name);
+                            if (isMountedRef.current) dispatchMaestroEvent(MaestroEvent.dataRefreshRequested);
                         } else {
                             console.warn(`[LockManager] Feloldás sikertelen (${article.name}, ${article.$id}):`, result.error);
                         }
