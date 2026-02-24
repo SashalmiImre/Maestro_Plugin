@@ -198,13 +198,13 @@ export const WORKFLOW_CONFIG = {
  * @type {Object.<number, string[]>}
  */
 export const STATE_PERMISSIONS = {
-    [WORKFLOW_STATES.DESIGNING]:           ["designers", "art_directors"],
-    [WORKFLOW_STATES.DESIGN_APPROVAL]:     ["art_directors"],
-    [WORKFLOW_STATES.WAITING_FOR_START]:   ["designers", "art_directors"],
-    [WORKFLOW_STATES.EDITORIAL_APPROVAL]:  ["editors", "managing_editors"],
+    [WORKFLOW_STATES.DESIGNING]:           ["designers", "artDirectors"],
+    [WORKFLOW_STATES.DESIGN_APPROVAL]:     ["artDirectors"],
+    [WORKFLOW_STATES.WAITING_FOR_START]:   ["designers", "artDirectors"],
+    [WORKFLOW_STATES.EDITORIAL_APPROVAL]:  ["editors", "managingEditors"],
     [WORKFLOW_STATES.CONTENT_REVISION]:    ["proofwriters"],
-    [WORKFLOW_STATES.FINAL_APPROVAL]:      ["editors", "managing_editors"],
-    [WORKFLOW_STATES.PRINTABLE]:           ["designers", "art_directors"]
+    [WORKFLOW_STATES.FINAL_APPROVAL]:      ["editors", "managingEditors"],
+    [WORKFLOW_STATES.PRINTABLE]:           ["designers", "artDirectors"]
 };
 
 /**
@@ -216,10 +216,10 @@ export const STATE_PERMISSIONS = {
  */
 export const TEAM_ARTICLE_FIELD = {
     "designers":        "designerId",
-    "art_directors":    "artDirectorId",
+    "artDirectors":     "artDirectorId",
     "editors":          "editorId",
-    "managing_editors": "managingEditorId",
+    "managingEditors":  "managingEditorId",
     "proofwriters":     "proofwriterId",
     "writers":          "writerId",
-    "image_editors":    "imageEditorId"
+    "imageEditors":     "imageEditorId"
 };

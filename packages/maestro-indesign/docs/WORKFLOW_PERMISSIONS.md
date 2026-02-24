@@ -29,15 +29,15 @@ Meghatározza, mely csapatok mozgathatják a cikkeket az adott állapotBÓL:
 
 Meghatározza, melyik csapat melyik cikkmező értékéhez van kötve a jogosultsági ellenőrzésben:
 
-| Csapat slug | Cikk mező | Appwrite team ID |
+| Label slug | Cikk mező | Appwrite team ID |
 |-------------|-----------|------------------|
 | `designers` | `designerId` | `designers` |
-| `art_directors` | `artDirectorId` | `art_directors` |
+| `artDirectors` | `artDirectorId` | `art_directors` |
 | `editors` | `editorId` | `editors` |
-| `managing_editors` | `managingEditorId` | `managing_editors` |
+| `managingEditors` | `managingEditorId` | `managing_editors` |
 | `proofwriters` | `proofwriterId` | `proofwriters` |
 | `writers` | `writerId` | `writers` |
-| `image_editors` | `imageEditorId` | `image_editors` |
+| `imageEditors` | `imageEditorId` | `image_editors` |
 
 ---
 
@@ -67,8 +67,8 @@ Egy cikk `DESIGN_APPROVAL` (1) állapotban van, `artDirectorId = "user_A"`:
 
 - **user_A** kiválasztja → **mozgathatja** (ő a hozzárendelt Art Director)
 - **user_B** (Art Directors csapat tagja, de nincs hozzárendelve) → **NEM mozgathatja** (van hozzárendelt, de nem ő az)
-- **user_C** (`labels: ["art_directors"]`) → **mozgathatja** (label override)
-- Ha az `artDirectorId` **üres** → csak az Art Directors csapat tagjai (`labels: ["art_directors"]`) mozgathatják
+- **user_C** (`labels: ["artDirectors"]`) → **mozgathatja** (label override)
+- Ha az `artDirectorId` **üres** → csak az Art Directors csapat tagjai (`labels: ["artDirectors"]`) mozgathatják
 
 ---
 
@@ -80,10 +80,10 @@ Az Appwrite felhasználók `labels` tömbje (Server SDK-ból vagy Console-ból �
 
 **Beállítás:** Az Appwrite Console-ban a felhasználó `labels` tömbjébe a csapat slug-ját kell felvenni:
 ```
-labels: ["editors", "managing_editors"]
+labels: ["editors", "managingEditors"]
 ```
 
-**Frissítés:** A `labels` tömb a bejelentkezéskor kerül lekérdezésre (`account.get()`). Ha egy admin megváltoztatja a felhasználó label-jeit az Appwrite Console-ban, a felhasználónak újra be kell töltenie a plugint (`uxp:reload`), hogy az új label-ek érvényesüljenek. (Az Appwrite Realtime `account` csatorna nem tüzel szerver-oldali label módosításra.)
+**Realtime szinkron:** A `labels` tömb a bejelentkezéskor kerül lekérdezésre (`account.get()`), majd az Appwrite Realtime `account` csatornán keresztül automatikusan frissül, ha az admin megváltoztatja a szerveren. Nem szükséges újra bejelentkezni vagy a plugint újratölteni.
 
 ---
 

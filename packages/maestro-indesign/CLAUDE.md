@@ -365,8 +365,7 @@ index.jsx
 - `user` — aktuális felhasználó objektum (vagy `null`)
 - `login(email, password)`, `logout()`
 - `loading` — hitelesítés folyamatban
-- **Realtime szinkron**: Az Appwrite `account` csatornára feliratkozva a `user` objektum (beleértve `labels`, `name`, `prefs`) automatikusan frissül, ha a szerveren módosítják
-- **Korlátozás**: Az Appwrite Realtime `account` csatorna **nem tüzel** szerver-oldali (Console/Server SDK) label módosításra — a felhasználónak újra be kell töltenie a plugint
+- **Realtime szinkron**: Az Appwrite Realtime `account` csatornára feliratkozva a `user` objektum (beleértve `labels`, `name`, `prefs`) automatikusan frissül, ha a szerveren módosítják (Console/Server SDK)
 
 ### ConnectionContext API
 - `isOnline`, `isConnecting` — UI indikátorokhoz (spinner, overlay)

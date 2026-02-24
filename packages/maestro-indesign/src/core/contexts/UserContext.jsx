@@ -163,6 +163,8 @@ export function AuthorizationProvider({ children }) {
     }, []);
 
     // Felhasználói adatok valós idejű szinkronizálása (pl. labels módosítás a szerveren)
+    // Az Appwrite Realtime `account` csatorna a bejelentkezett felhasználó változásait figyeli,
+    // beleértve a szerver-oldali (Console/Server SDK) label módosításokat is.
     useEffect(() => {
         if (!user) return;
 
