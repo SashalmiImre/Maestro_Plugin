@@ -204,12 +204,12 @@ export const WORKFLOW_CONFIG = {
  */
 export const STATE_DURATIONS = {
     [WORKFLOW_STATES.DESIGNING]:           { perPage: 60, fixed: 0 },
-    [WORKFLOW_STATES.DESIGN_APPROVAL]:     { perPage: 5,  fixed: 15 },
-    [WORKFLOW_STATES.WAITING_FOR_START]:   { perPage: 0,  fixed: 15 },
-    [WORKFLOW_STATES.EDITORIAL_APPROVAL]:  { perPage: 10, fixed: 15 },
+    [WORKFLOW_STATES.DESIGN_APPROVAL]:     { perPage: 30,  fixed: 15 },
+    [WORKFLOW_STATES.WAITING_FOR_START]:   { perPage: 10,  fixed: 15 },
+    [WORKFLOW_STATES.EDITORIAL_APPROVAL]:  { perPage: 30, fixed: 15 },
     [WORKFLOW_STATES.CONTENT_REVISION]:    { perPage: 30, fixed: 10 },
-    [WORKFLOW_STATES.FINAL_APPROVAL]:      { perPage: 5,  fixed: 15 },
-    [WORKFLOW_STATES.PRINTABLE]:           { perPage: 5,  fixed: 5 }
+    [WORKFLOW_STATES.FINAL_APPROVAL]:      { perPage: 10,  fixed: 15 },
+    [WORKFLOW_STATES.PRINTABLE]:           { perPage: 10,  fixed: 5 }
 };
 
 /**

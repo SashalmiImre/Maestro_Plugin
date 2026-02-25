@@ -76,7 +76,8 @@ const STYLES = {
         alignItems: "center",
         borderBottom: "1px solid rgba(128, 128, 128, 0.2)",
         cursor: "default",
-        minWidth: "100%"
+        minWidth: "100%",
+        contain: "layout style"
     },
     emptyRow: {
         justifyContent: "center",
@@ -166,6 +167,72 @@ const useColumnResize = () => {
 
     return { columnWidths, handleResizeStart };
 };
+
+// -- MEMOIZED ROW --
+/**
+ * Egyedi comparator a TableRow-hoz.
+ * A columns/columnWidths/callback referenciák minden renderben újak,
+ * ezért az item $updatedAt mezőjét + a rowStyle.background-ot hasonlítjuk.
+ * Ha az item adata nem változott és a háttérszín sem, kihagyjuk a renderelést.
+ */
+const areRowPropsEqual = (prev, next) => {
+    if (prev.item !== next.item) {
+        // Referencia változott — ellenőrizzük az $updatedAt-ot
+        if (prev.item.$updatedAt !== next.item.$updatedAt) return false;
+        if (prev.item.$id !== next.item.$id) return false;
+    }
+    // Háttérszín változott? (sürgősség frissítés)
+    if (prev.rowStyle?.background !== next.rowStyle?.background) return false;
+    // Oszlopszélesség változott? (resize)
+    if (prev.columnWidths !== next.columnWidths) return false;
+    return true;
+};
+
+const TableRow = React.memo(({
+    item,
+    columns,
+    columnWidths,
+    rowStyle,
+    onRowClick,
+    onRowDoubleClick,
+    onMouseEnter,
+    onMouseLeave
+}) => (
+    <div
+        role="row"
+        style={rowStyle}
+        onClick={() => onRowClick && onRowClick(item)}
+        onDoubleClick={() => onRowDoubleClick && onRowDoubleClick(item)}
+        onMouseEnter={onMouseEnter}
+        onMouseLeave={onMouseLeave}
+    >
+        {columns.map(col => {
+            const content = col.renderCell ? col.renderCell(item) : item[col.id];
+            const titleVal = (typeof content === 'string' || typeof content === 'number') ? content : "";
+            const width = columnWidths[col.id] || col.width;
+
+            return (
+                <div
+                    key={col.id}
+                    role="cell"
+                    aria-label={titleVal ? undefined : col.label}
+                    style={{
+                        ...STYLES.cell,
+                        width,
+                        justifyContent: col.align === "right" ? "flex-end" : col.align === "center" ? "center" : "flex-start",
+                        textAlign: col.align || "left"
+                    }}
+                    title={titleVal}
+                >
+                    <div style={STYLES.cellContent}>
+                        <sp-body style={STYLES.cellBody}>{content}</sp-body>
+                    </div>
+                    {col.divider && <div style={STYLES.divider} />}
+                </div>
+            );
+        })}
+    </div>
+), areRowPropsEqual);
 
 /**
  * CustomTable component
@@ -272,43 +339,24 @@ export const CustomTable = ({
                     ) : (
                         data.map((item, rowIndex) => {
                             const customRowStyle = getRowStyle ? getRowStyle(item) : undefined;
+                            const rowStyle = customRowStyle
+                                ? { ...STYLES.row, ...customRowStyle }
+                                : STYLES.row;
 
                             return (
-                            <div
-                                key={item.id || item.$id || rowIndex}
-                                role="row"
-                                style={{ ...STYLES.row, ...customRowStyle }}
-                                onClick={() => onRowClick && onRowClick(item)}
-                                onDoubleClick={() => onRowDoubleClick && onRowDoubleClick(item)}
-                                onMouseEnter={handleRowMouseEnter}
-                                onMouseLeave={handleRowMouseLeave}
-                            >
-                                {columns.map(col => {
-                                    const content = col.renderCell ? col.renderCell(item) : item[col.id];
-                                    const titleVal = (typeof content === 'string' || typeof content === 'number') ? content : "";
-                                    const alignmentStyle = getAlignmentStyle(col.align);
-
-                                    return (
-                                        <div
-                                            key={`${item.id || rowIndex}-${col.id}`}
-                                            role="cell"
-                                            aria-label={titleVal ? undefined : col.label}
-                                            style={{
-                                                ...STYLES.cell,
-                                                width: columnWidths[col.id] || col.width,
-                                                ...alignmentStyle
-                                            }}
-                                            title={titleVal}
-                                        >
-                                            <div style={STYLES.cellContent}>
-                                                <sp-body style={STYLES.cellBody}>{content}</sp-body>
-                                            </div>
-                                            {col.divider && <div style={STYLES.divider} />}
-                                        </div>
-                                    );
-                                })}
-                            </div>
-                        );})
+                                <TableRow
+                                    key={item.id || item.$id || rowIndex}
+                                    item={item}
+                                    columns={columns}
+                                    columnWidths={columnWidths}
+                                    rowStyle={rowStyle}
+                                    onRowClick={onRowClick}
+                                    onRowDoubleClick={onRowDoubleClick}
+                                    onMouseEnter={handleRowMouseEnter}
+                                    onMouseLeave={handleRowMouseLeave}
+                                />
+                            );
+                        })
                     )}
                 </div>
             </div>

@@ -71,10 +71,8 @@ export const fetchHolidays = async (year) => {
             return holidays;
         } catch (error) {
             logWarn(`[urgencyUtils] Ünnepnapok lekérése sikertelen (${year}):`, error.message);
-            // Fallback: üres set — csak hétvégéket hagyja ki
-            const emptySet = new Set();
-            holidayCache.set(year, emptySet);
-            return emptySet;
+            // Nem cache-eljük a hibát — a következő hívás újra megpróbálhatja
+            return null;
         } finally {
             pendingFetches.delete(year);
         }
@@ -252,7 +250,7 @@ export const getArticleDeadline = (article, deadlines) => {
  * @param {Object} options
  * @param {Set<string>} options.holidays - Ünnepnapok set-je
  * @param {boolean} options.excludeWeekends - Hétvégéket kihagyja-e
- * @returns {{ ratio: number, color: string|null }|null} Sürgősségi adatok, vagy null
+ * @returns {{ ratio: number, background: string|null }|null} Sürgősségi adatok, vagy null
  */
 export const calculateUrgencyRatio = (article, deadlines, { holidays, excludeWeekends }) => {
     // ARCHIVABLE vagy IGNORE markeres cikk → nincs sürgősség
@@ -296,26 +294,26 @@ export const calculateUrgencyRatio = (article, deadlines, { holidays, excludeWee
  * @type {string[]}
  */
 const URGENCY_COLORS = [
-    "rgba(255, 255, 0, 0.03)",   //  1 — Halvány citromsárga
-    "rgba(255, 240, 0, 0.06)",   //  2
-    "rgba(255, 225, 0, 0.09)",   //  3 — Meleg sárga
-    "rgba(255, 210, 0, 0.12)",   //  4
-    "rgba(255, 195, 0, 0.15)",   //  5 — Arany
-    "rgba(255, 180, 0, 0.18)",   //  6
-    "rgba(255, 165, 0, 0.21)",   //  7 — Világos narancs
-    "rgba(255, 150, 0, 0.24)",   //  8
-    "rgba(255, 135, 0, 0.27)",   //  9 — Narancssárga
-    "rgba(255, 120, 0, 0.30)",   // 10 — Félúton
-    "rgba(255, 105, 0, 0.33)",   // 11 — Erős narancs
-    "rgba(255, 90, 0, 0.36)",    // 12
-    "rgba(255, 75, 0, 0.39)",    // 13 — Narancsvörös
-    "rgba(255, 60, 0, 0.42)",    // 14
-    "rgba(255, 45, 0, 0.45)",    // 15 — Világos vörös
-    "rgba(255, 30, 0, 0.48)",    // 16
-    "rgba(255, 15, 0, 0.51)",    // 17 — Tűzvörös
-    "rgba(255, 5, 0, 0.54)",     // 18
-    "rgba(255, 0, 0, 0.57)",     // 19 — Mély vörös
-    "rgba(255, 0, 0, 0.60)"      // 20 — Maximum fedés (60%)
+    "rgba(255, 255, 0, 0.01)",   //  1 — Halvány citromsárga
+    "rgba(255, 240, 0, 0.02)",   //  2
+    "rgba(255, 225, 0, 0.03)",   //  3 — Meleg sárga
+    "rgba(255, 210, 0, 0.04)",   //  4
+    "rgba(255, 195, 0, 0.05)",   //  5 — Arany
+    "rgba(255, 180, 0, 0.06)",   //  6
+    "rgba(255, 165, 0, 0.07)",   //  7 — Világos narancs
+    "rgba(255, 150, 0, 0.08)",   //  8
+    "rgba(255, 135, 0, 0.09)",   //  9 — Narancssárga
+    "rgba(255, 120, 0, 0.10)",   // 10 — Félúton
+    "rgba(255, 105, 0, 0.11)",   // 11 — Erős narancs
+    "rgba(255, 90, 0, 0.12)",    // 12
+    "rgba(255, 75, 0, 0.13)",    // 13 — Narancsvörös
+    "rgba(255, 60, 0, 0.14)",    // 14
+    "rgba(255, 45, 0, 0.15)",    // 15 — Világos vörös
+    "rgba(255, 30, 0, 0.16)",    // 16
+    "rgba(255, 15, 0, 0.17)",    // 17 — Tűzvörös
+    "rgba(255, 5, 0, 0.18)",     // 18
+    "rgba(255, 0, 0, 0.19)",     // 19 — Mély vörös
+    "rgba(255, 0, 0, 0.20)"      // 20 — Maximum fedés (20%)
 ];
 
 /**

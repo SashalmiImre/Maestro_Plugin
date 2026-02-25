@@ -23,11 +23,12 @@ const REFRESH_INTERVAL_MS = 60_000;
  * @param {Array} articles - A kiadvány cikkeinek tömbje
  * @param {Array} deadlines - A kiadvány deadline-jainak tömbje
  * @param {Object} publication - A kiadvány objektum (excludeWeekends mező)
- * @returns {Map<string, { ratio: number, color: string|null }>} Cikk ID → sürgősségi adatok
+ * @returns {Map<string, { ratio: number, background: string|null }>} Cikk ID → sürgősségi adatok
  */
 export const useUrgency = (articles, deadlines, publication) => {
     const [urgencyMap, setUrgencyMap] = useState(() => new Map());
     const [holidays, setHolidays] = useState(() => new Set());
+    const [currentYear, setCurrentYear] = useState(() => new Date().getFullYear());
     const intervalRef = useRef(null);
 
     const excludeWeekends = publication?.excludeWeekends ?? true;
@@ -35,7 +36,6 @@ export const useUrgency = (articles, deadlines, publication) => {
     // Ünnepnapok lekérése (induláskor + évváltáskor)
     useEffect(() => {
         let cancelled = false;
-        const currentYear = new Date().getFullYear();
 
         const loadHolidays = async () => {
             try {
@@ -57,11 +57,14 @@ export const useUrgency = (articles, deadlines, publication) => {
 
         loadHolidays();
         return () => { cancelled = true; };
-    }, []);
+    }, [currentYear]);
 
     // Sürgősség kiszámítása + percenkénti frissítés
     useEffect(() => {
         const recalculate = () => {
+            // Évváltás detektálása — a currentYear state frissítése újra lefuttatja az ünnepnap-lekérést
+            setCurrentYear(new Date().getFullYear());
+
             if (!articles?.length || !deadlines?.length) {
                 setUrgencyMap(new Map());
                 return;

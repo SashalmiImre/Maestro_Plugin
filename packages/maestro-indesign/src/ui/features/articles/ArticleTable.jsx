@@ -49,23 +49,40 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
     }, [currentUser, getUserName]);
 
     /**
+     * Felhasználói validációk előindexelése articleId szerint — O(n) egyszer, O(1) keresésenként.
+     */
+    const userValidationsByArticle = useMemo(() => {
+        const map = new Map();
+        for (const v of validations) {
+            if (v.isResolved) continue;
+            const list = map.get(v.articleId);
+            const item = {
+                type: v.type || 'info',
+                message: v.description || v.message || '',
+                source: v.source || 'user',
+                createdAt: v.createdAt || v.$createdAt
+            };
+            if (list) {
+                list.push(item);
+            } else {
+                map.set(v.articleId, [item]);
+            }
+        }
+        return map;
+    }, [validations]);
+
+    /**
      * Összegyűjti egy cikk összes aktív (nem megoldott) validációs elemét
      * mindkét forrásból: rendszer (ValidationContext) + felhasználói (DataContext).
      */
     const getAllActiveItems = useCallback((articleId) => {
         const systemItems = validationResults.get(articleId) || [];
+        const userItems = userValidationsByArticle.get(articleId) || [];
 
-        const userItems = validations
-            .filter(v => v.articleId === articleId && !v.isResolved)
-            .map(v => ({
-                type: v.type || 'info',
-                message: v.description || v.message || '',
-                source: v.source || 'user',
-                createdAt: v.createdAt || v.$createdAt
-            }));
-
+        if (systemItems.length === 0) return userItems;
+        if (userItems.length === 0) return systemItems.filter(i => !i.isResolved);
         return [...systemItems, ...userItems].filter(i => !i.isResolved);
-    }, [validationResults, validations]);
+    }, [validationResults, userValidationsByArticle]);
 
     /**
      * Visszaadja a cikk validációs súlyát a rendezéshez.

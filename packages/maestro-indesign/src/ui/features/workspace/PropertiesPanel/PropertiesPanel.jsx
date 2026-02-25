@@ -78,6 +78,8 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
                 if (result.document) {
                     applyArticleUpdate(result.document);
                     if (onUpdate) onUpdate(result.document);
+                } else if (!result.silent) {
+                    showToast(result.message || "Művelet végrehajtva", "success");
                 }
             } else {
                 const errorMessage = result.error?.message || (typeof result.error === 'string' ? result.error : 'Ismeretlen hiba');

@@ -65,12 +65,12 @@ Minden workflow-állapothoz két komponens tartozik:
 | Állapot | `perPage` (perc/oldal) | `fixed` (perc) |
 |---------|----------------------:|----------------:|
 | DESIGNING (0) | 60 | 0 |
-| DESIGN_APPROVAL (1) | 5 | 15 |
-| WAITING_FOR_START (2) | 0 | 15 |
-| EDITORIAL_APPROVAL (3) | 10 | 15 |
+| DESIGN_APPROVAL (1) | 30 | 15 |
+| WAITING_FOR_START (2) | 10 | 15 |
+| EDITORIAL_APPROVAL (3) | 30 | 15 |
 | CONTENT_REVISION (4) | 30 | 10 |
-| FINAL_APPROVAL (5) | 5 | 15 |
-| PRINTABLE (6) | 5 | 5 |
+| FINAL_APPROVAL (5) | 10 | 15 |
+| PRINTABLE (6) | 10 | 5 |
 
 **Formula állapotonként:**
 
@@ -93,12 +93,12 @@ Ha nincs `startPage` vagy `endPage`, fallback: **1 oldal**.
 ```
 Cikk: 4 oldalas, state: EDITORIAL_APPROVAL (3)
 
-  3 (EDITORIAL_APPROVAL): 10×4 + 15 =  55 perc
+  3 (EDITORIAL_APPROVAL): 30×4 + 15 = 135 perc
   4 (CONTENT_REVISION):   30×4 + 10 = 130 perc
-  5 (FINAL_APPROVAL):      5×4 + 15 =  35 perc
-  6 (PRINTABLE):            5×4 + 5  =  25 perc
+  5 (FINAL_APPROVAL):     10×4 + 15 =  55 perc
+  6 (PRINTABLE):          10×4 + 5  =  45 perc
                                       ────────
-  Összesen:                            245 perc
+  Összesen:                            365 perc
 ```
 
 ---
@@ -152,11 +152,11 @@ https://date.nager.at/api/v3/publicholidays/{year}/HU
 - **Alkalmanként 2 HTTP kérés**: az aktuális és a következő év (éves határ közelében is pontos legyen)
 - **Memória cache**: Évenként egyszer kéri le, utána `Map<year, Set<string>>` cache-ből szolgálja ki
 - **Deduplikáció**: Ha párhuzamosan több hívás indul ugyanarra az évre, csak egy fetch fut (Promise deduplikáció)
-- **Fallback**: Ha az API nem elérhető, üres set → csak hétvégéket hagyja ki
+- **Fallback**: Ha az API nem elérhető, `null` visszatérés (nem cache-eli a hibát) → a következő hívás újra megpróbálja. Addig csak hétvégéket hagyja ki.
 
 ### Időzítés
 
-Az ünnepnapok betöltése a `useUrgency` hook mount-jakor történik. Évváltáskor az effect újra lefut.
+Az ünnepnapok betöltése a `useUrgency` hook mount-jakor történik. A percenkénti újraszámítás (`recalculate`) minden futáskor ellenőrzi az aktuális évet — ha az év változott (pl. éjfélkor), a `currentYear` state frissítése automatikusan újra futtatja az ünnepnap-lekérő effect-et.
 
 ---
 
@@ -189,30 +189,30 @@ A rendszer **nem számol sürgősséget** a következő esetekben:
 
 ### 20 lépcsős színskála
 
-A sürgősség mértékét egy progresszív, balról jobbra növekvő színsáv jelzi. A szín a citromsárgától a tűzvörösig fokozódik, az átlátszóság 3%-tól 60%-ig nő:
+A sürgősség mértékét egy progresszív, balról jobbra növekvő színsáv jelzi. A szín a citromsárgától a tűzvörösig fokozódik, az átlátszóság 1%-tól 20%-ig nő:
 
 | Lépcső | Szín | Opacity |
 |:------:|------|--------:|
-| 1 | Halvány citromsárga `rgb(255, 255, 0)` | 3% |
-| 2 | `rgb(255, 240, 0)` | 6% |
-| 3 | Meleg sárga `rgb(255, 225, 0)` | 9% |
-| 4 | `rgb(255, 210, 0)` | 12% |
-| 5 | Arany `rgb(255, 195, 0)` | 15% |
-| 6 | `rgb(255, 180, 0)` | 18% |
-| 7 | Világos narancs `rgb(255, 165, 0)` | 21% |
-| 8 | `rgb(255, 150, 0)` | 24% |
-| 9 | Narancssárga `rgb(255, 135, 0)` | 27% |
-| 10 | Félúton `rgb(255, 120, 0)` | 30% |
-| 11 | Erős narancs `rgb(255, 105, 0)` | 33% |
-| 12 | `rgb(255, 90, 0)` | 36% |
-| 13 | Narancsvörös `rgb(255, 75, 0)` | 39% |
-| 14 | `rgb(255, 60, 0)` | 42% |
-| 15 | Világos vörös `rgb(255, 45, 0)` | 45% |
-| 16 | `rgb(255, 30, 0)` | 48% |
-| 17 | Tűzvörös `rgb(255, 15, 0)` | 51% |
-| 18 | `rgb(255, 5, 0)` | 54% |
-| 19 | Mély vörös `rgb(255, 0, 0)` | 57% |
-| 20 | Maximum `rgb(255, 0, 0)` | 60% |
+| 1 | Halvány citromsárga `rgb(255, 255, 0)` | 1% |
+| 2 | `rgb(255, 240, 0)` | 2% |
+| 3 | Meleg sárga `rgb(255, 225, 0)` | 3% |
+| 4 | `rgb(255, 210, 0)` | 4% |
+| 5 | Arany `rgb(255, 195, 0)` | 5% |
+| 6 | `rgb(255, 180, 0)` | 6% |
+| 7 | Világos narancs `rgb(255, 165, 0)` | 7% |
+| 8 | `rgb(255, 150, 0)` | 8% |
+| 9 | Narancssárga `rgb(255, 135, 0)` | 9% |
+| 10 | Félúton `rgb(255, 120, 0)` | 10% |
+| 11 | Erős narancs `rgb(255, 105, 0)` | 11% |
+| 12 | `rgb(255, 90, 0)` | 12% |
+| 13 | Narancsvörös `rgb(255, 75, 0)` | 13% |
+| 14 | `rgb(255, 60, 0)` | 14% |
+| 15 | Világos vörös `rgb(255, 45, 0)` | 15% |
+| 16 | `rgb(255, 30, 0)` | 16% |
+| 17 | Tűzvörös `rgb(255, 15, 0)` | 17% |
+| 18 | `rgb(255, 5, 0)` | 18% |
+| 19 | Mély vörös `rgb(255, 0, 0)` | 19% |
+| 20 | Maximum `rgb(255, 0, 0)` | 20% |
 
 ### Progresszív sáv
 
@@ -244,6 +244,16 @@ Az újraszámítás azonnal megtörténik, ha:
 - Változnak a `deadlines`
 - Befejeződik az ünnepnapok lekérése
 - Változik az `excludeWeekends` beállítás
+
+---
+
+## Teljesítmény-optimalizáció
+
+A percenkénti sürgősség-újraszámítás és a Realtime események sor-szintű újrarajzolást válthatnak ki. A `CustomTable` a következő optimalizációkat alkalmazza:
+
+- **`TableRow` + `React.memo` egyedi comparator-ral (`areRowPropsEqual`)**: Csak azok a sorok renderelődnek újra, amelyeknek ténylegesen változott az adat (`$updatedAt`) vagy a háttérszín (`rowStyle.background`). A `columns` és callback referenciák változása figyelmen kívül marad.
+- **CSS `contain: layout style`** a sorokon: Jelzi a böngésző/UXP motornak, hogy egy sor belső változása nem hat ki más sorokra — gyorsabb scroll paint.
+- **Validációk előindexelése** (`ArticleTable.userValidationsByArticle`): A felhasználói validációk `Map<articleId, items[]>` indexben tárolódnak (O(1) lookup), nem soronkénti tömb-szűréssel (O(m)).
 
 ---
 

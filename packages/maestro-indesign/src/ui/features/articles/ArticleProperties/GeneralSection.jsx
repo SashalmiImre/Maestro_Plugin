@@ -68,15 +68,6 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
         let rawState = article.state;
         if (rawState === undefined) rawState = article.State;
 
-        if (typeof WorkflowEngine === 'undefined') {
-            console.error("[GeneralSection] CRITICAL: WorkflowEngine is undefined!");
-            return { activeMarkersMask: 0, currentState: 0, currentConfig: {}, availableTransitions: [] };
-        }
-        if (typeof WORKFLOW_CONFIG === 'undefined') {
-            console.error("[GeneralSection] CRITICAL: WORKFLOW_CONFIG is undefined!");
-            return { activeMarkersMask: 0, currentState: 0, currentConfig: {}, availableTransitions: [] };
-        }
-
         const state = typeof rawState === 'number' ? rawState : WORKFLOW_STATES.DESIGNING;
         const config = WORKFLOW_CONFIG[state]?.config || WORKFLOW_CONFIG[WORKFLOW_STATES.DESIGNING]?.config || {};
 
