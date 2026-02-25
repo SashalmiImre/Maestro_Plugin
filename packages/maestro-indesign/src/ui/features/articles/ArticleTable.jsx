@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { WorkflowStatus } from "../publications/Publication/WorkflowStatus.jsx";
 import { useTeamMembers } from "../../../data/hooks/useTeamMembers.js";
+import { useUrgency } from "../../../data/hooks/useUrgency.js";
 import { TEAMS } from "../../../core/config/appwriteConfig.js";
 import { useUser } from "../../../core/contexts/UserContext.jsx";
 import { CustomTable } from "../../common/Table/CustomTable.jsx";
@@ -10,7 +11,8 @@ import { useData } from "../../../core/contexts/DataContext.jsx";
 export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }) => {
     const { user: currentUser } = useUser();
     const { validationResults } = useValidation();
-    const { validations } = useData();
+    const { validations, deadlines } = useData();
+    const urgencyMap = useUrgency(articles, deadlines, publication);
     const [sortColumn, setSortColumn] = useState("startPage");
     const [sortDirection, setSortDirection] = useState("asc");
     const clickTimerRef = useRef(null);
@@ -234,6 +236,13 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
         }, 250);
     };
 
+    /** Sürgősség alapú sor háttér (progresszív gradient) */
+    const getRowStyle = useCallback((article) => {
+        const urgency = urgencyMap.get(article.$id);
+        if (!urgency?.background) return undefined;
+        return { background: urgency.background };
+    }, [urgencyMap]);
+
     const handleRowDoubleClick = (article) => {
         if (clickTimerRef.current) {
             clearTimeout(clickTimerRef.current);
@@ -251,6 +260,7 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
             onSort={handleSort}
             onRowClick={handleRowClick}
             onRowDoubleClick={handleRowDoubleClick}
+            getRowStyle={getRowStyle}
         />
     );
 };

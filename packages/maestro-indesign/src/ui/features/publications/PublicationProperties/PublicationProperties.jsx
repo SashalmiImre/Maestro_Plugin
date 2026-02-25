@@ -50,6 +50,7 @@ export const PublicationProperties = ({ publication, onFieldUpdate, onValidation
 
                 <DeadlinesSection
                     publication={publication}
+                    onFieldUpdate={onFieldUpdate}
                     onValidationChange={onValidationChange}
                 />
 

@@ -42,10 +42,10 @@ export function getBackgroundOpenLogic(filePath, docVarName, openedVarName) {
                 if (!isOpen) {
                     // Háttérben nyitjuk meg
                     var oldInteraction = app.scriptPreferences.userInteractionLevel;
-                    // var oldCheckLinks = app.linkingPreferences.checkLinksAtOpen; // Opcionális
+                    var oldCheckLinks = app.linkingPreferences.checkLinksAtOpen;
 
                     app.scriptPreferences.userInteractionLevel = UserInteractionLevels.NEVER_INTERACT;
-                    // app.linkingPreferences.checkLinksAtOpen = false; // Opcionális, de gyorsíthat
+                    app.linkingPreferences.checkLinksAtOpen = false;
 
                     try {
                         ${docVarName} = app.open(f, false); // false = láthatatlan
@@ -55,7 +55,7 @@ export function getBackgroundOpenLogic(filePath, docVarName, openedVarName) {
                          return "ERROR:Sikertelen megnyitás: " + e.message;
                     } finally {
                         app.scriptPreferences.userInteractionLevel = oldInteraction;
-                        // app.linkingPreferences.checkLinksAtOpen = oldCheckLinks;
+                        app.linkingPreferences.checkLinksAtOpen = oldCheckLinks;
                     }
                 }
 

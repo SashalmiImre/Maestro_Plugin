@@ -12,7 +12,7 @@ import { executeCommand } from "../../../../core/commands/index.js";
 export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onPublicationUpdate, onBack, onOpen, runAndPersistPreflight }) => {
     // Hooks
     const { user } = useUser();
-    const { layouts } = useData();
+    const { layouts, applyArticleUpdate } = useData();
     const { showToast } = useToast();
     const [isSyncing, setIsSyncing] = useState(false);
     const [hasDeadlineErrors, setHasDeadlineErrors] = useState(false);
@@ -75,8 +75,9 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
         try {
             const result = await WorkflowEngine.toggleMarker(item, MARKERS.IGNORE, user);
             if (result.success) {
-                if (onUpdate && result.document) {
-                    onUpdate(result.document);
+                if (result.document) {
+                    applyArticleUpdate(result.document);
+                    if (onUpdate) onUpdate(result.document);
                 }
             } else {
                 const errorMessage = result.error?.message || (typeof result.error === 'string' ? result.error : 'Ismeretlen hiba');

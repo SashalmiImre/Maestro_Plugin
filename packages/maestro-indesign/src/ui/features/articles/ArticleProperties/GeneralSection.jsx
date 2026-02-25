@@ -302,7 +302,7 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
                                 style={{ width: "100%" }}
                             />
                         </div>
-                        <div style={{ flex: 3, marginRight: "8px" }}>
+                        <div style={{ flex: 10, marginRight: "8px" }}>
                             <sp-label>Név</sp-label>
                             <ValidatedTextField
                                 id="name-field"
@@ -315,7 +315,7 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
                                 style={{ width: "100%" }}
                             />
                         </div>
-                        <div style={{ flex: 2 }}>
+                        <div style={{ flex: 9 }}>
                             <sp-label>Elrendezés</sp-label>
                             <CustomDropdown
                                 id="layout-dropdown"
@@ -366,7 +366,7 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
                             <div style={{
                                 flex: 1,
                                 backgroundColor: isIgnored ? "var(--spectrum-global-color-gray-500)" : currentConfig?.color,
-                                color: "var(--spectrum-global-color-gray-900)",
+                                color: "var(--spectrum-global-color-gray-200)",
                                 borderRadius: "0",
                                 textAlign: "center",
                                 fontWeight: "700",

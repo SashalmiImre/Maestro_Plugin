@@ -188,6 +188,31 @@ export const WORKFLOW_CONFIG = {
 };
 
 /**
+ * Az egyes munkafolyamat állapotok becsült időtartama.
+ * A sürgősség-számítás ezeket használja annak meghatározásához,
+ * hogy a hátralévő munka belefér-e a lapzártáig.
+ *
+ * Minden állapothoz két összetevő tartozik:
+ * - `perPage`: egy emberre, egy oldalra vetített átlagos idő percben
+ * - `fixed`: oldalszámtól független fix ráfordítás percben
+ *
+ * Formula: állapot idő = perPage × oldalszám + fixed
+ *
+ * Az ARCHIVABLE állapot nem szerepel, mert az a leadás utáni munka.
+ *
+ * @type {Object.<number, { perPage: number, fixed: number }>}
+ */
+export const STATE_DURATIONS = {
+    [WORKFLOW_STATES.DESIGNING]:           { perPage: 60, fixed: 0 },
+    [WORKFLOW_STATES.DESIGN_APPROVAL]:     { perPage: 5,  fixed: 15 },
+    [WORKFLOW_STATES.WAITING_FOR_START]:   { perPage: 0,  fixed: 15 },
+    [WORKFLOW_STATES.EDITORIAL_APPROVAL]:  { perPage: 10, fixed: 15 },
+    [WORKFLOW_STATES.CONTENT_REVISION]:    { perPage: 30, fixed: 10 },
+    [WORKFLOW_STATES.FINAL_APPROVAL]:      { perPage: 5,  fixed: 15 },
+    [WORKFLOW_STATES.PRINTABLE]:           { perPage: 5,  fixed: 5 }
+};
+
+/**
  * Állapot-jogosultsági leképezés.
  * Meghatározza, mely csapatok mozgathatják a cikkeket az adott állapotBÓL
  * (előre és hátra egyaránt).

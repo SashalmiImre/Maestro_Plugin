@@ -162,6 +162,7 @@ Maestro/
 │   ├── EVENT_ARCHITECTURE.md
 │   ├── REALTIME_ARCHITECTURE.md
 │   ├── WORKFLOW_PERMISSIONS.md
+│   ├── URGENCY_SYSTEM.md
 │   ├── PROXY_SERVER.md
 │   └── diagrams/
 │       ├── data-flow-architecture.md
@@ -204,6 +205,7 @@ Maestro/
 │   │       ├── pathUtils.js            ← Fájlútvonal segédfüggvények (UXP ↔ InDesign leképezés)
 │   │       ├── namingUtils.js          ← Név formázó helperek
 │   │       ├── promiseUtils.js         ← Promise segédfüggvények (withTimeout, withRetry)
+│   │       ├── urgencyUtils.js        ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színek)
 │   │       ├── validationRunner.js     ← Validátor futtatás orchestrálása
 │   │       ├── validators/             ← Tiszta validációs logika osztályok
 │   │       │   ├── ValidatorBase.js
@@ -238,7 +240,8 @@ Maestro/
 │   │       ├── useDatabaseIntegrityValidation.js ← DB integritás esemény-feliratkozó hook
 │   │       ├── useOverlapValidation.js          ← Átfedés detektálás esemény-feliratkozó hook
 │   │       ├── useDeadlines.js                  ← Határidők CRUD
-│   │       └── useLayouts.js                    ← Layoutok CRUD + layoutChanged esemény
+│   │       ├── useLayouts.js                    ← Layoutok CRUD + layoutChanged esemény
+│   │       └── useUrgency.js                    ← Sürgősség-számítás hook (percenkénti frissítés)
 │   │
 │   ├── ui/                       ← React Komponensek
 │   │   ├── common/               ← Újrafelhasználható UI elemek
@@ -332,6 +335,7 @@ Appwrite DB változás → WebSocket esemény → `realtimeClient.js` → `DataC
 | `docs/diagrams/network-architecture.md`   | Hálózati kapcsolatkezelés, sleep recovery, auto-retry               |
 | `docs/WORKFLOW_CONFIGURATION.md`          | Munkafolyamat konfiguráció, állapotátmenetek és validációs szabályok |
 | `docs/WORKFLOW_PERMISSIONS.md`            | Jogosultsági rendszer: csapat-alapú állapotátmenet-védelem          |
+| `docs/URGENCY_SYSTEM.md`                  | Sürgősség-számítás: munkaidő, ünnepnapok, ratio, progresszív sáv   |
 | `docs/VALIDATION_MECHANISM.md`            | Egységes validációs és üzenetküldő rendszer működése                |
 | `CONTRIBUTING.md`                         | Fejlesztési szabályok, JSDoc policy, import sorrend, PR workflow    |
 

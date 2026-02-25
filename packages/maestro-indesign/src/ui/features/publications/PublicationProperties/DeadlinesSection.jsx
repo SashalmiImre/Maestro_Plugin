@@ -4,6 +4,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { CollapsibleSection } from "../../../common/CollapsibleSection.jsx";
 import { ValidatedTextField } from "../../../common/ValidatedTextField.jsx";
 import { ConfirmDialog } from "../../../common/ConfirmDialog.jsx";
+import { CustomCheckbox } from "../../../common/CustomCheckbox.jsx";
 
 // Contexts & Hooks
 import { useDeadlines } from "../../../../data/hooks/useDeadlines.js";
@@ -85,10 +86,11 @@ const buildDatetime = (datePart, timePart) => {
  * A UI két külön mezőben jeleníti meg (ÉÉÉÉ.HH.NN + ÓÓ:PP), mentéskor kombinálja őket.
  *
  * @param {Object} props
- * @param {Object} props.publication - A kiadvány objektum (coverageStart, coverageEnd)
+ * @param {Object} props.publication - A kiadvány objektum (coverageStart, coverageEnd, excludeWeekends)
+ * @param {Function} props.onFieldUpdate - Mező frissítés callback: (fieldName, value) => void
  * @param {Function} props.onValidationChange - Callback: (hasErrors: boolean) => void
  */
-export const DeadlinesSection = ({ publication, onValidationChange }) => {
+export const DeadlinesSection = ({ publication, onFieldUpdate, onValidationChange }) => {
     const { deadlines, createDeadline, updateDeadline, deleteDeadline } = useDeadlines();
     const { showToast } = useToast();
 
@@ -321,6 +323,19 @@ export const DeadlinesSection = ({ publication, onValidationChange }) => {
                 storageKey={STORAGE_KEYS.SECTION_PUB_DEADLINES_COLLAPSED}
             >
                 <div style={{ display: "flex", flexDirection: "column" }}>
+                    {/* Hétvégék kihagyása beállítás */}
+                    <CustomCheckbox
+                        checked={publication?.excludeWeekends ?? true}
+                        onChange={() => {
+                            if (onFieldUpdate) {
+                                onFieldUpdate("excludeWeekends", !(publication?.excludeWeekends ?? true));
+                            }
+                        }}
+                        style={{ marginBottom: "10px" }}
+                    >
+                        Hétvégék kihagyása
+                    </CustomCheckbox>
+
                     {/* Határidő lista */}
                     {deadlines.map((deadline) => (
                         <div

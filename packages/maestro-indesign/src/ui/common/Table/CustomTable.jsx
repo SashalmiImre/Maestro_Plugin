@@ -179,6 +179,7 @@ const useColumnResize = () => {
  * @param {Function} props.onSort - (columnId) => void
  * @param {Function} props.onRowClick - (item) => void
  * @param {Function} props.onRowDoubleClick - (item) => void
+ * @param {Function} [props.getRowStyle] - (item) => style object — egyedi sor stílushoz (pl. sürgősség színkódolás)
  * @param {object} props.style - Container style overrides
  */
 export const CustomTable = ({
@@ -189,12 +190,14 @@ export const CustomTable = ({
     onSort,
     onRowClick,
     onRowDoubleClick,
+    getRowStyle,
     style
 }) => {
     const { columnWidths, handleResizeStart } = useColumnResize();
 
     const handleRowMouseEnter = React.useCallback((e) => {
-        e.currentTarget.style.backgroundColor = "var(--spectrum-alias-highlight-hover)";
+        // backgroundColor a gradient ALÁ kerül — mindkettő látszódik
+        e.currentTarget.style.backgroundColor = "rgba(0, 0, 0, 0.06)";
     }, []);
 
     const handleRowMouseLeave = React.useCallback((e) => {
@@ -267,11 +270,14 @@ export const CustomTable = ({
                             <div role="cell" style={STYLES.emptyMessage} aria-colspan={columns.length}>{EMPTY_MESSAGE}</div>
                         </div>
                     ) : (
-                        data.map((item, rowIndex) => (
+                        data.map((item, rowIndex) => {
+                            const customRowStyle = getRowStyle ? getRowStyle(item) : undefined;
+
+                            return (
                             <div
                                 key={item.id || item.$id || rowIndex}
                                 role="row"
-                                style={STYLES.row}
+                                style={{ ...STYLES.row, ...customRowStyle }}
                                 onClick={() => onRowClick && onRowClick(item)}
                                 onDoubleClick={() => onRowDoubleClick && onRowDoubleClick(item)}
                                 onMouseEnter={handleRowMouseEnter}
@@ -302,7 +308,7 @@ export const CustomTable = ({
                                     );
                                 })}
                             </div>
-                        ))
+                        );})
                     )}
                 </div>
             </div>
