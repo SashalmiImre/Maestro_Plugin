@@ -66,6 +66,10 @@ export const MaestroEvent = Object.freeze({
 
     /** Verifikáció befejeződött — lockkezelés folytatása. Nincs detail. */
     verificationEnded: 'maestro:verification-ended',
+
+    // --- Infrastruktúra ---
+    /** Proxy endpoint váltás történt. Detail: { isPrimary, endpoint } */
+    endpointSwitched: 'maestro:endpoint-switched',
 });
 
 // ---------------------------------------------------------------------------

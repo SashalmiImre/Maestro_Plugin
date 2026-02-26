@@ -1,11 +1,10 @@
 import { Client, Realtime } from "appwrite";
 import { log, logError, logWarn } from "../utils/logger.js";
 import { MaestroEvent, dispatchMaestroEvent } from "./maestroEvents.js";
-import { 
-    APPWRITE_ENDPOINT, 
-    APPWRITE_PROJECT_ID, 
+import {
+    APPWRITE_PROJECT_ID,
     APPWRITE_LOCALE,
-    HEALTH_ENDPOINT 
+    endpointManager
 } from "./appwriteConfig.js";
 
 import { ID } from "appwrite";
@@ -65,7 +64,7 @@ class RealtimeClient {
         }
         
         this.client = new Client()
-            .setEndpoint(APPWRITE_ENDPOINT)
+            .setEndpoint(endpointManager.getEndpoint())
             .setProject(APPWRITE_PROJECT_ID)
             .setLocale(APPWRITE_LOCALE);
 

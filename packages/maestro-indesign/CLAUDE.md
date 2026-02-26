@@ -126,8 +126,11 @@
     - **Konfiguráció**: `workflowConstants.js` (`STATE_PERMISSIONS`, `TEAM_ARTICLE_FIELD`), `workflowPermissions.js` (`canUserMoveArticle`).
     - Ld. `docs/WORKFLOW_PERMISSIONS.md`
 
-6. **Kapcsolat-helyreállítás (RecoveryManager)**
+6. **Kapcsolat-helyreállítás (RecoveryManager) & Dual-Proxy Failover**
+    - **Dual-Proxy Architektúra**: Railway (primary, EU West Amsterdam, ~0.5s TTFB) + emago.hu (fallback, Apache/Passenger, 8-10s cold start). Független infrastruktúra → szinte nulla egyidejű kiesés esélye.
+    - **EndpointManager** (`appwriteConfig.js`): Singleton, amely kezeli az aktív/fallback proxy endpoint váltást. `switchToFallback()`, `switchToPrimary()`, `switchToOther()` — automatikusan frissíti az Appwrite Client endpoint-ját. `endpointSwitched` MaestroEvent-et dispatch-el váltáskor → toast értesítés a UI-ban.
     - **Központi RecoveryManager** (`recoveryManager.js`): Egyetlen belépési pont az összes recovery trigger (online, sleep, focus, realtime disconnect) számára.
+    - **Cascading Health Check**: (1) Aktív endpoint retry-okkal, (2) ha nem elérhető, másik endpoint egyetlen próbával, (3) ha a másik működik, átkapcsol. Fallback-en minden recovery-nél ellenőrzi: primary visszajött-e → automatikus visszakapcsolás.
     - Lock + debounce védelemmel a párhuzamos és gyors egymás utáni recovery kérések ellen.
     - **Debounce végponttól**: A `lastRecoveryAt` a recovery VÉGÉN is frissül (`finally` blokk), megakadályozva, hogy egy hosszú recovery lejárja a debounce-t.
     - **isReconnecting guard**: Nem indít újabb `reconnect()`-et, ha egy már folyamatban van.
@@ -136,6 +139,7 @@
     - **Szinkron Resubscribe**: A `reconnect()` szinkron építi újra a feliratkozásokat (nincs `setTimeout`), megakadályozva az `isConnected` flag ideiglenesen hamis állapotát.
     - **Ghost Socket Védelem**: Socket generáció-számláló (`_socketGeneration`) a `realtimeClient.js`-ben. A close handler ignorálja a régi socket-ek close event-jeit, megakadályozva a végtelen reconnect ciklust.
     - **Explicit Socket Cleanup**: A `reconnect()` metódus explicit `close(1000)` hívással zárja le a régi WebSocket-et az új létrehozása előtt.
+    - **Dinamikus Endpoint (Realtime)**: A `realtimeClient.js` `_initClient()` metódusa `endpointManager.getEndpoint()`-ot használ → `reconnect()` automatikusan felveszi az aktuális (primary/fallback) endpoint-ot.
     - **Timeout ≠ Offline**: Az adatlekérés időtúllépése NEM aktiválja az offline overlay-t — toast figyelmeztetést kap a felhasználó. Csak valódi hálózati hibák (Failed to fetch, ECONNREFUSED stb.) váltják ki az offline állapotot.
     - **Overlay Cleanup**: A `DataContext.fetchData` finally blokkja mindig törli az `isConnecting` állapotot, ha nem mentünk offline-ba — megakadályozza az overlay beragadását.
     - **API Ellenállóképesség**: Centralizált `withRetry` segédfüggvény (`promiseUtils.js`) exponenciális backoff-fal (1s→2s→4s) az átmeneti szerverhibák (502, 503, 504) és hálózati hibák kezelésére.
@@ -178,7 +182,7 @@ Maestro/
 │   │   ├── index.jsx             ← App bootstrap, belépési pont
 │   │   ├── Main.jsx              ← Gyökér komponens (sleep/focus detektálás, RecoveryManager trigger)
 │   │   ├── config/
-│   │   │   ├── appwriteConfig.js       ← Appwrite kliens, db/collection/bucket ID-k
+│   │   │   ├── appwriteConfig.js       ← Appwrite kliens, EndpointManager (dual-proxy), db/collection/bucket ID-k
 │   │   │   ├── realtimeClient.js       ← WebSocket kliens proxy auth injection-nel
 │   │   │   ├── recoveryManager.js      ← Központi recovery orchestrator (health check, reconnect, refresh)
 │   │   │   └── maestroEvents.js        ← MaestroEvent konstansok & dispatchMaestroEvent()
@@ -385,7 +389,7 @@ index.jsx
 ### Végpontok & ID-k
 A konfigurációs konstansok: `src/core/config/appwriteConfig.js`
 
-- **Endpoint**: A proxy-n keresztül (`APPWRITE_ENDPOINT`), nem közvetlenül az Appwrite Cloud-ra.
+- **Endpoint**: Dual-proxy failover-rel (`EndpointManager`): Railway (primary) → emago.hu (fallback). Mindig `endpointManager.getEndpoint()`-ot használj az aktuális endpoint lekéréséhez — a korábbi `APPWRITE_ENDPOINT` statikus export el lett távolítva.
 - **Project ID**, **Database ID**, **Collection ID-k** (Articles, Publications, Messages), **Bucket ID** (Storage).
 - **Team ID-k**: Team-alapú hozzáférés-kezelés és jogosultságkezelés. Csapatok: `editors`, `designers`, `writers`, `image_editors`, `art_directors`, `managing_editors`, `proofwriters`.
 

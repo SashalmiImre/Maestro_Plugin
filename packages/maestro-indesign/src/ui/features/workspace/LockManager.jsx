@@ -9,7 +9,7 @@ import { tables, Query, DATABASE_ID, ARTICLES_COLLECTION_ID } from "../../../cor
 // Segédfüggvények
 import { resolvePlatformPath, getCrossPlatformPaths } from "../../../core/utils/pathUtils.js";
 import { SCRIPT_LANGUAGE_JAVASCRIPT, LOCK_TYPE } from "../../../core/utils/constants.js";
-import { withTimeout } from "../../../core/utils/promiseUtils.js";
+import { withTimeout, withRetry } from "../../../core/utils/promiseUtils.js";
 import { isIndexNotFoundError } from "../../../core/utils/errorUtils.js";
 import { getOpenDocumentPaths, getIndesignApp, generateGetActiveDocumentPathScript } from "../../../core/utils/indesign/index.js";
 import { WorkflowEngine } from "../../../core/utils/workflow/workflowEngine.js";
@@ -100,15 +100,18 @@ export const LockManager = () => {
                 Query.equal("lockOwnerId", user.$id)
             ];
 
-            const response = await withTimeout(
-                tables.listRows({
-                    databaseId: DATABASE_ID,
-                    tableId: ARTICLES_COLLECTION_ID,
-                    queries: orphanedQueries,
-                    limit: 100
-                }),
-                30000,
-                "LockManager: cleanupOrphanedLocks"
+            const response = await withRetry(
+                () => withTimeout(
+                    tables.listRows({
+                        databaseId: DATABASE_ID,
+                        tableId: ARTICLES_COLLECTION_ID,
+                        queries: orphanedQueries,
+                        limit: 100
+                    }),
+                    10000,
+                    "LockManager: cleanupOrphanedLocks"
+                ),
+                { operationName: "LockManager: cleanupOrphanedLocks" }
             );
 
             if (!isMountedRef.current) return;
@@ -117,15 +120,22 @@ export const LockManager = () => {
             for (const article of response.rows) {
                 if (!isMountedRef.current) break;
                 try {
-                    await tables.updateRow({
-                        databaseId: DATABASE_ID,
-                        tableId: ARTICLES_COLLECTION_ID,
-                        rowId: article.$id,
-                        data: {
-                            lockType: null,
-                            lockOwnerId: null
-                        }
-                    });
+                    await withRetry(
+                        () => withTimeout(
+                            tables.updateRow({
+                                databaseId: DATABASE_ID,
+                                tableId: ARTICLES_COLLECTION_ID,
+                                rowId: article.$id,
+                                data: {
+                                    lockType: null,
+                                    lockOwnerId: null
+                                }
+                            }),
+                            10000,
+                            "LockManager: cleanupOrphanedLocks updateRow"
+                        ),
+                        { operationName: "LockManager: cleanupOrphanedLocks updateRow" }
+                    );
                     console.log(`[LockManager] Orphaned lock törölve: ${article.name}`);
                 } catch (error) {
                     console.error(`[LockManager] Orphaned lock törlése sikertelen (${article.name}):`, error);
@@ -172,27 +182,33 @@ export const LockManager = () => {
 
         // Párhuzamos lekérdezések futtatása timeout-tal
         const promises = [
-            withTimeout(
-                tables.listRows({
-                    databaseId: DATABASE_ID,
-                    tableId: ARTICLES_COLLECTION_ID,
-                    queries: cleanupQuery,
-                    limit: 100
-                }),
-                30000, "LockManager: listRows (cleanup)"
+            withRetry(
+                () => withTimeout(
+                    tables.listRows({
+                        databaseId: DATABASE_ID,
+                        tableId: ARTICLES_COLLECTION_ID,
+                        queries: cleanupQuery,
+                        limit: 100
+                    }),
+                    10000, "LockManager: listRows (cleanup)"
+                ),
+                { operationName: "LockManager: listRows (cleanup)" }
             )
         ];
 
         if (openFilesQuery) {
             promises.push(
-                withTimeout(
-                    tables.listRows({
-                        databaseId: DATABASE_ID,
-                        tableId: ARTICLES_COLLECTION_ID,
-                        queries: openFilesQuery,
-                        limit: 100
-                    }),
-                    30000, "LockManager: listRows (open files)"
+                withRetry(
+                    () => withTimeout(
+                        tables.listRows({
+                            databaseId: DATABASE_ID,
+                            tableId: ARTICLES_COLLECTION_ID,
+                            queries: openFilesQuery,
+                            limit: 100
+                        }),
+                        10000, "LockManager: listRows (open files)"
+                    ),
+                    { operationName: "LockManager: listRows (open files)" }
                 )
             );
         }
@@ -221,15 +237,18 @@ export const LockManager = () => {
             const searchPaths = getCrossPlatformPaths(path) || [];
 
             // 1. Megkeressük a cikket az útvonal alapján
-            const response = await withTimeout(
-                tables.listRows({
-                    databaseId: DATABASE_ID,
-                    tableId: ARTICLES_COLLECTION_ID,
-                    queries: [Query.equal("filePath", searchPaths)],
-                    limit: 10
-                }),
-                30000,
-                "LockManager: listRows"
+            const response = await withRetry(
+                () => withTimeout(
+                    tables.listRows({
+                        databaseId: DATABASE_ID,
+                        tableId: ARTICLES_COLLECTION_ID,
+                        queries: [Query.equal("filePath", searchPaths)],
+                        limit: 10
+                    }),
+                    10000,
+                    "LockManager: listRows"
+                ),
+                { operationName: "LockManager: listRows" }
             );
 
             const article = findArticleByPath(response?.rows, path);
@@ -270,15 +289,18 @@ export const LockManager = () => {
         try {
             const searchPaths = getCrossPlatformPaths(path) || [];
 
-            const response = await withTimeout(
-                tables.listRows({
-                    databaseId: DATABASE_ID,
-                    tableId: ARTICLES_COLLECTION_ID,
-                    queries: [Query.equal("filePath", searchPaths)],
-                    limit: 10
-                }),
-                30000,
-                "LockManager: listRows (unlock)"
+            const response = await withRetry(
+                () => withTimeout(
+                    tables.listRows({
+                        databaseId: DATABASE_ID,
+                        tableId: ARTICLES_COLLECTION_ID,
+                        queries: [Query.equal("filePath", searchPaths)],
+                        limit: 10
+                    }),
+                    10000,
+                    "LockManager: listRows (unlock)"
+                ),
+                { operationName: "LockManager: listRows (unlock)" }
             );
 
             const article = findArticleByPath(response?.rows, path);
@@ -518,11 +540,23 @@ export const LockManager = () => {
         const handleVerificationStart = () => { isVerifyingRef.current = true; };
         const handleVerificationEnd = () => { isVerifyingRef.current = false; };
 
+        /**
+         * Recovery utáni lock szinkronizáció.
+         * Ha a kapcsolat megszakadt és helyreállt, a lockok elavultak lehetnek
+         * (pl. más felhasználó közben zárat szerzett/elengedett).
+         */
+        const handleDataRefresh = () => {
+            if (isMountedRef.current) {
+                debouncedSyncLocks(500);
+            }
+        };
+
         // Feliratkozás az InDesign és DOM eseményekre
         const afterOpenListener = app.addEventListener("afterOpen", handleAfterOpen);
         const afterCloseListener = app.addEventListener("afterClose", handleAfterClose);
         const afterSaveAsListener = app.addEventListener("afterSaveAs", handleAfterSaveAs);
         window.addEventListener(MaestroEvent.lockCheckRequested, handleManualCheck);
+        window.addEventListener(MaestroEvent.dataRefreshRequested, handleDataRefresh);
         window.addEventListener(MaestroEvent.verificationStarted, handleVerificationStart);
         window.addEventListener(MaestroEvent.verificationEnded, handleVerificationEnd);
 
@@ -539,6 +573,7 @@ export const LockManager = () => {
 
             // Eseményfigyelők eltávolítása
             window.removeEventListener(MaestroEvent.lockCheckRequested, handleManualCheck);
+            window.removeEventListener(MaestroEvent.dataRefreshRequested, handleDataRefresh);
             window.removeEventListener(MaestroEvent.verificationStarted, handleVerificationStart);
             window.removeEventListener(MaestroEvent.verificationEnded, handleVerificationEnd);
             // InDesign leiratkozások (try-catch, mert kilépéskor hibát dobhatnak)

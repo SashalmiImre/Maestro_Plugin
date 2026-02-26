@@ -174,6 +174,10 @@ const useColumnResize = () => {
  * A columns/columnWidths/callback referenciák minden renderben újak,
  * ezért az item $updatedAt mezőjét + a rowStyle.background-ot hasonlítjuk.
  * Ha az item adata nem változott és a háttérszín sem, kihagyjuk a renderelést.
+ *
+ * renderVersion: a szülő által kezelt escape-hatch — ha a renderCell closure-ok
+ * megváltoztak (pl. új context adat), a szülő ezt a számot lépteti, ami kikényszeríti
+ * az újrarenderelést még akkor is, ha az item $updatedAt-ja nem változott.
  */
 const areRowPropsEqual = (prev, next) => {
     if (prev.item !== next.item) {
@@ -185,6 +189,8 @@ const areRowPropsEqual = (prev, next) => {
     if (prev.rowStyle?.background !== next.rowStyle?.background) return false;
     // Oszlopszélesség változott? (resize)
     if (prev.columnWidths !== next.columnWidths) return false;
+    // renderCell closure-ok megváltoztak? (szülő által jelzett escape-hatch)
+    if (prev.renderVersion !== next.renderVersion) return false;
     return true;
 };
 
@@ -196,7 +202,8 @@ const TableRow = React.memo(({
     onRowClick,
     onRowDoubleClick,
     onMouseEnter,
-    onMouseLeave
+    onMouseLeave,
+    renderVersion  // csak az areRowPropsEqual comparator használja // eslint-disable-line no-unused-vars
 }) => (
     <div
         role="row"
@@ -247,6 +254,8 @@ const TableRow = React.memo(({
  * @param {Function} props.onRowClick - (item) => void
  * @param {Function} props.onRowDoubleClick - (item) => void
  * @param {Function} [props.getRowStyle] - (item) => style object — egyedi sor stílushoz (pl. sürgősség színkódolás)
+ * @param {number|string} [props.renderVersion] - Escape-hatch: a szülő lépteti, ha a renderCell
+ *   closure-ok megváltoztak (pl. új context adat), kikényszerítve az összes sor újrarenderelését.
  * @param {object} props.style - Container style overrides
  */
 export const CustomTable = ({
@@ -258,6 +267,7 @@ export const CustomTable = ({
     onRowClick,
     onRowDoubleClick,
     getRowStyle,
+    renderVersion,
     style
 }) => {
     const { columnWidths, handleResizeStart } = useColumnResize();
@@ -354,6 +364,7 @@ export const CustomTable = ({
                                     onRowDoubleClick={onRowDoubleClick}
                                     onMouseEnter={handleRowMouseEnter}
                                     onMouseLeave={handleRowMouseLeave}
+                                    renderVersion={renderVersion}
                                 />
                             );
                         })

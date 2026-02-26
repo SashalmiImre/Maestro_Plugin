@@ -1,16 +1,84 @@
 import { Client, Account, Databases, TablesDB, Storage, ID, Query, Realtime, Teams, Functions } from "appwrite";
+import { log } from "../utils/logger.js";
+import { MaestroEvent, dispatchMaestroEvent } from "./maestroEvents.js";
 
 export const APPWRITE_PROJECT_ID = "68808427001c20418996";
 export const APPWRITE_LOCALE = "hu-HU";
 
-// Server endpoints
-export const APPWRITE_ENDPOINT = "https://emago.hu/maestro-proxy/v1";
-export const HEALTH_ENDPOINT = `${APPWRITE_ENDPOINT}/health`;
+// =============================================================================
+// Dual-Proxy Failover — Endpoint konfiguráció
+// =============================================================================
+
+/**
+ * Proxy endpoint-ok.
+ * PRIMARY: Railway EU West (Amsterdam) — mindig meleg, ~0.5s TTFB, nincs cold start.
+ * FALLBACK: emago.hu — Apache/Passenger, cold start 8-10s, de független infrastruktúra.
+ */
+const ENDPOINTS = {
+    PRIMARY: 'https://gallant-balance-production-b513.up.railway.app/v1',
+    FALLBACK: 'https://emago.hu/maestro-proxy/v1'
+};
+
+/**
+ * EndpointManager — Kezeli az aktív/fallback proxy endpoint váltást.
+ *
+ * A RecoveryManager cascading health check-je hívja a switch metódusokat.
+ * Az Appwrite Client endpoint-ját automatikusan frissíti váltáskor.
+ */
+class EndpointManager {
+    constructor() {
+        this.activeEndpoint = ENDPOINTS.PRIMARY;
+        this.isPrimary = true;
+    }
+
+    /** Az aktuálisan aktív endpoint URL. */
+    getEndpoint() { return this.activeEndpoint; }
+
+    /** Az aktív endpoint health check URL-je. */
+    getHealthEndpoint() { return `${this.activeEndpoint}/health`; }
+
+    /** Igaz, ha a primary (Railway) az aktív endpoint. */
+    getIsPrimary() { return this.isPrimary; }
+
+    /** Átkapcsol a fallback-re és frissíti a fő klienst. */
+    switchToFallback() {
+        if (!this.isPrimary) return;
+        this.activeEndpoint = ENDPOINTS.FALLBACK;
+        this.isPrimary = false;
+        client.setEndpoint(this.activeEndpoint);
+        log('[EndpointManager] Átkapcsolás fallback-re: ' + this.activeEndpoint);
+        dispatchMaestroEvent(MaestroEvent.endpointSwitched, { isPrimary: false, endpoint: this.activeEndpoint });
+    }
+
+    /** Visszakapcsol a primary-re és frissíti a fő klienst. */
+    switchToPrimary() {
+        if (this.isPrimary) return;
+        this.activeEndpoint = ENDPOINTS.PRIMARY;
+        this.isPrimary = true;
+        client.setEndpoint(this.activeEndpoint);
+        log('[EndpointManager] Visszakapcsolás primary-re: ' + this.activeEndpoint);
+        dispatchMaestroEvent(MaestroEvent.endpointSwitched, { isPrimary: true, endpoint: this.activeEndpoint });
+    }
+
+    /** A másik (nem aktív) endpoint health URL-je. */
+    getOtherHealthEndpoint() {
+        return this.isPrimary
+            ? `${ENDPOINTS.FALLBACK}/health`
+            : `${ENDPOINTS.PRIMARY}/health`;
+    }
+
+    /** Átkapcsol a jelenleg nem aktív endpoint-ra. */
+    switchToOther() {
+        if (this.isPrimary) this.switchToFallback();
+        else this.switchToPrimary();
+    }
+}
+
+export const endpointManager = new EndpointManager();
 
 // Appwrite kliens inicializálása
 const client = new Client()
-    // Use self-hosted CORS proxy on Cweb (always-on, no sleep)
-    .setEndpoint(APPWRITE_ENDPOINT) 
+    .setEndpoint(endpointManager.getEndpoint())
     .setProject(APPWRITE_PROJECT_ID)
     .setLocale(APPWRITE_LOCALE);
 
@@ -29,7 +97,12 @@ window.fetch = async (...args) => {
     const [resource, config] = args;
     const response = await originalFetch(resource, config);
 
-    if (typeof resource === 'string' && resource.includes('maestro-proxy')) {
+    // Mindkét proxy endpoint-ot ellenőrizzük (Railway + emago.hu)
+    const isProxyRequest = typeof resource === 'string' && (
+        resource.includes('gallant-balance-production-b513.up.railway.app') ||
+        resource.includes('maestro-proxy')
+    );
+    if (isProxyRequest) {
         const setCookie = response.headers.get('set-cookie');
         if (setCookie) {
             try {

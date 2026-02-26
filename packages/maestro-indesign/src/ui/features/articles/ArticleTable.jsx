@@ -107,6 +107,12 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
         return startStr;
     }, [publication]);
 
+    // Escape-hatch a CustomTable renderVersion prop-hoz: minden columns-referencia-váltáskor
+    // (pl. getAllActiveItems frissül új validációs adattal) növeljük a számlálót,
+    // hogy az areRowPropsEqual kényszervégre hajtsa az összes sor újrarenderelését.
+    const renderVersionRef = useRef(0);
+    const prevColumnsRef = useRef(null);
+
     const columns = useMemo(() => [
         {
             id: "range",
@@ -186,6 +192,11 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
             }
         }
     ], [formatPageRange, getLockLabel, getAllActiveItems]);
+
+    if (prevColumnsRef.current !== columns) {
+        renderVersionRef.current += 1;
+        prevColumnsRef.current = columns;
+    }
 
     const sortedArticles = useMemo(() => {
         const sorted = [...articles];
@@ -278,6 +289,7 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
             onRowClick={handleRowClick}
             onRowDoubleClick={handleRowDoubleClick}
             getRowStyle={getRowStyle}
+            renderVersion={renderVersionRef.current}
         />
     );
 };

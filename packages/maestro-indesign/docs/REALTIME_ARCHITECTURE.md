@@ -82,7 +82,7 @@ A proxy emellett biztosítja:
 | Komponens             | Beállítás           | Érték                               |
 | :-------------------- | :------------------ | :---------------------------------- |
 | **Appwrite Platform** | Hostname            | `emago.hu`                          |
-| **Plugin Konfig**     | `APPWRITE_ENDPOINT` | `https://emago.hu/maestro-proxy/v1` |
+| **Plugin Konfig**     | `endpointManager.getEndpoint()` | Railway (primary) / emago.hu (fallback) |
 | **Proxy Szerver**     | `Host` Header       | `cloud.appwrite.io` (`changeOrigin: true`) |
 
 ## Szerverhiba Ellenállóképesség

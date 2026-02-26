@@ -75,10 +75,9 @@ export const CONNECTION_CONFIG = {
     IDLE_CHECK_INTERVAL_MS: 15000,  // Ellenőrzés gyakorisága
     SLEEP_THRESHOLD_MS: 60000,      // Küszöbérték, ami felett alvásnak tekintjük a szünetet (1 perc)
 
-    // Újracsatlakozás és Időtúllépések
-    RETRY_DELAY_MS: 3000,          // Várakozás újracsatlakozás előtt
-    FETCH_TIMEOUT_MS: 8000,        // API kérés timeout
-    ABORT_TIMEOUT_MS: 10000,       // Megszakítási timeout
+    // Realtime kapcsolat elavultsági küszöb
+    // Az Appwrite heartbeat ~30s → ha 45s-nél régebbi az utolsó WS üzenet, a TCP valószínűleg halott
+    REALTIME_STALENESS_MS: 45000,
 
     // Realtime kapcsolat ellenőrzése
     RECONNECT_CHECK_MS: 30000      // 30mp fallback - az alvás detektálás kezeli az azonnali helyreállítást
@@ -132,7 +131,8 @@ export const DRIVE_CHECK_INTERVAL_MS = 2000; // 2 másodperc
  */
 export const RECOVERY_CONFIG = {
     DEBOUNCE_MS: 5000,          // Két recovery között minimum várakozás (5s)
-    HEALTH_TIMEOUT_MS: 5000,    // Health check kérés timeout (5s)
-    MAX_RETRIES: 5,             // Maximum health check próbálkozás
-    RETRY_BASE_MS: 3000         // Backoff alap (3s → 6s → 12s → 24s → 48s)
+    HEALTH_TIMEOUT_MS: 5000,    // Health check kérés timeout (5s — Railway ~0.5s, emago fallback egyetlen próba)
+    MAX_RETRIES: 3,             // Maximum health check próbálkozás az aktív endpoint-on
+    RETRY_BASE_MS: 1500         // Backoff alap (1.5s → 3s → 6s)
+    // Worst case: aktív 3×5s + 1.5s + 3s = 19.5s, + fallback 1×5s = 24.5s
 };

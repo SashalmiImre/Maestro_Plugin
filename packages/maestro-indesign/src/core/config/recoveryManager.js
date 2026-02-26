@@ -17,10 +17,10 @@
  */
 
 import { realtime } from "./realtimeClient.js";
-import { HEALTH_ENDPOINT } from "./appwriteConfig.js";
+import { endpointManager } from "./appwriteConfig.js";
 import { MaestroEvent, dispatchMaestroEvent } from "./maestroEvents.js";
 import { RECOVERY_CONFIG } from "../utils/constants.js";
-import { log, logError, logWarn } from "../utils/logger.js";
+import { log, logError, logWarn, logDebug } from "../utils/logger.js";
 
 class RecoveryManager {
     constructor() {
@@ -132,54 +132,125 @@ class RecoveryManager {
     }
 
     /**
-     * Health check újrapróbálkozással (exponenciális backoff).
-     * 
-     * @returns {Promise<boolean>} Igaz, ha a szerver elérhető.
+     * Cascading health check: aktív endpoint → másik endpoint.
+     *
+     * 1. Aktív endpoint-on retry-okkal próbálkozik.
+     * 2. Ha az nem elérhető, megpróbálja a másikat (egyetlen próba).
+     * 3. Ha a másik működik, átkapcsol rá (endpointManager.switchToOther()).
+     * 4. Ha fallback-en vagyunk és a primary visszajött, visszakapcsol.
+     *
+     * @returns {Promise<boolean>} Igaz, ha valamelyik szerver elérhető.
      * @private
      */
     async _healthCheckWithRetry() {
         const { MAX_RETRIES, RETRY_BASE_MS, HEALTH_TIMEOUT_MS } = RECOVERY_CONFIG;
 
-        for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+        // 1. Aktív endpoint próbálkozás (retry-okkal)
+        const activeOk = await this._tryEndpointHealth(
+            endpointManager.getHealthEndpoint(), MAX_RETRIES, RETRY_BASE_MS, HEALTH_TIMEOUT_MS
+        );
+
+        if (activeOk) {
+            // Ha fallback-en voltunk és a primary most visszajött, próbáljuk visszakapcsolni
+            if (!endpointManager.getIsPrimary()) {
+                const primaryOk = await this._singleHealthCheck(
+                    endpointManager.getOtherHealthEndpoint(), HEALTH_TIMEOUT_MS
+                );
+                if (primaryOk) {
+                    endpointManager.switchToPrimary();
+                    log('[Recovery] Primary proxy visszaállt, átkapcsolva');
+                }
+            }
+            return true;
+        }
+
+        // 2. Aktív nem elérhető → próbáljuk a másikat
+        log('[Recovery] Aktív endpoint nem elérhető, fallback próba...');
+        const otherOk = await this._singleHealthCheck(
+            endpointManager.getOtherHealthEndpoint(), HEALTH_TIMEOUT_MS
+        );
+
+        if (otherOk) {
+            endpointManager.switchToOther();
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Retry-os health check egy adott endpoint-ra.
+     *
+     * @param {string} url - Health endpoint URL.
+     * @param {number} maxRetries - Maximum próbálkozások.
+     * @param {number} retryBaseMs - Backoff alap (ms).
+     * @param {number} timeoutMs - Kérés timeout (ms).
+     * @returns {Promise<boolean>} Igaz, ha elérhető.
+     * @private
+     */
+    async _tryEndpointHealth(url, maxRetries, retryBaseMs, timeoutMs) {
+        for (let attempt = 1; attempt <= maxRetries; attempt++) {
             try {
                 const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), HEALTH_TIMEOUT_MS);
+                const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-                const response = await fetch(HEALTH_ENDPOINT, {
+                const response = await fetch(url, {
                     method: 'GET',
                     signal: controller.signal
                 });
                 clearTimeout(timeoutId);
 
-                if (response.ok) {
-                    return true;
-                }
+                if (response.ok) return true;
 
                 if (response.status === 401) {
-                    // Hálózat rendben, de session lejárt
-                    log('[Recovery] ⚠️ Session lejárt (401)');
+                    log('[Recovery] Session lejárt (401)');
                     dispatchMaestroEvent(MaestroEvent.sessionExpired);
-                    return true; // Hálózat OK, a session kezelés külön fut
+                    return true; // Hálózat OK, session kezelés külön fut
                 }
 
-                logWarn(`[Recovery] Health check HTTP ${response.status} (${attempt}/${MAX_RETRIES})`);
+                logWarn(`[Recovery] Health check HTTP ${response.status} (${attempt}/${maxRetries})`);
             } catch (error) {
                 if (error.name === 'AbortError') {
-                    logWarn(`[Recovery] Health check timeout (${attempt}/${MAX_RETRIES})`);
+                    logWarn(`[Recovery] Health check timeout (${attempt}/${maxRetries})`);
                 } else {
-                    logWarn(`[Recovery] Health check hiba (${attempt}/${MAX_RETRIES}):`, error.message);
+                    logWarn(`[Recovery] Health check hiba (${attempt}/${maxRetries}):`, error.message);
                 }
             }
 
-            // Ha nem az utolsó próbálkozás, várunk backoff-fal
-            if (attempt < MAX_RETRIES) {
-                const delayMs = RETRY_BASE_MS * Math.pow(2, attempt - 1);
-                log(`[Recovery] ⏳ Újrapróbálás ${delayMs / 1000}s múlva...`);
+            if (attempt < maxRetries) {
+                const delayMs = retryBaseMs * Math.pow(2, attempt - 1);
+                log(`[Recovery] Újrapróbálás ${delayMs / 1000}s múlva...`);
                 await new Promise(resolve => setTimeout(resolve, delayMs));
             }
         }
 
         return false;
+    }
+
+    /**
+     * Egyetlen health check próbálkozás egy adott endpoint-ra.
+     *
+     * @param {string} url - Health endpoint URL.
+     * @param {number} timeoutMs - Kérés timeout (ms).
+     * @returns {Promise<boolean>} Igaz, ha elérhető.
+     * @private
+     */
+    async _singleHealthCheck(url, timeoutMs) {
+        try {
+            const controller = new AbortController();
+            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+
+            const response = await fetch(url, {
+                method: 'GET',
+                signal: controller.signal
+            });
+            clearTimeout(timeoutId);
+
+            return response.ok || response.status === 401;
+        } catch (error) {
+            logDebug(`[Recovery] _singleHealthCheck hiba (url: ${url}, timeout: ${timeoutMs}ms):`, error);
+            return false;
+        }
     }
 
     /**

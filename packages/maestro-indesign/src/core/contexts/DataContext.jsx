@@ -133,7 +133,7 @@ export const DataProvider = ({ children }) => {
                             Query.notEqual("$id", cacheBustId)
                         ]
                     }),
-                    20000, "fetchPublications"
+                    10000, "fetchPublications"
                 ),
                 { operationName: "fetchPublications" }
             );
@@ -156,7 +156,7 @@ export const DataProvider = ({ children }) => {
                                 Query.notEqual("$id", cacheBustId)
                             ]
                         }),
-                        25000, "fetchArticles"
+                        10000, "fetchArticles"
                     ),
                     { operationName: "fetchArticles" }
                 );
@@ -172,7 +172,7 @@ export const DataProvider = ({ children }) => {
                                 Query.limit(100)
                             ]
                         }),
-                        10000, "fetchLayouts"
+                        8000, "fetchLayouts"
                     ),
                     { operationName: "fetchLayouts" }
                 );
@@ -188,7 +188,7 @@ export const DataProvider = ({ children }) => {
                                 Query.limit(100)
                             ]
                         }),
-                        10000, "fetchDeadlines"
+                        8000, "fetchDeadlines"
                     ),
                     { operationName: "fetchDeadlines" }
                 );
@@ -266,7 +266,7 @@ export const DataProvider = ({ children }) => {
                                     Query.limit(chunkIds.length * 5)
                                 ]
                             }),
-                            30000, "fetchValidationChunk"
+                            10000, "fetchValidationChunk"
                         ),
                         { operationName: "fetchValidationChunk" }
                     )

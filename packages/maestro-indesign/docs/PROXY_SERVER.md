@@ -8,31 +8,40 @@ A Maestro Proxy egy Express-alapú reverse proxy szerver, amely az Appwrite Clou
 2. **WebSocket Keep-Alive** — Periodikus ping frame-ek az idle timeout megelőzésére
 3. **CORS kezelés** — Az InDesign UXP kliens cross-origin kéréseinek engedélyezése
 
-A szerver a hosting szolgáltató (cPanel/Passenger) környezetében fut, és az `emago.hu/maestro-proxy/` útvonalon érhető el.
+A szerver két független környezetben fut (dual-proxy failover):
+- **Primary**: Railway EU West (Amsterdam) — `gallant-balance-production-b513.up.railway.app`
+- **Fallback**: emago.hu (cPanel/Passenger) — `emago.hu/maestro-proxy/`
+
+Mindkét helyen ugyanaz a `server.js` fut. A plugin `EndpointManager`-e (`appwriteConfig.js`) automatikusan vált közöttük.
 
 ## Architektúra
 
 ```mermaid
 graph LR
     subgraph "InDesign (UXP)"
-        Plugin[Maestro Plugin]
+        Plugin[Maestro Plugin<br/>EndpointManager]
     end
 
-    subgraph "Hosting (emago.hu)"
+    subgraph "Railway EU West (Primary)"
+        RailwayProxy[Maestro Proxy<br/>Express + HPM]
+    end
+
+    subgraph "emago.hu (Fallback)"
         Apache[Apache / Passenger]
-        Proxy[Maestro Proxy<br/>Express + HPM]
+        EmagoProxy[Maestro Proxy<br/>Express + HPM]
     end
 
     subgraph "Cloud"
         Appwrite[Appwrite Cloud<br/>cloud.appwrite.io]
     end
 
-    Plugin -->|"HTTP REST<br/>fetch()"| Apache
-    Plugin -->|"WebSocket<br/>new WebSocket()"| Apache
-    Apache -->|"mod_proxy_wstunnel"| Proxy
-    Proxy -->|"HTTP + Cookie header"| Appwrite
-    Proxy -->|"WS + Cookie header"| Appwrite
-    Proxy -.->|"15s ping frame"| Plugin
+    Plugin -->|"Primary"| RailwayProxy
+    Plugin -.->|"Fallback"| Apache
+    Apache --> EmagoProxy
+    RailwayProxy -->|"HTTP + Cookie header"| Appwrite
+    RailwayProxy -->|"WS + Cookie header"| Appwrite
+    EmagoProxy -->|"HTTP + Cookie header"| Appwrite
+    EmagoProxy -->|"WS + Cookie header"| Appwrite
 ```
 
 ## Fő komponensek

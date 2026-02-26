@@ -69,6 +69,23 @@ graph TD
 
 ## Folyamatok magyarázata
 
+### 0. Dual-Proxy Failover (EndpointManager)
+A plugin két független proxy-n keresztül éri el az Appwrite Cloud-ot:
+
+| | Railway (Primary) | emago.hu (Fallback) |
+|---|---|---|
+| **Infra** | Google Cloud (GCP), EU West Amsterdam | Apache/Passenger (shared hosting) |
+| **TTFB** | ~0.5s (mindig meleg) | ~0.2s meleg / 8-10s cold start |
+| **Failure mód** | GCP outage / Railway platform hiba | Passenger crash / szerver karbantartás |
+
+**Failover logika** (`recoveryManager.js` cascading health check):
+1. Aktív endpoint (retry-okkal, 5s timeout, 1.5s→3s→6s backoff)
+2. Ha nem elérhető → másik endpoint (egyetlen próba)
+3. Ha a másik működik → `endpointManager.switchToOther()` + toast értesítés
+4. Fallback-en: minden recovery ellenőrzi, a primary visszajött-e → automatikus visszakapcsolás
+
+Az `EndpointManager` (`appwriteConfig.js`) kezeli a váltást — frissíti a fő Appwrite Client endpoint-ját, a `realtimeClient.js` dinamikusan olvassa az aktuális endpoint-ot `reconnect()`-nél.
+
 ### 1. Események (System Events)
 - **Sleep Detector**: Az InDesign `IdleTask` segítségével figyeli a rendszer alvását. Ha 60 másodpercnél nagyobb kimaradást észlel, ellenőrzi a kapcsolatot: ha élő, csak frissít, ha megszakadt, reconnectel.
 - **Network Events**: A böngésző szabványos `online`/`offline` eseményeit figyeli.

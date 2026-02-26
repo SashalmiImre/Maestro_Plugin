@@ -16,6 +16,7 @@ import React, { useEffect, useRef } from "react";
 import { useUser } from "./contexts/UserContext.jsx";
 import { useConnection } from "./contexts/ConnectionContext.jsx";
 import { CONNECTION_STATES, CONNECTION_CONFIG } from "./utils/constants.js";
+import { MaestroEvent } from "./config/maestroEvents.js";
 import { realtime } from "./config/realtimeClient.js";
 import { recoveryManager } from "./config/recoveryManager.js";
 import { log, logError, logWarn } from "./utils/logger.js";
@@ -25,10 +26,34 @@ import { getIndesignModule, getIndesignApp } from "./utils/indesign/indesignUtil
 import { Login } from "../ui/features/user/Login/Login.jsx";
 import { Loading } from "../ui/common/Loading/Loading.jsx";
 import { Workspace } from "../ui/features/workspace/Workspace.jsx";
-import { ToastProvider } from "../ui/common/Toast/ToastContext.jsx";
+import { ToastProvider, useToast } from "../ui/common/Toast/ToastContext.jsx";
 import { ToastContainer } from "../ui/common/Toast/ToastContainer.jsx";
 import { DataProvider } from "./contexts/DataContext.jsx";
 import { ValidationProvider } from "./contexts/ValidationContext.jsx";
+
+/**
+ * Endpoint váltás toast értesítő.
+ * A ToastProvider-en belül kell renderelni, hogy hozzáférjen a useToast hook-hoz.
+ */
+const EndpointSwitchNotifier = () => {
+    const { showToast } = useToast();
+
+    useEffect(() => {
+        const handleSwitch = (event) => {
+            const { isPrimary } = event.detail;
+            if (isPrimary) {
+                showToast('Fő szerverre visszakapcsolva', 'info');
+            } else {
+                showToast('Tartalék szerverre váltva', 'warning', 'A fő szerver nem elérhető, a tartalék szerver aktív.');
+            }
+        };
+
+        window.addEventListener(MaestroEvent.endpointSwitched, handleSwitch);
+        return () => window.removeEventListener(MaestroEvent.endpointSwitched, handleSwitch);
+    }, [showToast]);
+
+    return null;
+};
 
 /**
  * Main application component.
@@ -231,13 +256,20 @@ export const Main = () => {
 
             log(`[Main] ⚡ InDesign Activated (Gap: ${Math.round(timeSinceLastIdle / 1000)}s)`);
 
-            // Hosszú gap vagy disconnect esetén recovery
+            // Háromszintű ellenőrzés: disconnect / elavult WS / friss kapcsolat
             const isConnected = realtime.getConnectionStatus();
+            const lastActivity = realtime.getLastActivity();
+            const activityAge = lastActivity ? (now - lastActivity) : Infinity;
+            const isStale = activityAge > CONNECTION_CONFIG.REALTIME_STALENESS_MS;
+
             if (!isConnected || timeSinceLastIdle >= CONNECTION_CONFIG.SLEEP_THRESHOLD_MS) {
                 log('[Main] 🔄 Hosszú gap vagy disconnected — Recovery indítása...');
                 recoveryManager.requestRecovery('focus');
+            } else if (isStale) {
+                log(`[Main] 🔄 Kapcsolat elavult (${Math.round(activityAge / 1000)}s óta nincs WS üzenet) — Recovery indítása...`);
+                recoveryManager.requestRecovery('focus');
             } else {
-                log('[Main] ⏩ Kapcsolat él & rövid gap — Kihagyva.');
+                log(`[Main] ⏩ Kapcsolat él & friss (${Math.round(activityAge / 1000)}s) — Kihagyva.`);
             }
 
             // Ha offline állapotban vagyunk, azonnali vizuális visszajelzés
@@ -291,6 +323,7 @@ export const Main = () => {
             </div>
 
             <ToastProvider>
+                <EndpointSwitchNotifier />
                 <div style={{
                     padding: "16px",
                     display: showConnectionOverlay ? "none" : "flex", // Completely hide content layer to prevent layout trashing
