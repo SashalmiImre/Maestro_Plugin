@@ -72,15 +72,16 @@ export const Workspace = () => {
     const [selectedType, setSelectedType] = useState(null);
     const [selectedPublication, setSelectedPublication] = useState(null);
 
-    // Set Active Publication ID in DataContext whenever selectedPublication changes
-    // This triggers the fetch of articles and validations for that publication
+    // Aktív publikáció szinkronizálás a DataContext-tel — csak properties nézetben.
+    // Lista nézetben a PublicationList kezeli az activePublicationId-t (toggleExpansion).
     useEffect(() => {
+        if (currentView !== 'properties') return;
         if (selectedPublication?.$id) {
             setActivePublicationId(selectedPublication.$id);
         } else if (selectedType === 'publication' && selectedItemId) {
             setActivePublicationId(selectedItemId);
         }
-    }, [selectedPublication, selectedItemId, selectedType, setActivePublicationId]);
+    }, [currentView, selectedPublication, selectedItemId, selectedType, setActivePublicationId]);
 
     /**
      * Kiválasztott cikk származtatása a DataContext-ből.
@@ -133,17 +134,9 @@ export const Workspace = () => {
      */
     const handleBackToList = useCallback(() => {
         setCurrentView('list');
+        setSelectedItemId(null);
+        setSelectedType(null);
         setSelectedPublication(null);
-        // Opcionális: Clears active publication when going back to list? 
-        // A felhasználó lehet, hogy csak visszalép, de ugyanabban a publikációban akar maradni.
-        // Hagyjuk meg az aktív publikációt, amíg át nem vált másikra a listában (PublicationList).
-        // DE: A lista nézetben nincsenek cikkek betöltve (csak ha lenyitjuk). 
-        // A DataContext mostantól CSAK az aktívhoz tölt. 
-        // Ha a PublicationList-ben lenyitunk egy másikat, az ottani hooknak (useArticles?) kell majd kezelnie?
-        // A PublicationList valószínűleg a DataContext 'articles' listáját használja? 
-        // Ha igen, akkor csak az aktív publikáció cikkei látszanak.
-        // Ez változás a korábbi működéshez képest (ahol minden cikk le volt töltve).
-        // Hacsak a PublicationList nem kezeli a "lenyitást" úgy, hogy beállítja az aktív publikációt.
     }, []);
 
 

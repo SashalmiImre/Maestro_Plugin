@@ -8,9 +8,9 @@
 
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useConnection } from "../contexts/ConnectionContext.jsx";
-import { account, executeLogin, handleSignOut, clearLocalSession } from "../config/appwriteConfig.js";
+import { account, executeLogin, handleSignOut, clearLocalSession, ID, VERIFICATION_URL } from "../config/appwriteConfig.js";
 import { realtime } from "../config/realtimeClient.js";
-import { MaestroEvent } from "../config/maestroEvents.js";
+import { MaestroEvent, dispatchMaestroEvent } from "../config/maestroEvents.js";
 import { log } from "../utils/logger.js";
 
 /**
@@ -57,6 +57,11 @@ export function AuthorizationProvider({ children }) {
      */
     const userRef = useRef(user);
     useEffect(() => { userRef.current = user; }, [user]);
+
+    // Menüpont állapot szinkronizálása (pl. "Kijelentkezés" enabled/disabled)
+    useEffect(() => {
+        dispatchMaestroEvent(MaestroEvent.authStateChanged, { isLoggedIn: user !== null });
+    }, [user]);
 
     const { startConnecting, setConnected } = useConnection();
 
@@ -130,6 +135,39 @@ export function AuthorizationProvider({ children }) {
             console.error("Kijelentkezés sikertelen:", error);
         } finally {
             setUser(null);
+        }
+    };
+
+    /**
+     * Regisztráció végrehajtása email verificációval.
+     *
+     * Létrehozza a fiókot, ideiglenesen bejelentkezik a verificációs email
+     * küldéséhez (session szükséges), majd kijelentkezik. A felhasználó
+     * csak az email megerősítése után tud bejelentkezni.
+     *
+     * @param {string} name - Felhasználó teljes neve.
+     * @param {string} email - Felhasználó email címe.
+     * @param {string} password - Felhasználó jelszava (min. 8 karakter).
+     * @throws {Error} Ha a regisztráció vagy a verificáció küldése sikertelen.
+     */
+    const register = async (name, email, password) => {
+        try {
+            // 1. Fiók létrehozása
+            await account.create(ID.unique(), email, password, name);
+
+            // 2. Ideiglenes bejelentkezés (a createVerification session-t igényel)
+            await executeLogin(email, password);
+
+            // 3. Verificációs email küldése
+            await account.createVerification(VERIFICATION_URL);
+
+            // 4. Kijelentkezés (blokkoljuk amíg nem verifikál)
+            await handleSignOut();
+        } catch (error) {
+            // Takarítás: ha a session létrejött de a verifikáció sikertelen,
+            // biztosítjuk, hogy ne maradjon aktív session
+            clearLocalSession();
+            throw error;
         }
     };
 
@@ -234,7 +272,7 @@ export function AuthorizationProvider({ children }) {
     }, [startConnecting, setConnected]);
 
     return (
-        <UserContext.Provider value={{ user, login, logout, loading }}>
+        <UserContext.Provider value={{ user, login, logout, register, loading }}>
             {children}
         </UserContext.Provider>
     );
@@ -245,7 +283,7 @@ export { AuthorizationProvider as UserProvider };
 
 /**
  * Hook a UserContext használatához.
- * @returns {{ user: Object|null, login: Function, logout: Function, loading: boolean }} A UserContext értékei.
+ * @returns {{ user: Object|null, login: Function, logout: Function, register: Function, loading: boolean }} A UserContext értékei.
  */
 export function useUser() {
     return useContext(UserContext);

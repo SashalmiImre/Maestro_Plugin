@@ -50,6 +50,9 @@ export const MaestroEvent = Object.freeze({
     /** Munkamenet lejárt (401-es hiba detektálva). Nincs detail. */
     sessionExpired: 'maestro:session-expired',
 
+    /** Felhasználó bejelentkezett vagy kijelentkezett. Detail: { isLoggedIn } */
+    authStateChanged: 'maestro:auth-state-changed',
+
     // --- Adat / Frissítés ---
     /** Adatfrissítés szükséges (pl. alvásból ébredés, realtime reconnect). Nincs detail. */
     dataRefreshRequested: 'maestro:data-refresh-requested',

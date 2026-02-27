@@ -66,7 +66,7 @@ import { AuthorizationProvider } from "./contexts/UserContext.jsx";
 import { ConnectionProvider } from "./contexts/ConnectionContext.jsx";
 
 // --- Config & Constants ---
-import { handleSignOut } from "./config/appwriteConfig.js";
+import { account, handleSignOut, RECOVERY_URL } from "./config/appwriteConfig.js";
 
 // --- Components & Assets ---
 import { PanelController } from "./controllers/panelController.jsx";
@@ -114,6 +114,14 @@ const mainController = new PanelController(() => (
 
 /** Kijelentkezés megerősítő dialógussal (InDesign natív dialog, React kontextuson kívül). */
 const confirmSignOut = async () => {
+    // Ellenőrizzük, hogy van-e aktív session (React kontextuson kívül vagyunk)
+    try {
+        await account.get();
+    } catch {
+        // Nincs aktív session — nem kell kijelentkezni
+        return;
+    }
+
     const inDesignApp = require("indesign").app;
     const dialog = inDesignApp.dialogs.add({
         name: "Kijelentkezés megerősítése",
@@ -139,6 +147,119 @@ const confirmSignOut = async () => {
     }
 };
 
+/** InDesign natív üzenet dialógus (az alert() nem létezik UXP-ben). */
+const showMessage = (title, message) => {
+    const inDesignApp = require("indesign").app;
+    const dlg = inDesignApp.dialogs.add({ name: title, canCancel: false });
+    dlg.dialogColumns.add();
+    dlg.dialogColumns.item(0).staticTexts.add({ staticLabel: message });
+    dlg.show();
+    dlg.destroy();
+};
+
+/** Jelszó módosítása bejelentkezett felhasználónak (InDesign natív dialog). */
+const changePassword = async () => {
+    // Ellenőrizzük, hogy van-e aktív session
+    try {
+        await account.get();
+    } catch {
+        return; // Nincs aktív session
+    }
+
+    const inDesignApp = require("indesign").app;
+    const dialog = inDesignApp.dialogs.add({
+        name: "Jelszó módosítása",
+        canCancel: true,
+    });
+
+    dialog.dialogColumns.add();
+    const column = dialog.dialogColumns.item(0);
+
+    // Jelenlegi jelszó
+    column.staticTexts.add({ staticLabel: "Jelenlegi jelszó:" });
+    const currentPasswordField = column.textEditboxes.add({ minWidth: 200 });
+
+    // Új jelszó
+    column.staticTexts.add({ staticLabel: "Új jelszó (min. 8 karakter):" });
+    const newPasswordField = column.textEditboxes.add({ minWidth: 200 });
+
+    // Új jelszó megerősítés
+    column.staticTexts.add({ staticLabel: "Új jelszó megerősítés:" });
+    const confirmPasswordField = column.textEditboxes.add({ minWidth: 200 });
+
+    const isConfirmed = dialog.show();
+
+    if (isConfirmed) {
+        const currentPassword = currentPasswordField.editContents;
+        const newPassword = newPasswordField.editContents;
+        const confirmPassword = confirmPasswordField.editContents;
+
+        dialog.destroy();
+
+        if (!currentPassword || !newPassword || !confirmPassword) {
+            showMessage("Hiba", "Minden mező kitöltése kötelező!");
+            return;
+        }
+
+        if (newPassword.length < 8) {
+            showMessage("Hiba", "Az új jelszónak legalább 8 karakter hosszúnak kell lennie!");
+            return;
+        }
+
+        if (newPassword !== confirmPassword) {
+            showMessage("Hiba", "Az új jelszavak nem egyeznek!");
+            return;
+        }
+
+        try {
+            await account.updatePassword({ password: newPassword, oldPassword: currentPassword });
+            showMessage("Siker", "Jelszó sikeresen módosítva!");
+        } catch (error) {
+            console.error("[ChangePassword] Hiba:", error);
+            showMessage("Hiba", `Jelszó módosítása sikertelen: ${error?.message ?? "Ismeretlen hiba"}`);
+        }
+    } else {
+        dialog.destroy();
+    }
+};
+
+/** Elfelejtett jelszó — recovery email küldése (InDesign natív dialog). */
+const resetPassword = async () => {
+    const inDesignApp = require("indesign").app;
+    const dialog = inDesignApp.dialogs.add({
+        name: "Elfelejtett jelszó",
+        canCancel: true,
+    });
+
+    dialog.dialogColumns.add();
+    const column = dialog.dialogColumns.item(0);
+
+    column.staticTexts.add({ staticLabel: "Add meg az email címedet:" });
+    const emailField = column.textEditboxes.add({ minWidth: 200 });
+
+    const isConfirmed = dialog.show();
+
+    if (isConfirmed) {
+        const email = emailField.editContents;
+        dialog.destroy();
+
+        if (!email) {
+            showMessage("Hiba", "Az email cím megadása kötelező!");
+            return;
+        }
+
+        try {
+            await account.createRecovery({ email, url: RECOVERY_URL });
+            showMessage("Email elküldve", "Jelszó-visszaállító link elküldve az email címedre!");
+        } catch (error) {
+            console.error("[ResetPassword] Hiba:", error);
+            showMessage("Hiba", `${error?.message ?? "Ismeretlen hiba"}`);
+        }
+    } else {
+        dialog.destroy();
+    }
+};
+
 entrypoints.setup({
     plugin: {
         create() { },
@@ -147,6 +268,11 @@ entrypoints.setup({
     panels: {
         main: {
             ...mainController,
+            menuItems: [
+                { id: "signOut", label: "Kijelentkezés" },
+                { id: "changePassword", label: "Jelszó módosítása" },
+                { id: "resetPassword", label: "Elfelejtett jelszó" },
+            ],
             show(rootNode) {
                 console.log("[Entrypoints] Panel show() életciklus hook meghívva");
                 if (mainController.show) {
@@ -163,6 +289,12 @@ entrypoints.setup({
                 switch (id) {
                     case "signOut":
                         await confirmSignOut();
+                        break;
+                    case "changePassword":
+                        await changePassword();
+                        break;
+                    case "resetPassword":
+                        await resetPassword();
                         break;
                     default:
                         console.warn(`Ismeretlen menüpont: ${id}`);

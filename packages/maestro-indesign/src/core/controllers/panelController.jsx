@@ -22,12 +22,6 @@ export class PanelController {
         this[_Component] = Component;
         this[_id] = id;
         this[_menuItems] = menuItems || [];
-        this.menuItems = this[_menuItems].map(menuItem => ({
-            id: menuItem.id,
-            label: menuItem.label,
-            enabled: menuItem.enabled ?? true,
-            checked: menuItem.checked ?? false
-        }));
 
         ["create", "show", "hide", "destroy", "invokeMenu"].forEach(fn => this[fn] = this[fn].bind(this));
     }

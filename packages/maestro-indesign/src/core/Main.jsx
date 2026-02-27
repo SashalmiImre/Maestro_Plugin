@@ -11,7 +11,7 @@
  * - Application-wide UI overlays (Loading/Connection status)
  */
 
-import React, { useEffect, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 
 import { useUser } from "./contexts/UserContext.jsx";
 import { useConnection } from "./contexts/ConnectionContext.jsx";
@@ -24,6 +24,7 @@ import { log, logError, logWarn } from "./utils/logger.js";
 import { getIndesignModule, getIndesignApp } from "./utils/indesign/indesignUtils.js";
 
 import { Login } from "../ui/features/user/Login/Login.jsx";
+import { Register } from "../ui/features/user/Register/Register.jsx";
 import { Loading } from "../ui/common/Loading/Loading.jsx";
 import { Workspace } from "../ui/features/workspace/Workspace.jsx";
 import { ToastProvider, useToast } from "../ui/common/Toast/ToastContext.jsx";
@@ -62,6 +63,7 @@ const EndpointSwitchNotifier = () => {
  */
 export const Main = () => {
     const { user, loading: userLoading } = useUser();
+    const [authView, setAuthView] = useState('login');
     const {
         connectionStatus,
         showConnectionOverlay,
@@ -340,7 +342,9 @@ export const Main = () => {
                                 </ValidationProvider>
                             </DataProvider>
                         ) : (
-                            <Login />
+                            authView === 'login'
+                                ? <Login onSwitchToRegister={() => setAuthView('register')} />
+                                : <Register onSwitchToLogin={() => setAuthView('login')} />
                         )
                     )}
                 </div>

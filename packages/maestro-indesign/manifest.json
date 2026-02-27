@@ -46,6 +46,18 @@
           "label": {
             "default": "Kijelentkezés"
           }
+        },
+        {
+          "id": "changePassword",
+          "label": {
+            "default": "Jelszó módosítása"
+          }
+        },
+        {
+          "id": "resetPassword",
+          "label": {
+            "default": "Elfelejtett jelszó"
+          }
         }
       ]
     }

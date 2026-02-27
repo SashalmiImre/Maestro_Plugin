@@ -7,6 +7,8 @@ A Maestro Proxy egy Express-alapú reverse proxy szerver, amely az Appwrite Clou
 1. **Auth Injection** — Az UXP WebSocket limitációk megkerülése (query params → HTTP headers)
 2. **WebSocket Keep-Alive** — Periodikus ping frame-ek az idle timeout megelőzésére
 3. **CORS kezelés** — Az InDesign UXP kliens cross-origin kéréseinek engedélyezése
+4. **Email Verifikáció** — `/verify` callback endpoint a regisztrációs email megerősítéséhez
+5. **Jelszó-visszaállítás** — `/reset-password` form + feldolgozás az elfelejtett jelszó flow-hoz
 
 A szerver két független környezetben fut (dual-proxy failover):
 - **Primary**: Railway EU West (Amsterdam) — `gallant-balance-production-b513.up.railway.app`
@@ -107,6 +109,9 @@ A kliens bontásakor (sleep, panel-hide, recovery reconnect) keletkező `EPIPE` 
 | Útvonal | Típus | Cél |
 |---------|-------|-----|
 | `/v1/health`, `/maestro-proxy/v1/health` | GET | Health check (nem proxy-zott) |
+| `/verify` | GET | Email verifikációs callback (Appwrite Server SDK) |
+| `/reset-password` | GET | Jelszó-visszaállító form megjelenítése |
+| `/reset-password` | POST | Jelszó-visszaállítás feldolgozása (Appwrite REST API) |
 | `/v1/realtime`, `/maestro-proxy/v1/realtime` | WS | Appwrite Realtime WebSocket |
 | `/v1/*`, `/maestro-proxy/v1/*` | HTTP | Appwrite REST API |
 
@@ -138,13 +143,36 @@ A dupla útvonalak (`/v1/` és `/maestro-proxy/v1/`) azért kellenek, mert a Pas
 3. **Session lejárat (401)**
    - A kliens `clearLocalSession()` → újra bejelentkezés → új cookie → a proxy automatikusan az újat injektálja
 
+## Email Verifikáció & Jelszó-visszaállítás
+
+A proxy szerver két callback endpointot szolgál ki, amelyek az Appwrite által küldött emailekből érkeznek:
+
+### `/verify` (GET)
+- Az `account.createVerification(VERIFICATION_URL)` által küldött emailben lévő link ide irányít.
+- Query params: `userId`, `secret`
+- A Server SDK-val (`users.updateEmailVerification`) közvetlenül élesíti az email címet.
+- HTML választ ad: siker/hiba oldal Maestro brandinggel.
+
+### `/reset-password` (GET + POST)
+- Az `account.createRecovery(email, RECOVERY_URL)` által küldött emailben lévő link ide irányít.
+- **GET**: Query params `userId` + `secret` → HTML form az új jelszó megadásához.
+- **POST**: Form adatok (`userId`, `secret`, `password`, `passwordConfirm`) → validáció (egyezés, min. 8 karakter) → Appwrite REST API `PUT /v1/account/recovery` hívás.
+- A `PUT /v1/account/recovery` endpoint NEM igényel API key-t — a `userId` + `secret` kombináció az autentikáció.
+
+### Env vars (Railway-en beállítva)
+| Változó | Leírás |
+|---------|--------|
+| `APPWRITE_PROJECT_ID` | Appwrite projekt ID |
+| `APPWRITE_API_KEY` | Server API key (`users.read` + `users.write` scope) |
+
 ## Függőségek
 
 ```json
 {
     "express": "^4.x",
     "http-proxy-middleware": "^2.x || ^3.x",
-    "cors": "^2.x"
+    "cors": "^2.x",
+    "node-appwrite": "^22.x"
 }
 ```
 

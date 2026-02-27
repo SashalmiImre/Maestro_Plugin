@@ -180,17 +180,17 @@ Maestro/
 │   ├── polyfill.js               ← UXP polyfill-ek
 │   │
 │   ├── core/                     ← Üzleti logika & infrastruktúra
-│   │   ├── index.jsx             ← App bootstrap, belépési pont
+│   │   ├── index.jsx             ← App bootstrap, belépési pont, hamburgermenü handlerek (jelszókezelés, kijelentkezés)
 │   │   ├── Main.jsx              ← Gyökér komponens (sleep/focus detektálás, RecoveryManager trigger)
 │   │   ├── config/
-│   │   │   ├── appwriteConfig.js       ← Appwrite kliens, EndpointManager (dual-proxy), db/collection/bucket ID-k
+│   │   │   ├── appwriteConfig.js       ← Appwrite kliens, EndpointManager (dual-proxy), db/collection/bucket ID-k, VERIFICATION_URL, RECOVERY_URL
 │   │   │   ├── realtimeClient.js       ← WebSocket kliens proxy auth injection-nel
 │   │   │   ├── recoveryManager.js      ← Központi recovery orchestrator (health check, reconnect, refresh)
 │   │   │   └── maestroEvents.js        ← MaestroEvent konstansok & dispatchMaestroEvent()
 │   │   ├── contexts/
 │   │   │   ├── DataContext.jsx         ← Kiadványok & cikkek állapota + Realtime szinkron
 │   │   │   ├── ValidationContext.jsx   ← Validációs eredmények (cikk- és kiadvány-szintű)
-│   │   │   ├── UserContext.jsx         ← Auth állapot, bejelentkezés/kijelentkezés, session kezelés
+│   │   │   ├── UserContext.jsx         ← Auth állapot, bejelentkezés/kijelentkezés/regisztráció, session kezelés
 │   │   │   └── ConnectionContext.jsx   ← Online/offline/connecting állapot UI visszajelzéshez
 │   │   ├── controllers/
 │   │   │   └── panelController.jsx     ← UXP panel életciklus (megjelenítés/elrejtés)
@@ -284,7 +284,8 @@ Maestro/
 │   │       │   ├── LockManager.jsx      ← Dokumentumzárolás kezelő UI
 │   │       │   └── PropertiesPanel/     ← Jobb oldali tulajdonságok panel
 │   │       └── user/
-│   │           └── Login/               ← Hitelesítés UI
+│   │           ├── Login/               ← Bejelentkezés UI
+│   │           └── Register/            ← Regisztráció UI (email verifikációval)
 │   │
 │   └── assets/                   ← Statikus erőforrások (ikonok, stb.)
 │
@@ -372,8 +373,12 @@ index.jsx
 
 ### UserContext API
 - `user` — aktuális felhasználó objektum (vagy `null`)
-- `login(email, password)`, `logout()`
+- `login(email, password)`, `logout()`, `register(name, email, password)`
 - `loading` — hitelesítés folyamatban
+- **Regisztráció**: `register()` fiókot hoz létre → ideiglenes bejelentkezés → `account.createVerification(VERIFICATION_URL)` → kijelentkezés. A felhasználó NEM léphet be, amíg az email nincs megerősítve (`emailVerification` flag ellenőrzés a login-ban).
+- **Jelszókezelés** (hamburgermenü, `index.jsx`-ben, React kontextuson kívül):
+  - **Jelszó módosítás**: InDesign natív dialog → `account.updatePassword()` — bejelentkezést igényel.
+  - **Elfelejtett jelszó**: InDesign natív dialog (email) → `account.createRecovery(email, RECOVERY_URL)` → proxy `/reset-password` oldal a böngészőben.
 - **Realtime szinkron**: Az Appwrite Realtime `account` csatornára feliratkozva a `user` objektum (beleértve `labels`, `name`, `prefs`) automatikusan frissül, ha a szerveren módosítják (Console/Server SDK)
 - **Recovery szinkron**: A `dataRefreshRequested` MaestroEvent-re is feliratkozik — minden recovery-nél (sleep/wake, reconnect, focus) `account.get()`-tel frissíti a user adatokat. Ez biztosítja a labels/prefs szinkront akkor is, ha az Appwrite Realtime `account` csatorna nem tüzel proxy-n keresztül (pl. szerver-oldali label módosításnál).
 

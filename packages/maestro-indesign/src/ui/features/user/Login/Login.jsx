@@ -2,8 +2,8 @@ import React, { useState, useEffect } from "react";
 // Contexts
 import { useUser } from "../../../../core/contexts/UserContext.jsx";
 
-export const Login = () => {
-    const { login } = useUser();
+export const Login = ({ onSwitchToRegister }) => {
+    const { login, logout } = useUser();
     const [email, setEmail] = useState("");
     const [password, setPassword] = useState("");
     const [message, setMessage] = useState("");
@@ -26,7 +26,14 @@ export const Login = () => {
 
         setIsLoading(true);
         try {
-            await login(email, password);
+            const currentUser = await login(email, password);
+
+            // Email verificáció ellenőrzés — ha nincs megerősítve, nem engedjük be
+            if (currentUser && !currentUser.emailVerification) {
+                await logout();
+                setMessage("Az email cím nincs megerősítve. Ellenőrizd az email fiókodat!");
+                return;
+            }
         } catch (err) {
             console.error("Login error:", err);
             setMessage(err?.message ?? "Bejelentkezési hiba");
@@ -113,6 +120,24 @@ export const Login = () => {
                 >
                     {isLoading ? "Bejelentkezés..." : "Bejelentkezés"}
                 </sp-button>
+
+                <div style={{
+                    marginTop: "16px",
+                    fontSize: "12px",
+                    color: "var(--spectrum-global-color-gray-600)"
+                }}>
+                    <span>Nincs még fiókod? </span>
+                    <span
+                        onClick={onSwitchToRegister}
+                        style={{
+                            color: "var(--spectrum-global-color-blue-400)",
+                            cursor: "pointer",
+                            textDecoration: "underline"
+                        }}
+                    >
+                        Regisztrálj
+                    </span>
+                </div>
             </div>
         </div>
     );
