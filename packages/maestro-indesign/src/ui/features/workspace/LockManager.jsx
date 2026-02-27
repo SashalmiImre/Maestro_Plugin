@@ -13,7 +13,7 @@ import { withTimeout, withRetry } from "../../../core/utils/promiseUtils.js";
 import { isIndexNotFoundError } from "../../../core/utils/errorUtils.js";
 import { getOpenDocumentPaths, getIndesignApp, generateGetActiveDocumentPathScript } from "../../../core/utils/indesign/index.js";
 import { WorkflowEngine } from "../../../core/utils/workflow/workflowEngine.js";
-import { MaestroEvent, dispatchMaestroEvent } from "../../../core/config/maestroEvents.js";
+import { MaestroEvent } from "../../../core/config/maestroEvents.js";
 
 // InDesign Application objektum importálása (Lustán töltve)
 // const app = require("indesign").app; <-- Törölve, helyette getIndesignApp() a komponensen belül
@@ -36,6 +36,11 @@ export const LockManager = () => {
     // 1. Felhasználói környezet
     const { user } = useUser();
     const { showToast } = useToast();
+
+    // Ref a user aktuális értékéhez — a closure-ök mindig a friss user objektumot lássák,
+    // miközben az effect dependency [user?.$id]-re épül (nem triggerelődik feleslegesen).
+    const userRef = useRef(user);
+    useEffect(() => { userRef.current = user; }, [user]);
 
     // 2. Ref-ek a komponens élettartamának követésére
     // Segít elkerülni a memóriaszivárgást aszinkron műveleteknél, ha a komponens már nincs felcsatolva.
@@ -90,6 +95,7 @@ export const LockManager = () => {
      * Ez kezeli azt az esetet, amikor az InDesign lefagyott és a lockok bent maradtak.
      */
     const cleanupOrphanedLocks = async () => {
+        const user = userRef.current;
         if (!user || !isMountedRef.current) return;
 
         try {
@@ -163,6 +169,7 @@ export const LockManager = () => {
      * @returns {Promise<{rows: Array}>} A releváns cikkek egyesített listája.
      */
     const fetchRelevantArticles = async (openPaths = []) => {
+        const user = userRef.current;
         // Query 1: Amit ÉN zároltam (hogy feloldhassam, ha már nincs nyitva)
         const cleanupQuery = [Query.equal("lockOwnerId", user.$id)];
 
@@ -232,6 +239,7 @@ export const LockManager = () => {
      * @param {string} path - A zárolandó dokumentum natív fájlútvonala.
      */
     const lockFile = async (path) => {
+        const user = userRef.current;
         if (!user || !isMountedRef.current) return;
         try {
             const searchPaths = getCrossPlatformPaths(path) || [];
@@ -264,8 +272,6 @@ export const LockManager = () => {
                 const lockResult = await WorkflowEngine.lockDocument(article, LOCK_TYPE.USER, user);
                 if (lockResult.success) {
                     console.log('[LockManager] Fájl zárolva:', article.name, '-', user.name);
-                    // Kényszerített frissítés a UI szinkronizálásához
-                    dispatchMaestroEvent(MaestroEvent.dataRefreshRequested);
                 } else {
                     console.warn('[LockManager] Zárolás sikertelen:', lockResult.error);
                     showToast('A dokumentum zárolása sikertelen', 'error', lockResult.error || 'Nem sikerült zárolni a fájlt. Próbáld meg újra.');
@@ -285,6 +291,7 @@ export const LockManager = () => {
      * @param {string} path - A feloldandó dokumentum natív fájlútvonala.
      */
     const unlockFile = async (path) => {
+        const user = userRef.current;
         if (!user || !isMountedRef.current) return;
         try {
             const searchPaths = getCrossPlatformPaths(path) || [];
@@ -309,8 +316,6 @@ export const LockManager = () => {
                 const unlockResult = await WorkflowEngine.unlockDocument(article, user);
                 if (unlockResult.success) {
                     console.log('[LockManager] Fájl feloldva:', article.name);
-                    // Kényszerített frissítés a UI szinkronizálásához
-                    dispatchMaestroEvent(MaestroEvent.dataRefreshRequested);
                 }
             }
         } catch (error) {
@@ -335,6 +340,7 @@ export const LockManager = () => {
      */
     const syncLocks = async () => {
         const app = getIndesignApp();
+        const user = userRef.current;
         if (!user || !isMountedRef.current || !app) return;
 
         try {
@@ -374,7 +380,6 @@ export const LockManager = () => {
                         const result = await WorkflowEngine.lockDocument(article, LOCK_TYPE.USER, user);
                         if (result.success) {
                             console.log('[LockManager] Fájl zárolva:', article.name, '-', user.name);
-                            if (isMountedRef.current) dispatchMaestroEvent(MaestroEvent.dataRefreshRequested);
                         } else {
                             console.warn(`[LockManager] Zárolás sikertelen (${article.name}, ${article.$id}):`, result.error);
                         }
@@ -383,7 +388,6 @@ export const LockManager = () => {
                         const result = await WorkflowEngine.unlockDocument(article, user);
                         if (result.success) {
                             console.log('[LockManager] Fájl feloldva:', article.name);
-                            if (isMountedRef.current) dispatchMaestroEvent(MaestroEvent.dataRefreshRequested);
                         } else {
                             console.warn(`[LockManager] Feloldás sikertelen (${article.name}, ${article.$id}):`, result.error);
                         }
@@ -426,6 +430,9 @@ export const LockManager = () => {
     };
 
     // Eseményfigyelők beállítása (Effect)
+    // Dependency: user?.$id — csak bejelentkezés/kijelentkezés/felhasználóváltáskor fut újra.
+    // A user objektum referencia-változása (pl. account.get() után) NEM triggereli,
+    // mert a closure-ök userRef.current-et használják a friss adatokhoz.
     useEffect(() => {
         if (!user) return;
 
@@ -581,7 +588,7 @@ export const LockManager = () => {
             try { afterCloseListener.remove(); } catch (_) { /* InDesign kilépéskor hibát dobhat */ }
             try { afterSaveAsListener.remove(); } catch (_) { /* InDesign kilépéskor hibát dobhat */ }
         };
-    }, [user]);
+    }, [user?.$id]); // eslint-disable-line react-hooks/exhaustive-deps
 
     return null;
 };

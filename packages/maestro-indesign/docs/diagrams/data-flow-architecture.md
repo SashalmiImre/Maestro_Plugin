@@ -123,6 +123,7 @@ graph TD
         CoverageChanged --> Overlap
         LayoutChanged --> Overlap
         DataRefresh -->|"fetchData(true)"| DataCtx["DataContext"]
+        DataRefresh -->|"account.get()"| UserCtx["UserContext (labels, prefs frissítés)"]
     end
 
     subgraph "Eredmények"
@@ -158,7 +159,7 @@ graph TD
 | `pageRangesChanged`          |            —            |               —                |         igen         |        —        |
 | `layoutChanged`              |            —            |               —                |         igen         |        —        |
 | `publicationCoverageChanged` |            —            |               —                |         igen         |        —        |
-| `dataRefreshRequested`       |            —            |               —                |          —           | fetchData(true) |
+| `dataRefreshRequested`       |            —            |               —                |          —           | fetchData(true) + UserContext: account.get() |
 
 ---
 

@@ -14,8 +14,8 @@ import { useState, useEffect, useRef, useMemo } from "react";
 import { fetchHolidays, calculateUrgencyRatio } from "../../core/utils/urgencyUtils.js";
 import { logWarn } from "../../core/utils/logger.js";
 
-/** Frissítési intervallum (ms) — 1 perc */
-const REFRESH_INTERVAL_MS = 60_000;
+/** Frissítési intervallum (ms) — 5 perc */
+const REFRESH_INTERVAL_MS = 300_000;
 
 /**
  * Kiszámítja minden cikkhez a sürgősségi adatokat.

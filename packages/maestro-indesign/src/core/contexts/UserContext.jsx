@@ -172,13 +172,45 @@ export function AuthorizationProvider({ children }) {
             const { payload } = response;
             if (!payload || !payload.$id) return;
 
-            log('[UserContext] Felhasználói adat frissítve (Realtime)');
-            setUser(payload);
+            // Csak akkor frissítünk, ha az adat tényleg változott
+            setUser(prev => {
+                if (prev && prev.$updatedAt === payload.$updatedAt) return prev;
+                log('[UserContext] Felhasználói adat frissítve (Realtime)');
+                return payload;
+            });
         });
 
         return () => {
             if (typeof unsubscribe === 'function') unsubscribe();
         };
+    }, [user?.$id]);
+
+    // Felhasználói adatok frissítése recovery-nél (labels, prefs stb.)
+    // Az Appwrite Realtime `account` csatorna nem mindig tüzel szerver-oldali
+    // label módosításra (proxy-n keresztül), ezért a recovery-t is használjuk
+    // az adatok szinkronizálására.
+    useEffect(() => {
+        if (!user) return;
+
+        const handleRefresh = async () => {
+            try {
+                const updatedUser = await account.get();
+                // Csak akkor frissítünk, ha az adat tényleg változott.
+                // Enélkül az account.get() mindig új referenciát ad, ami felesleges
+                // re-rendereket okoz a teljes fában (LockManager useEffect[user] stb.)
+                setUser(prev => {
+                    if (prev && prev.$updatedAt === updatedUser.$updatedAt) return prev;
+                    log('[UserContext] Felhasználói adatok frissítve (recovery)');
+                    return updatedUser;
+                });
+            } catch (error) {
+                // 401 → sessionExpired event kezeli, egyéb hiba nem kritikus
+                log('[UserContext] Felhasználói adatok frissítése sikertelen', 'warn');
+            }
+        };
+
+        window.addEventListener(MaestroEvent.dataRefreshRequested, handleRefresh);
+        return () => window.removeEventListener(MaestroEvent.dataRefreshRequested, handleRefresh);
     }, [user?.$id]);
 
     // Kezdeti állapot ellenőrzése (pl. oldal újratöltés után)

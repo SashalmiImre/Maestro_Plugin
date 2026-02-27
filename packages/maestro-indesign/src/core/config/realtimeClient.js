@@ -50,6 +50,7 @@ class RealtimeClient {
 
         // Initialize immediately
         this.shouldReconnect = true;
+        this._subscribedChannels = new Set(); // Nyomon követi, mely csatornák vannak az aktív socket-ben
         this._initClient();
     }
 
@@ -138,19 +139,31 @@ class RealtimeClient {
             const url = this.client.config.endpointRealtime + '/realtime?' + query.toString();
 
             return new Promise((resolve, reject) => {
-                // Socket generáció növelése — a close handler ezzel ellenőrzi,
-                // hogy az aktuális socket-hez tartozik-e az esemény
+                // Ellenőrizzük, hogy vannak-e új csatornák az aktív socket-hez képest
+                const hasNewChannels = channelArray.some(ch => !this._subscribedChannels.has(ch));
+
+                if (this.realtime.socket && (this.realtime.socket.readyState === WebSocket.CONNECTING || this.realtime.socket.readyState === WebSocket.OPEN)) {
+                    if (!hasNewChannels) {
+                        // Nincs új csatorna — skip (eredeti viselkedés)
+                        resolve();
+                        return;
+                    }
+                    // Új csatornák vannak — zárjuk le a régit és építsünk újat
+                    log(`[Realtime] 🔄 Új csatornák észlelve, socket újraépítése (${channelArray.length} csatorna)...`);
+                    try {
+                        this.realtime.stopHeartbeat();
+                        this.realtime.socket.close(1000, 'channel-update');
+                    } catch (e) { /* ignore */ }
+                }
+
+                // Socket generáció növelése — CSAK ha tényleg új socketet hozunk létre.
+                // A close handler ezzel ellenőrzi, hogy az aktuális socket-hez tartozik-e az esemény.
+                // Ha a skip ág előtt növelnénk, az aktuális socket close event-je ghost-nak tűnne.
                 this._socketGeneration = (this._socketGeneration || 0) + 1;
                 const myGeneration = this._socketGeneration;
 
-                // Prevent duplicate connections
-                if (this.realtime.socket && (this.realtime.socket.readyState === WebSocket.CONNECTING || this.realtime.socket.readyState === WebSocket.OPEN)) {
-                    log('[Realtime] ⚠️ Socket already active, skipping creation');
-                    resolve();
-                    return;
-                }
-
-                // Socket létrehozása
+                // Socket létrehozása — az aktív csatornák nyilvántartása
+                this._subscribedChannels = new Set(channelArray);
                 this.realtime.socket = new WebSocket(url);
                 
                 this.realtime.socket.addEventListener('open', () => {
@@ -485,7 +498,8 @@ class RealtimeClient {
             this.realtime = null;
             this.client = null;
             this.shouldReconnect = true;
-            
+            this._subscribedChannels = new Set(); // Csatorna-nyilvántartás törlése az újraépítéshez
+
             // Szerver hiba számláló nullázása az újraépítésnél
             this.consecutiveServerErrors = 0;
             this.serverErrorCooldownUntil = 0;

@@ -20,7 +20,7 @@ A probléma megoldásához a meglévő CORS Proxy-nkat (`proxy/server.js`) haszn
 ```mermaid
 sequenceDiagram
     participant Client as Maestro Plugin (UXP)
-    participant Proxy as Maestro Proxy (emago.hu)
+    participant Proxy as Maestro Proxy (Railway / emago.hu)
     participant Appwrite as Appwrite Cloud
 
     Note over Client: Realtime Client inicializálás
@@ -52,7 +52,7 @@ sequenceDiagram
 #### 1. Kliens-oldal (`src/core/config/realtimeClient.js`)
 Felülírjuk a szabványos Appwrite SDK `createSocket` metódusát és **Singleton Mintát** implementálunk:
 *   **Globális Singleton**: Az aktív példányt a `window.__maestroRealtimeInstance`-ban tárolja. Modul újratöltéskor (hot-reload) lekapcsolja az előző példányt a duplikált kapcsolatok megelőzésére.
-*   **Kapcsolat-deduplikáció**: A `createSocket` szigorúan ellenőrzi, hogy van-e már `CONNECTING` vagy `OPEN` állapotú socket, mielőtt újat hozna létre.
+*   **Kapcsolat-deduplikáció & csatorna-nyilvántartás**: A `createSocket` ellenőrzi, hogy van-e már `CONNECTING` vagy `OPEN` állapotú socket. Ha van, de új csatornák kerültek az `activeChannels`-be (pl. az `account` csatorna a database channels után), a régi socketet lezárja és újat hoz létre az összes csatornával. A `_subscribedChannels` Set nyomon követi az aktuális socket csatornáit — ha nincs új csatorna, a socket nem épül újra (skip).
 *   A session cookie-t a `localStorage`-ból olvassa (`cookieFallback`).
 *   Hozzáfűzi a WebSocket URL-hez query paraméterként: `?x-fallback-cookies=...`.
 *   Hozzáfűzi a csomag nevet: `?x-appwrite-package-name=...`.

@@ -98,7 +98,9 @@ Az `EndpointManager` (`appwriteConfig.js`) kezeli a váltást — frissíti a f�
 ### 3. Realtime Client (A motor)
 - **Destroy & Rebuild stratégia**: Alvás vagy hiba után nem próbálja javítani a kapcsolatot, hanem **eldobja a teljes Appwrite Client példányt** és újat hoz létre. Ez garantálja, hogy nem maradnak "zombi" WebSocket kapcsolatok.
 - **Szinkron Resubscribe**: Az új kapcsolat felépülése után **szinkron** újra feliratkozik a szükséges csatornákra. A feliratkozások NEM `setTimeout`-ban futnak — a szinkron végrehajtás megakadályozza, hogy az `isConnected` flag ideiglenesen `false` maradjon (ami végtelen recovery ciklust okozna).
+- **Dinamikus csatorna-kezelés**: A `_subscribedChannels` Set nyomon követi, mely csatornák vannak az aktív socket-ben. Ha új csatorna érkezik (pl. `account` a database channels után — eltérő React render ciklus miatt), a `createSocket` lezárja a régi socketet és újat épít az összes csatornával. Ez megakadályozza, hogy a másodikként feliratkozó csatornák kimaradjanak.
 - **WebSocket Auth**: A proxy `onProxyReqWs` hookja injektálja a cookie-kat a WS upgrade kérésbe. A kliens oldalon `readyState` guard + 200ms retry védi a UXP timing problémáktól.
+- **Recovery user szinkron**: A `UserContext` feliratkozik a `dataRefreshRequested` eseményre — minden recovery `account.get()`-tel frissíti a user adatokat (labels, prefs). Ez biztosítja a jogosultságok szinkronját akkor is, ha az Appwrite Realtime `account` csatorna nem tüzel szerver-oldali módosításra proxy-n keresztül.
 
 ### 4. Server Error Resilience (Realtime)
 - **Exponenciális backoff**: Szerver hiba (pl. code 1003) után növekvő várakozás: 5s → 10s → 20s → 40s → max 60s.

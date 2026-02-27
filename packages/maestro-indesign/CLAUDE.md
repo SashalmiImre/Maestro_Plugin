@@ -138,6 +138,7 @@
     - Sleep detection (InDesign `IdleTask` gap > 60s) → `recoveryManager.requestRecovery('sleep')`.
     - **Szinkron Resubscribe**: A `reconnect()` szinkron építi újra a feliratkozásokat (nincs `setTimeout`), megakadályozva az `isConnected` flag ideiglenesen hamis állapotát.
     - **Ghost Socket Védelem**: Socket generáció-számláló (`_socketGeneration`) a `realtimeClient.js`-ben. A close handler ignorálja a régi socket-ek close event-jeit, megakadályozva a végtelen reconnect ciklust.
+    - **Dinamikus Csatorna-kezelés**: A `_subscribedChannels` Set nyomon követi az aktív socket csatornáit. Ha új csatorna érkezik (pl. az `account` a database channels után), a `createSocket` lezárja a régi socketet és újat hoz létre az összes csatornával. Ez megoldja az eltérő React render ciklusokból adódó subscription-sorrend problémát.
     - **Explicit Socket Cleanup**: A `reconnect()` metódus explicit `close(1000)` hívással zárja le a régi WebSocket-et az új létrehozása előtt.
     - **Dinamikus Endpoint (Realtime)**: A `realtimeClient.js` `_initClient()` metódusa `endpointManager.getEndpoint()`-ot használ → `reconnect()` automatikusan felveszi az aktuális (primary/fallback) endpoint-ot.
     - **Timeout ≠ Offline**: Az adatlekérés időtúllépése NEM aktiválja az offline overlay-t — toast figyelmeztetést kap a felhasználó. Csak valódi hálózati hibák (Failed to fetch, ECONNREFUSED stb.) váltják ki az offline állapotot.
@@ -195,7 +196,7 @@ Maestro/
 │   │   │   └── panelController.jsx     ← UXP panel életciklus (megjelenítés/elrejtés)
 │   │   ├── commands/
 │   │   │   ├── index.js                ← Parancs-regiszter
-│   │   │   └── handlers/              ← InDesign parancs handlerek
+│   │   │   └── handlers/               ← InDesign parancs handlerek
 │   │   │       ├── collectImages.js    ← Képgyűjtés
 │   │   │       ├── exportPdf.js        ← PDF export (preset támogatással)
 │   │   │       ├── preflightCheck.js   ← Kézi preflight trigger
@@ -209,7 +210,7 @@ Maestro/
 │   │       ├── pathUtils.js            ← Fájlútvonal segédfüggvények (UXP ↔ InDesign leképezés)
 │   │       ├── namingUtils.js          ← Név formázó helperek
 │   │       ├── promiseUtils.js         ← Promise segédfüggvények (withTimeout, withRetry)
-│   │       ├── urgencyUtils.js        ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színek)
+│   │       ├── urgencyUtils.js         ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színek)
 │   │       ├── validationRunner.js     ← Validátor futtatás orchestrálása
 │   │       ├── validators/             ← Tiszta validációs logika osztályok
 │   │       │   ├── ValidatorBase.js
@@ -227,9 +228,9 @@ Maestro/
 │   │       │   ├── preflightScripts.js ← Preflight ellenőrzés scriptek
 │   │       │   ├── scriptHelpers.js    ← Közös script építőelemek
 │   │       │   └── index.js
-│   │       └── workflow/               ← Cikk állapotgép
-│   │           ├── workflowConstants.js  ← Állapotok, átmenetek, jogosultságok, STATE_PERMISSIONS
-│   │           ├── workflowEngine.js     ← executeTransition, lockDocument, unlockDocument
+│   │       └── workflow/                  ← Cikk állapotgép
+│   │           ├── workflowConstants.js   ← Állapotok, átmenetek, jogosultságok, STATE_PERMISSIONS
+│   │           ├── workflowEngine.js      ← executeTransition, lockDocument, unlockDocument
 │   │           ├── workflowPermissions.js ← canUserMoveArticle, hasTransitionPermission
 │   │           └── index.js
 │   │
@@ -374,6 +375,7 @@ index.jsx
 - `login(email, password)`, `logout()`
 - `loading` — hitelesítés folyamatban
 - **Realtime szinkron**: Az Appwrite Realtime `account` csatornára feliratkozva a `user` objektum (beleértve `labels`, `name`, `prefs`) automatikusan frissül, ha a szerveren módosítják (Console/Server SDK)
+- **Recovery szinkron**: A `dataRefreshRequested` MaestroEvent-re is feliratkozik — minden recovery-nél (sleep/wake, reconnect, focus) `account.get()`-tel frissíti a user adatokat. Ez biztosítja a labels/prefs szinkront akkor is, ha az Appwrite Realtime `account` csatorna nem tüzel proxy-n keresztül (pl. szerver-oldali label módosításnál).
 
 ### ConnectionContext API
 - `isOnline`, `isConnecting` — UI indikátorokhoz (spinner, overlay)
