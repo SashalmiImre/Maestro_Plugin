@@ -5,11 +5,13 @@ import { MaestroEvent, dispatchMaestroEvent } from "./maestroEvents.js";
 export const APPWRITE_PROJECT_ID = "68808427001c20418996";
 export const APPWRITE_LOCALE = "hu-HU";
 
-/** Email verificációs callback URL (proxy szerveren hostolt). */
-export const VERIFICATION_URL = 'https://gallant-balance-production-b513.up.railway.app/verify';
+const RAILWAY_BASE = 'https://gallant-balance-production-b513.up.railway.app';
 
-/** Jelszó-visszaállítási callback URL (proxy szerveren hostolt). */
-export const RECOVERY_URL = 'https://gallant-balance-production-b513.up.railway.app/reset-password';
+/** Email verificációs callback URL — VERIFICATION_URL env változóból, vagy Railway fallback. */
+export const VERIFICATION_URL = process.env.VERIFICATION_URL || `${RAILWAY_BASE}/verify`;
+
+/** Jelszó-visszaállítási callback URL — RECOVERY_URL env változóból, vagy Railway fallback. */
+export const RECOVERY_URL = process.env.RECOVERY_URL || `${RAILWAY_BASE}/reset-password`;
 
 
 

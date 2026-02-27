@@ -206,14 +206,22 @@ app.post('/reset-password', async (req, res) => {
     try {
         // Appwrite REST API — PUT /v1/account/recovery
         // Nem igényel API key-t, a userId + secret kombináció az autentikáció
-        const response = await fetch('https://cloud.appwrite.io/v1/account/recovery', {
-            method: 'PUT',
-            headers: {
-                'Content-Type': 'application/json',
-                'X-Appwrite-Project': process.env.APPWRITE_PROJECT_ID,
-            },
-            body: JSON.stringify({ userId, secret, password }),
-        });
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 10000);
+        let response;
+        try {
+            response = await fetch('https://cloud.appwrite.io/v1/account/recovery', {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Appwrite-Project': process.env.APPWRITE_PROJECT_ID,
+                },
+                body: JSON.stringify({ userId, secret, password }),
+                signal: controller.signal,
+            });
+        } finally {
+            clearTimeout(timeoutId);
+        }
 
         if (!response.ok) {
             const errorData = await response.json().catch(() => ({}));
@@ -228,13 +236,30 @@ app.post('/reset-password', async (req, res) => {
         ));
     } catch (error) {
         console.error(`[Recovery] Hiba: userId=${userId}`, error.message);
+        const isAbort = error.name === 'AbortError';
         res.status(500).send(resultHTML(
             'A jelszó módosítása sikertelen',
-            'Hiba történt a jelszó módosítása során. Próbáld újra a pluginból.',
+            isAbort
+                ? 'A szerver nem válaszolt időben. Próbáld újra a pluginból.'
+                : 'Hiba történt a jelszó módosítása során. Próbáld újra a pluginból.',
             false
         ));
     }
 });
+
+/**
+ * Escapes special characters for safe embedding in HTML attribute values.
+ * @param {string} str - The raw string to escape.
+ * @returns {string} The escaped string.
+ */
+function escapeAttr(str) {
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#x27;');
+}
 
 /**
  * HTML sablon a jelszó-visszaállító formhoz.
@@ -298,8 +323,8 @@ function resetPasswordFormHTML(userId, secret) {
         <p style="margin-bottom: 24px;">Add meg az új jelszavadat.</p>
 
         <form method="POST" action="/reset-password" id="resetForm">
-            <input type="hidden" name="userId" value="${userId}">
-            <input type="hidden" name="secret" value="${secret}">
+            <input type="hidden" name="userId" value="${escapeAttr(userId)}">
+            <input type="hidden" name="secret" value="${escapeAttr(secret)}">
 
             <div class="form-group">
                 <label for="password">Új jelszó (min. 8 karakter)</label>

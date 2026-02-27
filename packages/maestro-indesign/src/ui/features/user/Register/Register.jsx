@@ -40,6 +40,11 @@ export const Register = ({ onSwitchToLogin }) => {
             return;
         }
 
+        if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+            setMessage("Érvénytelen email formátum!");
+            return;
+        }
+
         if (password.length < MIN_PASSWORD_LENGTH) {
             setMessage(`A jelszónak legalább ${MIN_PASSWORD_LENGTH} karakter hosszúnak kell lennie!`);
             return;
@@ -177,7 +182,10 @@ export const Register = ({ onSwitchToLogin }) => {
                 }}>
                     <span>Már van fiókod? </span>
                     <span
+                        role="button"
+                        tabIndex={0}
                         onClick={onSwitchToLogin}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSwitchToLogin(); } }}
                         style={{
                             color: "var(--spectrum-global-color-blue-400)",
                             cursor: "pointer",

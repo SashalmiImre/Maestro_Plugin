@@ -129,6 +129,10 @@ export const Login = ({ onSwitchToRegister }) => {
                     <span>Nincs még fiókod? </span>
                     <span
                         onClick={onSwitchToRegister}
+                        onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSwitchToRegister(); } }}
+                        tabIndex={0}
+                        role="button"
+                        aria-label="Regisztrálj"
                         style={{
                             color: "var(--spectrum-global-color-blue-400)",
                             cursor: "pointer",

@@ -52,6 +52,12 @@ const shared = {
     new webpack.optimize.LimitChunkCountPlugin({
       maxChunks: 1,
     }),
+    // Környezeti változók build-időben beégetve; ha nincs beállítva, undefined-ra értékelődik ki,
+    // az appwriteConfig.js fallback értékei érvényesülnek.
+    new webpack.DefinePlugin({
+      'process.env.VERIFICATION_URL': JSON.stringify(process.env.VERIFICATION_URL),
+      'process.env.RECOVERY_URL': JSON.stringify(process.env.RECOVERY_URL),
+    }),
   ],
   devServer: {
     port: 3030, // you can change the port

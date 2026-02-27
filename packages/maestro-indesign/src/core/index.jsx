@@ -175,6 +175,9 @@ const changePassword = async () => {
     dialog.dialogColumns.add();
     const column = dialog.dialogColumns.item(0);
 
+    // Figyelmeztetés: a platformon nem támogatott a jelszó maszkolás
+    column.staticTexts.add({ staticLabel: "Figyelem: a mezők tartalma gépelés közben látható!" });
+
     // Jelenlegi jelszó
     column.staticTexts.add({ staticLabel: "Jelenlegi jelszó:" });
     const currentPasswordField = column.textEditboxes.add({ minWidth: 200 });
