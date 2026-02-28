@@ -320,7 +320,7 @@ export const DeadlinesSection = ({ publication, onFieldUpdate, onValidationChang
         <>
             <CollapsibleSection
                 title="HATÁRIDŐK"
-                storageKey={STORAGE_KEYS.SECTION_PUB_DEADLINES_COLLAPSED}
+                storageKey={STORAGE_KEYS.SECTION_PUBLICATION_DEADLINES_COLLAPSED}
             >
                 <div style={{ display: "flex", flexDirection: "column" }}>
                     {/* Hétvégék kihagyása beállítás */}

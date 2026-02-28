@@ -61,7 +61,7 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
         <CollapsibleSection
             title="MUNKATÁRSAK"
             showDivider={true}
-            storageKey={STORAGE_KEYS.SECTION_CONTRIBUTORS_COLLAPSED}
+            storageKey={STORAGE_KEYS.SECTION_ARTICLE_CONTRIBUTORS_COLLAPSED}
         >
             <div style={{ display: "flex", flexDirection: "column" }}>
 

@@ -14,14 +14,14 @@ export const SCRIPT_LANGUAGE_JAVASCRIPT = 1246973031;
 export const STORAGE_KEYS = {
     EXPANDED_PUBLICATION_ID: "maestro.expandedPublicationId", // Kinyitott kiadvány ID-ja
     HIDE_RESOLVED_MESSAGES: "maestro.hideResolvedMessages",   // Megoldott üzenetek elrejtése
-    SECTION_GENERAL_COLLAPSED: "maestro.section.general.collapsed",         // Általános szekció állapota
-    SECTION_MESSAGES_COLLAPSED: "maestro.section.messages.collapsed",       // Üzenetek szekció állapota
-    SECTION_CONTRIBUTORS_COLLAPSED: "maestro.section.contributors.collapsed", // Közreműködők szekció állapota
-    SECTION_VALIDATION_COLLAPSED: "maestro.section.validation.collapsed",     // Validáció szekció állapota
-    SECTION_PUB_GENERAL_COLLAPSED: "maestro.section.pub.general.collapsed",         // Kiadvány általános szekció
-    SECTION_PUB_LAYOUTS_COLLAPSED: "maestro.section.pub.layouts.collapsed",         // Kiadvány elrendezések szekció
-    SECTION_PUB_CONTRIBUTORS_COLLAPSED: "maestro.section.pub.contributors.collapsed", // Kiadvány munkatársak szekció
-    SECTION_PUB_DEADLINES_COLLAPSED: "maestro.section.pub.deadlines.collapsed"      // Kiadvány határidők szekció
+    SECTION_ARTICLE_GENERAL_COLLAPSED: "maestro.section.article.general.collapsed",             // Cikk általános szekció
+    SECTION_ARTICLE_MESSAGES_COLLAPSED: "maestro.section.article.messages.collapsed",           // Cikk üzenetek szekció
+    SECTION_ARTICLE_CONTRIBUTORS_COLLAPSED: "maestro.section.article.contributors.collapsed",   // Cikk közreműködők szekció
+    SECTION_ARTICLE_VALIDATION_COLLAPSED: "maestro.section.article.validation.collapsed",       // Cikk validáció szekció
+    SECTION_PUBLICATION_GENERAL_COLLAPSED: "maestro.section.publication.general.collapsed",           // Kiadvány általános szekció
+    SECTION_PUBLICATION_LAYOUTS_COLLAPSED: "maestro.section.publication.layouts.collapsed",           // Kiadvány elrendezések szekció
+    SECTION_PUBLICATION_CONTRIBUTORS_COLLAPSED: "maestro.section.publication.contributors.collapsed", // Kiadvány munkatársak szekció
+    SECTION_PUBLICATION_DEADLINES_COLLAPSED: "maestro.section.publication.deadlines.collapsed"        // Kiadvány határidők szekció
 };
 
 // Útvonal Konfiguráció

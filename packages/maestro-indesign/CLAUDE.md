@@ -112,6 +112,7 @@
     - **Egységes Architektúra**: Összefésüli a rendszer validációkat (Preflight, Overlap) és a felhasználói üzeneteket egyetlen listába.
     - **Felhasználói Validációk**: Közvetlenül a `DataContext` kezeli (DB-ből származnak), Realtime-on keresztül szinkronizálva.
     - **Rendszer Validációk**: A `ValidationContext` kezeli (memóriában, session-önként).
+    - **Állapotátmenet-validáció**: A `StateComplianceValidator` koordinálja az összes állapotváltási ellenőrzést (`file_accessible`, `page_number_check`, `filename_verification`, `preflight_check`) a `WORKFLOW_CONFIG` `requiredToEnter`/`requiredToExit` alapján. A `WorkflowEngine.validateTransition()` delegál a `validationRunner.validate()` → `StateComplianceValidator` láncon keresztül.
     - **Blokkolási Logika**: Bármely aktív `error` típusú elem blokkolja az állapotátmeneteket.
     - **Komponensek**: `ValidationSection.jsx` (UI), `useUnifiedValidation` (Logika), `ValidationContext` (Rendszeradatok).
     - **Mező-szintű Validáció**: `ValidatedTextField` `invalid` prop + validátor statikus metódusok (pl. `DeadlineValidator.isValidDate/isValidTime`, `isValidFileName`) — azonnali piros keret blur-kor, formátum-hibára. Fájlnév validáció: `\ / : * ? " < > |` tiltott karakterek + Windows fenntartott nevek (CON, PRN, AUX, NUL, COM1–9, LPT1–9) + pontra/szóközre végződő nevek tiltása.
@@ -211,14 +212,14 @@ Maestro/
 │   │       ├── namingUtils.js          ← Név formázó helperek
 │   │       ├── promiseUtils.js         ← Promise segédfüggvények (withTimeout, withRetry)
 │   │       ├── urgencyUtils.js         ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színek)
-│   │       ├── validationRunner.js     ← Validátor futtatás orchestrálása
+│   │       ├── validationRunner.js     ← Validátor futtatás orchestrálása + standalone fájl létezés ellenőrzés
 │   │       ├── validators/             ← Tiszta validációs logika osztályok
 │   │       │   ├── ValidatorBase.js
 │   │       │   ├── DatabaseIntegrityValidator.js
 │   │       │   ├── FileSystemValidator.js
 │   │       │   ├── PreflightValidator.js
 │   │       │   ├── PublicationStructureValidator.js
-│   │       │   ├── StateComplianceValidator.js
+│   │       │   ├── StateComplianceValidator.js  ← Állapotátmenet-validáció koordinátor (fájl, oldalszám, fájlnév, preflight)
 │   │       │   ├── DeadlineValidator.js
 │   │       │   └── index.js
 │   │       ├── indesign/               ← ExtendScript generálás & InDesign segédfüggvények
@@ -230,7 +231,7 @@ Maestro/
 │   │       │   └── index.js
 │   │       └── workflow/                  ← Cikk állapotgép
 │   │           ├── workflowConstants.js   ← Állapotok, átmenetek, jogosultságok, STATE_PERMISSIONS
-│   │           ├── workflowEngine.js      ← executeTransition, lockDocument, unlockDocument
+│   │           ├── workflowEngine.js      ← executeTransition (→ StateComplianceValidator), lockDocument, unlockDocument
 │   │           ├── workflowPermissions.js ← canUserMoveArticle, hasTransitionPermission
 │   │           └── index.js
 │   │

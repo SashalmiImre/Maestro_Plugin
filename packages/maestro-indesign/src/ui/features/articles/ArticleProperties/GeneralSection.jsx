@@ -264,7 +264,7 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
             <CollapsibleSection
                 title="ÁLTALÁNOS"
                 showDivider={false}
-                storageKey={STORAGE_KEYS.SECTION_GENERAL_COLLAPSED}
+                storageKey={STORAGE_KEYS.SECTION_ARTICLE_GENERAL_COLLAPSED}
             >
                 <div style={{ display: "flex", flexDirection: "column", gap: "12px" }}>
                     {/* Name and Page Numbers Row - FIRST ROW */}

@@ -98,30 +98,13 @@ export const validate = async (target, checkTypes, context = {}) => {
 };
 
 /**
- * Legacy kompatibilitás: Standard 'validateArticle' függvény.
- * Alapvető fájl létezést ellenőriz.
+ * Fájl létezés ellenőrzése InDesign ExtendScript-tel.
+ * Standalone változat — az állapotátmenet-validáció a StateComplianceValidator-ban fut.
+ *
+ * @param {Object} article - A validálandó cikk (filePath vagy FilePath mezővel)
+ * @returns {Promise<Object>} { isValid, errors[], warnings[] }
  */
 export const validateArticle = async (article) => {
-    // Egyelőre átirányítjuk ezt az új rendszerünkön keresztül
-    // A StateCompliance használatával, ami belsőleg meghívja a 'file_accessible'-t a WorkflowConstants-on keresztül
-    // VAGY feltételezzük, hogy ez az ellenőrzés azt jelenti: "Létezik-e a fájl?"
-    
-    // Az eredeti logika újraimplementálása itt a biztonság érdekében, amíg a FileSystemValidator nem lesz robusztus az egyes fájlokhoz
-    // Az eredeti logika az indesign doScript-et használta.
-    // Használjuk az új DatabaseIntegrityValidator-t, ami közvetve ellenőrzi a fájlhozzáférést scripten keresztül?
-    // Nem, az az oldalszámokat ellenőrzi.
-    // Tartsuk meg az eredeti logikát ehhez a specifikus export függvényhez, kissé módosítva, hogy tisztább legyen,
-    // vagy hagyatkozzunk arra, hogy a WorkflowEngine meghívja az új 'validate' orchestratort.
-    
-    // Az új tervhez igazodva:
-    // Ezt a függvényt a WorkflowEngine importálja.
-    // Át kellene irányítanunk az új architektúra használatára.
-    
-    // A 'file_accessible' esetében maradhatunk az eredeti implementáció logikájánál,
-    // DE átmozgatva egy Validator osztályba, ha tisztaságot akarunk.
-    // A korlátokat figyelembe véve, tartsuk meg a legacy törzset itt a 100%-os biztonság érdekében a "validateArticle" esetében,
-    // de jelöljük meg mint Legacy.
-    
     const { resolvePlatformPath, escapePathForExtendScript } = require("./pathUtils.js");
     const results = { isValid: true, errors: [], warnings: [] };
     const path = article.filePath || article.FilePath;

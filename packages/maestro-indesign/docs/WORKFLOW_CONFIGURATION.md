@@ -19,6 +19,8 @@ A konfiguráció állapotonként (`WORKFLOW_STATES`) csoportosítva tartalmazza 
 
 ## Validációs Rendszer
 
+Az állapotátmenet-validációt a `StateComplianceValidator` koordinálja. A `WorkflowEngine.validateTransition()` a `validationRunner.validate()` → `StateComplianceValidator` láncon keresztül delegál — az összes `requiredToEnter`/`requiredToExit` ellenőrzést (`file_accessible`, `page_number_check`, `filename_verification`, `preflight_check`) ez az osztály futtatja.
+
 A `validations` objektum három kulcsot tartalmazhat, amelyek a munkafolyamat különböző pontjain érvényesülnek.
 
 ### 1. `onEntry` (Automatikus Futtatás)

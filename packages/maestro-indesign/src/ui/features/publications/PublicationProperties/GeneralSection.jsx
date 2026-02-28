@@ -53,7 +53,7 @@ export const GeneralSection = ({ publication, onFieldUpdate }) => {
         <CollapsibleSection
             title="ÁLTALÁNOS"
             showDivider={false}
-            storageKey={STORAGE_KEYS.SECTION_PUB_GENERAL_COLLAPSED}
+            storageKey={STORAGE_KEYS.SECTION_PUBLICATION_GENERAL_COLLAPSED}
         >
             <div style={{ display: "flex", flexDirection: "column" }}>
                 {/* Terjedelem + Név sor */}

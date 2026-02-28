@@ -345,7 +345,7 @@ export const ValidationSection = ({ article, disabled }) => {
         <CollapsibleSection
             title="VALIDÁCIÓ ÉS ÜZENETEK"
             showDivider={true}
-            storageKey={STORAGE_KEYS.SECTION_VALIDATION_COLLAPSED}
+            storageKey={STORAGE_KEYS.SECTION_ARTICLE_VALIDATION_COLLAPSED}
         >
             <div style={{ display: "flex", flexDirection: "column" }}>
 

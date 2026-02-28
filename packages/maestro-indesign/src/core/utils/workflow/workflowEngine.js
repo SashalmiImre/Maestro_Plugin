@@ -5,12 +5,12 @@
  * @module utils/workflowEngine
  */
 
-import { tables, Query, DATABASE_ID, ARTICLES_COLLECTION_ID } from "../../config/appwriteConfig.js";
+import { tables, DATABASE_ID, ARTICLES_COLLECTION_ID } from "../../config/appwriteConfig.js";
 import { withTimeout } from "../promiseUtils.js";
 import { WORKFLOW_CONFIG, MARKERS } from "./workflowConstants.js";
 import { canUserMoveArticle } from "./workflowPermissions.js";
 import { LOCK_TYPE } from "../constants.js";
-import { validateArticle, validate } from "../validationRunner.js";
+import { validate } from "../validationRunner.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../config/maestroEvents.js";
 
 /**
@@ -56,79 +56,9 @@ export class WorkflowEngine {
      * @returns {string[]} return.warnings - Figyelmeztetések tömbje (nem blokkol).
      */
     static async validateTransition(article, targetState) {
-        const currentState = article.state;
-        
-        // 1. Exit requirements for current state
-        const exitReqs = WORKFLOW_CONFIG[currentState]?.validations?.requiredToExit || [];
-        
-        // 2. Entry requirements for target state
-        const enterReqs = WORKFLOW_CONFIG[targetState]?.validations?.requiredToEnter || [];
-        
-        // Combine unique requirements
-        const requiredChecks = [...new Set([...exitReqs, ...enterReqs])];
-        
-        const results = { isValid: true, errors: [], warnings: [] };
-
-        // 1. Alapvető fájlvalidáció (Mindig lefut)
-        const fileValidation = await validateArticle(article);
-        if (!fileValidation.isValid) {
-            return fileValidation;
-        }
-
-        // 2. Specifikus ellenőrzések
-        // 2. Specifikus ellenőrzések
-        for (const checkItem of requiredChecks) {
-            // Normalize check item: if string, convert to simple object for uniform handling
-            const checkConfig = typeof checkItem === 'string' 
-                ? { validator: checkItem, options: {} } 
-                : checkItem;
-            
-            const validatorName = checkConfig.validator;
-
-            switch (validatorName) {
-                case "page_number_check":
-                    // TODO: Implementálni a tényleges oldalszám ellenőrzést InDesign szkripttel
-                    // console.log("Oldalszám ellenőrzés futtatása...");
-                    break;
-                case "filename_verification":
-                    // TODO: Implementálni a fájlnév ellenőrzést
-                    break;
-                case "preflight_check": {
-                    // Check if specific options are defined for this state's preflight
-                    // We prioritize the explicit options in the requirement, 
-                    // fallback to onEntry config if available (legacy support)
-                    
-                    let options = checkConfig.options;
-                    
-                    // Ha a requirement nem specifikál opciókat (csak string referencia volt),
-                    // akkor megpróbáljuk kitalálni a konfigból (legacy behavior)
-                    if (Object.keys(options).length === 0) {
-                         const entryConfig = WORKFLOW_CONFIG[targetState]?.validations?.onEntry?.find(v => v.validator === 'preflight_check');
-                         if (entryConfig?.options) {
-                             options = entryConfig.options;
-                         }
-                    }
-
-                    const preflightResult = await validate(article, 'preflight_check', { options });
-                    
-                    if (!preflightResult.isValid) {
-                        results.isValid = false;
-                        results.errors.push(...preflightResult.errors);
-                    }
-                    if (preflightResult.warnings?.length > 0) {
-                        results.warnings.push(...preflightResult.warnings);
-                    }
-                    // Infrastruktúra-flag propagálás (pl. csatolatlan meghajtó)
-                    if (preflightResult.skipped) {
-                        results.skipped = true;
-                        results.unmountedDrives = preflightResult.unmountedDrives;
-                    }
-                    break;
-                }
-            }
-        }
-
-        return results;
+        // Állapot-specifikus ellenőrzések (fájl létezés, oldalszám, fájlnév, preflight)
+        // delegálva a StateComplianceValidator-nak
+        return validate(article, 'state_compliance', { targetState });
     }
 
     /**

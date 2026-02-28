@@ -169,7 +169,7 @@ export const LayoutsSection = ({ publication }) => {
         <>
             <CollapsibleSection
                 title="ELRENDEZÉSEK"
-                storageKey={STORAGE_KEYS.SECTION_PUB_LAYOUTS_COLLAPSED}
+                storageKey={STORAGE_KEYS.SECTION_PUBLICATION_LAYOUTS_COLLAPSED}
             >
                 <div style={{ display: "flex", flexDirection: "column" }}>
                     {/* Layout lista */}
