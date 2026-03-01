@@ -1,4 +1,5 @@
 
+import { VALIDATOR_TYPES } from "../validationConstants.js";
 
 /**
  * Munkafolyamat állapotok enumerációja.
@@ -33,8 +34,15 @@ export const MARKERS = {
     IGNORE: 1          // Kimarad — a cikk ideiglenesen ki van hagyva a kiadványból
 };
 
-export const MARKER_CONFIG = {
-    [1]: { label: "Kimarad", color: "var(--spectrum-global-color-gray-500)" }
+/**
+ * Munkafolyamat átmenet típusok enum.
+ * Meghatározza, hogy az állapotváltás előre vagy hátra történik.
+ *
+ * @enum {string}
+ */
+export const TRANSITION_TYPES = {
+    FORWARD: 'forward',   // Előre haladás a munkafolyamatban
+    BACKWARD: 'backward'  // Visszalépés korábbi állapotba
 };
 
 /**
@@ -60,11 +68,11 @@ export const WORKFLOW_CONFIG = {
     [WORKFLOW_STATES.DESIGNING]: {
         config: { label: "Tervezés", color: "var(--status-designing)", icon: "" },
         transitions: [
-            { target: WORKFLOW_STATES.DESIGN_APPROVAL, label: "Tördelve", type: "forward" }
+            { target: WORKFLOW_STATES.DESIGN_APPROVAL, label: "Tördelve", type: TRANSITION_TYPES.FORWARD }
         ],
         validations: {
             onEntry: [],
-            requiredToEnter: ["file_accessible"],
+            requiredToEnter: [VALIDATOR_TYPES.FILE_ACCESSIBLE],
             requiredToExit: []
         },
         commands: []
@@ -72,12 +80,12 @@ export const WORKFLOW_CONFIG = {
     [WORKFLOW_STATES.DESIGN_APPROVAL]: {
         config: { label: "Terv ellenőrzés", color: "var(--status-design-approval)", icon: "" },
         transitions: [
-            { target: WORKFLOW_STATES.WAITING_FOR_START, label: "Jóváhagyás", type: "forward" },
-            { target: WORKFLOW_STATES.DESIGNING, label: "Tervezéshez", type: "backward" }
+            { target: WORKFLOW_STATES.WAITING_FOR_START, label: "Jóváhagyás", type: TRANSITION_TYPES.FORWARD },
+            { target: WORKFLOW_STATES.DESIGNING, label: "Tervezéshez", type: TRANSITION_TYPES.BACKWARD }
         ],
         validations: {
             onEntry: [],
-            requiredToEnter: ["file_accessible", "page_number_check", "filename_verification"],
+            requiredToEnter: [VALIDATOR_TYPES.FILE_ACCESSIBLE, VALIDATOR_TYPES.PAGE_NUMBER_CHECK, VALIDATOR_TYPES.FILENAME_VERIFICATION],
             requiredToExit: []
         },
         commands: [
@@ -87,12 +95,12 @@ export const WORKFLOW_CONFIG = {
     [WORKFLOW_STATES.WAITING_FOR_START]: {
         config: { label: "Elindításra vár", color: "var(--status-waiting-for-start)", icon: "" },
         transitions: [
-            { target: WORKFLOW_STATES.EDITORIAL_APPROVAL, label: "Indítás", type: "forward" },
-            { target: WORKFLOW_STATES.DESIGN_APPROVAL, label: "Jóváhagyáshoz", type: "backward" }
+            { target: WORKFLOW_STATES.EDITORIAL_APPROVAL, label: "Indítás", type: TRANSITION_TYPES.FORWARD },
+            { target: WORKFLOW_STATES.DESIGN_APPROVAL, label: "Jóváhagyáshoz", type: TRANSITION_TYPES.BACKWARD }
         ],
         validations: {
             onEntry: [],
-            requiredToEnter: ["file_accessible", "page_number_check", "filename_verification"],
+            requiredToEnter: [VALIDATOR_TYPES.FILE_ACCESSIBLE, VALIDATOR_TYPES.PAGE_NUMBER_CHECK, VALIDATOR_TYPES.FILENAME_VERIFICATION],
             requiredToExit: []
         },
         commands: [
@@ -103,12 +111,12 @@ export const WORKFLOW_CONFIG = {
     [WORKFLOW_STATES.EDITORIAL_APPROVAL]: {
         config: { label: "Szerkesztői ellenőrzés", color: "var(--status-editorial-approval)", icon: "" },
         transitions: [
-            { target: WORKFLOW_STATES.CONTENT_REVISION, label: "Jóváhagyás", type: "forward" },
-            { target: WORKFLOW_STATES.DESIGNING, label: "Tervezéshez", type: "backward" }
+            { target: WORKFLOW_STATES.CONTENT_REVISION, label: "Jóváhagyás", type: TRANSITION_TYPES.FORWARD },
+            { target: WORKFLOW_STATES.DESIGNING, label: "Tervezéshez", type: TRANSITION_TYPES.BACKWARD }
         ],
         validations: {
             onEntry: [],
-            requiredToEnter: ["file_accessible", "page_number_check", "filename_verification"],
+            requiredToEnter: [VALIDATOR_TYPES.FILE_ACCESSIBLE, VALIDATOR_TYPES.PAGE_NUMBER_CHECK, VALIDATOR_TYPES.FILENAME_VERIFICATION],
             requiredToExit: []
         },
         commands: [
@@ -119,12 +127,12 @@ export const WORKFLOW_CONFIG = {
     [WORKFLOW_STATES.CONTENT_REVISION]: {
         config: { label: "Korrektúrázás", color: "var(--status-content-revision)", icon: "" },
         transitions: [
-            { target: WORKFLOW_STATES.FINAL_APPROVAL, label: "Korrektúrázva", type: "forward" },
-            { target: WORKFLOW_STATES.EDITORIAL_APPROVAL, label: "Szerkesztőhöz", type: "backward" }
+            { target: WORKFLOW_STATES.FINAL_APPROVAL, label: "Korrektúrázva", type: TRANSITION_TYPES.FORWARD },
+            { target: WORKFLOW_STATES.EDITORIAL_APPROVAL, label: "Szerkesztőhöz", type: TRANSITION_TYPES.BACKWARD }
         ],
         validations: {
             onEntry: [],
-            requiredToEnter: ["file_accessible", "page_number_check", "filename_verification"],
+            requiredToEnter: [VALIDATOR_TYPES.FILE_ACCESSIBLE, VALIDATOR_TYPES.PAGE_NUMBER_CHECK, VALIDATOR_TYPES.FILENAME_VERIFICATION],
             requiredToExit: []
         },
         commands: [
@@ -135,14 +143,14 @@ export const WORKFLOW_CONFIG = {
     [WORKFLOW_STATES.FINAL_APPROVAL]: {
         config: { label: "Végső ellenőrzés", color: "var(--status-final-approval)", icon: "" },
         transitions: [
-            { target: WORKFLOW_STATES.PRINTABLE, label: "Jóváhagyás", type: "forward" },
-            { target: WORKFLOW_STATES.DESIGN_APPROVAL, label: "Terv ellenőrzés", type: "backward" }
+            { target: WORKFLOW_STATES.PRINTABLE, label: "Jóváhagyás", type: TRANSITION_TYPES.FORWARD },
+            { target: WORKFLOW_STATES.DESIGN_APPROVAL, label: "Terv ellenőrzés", type: TRANSITION_TYPES.BACKWARD }
         ],
         validations: {
             onEntry: [
-                 { validator: 'preflight_check', options: { profile: "Levil", profileFile: "Levil.idpp" } }
+                 { validator: VALIDATOR_TYPES.PREFLIGHT_CHECK, options: { profile: "Levil", profileFile: "Levil.idpp" } }
             ],
-            requiredToEnter: ["file_accessible"],
+            requiredToEnter: [VALIDATOR_TYPES.FILE_ACCESSIBLE],
             requiredToExit: []
         },
         commands: [
@@ -153,19 +161,19 @@ export const WORKFLOW_CONFIG = {
     [WORKFLOW_STATES.PRINTABLE]: {
         config: { label: "Nyomdakész", color: "var(--status-printable)", icon: "" },
         transitions: [
-            { target: WORKFLOW_STATES.ARCHIVABLE, label: "Levilágítás", type: "forward" },
-            { target: WORKFLOW_STATES.FINAL_APPROVAL, label: "Végső ellenőrzés", type: "backward" }
+            { target: WORKFLOW_STATES.ARCHIVABLE, label: "Levilágítás", type: TRANSITION_TYPES.FORWARD },
+            { target: WORKFLOW_STATES.FINAL_APPROVAL, label: "Végső ellenőrzés", type: TRANSITION_TYPES.BACKWARD }
         ],
         validations: {
             onEntry: [
-                 { validator: 'preflight_check', options: { profile: "Levil", profileFile: "Levil.idpp" } }
+                 { validator: VALIDATOR_TYPES.PREFLIGHT_CHECK, options: { profile: "Levil", profileFile: "Levil.idpp" } }
             ],
             requiredToEnter: [
                 "file_accessible",
-                { validator: 'preflight_check', options: { profile: "Levil", profileFile: "Levil.idpp" } }
+                { validator: VALIDATOR_TYPES.PREFLIGHT_CHECK, options: { profile: "Levil", profileFile: "Levil.idpp" } }
             ],
             requiredToExit: [
-                { validator: 'preflight_check', options: { profile: "Levil", profileFile: "Levil.idpp" } }
+                { validator: VALIDATOR_TYPES.PREFLIGHT_CHECK, options: { profile: "Levil", profileFile: "Levil.idpp" } }
             ]
         },
         commands: [
@@ -177,7 +185,7 @@ export const WORKFLOW_CONFIG = {
         transitions: [],
         validations: {
             onEntry: [],
-            requiredToEnter: ["file_accessible"],
+            requiredToEnter: [VALIDATOR_TYPES.FILE_ACCESSIBLE],
             requiredToExit: []
         },
         commands: [

@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import { useValidation } from '../../core/contexts/ValidationContext.jsx';
 import { useUserValidations } from './useUserValidations.js';
 import { VALIDATION_TYPES } from '../../core/utils/messageConstants.js';
+import { VALIDATION_SOURCES } from '../../core/utils/validationConstants.js';
 
 /**
  * Hook to get unified validation items (System + User Validations) for an article.
@@ -28,7 +29,7 @@ export const useUnifiedValidation = (article) => {
         const rawItems = validationResults.get(article.$id) || [];
         
         return rawItems
-            .filter(item => item.source !== 'user' && item.source !== 'system_override')
+            .filter(item => item.source !== VALIDATION_SOURCES.USER && item.source !== VALIDATION_SOURCES.SYSTEM_OVERRIDE)
             .map(item => ({
                 ...item,
                 type: Object.values(VALIDATION_TYPES).includes(item.type) ? item.type : VALIDATION_TYPES.ERROR,
@@ -39,7 +40,7 @@ export const useUnifiedValidation = (article) => {
 
     // 2. Override Messages (User messages that downgrade system errors)
     const overrideMessages = useMemo(() => {
-        return validations.filter(m => m.source === 'system_override' && m.contextId);
+        return validations.filter(m => m.source === VALIDATION_SOURCES.SYSTEM_OVERRIDE && m.contextId);
     }, [validations]);
 
     // 3. Active System Items (Filter out overridden ones)

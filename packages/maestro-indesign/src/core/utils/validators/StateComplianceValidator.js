@@ -7,6 +7,7 @@
 import { ValidatorBase } from "./ValidatorBase.js";
 import { PreflightValidator } from "./PreflightValidator.js";
 import { WORKFLOW_CONFIG } from "../workflow/workflowConstants.js";
+import { VALIDATOR_TYPES } from "../validationConstants.js";
 import { isValidFileName, resolvePlatformPath, escapePathForExtendScript } from "../pathUtils.js";
 
 /** Gyorsítótárazott PreflightValidator példány. */
@@ -53,24 +54,24 @@ export class StateComplianceValidator extends ValidatorBase {
             let options = checkConfig.options || {};
 
             switch (validatorName) {
-                case 'file_accessible':
+                case VALIDATOR_TYPES.FILE_ACCESSIBLE:
                     await this._checkFileAccessible(article, results);
                     break;
 
-                case 'page_number_check':
+                case VALIDATOR_TYPES.PAGE_NUMBER_CHECK:
                     this._checkPageNumbers(article, results);
                     break;
 
-                case 'filename_verification':
+                case VALIDATOR_TYPES.FILENAME_VERIFICATION:
                     this._checkFileName(article, results);
                     break;
 
-                case 'preflight_check': {
+                case VALIDATOR_TYPES.PREFLIGHT_CHECK: {
                     // Legacy fallback: ha nincs explicit options, onEntry config-ból keresi
                     if (Object.keys(options).length === 0) {
                         const entryConfig = WORKFLOW_CONFIG[targetState]
                             ?.validations?.onEntry
-                            ?.find(v => v.validator === 'preflight_check');
+                            ?.find(v => v.validator === VALIDATOR_TYPES.PREFLIGHT_CHECK);
                         if (entryConfig?.options) options = entryConfig.options;
                     }
                     await this._checkPreflight(article, options, results);

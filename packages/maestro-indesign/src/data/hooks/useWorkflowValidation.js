@@ -19,11 +19,11 @@ import { useValidation } from "../../core/contexts/ValidationContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 
 import { WORKFLOW_CONFIG } from "../../core/utils/workflow/workflowConstants.js";
+import { VALIDATOR_TYPES, VALIDATION_SOURCES } from "../../core/utils/validationConstants.js";
+import { VALIDATION_TYPES } from "../../core/utils/messageConstants.js";
 import { tables, DATABASE_ID, VALIDATIONS_COLLECTION_ID, ID, Query } from "../../core/config/appwriteConfig.js";
 import { log, logError } from "../../core/utils/logger.js";
-
-const VALIDATION_SOURCE = "preflight";
-const PAGE_SIZE = 1000;
+import { DATA_QUERY_CONFIG, TOAST_TYPES } from "../../core/utils/constants.js";
 
 
 
@@ -40,7 +40,7 @@ async function fetchAllPreflightRows(baseQueries) {
             tableId: VALIDATIONS_COLLECTION_ID,
             queries: [
                 ...baseQueries,
-                Query.limit(PAGE_SIZE),
+                Query.limit(DATA_QUERY_CONFIG.PAGE_SIZE),
                 Query.offset(offset)
             ]
         });
@@ -52,8 +52,8 @@ async function fetchAllPreflightRows(baseQueries) {
 
         allRows.push(...response.rows);
 
-        if (response.rows.length < PAGE_SIZE) break;
-        offset += PAGE_SIZE;
+        if (response.rows.length < DATA_QUERY_CONFIG.PAGE_SIZE) break;
+        offset += DATA_QUERY_CONFIG.PAGE_SIZE;
     }
 
     return allRows;
@@ -89,7 +89,7 @@ export const useWorkflowValidation = () => {
                 // Betöltjük a 'preflight' forrású validációkat (hardkódolva a kompatibilitás miatt,
                 // de később kiterjeszthető más forrásokra is)
                 const allRows = await fetchAllPreflightRows([
-                    Query.equal('source', VALIDATION_SOURCE)
+                    Query.equal('source', VALIDATION_SOURCES.PREFLIGHT)
                 ]);
 
                 if (allRows.length === 0) return;
@@ -97,14 +97,14 @@ export const useWorkflowValidation = () => {
                 for (const doc of allRows) {
                     const items = [];
                     if (doc.errors && doc.errors.length > 0) {
-                        items.push(...doc.errors.map(msg => ({ type: 'error', message: msg, source: VALIDATION_SOURCE })));
+                        items.push(...doc.errors.map(msg => ({ type: VALIDATION_TYPES.ERROR, message: msg, source: VALIDATION_SOURCES.PREFLIGHT })));
                     }
                     if (doc.warnings && doc.warnings.length > 0) {
-                        items.push(...doc.warnings.map(msg => ({ type: 'warning', message: msg, source: VALIDATION_SOURCE })));
+                        items.push(...doc.warnings.map(msg => ({ type: VALIDATION_TYPES.WARNING, message: msg, source: VALIDATION_SOURCES.PREFLIGHT })));
                     }
                     
                     if (items.length > 0) {
-                        updateArticleValidation(doc.articleId, VALIDATION_SOURCE, items);
+                        updateArticleValidation(doc.articleId, VALIDATION_SOURCES.PREFLIGHT, items);
                     }
                 }
 
@@ -195,7 +195,7 @@ export const useWorkflowValidation = () => {
             const driveList = result.unmountedDrives?.join(', ') || '';
             showToast(
                 'A validáció nem futott le',
-                'error',
+                TOAST_TYPES.ERROR,
                 `A következő hálózati meghajtó(k) nem elérhetők: ${driveList}. ` +
                 'Kérjük, ellenőrizd a hálózati kapcsolatot, majd próbáld újra.'
             );
@@ -209,15 +209,15 @@ export const useWorkflowValidation = () => {
 
         // Forrás meghatározása a típusból (egyelőre leképezzük 'preflight'-ra ha preflight_check)
         // Ha később több típus lesz, itt lehet logikázni.
-        const source = validatorType === 'preflight_check' ? 'preflight' : validatorType;
+        const source = validatorType === VALIDATOR_TYPES.PREFLIGHT_CHECK ? VALIDATION_SOURCES.PREFLIGHT : validatorType;
 
         // ValidationContext frissítés - Átalakítás ValidationItem-ekre
         const items = [];
         if (validationResult.errors.length > 0) {
-            items.push(...validationResult.errors.map(msg => ({ type: 'error', message: msg, source })));
+            items.push(...validationResult.errors.map(msg => ({ type: VALIDATION_TYPES.ERROR, message: msg, source })));
         }
         if (validationResult.warnings.length > 0) {
-            items.push(...validationResult.warnings.map(msg => ({ type: 'warning', message: msg, source })));
+            items.push(...validationResult.warnings.map(msg => ({ type: VALIDATION_TYPES.WARNING, message: msg, source })));
         }
 
         updateArticleValidation(article.$id, source, items);
@@ -235,10 +235,10 @@ export const useWorkflowValidation = () => {
         // VAGY egy alapértelmezett profilt.
         // A WORKFLOW_CONFIG-ból kikeressük, van-e config erre az állapotra.
         const stateConfig = WORKFLOW_CONFIG[article.state]?.validations;
-        const preflightConfig = stateConfig?.onEntry?.find(v => v.validator === 'preflight_check');
+        const preflightConfig = stateConfig?.onEntry?.find(v => v.validator === VALIDATOR_TYPES.PREFLIGHT_CHECK);
         const options = preflightConfig?.options || {}; // Default to empty if not configured (PreflightValidator defaults to Levil)
 
-        return runValidation(article, 'preflight_check', options);
+        return runValidation(article, VALIDATOR_TYPES.PREFLIGHT_CHECK, options);
     }, [runValidation]);
 
     // Egyetlen ref a stabil hivatkozásokhoz az event handlerekben
@@ -292,13 +292,13 @@ export const useWorkflowValidation = () => {
             // A régi implementáció törölte a preflight eredményt, ha kiléptünk a PREFLIGHT_STATES-ből.
             
             // Megnézzük, hogy a régi állapotban volt-e preflight, és az újban van-e.
-            const hadPreflight = prevConfig?.onEntry?.some(v => v.validator === 'preflight_check');
-            const hasPreflight = newConfig?.onEntry?.some(v => v.validator === 'preflight_check');
+            const hadPreflight = prevConfig?.onEntry?.some(v => v.validator === VALIDATOR_TYPES.PREFLIGHT_CHECK);
+            const hasPreflight = newConfig?.onEntry?.some(v => v.validator === VALIDATOR_TYPES.PREFLIGHT_CHECK);
 
             if (hadPreflight && !hasPreflight) {
                  log(`[useWorkflowValidation] Preflight eredmények törlése (kilépés): "${article.name}"`);
-                 callbacksRef.current.clearArticleValidation(article.$id, 'preflight');
-                 callbacksRef.current.persistToDatabase(article.$id, article.publicationId, 'preflight', { errors: [], warnings: [] });
+                 callbacksRef.current.clearArticleValidation(article.$id, VALIDATION_SOURCES.PREFLIGHT);
+                 callbacksRef.current.persistToDatabase(article.$id, article.publicationId, VALIDATION_SOURCES.PREFLIGHT, { errors: [], warnings: [] });
             }
 
             // 2. Belépés az új állapotba: futtatás

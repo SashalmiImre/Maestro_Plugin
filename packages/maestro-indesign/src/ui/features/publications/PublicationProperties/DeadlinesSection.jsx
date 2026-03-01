@@ -11,7 +11,7 @@ import { useDeadlines } from "../../../../data/hooks/useDeadlines.js";
 import { useToast } from "../../../common/Toast/ToastContext.jsx";
 
 // Config & Constants
-import { STORAGE_KEYS } from "../../../../core/utils/constants.js";
+import { STORAGE_KEYS, UI_TIMING, TOAST_TYPES } from "../../../../core/utils/constants.js";
 
 // Utils
 import { logError } from "../../../../core/utils/logger.js";
@@ -129,7 +129,7 @@ export const DeadlinesSection = ({ publication, onFieldUpdate, onValidationChang
             setValidationErrors(result.errors || []);
             setValidationWarnings(result.warnings || []);
             if (onValidationChange) onValidationChange(!result.isValid);
-        }, 300);
+        }, UI_TIMING.VALIDATION_DEBOUNCE_MS);
 
         return () => {
             if (validationTimerRef.current) clearTimeout(validationTimerRef.current);
@@ -281,7 +281,7 @@ export const DeadlinesSection = ({ publication, onFieldUpdate, onValidationChang
                 endPage: defaultEnd,
                 datetime: new Date().toISOString()
             });
-            showToast('Új határidő létrehozva', 'success');
+            showToast('Új határidő létrehozva', TOAST_TYPES.SUCCESS);
         } catch (error) {
             logError('[DeadlinesSection] Create failed:', error);
         }
@@ -303,7 +303,7 @@ export const DeadlinesSection = ({ publication, onFieldUpdate, onValidationChang
 
         try {
             await deleteDeadline(deadlineId);
-            showToast('Határidő törölve', 'success');
+            showToast('Határidő törölve', TOAST_TYPES.SUCCESS);
         } catch (error) {
             logError('[DeadlinesSection] Delete failed:', error);
         }

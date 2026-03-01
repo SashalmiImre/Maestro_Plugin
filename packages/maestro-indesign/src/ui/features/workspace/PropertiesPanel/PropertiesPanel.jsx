@@ -7,6 +7,7 @@ import { WorkflowEngine } from "../../../../core/utils/workflow/workflowEngine.j
 import { useUser } from "../../../../core/contexts/UserContext.jsx";
 import { useData } from "../../../../core/contexts/DataContext.jsx";
 import { useToast } from "../../../common/Toast/ToastContext.jsx";
+import { TOAST_TYPES } from "../../../../core/utils/constants.js";
 import { executeCommand } from "../../../../core/commands/index.js";
 
 export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onPublicationUpdate, onBack, onOpen, runAndPersistPreflight }) => {
@@ -55,14 +56,14 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
             // silent: a handler már megjelenítette a visszajelzést (pl. toast a hook-ból)
             if (!result.silent) {
                 if (result.success) {
-                    showToast(result.message || "Művelet végrehajtva", "success");
+                    showToast(result.message || "Művelet végrehajtva", TOAST_TYPES.SUCCESS);
                 } else {
-                    showToast("A művelet sikertelen", "error", result.error || "Ismeretlen hiba történt a végrehajtás során.");
+                    showToast("A művelet sikertelen", TOAST_TYPES.ERROR, result.error || "Ismeretlen hiba történt a végrehajtás során.");
                 }
             }
         } catch (error) {
             console.error("Command execution error:", error);
-            showToast("Váratlan hiba", "error", error.message || "Ismeretlen hiba történt a parancs végrehajtása közben.");
+            showToast("Váratlan hiba", TOAST_TYPES.ERROR, error.message || "Ismeretlen hiba történt a parancs végrehajtása közben.");
         } finally {
             setIsSyncing(false);
         }
@@ -79,16 +80,16 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
                     applyArticleUpdate(result.document);
                     if (onUpdate) onUpdate(result.document);
                 } else if (!result.silent) {
-                    showToast(result.message || "Művelet végrehajtva", "success");
+                    showToast(result.message || "Művelet végrehajtva", TOAST_TYPES.SUCCESS);
                 }
             } else {
                 const errorMessage = result.error?.message || (typeof result.error === 'string' ? result.error : 'Ismeretlen hiba');
                 console.error("Marker toggle error:", result.error);
-                showToast('A jelölő módosítása sikertelen', 'error', errorMessage);
+                showToast('A jelölő módosítása sikertelen', TOAST_TYPES.ERROR, errorMessage);
             }
         } catch (error) {
             console.error("Marker toggle exception:", error);
-            showToast('A jelölő módosítása sikertelen', 'error', error.message || 'Váratlan hiba történt.');
+            showToast('A jelölő módosítása sikertelen', TOAST_TYPES.ERROR, error.message || 'Váratlan hiba történt.');
         } finally {
             setIsSyncing(false);
         }

@@ -15,7 +15,7 @@ import React, { useEffect, useRef, useState } from "react";
 
 import { useUser } from "./contexts/UserContext.jsx";
 import { useConnection } from "./contexts/ConnectionContext.jsx";
-import { CONNECTION_STATES, CONNECTION_CONFIG } from "./utils/constants.js";
+import { CONNECTION_STATES, CONNECTION_CONFIG, RECOVERY_TRIGGERS, TOAST_TYPES } from "./utils/constants.js";
 import { MaestroEvent } from "./config/maestroEvents.js";
 import { realtime } from "./config/realtimeClient.js";
 import { recoveryManager } from "./config/recoveryManager.js";
@@ -43,9 +43,9 @@ const EndpointSwitchNotifier = () => {
         const handleSwitch = (event) => {
             const { isPrimary } = event.detail;
             if (isPrimary) {
-                showToast('Fő szerverre visszakapcsolva', 'info');
+                showToast('Fő szerverre visszakapcsolva', TOAST_TYPES.INFO);
             } else {
-                showToast('Tartalék szerverre váltva', 'warning', 'A fő szerver nem elérhető, a tartalék szerver aktív.');
+                showToast('Tartalék szerverre váltva', TOAST_TYPES.WARNING, 'A fő szerver nem elérhető, a tartalék szerver aktív.');
             }
         };
 
@@ -89,7 +89,7 @@ export const Main = () => {
             log('[Main] 🟢 Online');
             setOnlineStatus(true);
             // Központi recovery — health check + reconnect + adat frissítés
-            recoveryManager.requestRecovery('online');
+            recoveryManager.requestRecovery(RECOVERY_TRIGGERS.ONLINE);
         };
 
         /**
@@ -127,7 +127,7 @@ export const Main = () => {
                 setConnected();
             } else {
                 // Realtime szétkapcsolódott → recovery indítása
-                recoveryManager.requestRecovery('realtime');
+                recoveryManager.requestRecovery(RECOVERY_TRIGGERS.REALTIME);
             }
         });
 
@@ -201,7 +201,7 @@ export const Main = () => {
                 }));
 
                 // Központi recovery
-                recoveryManager.requestRecovery('sleep');
+                recoveryManager.requestRecovery(RECOVERY_TRIGGERS.SLEEP);
             }
         };
 
@@ -266,10 +266,10 @@ export const Main = () => {
 
             if (!isConnected || timeSinceLastIdle >= CONNECTION_CONFIG.SLEEP_THRESHOLD_MS) {
                 log('[Main] 🔄 Hosszú gap vagy disconnected — Recovery indítása...');
-                recoveryManager.requestRecovery('focus');
+                recoveryManager.requestRecovery(RECOVERY_TRIGGERS.FOCUS);
             } else if (isStale) {
                 log(`[Main] 🔄 Kapcsolat elavult (${Math.round(activityAge / 1000)}s óta nincs WS üzenet) — Recovery indítása...`);
-                recoveryManager.requestRecovery('focus');
+                recoveryManager.requestRecovery(RECOVERY_TRIGGERS.FOCUS);
             } else {
                 log(`[Main] ⏩ Kapcsolat él & friss (${Math.round(activityAge / 1000)}s) — Kihagyva.`);
             }

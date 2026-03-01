@@ -13,9 +13,8 @@ import { useState, useEffect, useRef, useMemo } from "react";
 // Utils
 import { fetchHolidays, calculateUrgencyRatio } from "../../core/utils/urgencyUtils.js";
 import { logWarn } from "../../core/utils/logger.js";
-
-/** Frissítési intervallum (ms) — 5 perc */
-const REFRESH_INTERVAL_MS = 300_000;
+// Konstansok
+import { DATA_QUERY_CONFIG } from "../../core/utils/constants.js";
 
 /**
  * Kiszámítja minden cikkhez a sürgősségi adatokat.
@@ -87,7 +86,7 @@ export const useUrgency = (articles, deadlines, publication) => {
         recalculate();
 
         // Percenkénti frissítés
-        intervalRef.current = setInterval(recalculate, REFRESH_INTERVAL_MS);
+        intervalRef.current = setInterval(recalculate, DATA_QUERY_CONFIG.URGENCY_REFRESH_INTERVAL_MS);
 
         return () => {
             if (intervalRef.current) {

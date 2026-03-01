@@ -7,10 +7,11 @@
 
 import { tables, DATABASE_ID, ARTICLES_COLLECTION_ID } from "../../config/appwriteConfig.js";
 import { withTimeout } from "../promiseUtils.js";
-import { WORKFLOW_CONFIG, MARKERS } from "./workflowConstants.js";
+import { WORKFLOW_CONFIG } from "./workflowConstants.js";
 import { canUserMoveArticle } from "./workflowPermissions.js";
 import { LOCK_TYPE } from "../constants.js";
 import { validate } from "../validationRunner.js";
+import { VALIDATOR_TYPES } from "../validationConstants.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../config/maestroEvents.js";
 
 /**
@@ -58,7 +59,7 @@ export class WorkflowEngine {
     static async validateTransition(article, targetState) {
         // Állapot-specifikus ellenőrzések (fájl létezés, oldalszám, fájlnév, preflight)
         // delegálva a StateComplianceValidator-nak
-        return validate(article, 'state_compliance', { targetState });
+        return validate(article, VALIDATOR_TYPES.STATE_COMPLIANCE, { targetState });
     }
 
     /**
@@ -132,8 +133,7 @@ export class WorkflowEngine {
      * @param {Object} article - A módosítandó cikk objektum.
      * @param {string} article.$id - A cikk egyedi azonosítója.
      * @param {number} [article.markers=0] - Jelenlegi marker bitmaszk.
-     * @param {number} markerType - A kapcsolni kívánt marker bit (MARKERS konstansok egyike).
-     *                              Például: MARKERS.URGENT, MARKERS.REVIEWED, stb.
+     * @param {number} markerType - A kapcsolni kívánt marker bit (pl. 1 = IGNORE).
      * @param {Object} user - A felhasználó, aki a módosítást végzi.
      * 
      * @returns {Promise<Object>} Eredmény objektum.

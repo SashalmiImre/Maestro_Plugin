@@ -10,7 +10,7 @@ import { useLayouts } from "../../../../data/hooks/useLayouts.js";
 import { useToast } from "../../../common/Toast/ToastContext.jsx";
 
 // Config & Constants
-import { STORAGE_KEYS } from "../../../../core/utils/constants.js";
+import { STORAGE_KEYS, TOAST_TYPES } from "../../../../core/utils/constants.js";
 
 // Utils
 import { logError } from "../../../../core/utils/logger.js";
@@ -80,7 +80,7 @@ export const LayoutsSection = ({ publication }) => {
 
         try {
             await renameLayout(layoutId, newName.trim());
-            showToast('Elrendezés átnevezve', 'success');
+            showToast('Elrendezés átnevezve', TOAST_TYPES.SUCCESS);
             // Lokális state törlése (a szerver érték frissül Realtime-on)
             setLocalNames(prev => {
                 const next = { ...prev };
@@ -117,7 +117,7 @@ export const LayoutsSection = ({ publication }) => {
         setIsBusy(true);
         try {
             await createLayout(publication.$id, nextName);
-            showToast('Új elrendezés létrehozva', 'success');
+            showToast('Új elrendezés létrehozva', TOAST_TYPES.SUCCESS);
         } catch (error) {
             logError('[LayoutsSection] Create failed:', error);
         } finally {
@@ -148,7 +148,7 @@ export const LayoutsSection = ({ publication }) => {
         setIsBusy(true);
         try {
             await deleteLayout(layoutId);
-            showToast('Elrendezés törölve', 'success');
+            showToast('Elrendezés törölve', TOAST_TYPES.SUCCESS);
         } catch (error) {
             logError('[LayoutsSection] Delete failed:', error);
         } finally {

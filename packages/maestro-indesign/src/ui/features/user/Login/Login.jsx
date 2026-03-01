@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from "react";
 // Contexts
 import { useUser } from "../../../../core/contexts/UserContext.jsx";
+// Konstansok
+import { UI_TIMING } from "../../../../core/utils/constants.js";
 
 export const Login = ({ onSwitchToRegister }) => {
     const { login, logout } = useUser();
@@ -11,7 +13,7 @@ export const Login = ({ onSwitchToRegister }) => {
 
     useEffect(() => {
         if (message) {
-            const t = setTimeout(() => setMessage(""), 5000);
+            const t = setTimeout(() => setMessage(""), UI_TIMING.AUTH_MESSAGE_DISMISS_MS);
             return () => clearTimeout(t);
         }
     }, [message]);

@@ -20,7 +20,6 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
     const { user } = useUser();
     const {
         articles,
-        fetchArticles,
         addArticle,
         openArticle
     } = useArticles(publication.$id, publication.rootPath);

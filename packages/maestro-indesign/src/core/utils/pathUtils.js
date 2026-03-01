@@ -20,7 +20,7 @@ import os from "os";
  * normalizePath("C:\\Users\\Documents\\") // Eredmény: "C:/Users/Documents"
  * normalizePath("/Volumes/Story/") // Eredmény: "/Volumes/Story"
  */
-export const normalizePath = (path) => {
+const normalizePath = (path) => {
     if (!path) return "";
     // UXP útvonalak általában szabványosak, de ez biztosítja a konzisztenciát
     return path.replace(/\\/g, "/").replace(/\/$/, "");

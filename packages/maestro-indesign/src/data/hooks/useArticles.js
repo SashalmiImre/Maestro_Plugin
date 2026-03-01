@@ -20,7 +20,7 @@ import {
 } from "../../core/utils/indesign/index.js";
 import { isFileInFolder, resolvePlatformPath, convertNativePathToUrl, parsePath, joinPath } from "../../core/utils/pathUtils.js";
 import { log, logError, logWarn } from "../../core/utils/logger.js";
-import { SCRIPT_LANGUAGE_JAVASCRIPT } from "../../core/utils/constants.js";
+import { SCRIPT_LANGUAGE_JAVASCRIPT, TOAST_TYPES } from "../../core/utils/constants.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../core/config/maestroEvents.js";
 
 /**
@@ -61,15 +61,6 @@ export const useArticles = (publicationId, publicationRoot) => {
         if (!publicationId) return [];
         return allArticles.filter(a => a.publicationId === publicationId);
     }, [allArticles, publicationId]);
-
-    /**
-     * Cikkek lekérése (Kompatibilitási okokból megtartva).
-     * A DataContext automatikusan kezeli a lekérést és a valós idejű frissítést,
-     * így manuális meghívásra általában nincs szükség.
-     */
-    const fetchArticles = useCallback(async () => {
-        log('[useArticles] fetchArticles hívás (A DataContext kezeli, ez csak logol)');
-    }, []);
 
     /**
      * Új cikk hozzáadása a rendszerhez.
@@ -223,7 +214,7 @@ export const useArticles = (publicationId, publicationRoot) => {
                 const attempts = incrementAttempts();
                 setOffline(error, attempts);
             } else {
-                showToast('A cikk hozzáadása sikertelen', 'warning', getAPIErrorMessage(error, 'Cikk hozzáadása'));
+                showToast('A cikk hozzáadása sikertelen', TOAST_TYPES.WARNING, getAPIErrorMessage(error, 'Cikk hozzáadása'));
             }
             throw error;
         }
@@ -340,7 +331,7 @@ export const useArticles = (publicationId, publicationRoot) => {
 
         } catch (fileError) {
             logError("[useArticles] Fájl átnevezési hiba:", fileError);
-            showToast('A fájl átnevezése sikertelen', 'error', fileError.message || 'Ismeretlen hiba történt a fájl átnevezése közben.');
+            showToast('A fájl átnevezése sikertelen', TOAST_TYPES.ERROR, fileError.message || 'Ismeretlen hiba történt a fájl átnevezése közben.');
             throw fileError;
         }
 
@@ -351,7 +342,7 @@ export const useArticles = (publicationId, publicationRoot) => {
                 filePath: newNativePath
             });
 
-            showToast('Cikk sikeresen átnevezve', 'success');
+            showToast('Cikk sikeresen átnevezve', TOAST_TYPES.SUCCESS);
             return updated;
 
         } catch (dbError) {
@@ -377,13 +368,13 @@ export const useArticles = (publicationId, publicationRoot) => {
                 const rollbackResult = app.doScript(rollbackScript, SCRIPT_LANGUAGE_JAVASCRIPT, []);
                 
                 if (rollbackResult === 'SUCCESS') {
-                    showToast('Adatbázis hiba történt', 'warning', 'A fájl átnevezése visszavonásra került, mivel az adatbázis frissítése sikertelen volt.');
+                    showToast('Adatbázis hiba történt', TOAST_TYPES.WARNING, 'A fájl átnevezése visszavonásra került, mivel az adatbázis frissítése sikertelen volt.');
                 } else {
-                    showToast('Súlyos hiba az átnevezés során', 'error', 'Az adatbázis frissítése sikertelen, és a fájl eredeti nevének visszaállítása sem sikerült. Kérjük, ellenőrizd a fájlrendszert manuálisan.');
+                    showToast('Súlyos hiba az átnevezés során', TOAST_TYPES.ERROR, 'Az adatbázis frissítése sikertelen, és a fájl eredeti nevének visszaállítása sem sikerült. Kérjük, ellenőrizd a fájlrendszert manuálisan.');
                 }
             } catch (revertError) {
                 logError("[useArticles] FATAL: Kivétel a visszaállítás közben:", revertError);
-                showToast('Súlyos hiba az átnevezés során', 'error', 'Az adatbázis frissítése és a fájl visszaállítása is sikertelen. Kérjük, ellenőrizd a fájlrendszert manuálisan.');
+                showToast('Súlyos hiba az átnevezés során', TOAST_TYPES.ERROR, 'Az adatbázis frissítése és a fájl visszaállítása is sikertelen. Kérjük, ellenőrizd a fájlrendszert manuálisan.');
             }
             
             throw dbError;
@@ -405,7 +396,6 @@ export const useArticles = (publicationId, publicationRoot) => {
 
     return {
         articles,
-        fetchArticles,
         addArticle,
         openArticle,
         renameArticle,

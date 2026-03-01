@@ -3,6 +3,9 @@ import { WorkflowStatus } from "../publications/Publication/WorkflowStatus.jsx";
 import { useTeamMembers } from "../../../data/hooks/useTeamMembers.js";
 import { useUrgency } from "../../../data/hooks/useUrgency.js";
 import { TEAMS } from "../../../core/config/appwriteConfig.js";
+import { LOCK_TYPE, UI_TIMING, DATA_QUERY_CONFIG } from "../../../core/utils/constants.js";
+import { VALIDATION_SOURCES } from "../../../core/utils/validationConstants.js";
+import { VALIDATION_TYPES } from "../../../core/utils/messageConstants.js";
 import { useUser } from "../../../core/contexts/UserContext.jsx";
 import { CustomTable } from "../../common/Table/CustomTable.jsx";
 import { useValidation } from "../../../core/contexts/ValidationContext.jsx";
@@ -43,7 +46,7 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
 
     const getLockLabel = useCallback((article) => {
         if (!article.lockOwnerId) return null;
-        if (article.lockType === "system") return "Maestro";
+        if (article.lockType === LOCK_TYPE.SYSTEM) return "Maestro";
         if (article.lockOwnerId === currentUser?.$id) return "Én";
         return getUserName(article.lockOwnerId);
     }, [currentUser, getUserName]);
@@ -90,8 +93,8 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
      */
     const getValidationSeverity = useCallback((article) => {
         const activeItems = getAllActiveItems(article.$id);
-        if (activeItems.some(i => i.type === 'error')) return 2;
-        if (activeItems.some(i => i.type === 'warning')) return 1;
+        if (activeItems.some(i => i.type === VALIDATION_TYPES.ERROR)) return 2;
+        if (activeItems.some(i => i.type === VALIDATION_TYPES.WARNING)) return 1;
         return 0;
     }, [getAllActiveItems]);
 
@@ -164,11 +167,11 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
                 const activeItems = getAllActiveItems(article.$id);
                 if (activeItems.length === 0) return null;
 
-                const hasErrors = activeItems.some(i => i.type === 'error');
-                const hasWarnings = activeItems.some(i => i.type === 'warning');
+                const hasErrors = activeItems.some(i => i.type === VALIDATION_TYPES.ERROR);
+                const hasWarnings = activeItems.some(i => i.type === VALIDATION_TYPES.WARNING);
 
                 const tooltip = activeItems.map(i => {
-                    const prefix = i.type === 'error' ? (i.source === 'user' ? '[Gond]' : '[Hiba]') : (i.source === 'user' ? '[Infó]' : '[Figy.]');
+                    const prefix = i.type === VALIDATION_TYPES.ERROR ? (i.source === VALIDATION_SOURCES.USER ? '[Gond]' : '[Hiba]') : (i.source === VALIDATION_SOURCES.USER ? '[Infó]' : '[Figy.]');
                     return `${prefix} ${i.message}`;
                 }).join('\n');
 
@@ -205,8 +208,8 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
 
             switch (sortColumn) {
                 case "range":
-                    valA = a.startPage || 999999;
-                    valB = b.startPage || 999999;
+                    valA = a.startPage || DATA_QUERY_CONFIG.MAX_PAGE_SORT_FALLBACK;
+                    valB = b.startPage || DATA_QUERY_CONFIG.MAX_PAGE_SORT_FALLBACK;
                     break;
                 case "name":
                     valA = a.name ? a.name.toLowerCase() : "";
@@ -261,7 +264,7 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
         clickTimerRef.current = setTimeout(() => {
             onShowProperties?.(article, 'article');
             clickTimerRef.current = null;
-        }, 250);
+        }, UI_TIMING.CLICK_DEBOUNCE_MS);
     };
 
     /** Sürgősség alapú sor háttér (progresszív gradient) */

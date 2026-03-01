@@ -4,6 +4,7 @@ import { WorkflowEngine } from "../../utils/workflow/workflowEngine.js";
 import { LOCK_TYPE } from "../../utils/constants.js";
 import * as pathUtils from "../../utils/pathUtils.js";
 import { validate } from "../../utils/validationRunner.js";
+import { VALIDATOR_TYPES } from "../../utils/validationConstants.js";
 
 /**
  * Handles the 'print_output' (Levilágítás) command.
@@ -32,7 +33,7 @@ export const handlePrinting = async (context) => {
     const layoutName = layout?.name ?? "Layout";
 
     // 2. Preflight futtatás
-    const preflightResult = await validate(item, 'preflight_check');
+    const preflightResult = await validate(item, VALIDATOR_TYPES.PREFLIGHT_CHECK);
     if (!preflightResult.isValid) {
         return {
             success: false,

@@ -14,7 +14,8 @@ import { CustomCheckbox } from "../../../common/CustomCheckbox.jsx";
 import { CustomDropdown } from "../../../common/CustomDropdown.jsx";
 
 // Utils
-import { STORAGE_KEYS } from "../../../../core/utils/constants.js";
+import { STORAGE_KEYS, TOAST_TYPES } from "../../../../core/utils/constants.js";
+import { VALIDATION_SOURCES } from "../../../../core/utils/validationConstants.js";
 import {
     RECIPIENT_TYPES,
     RECIPIENT_TYPE_LABELS,
@@ -132,7 +133,7 @@ const ValidationItem = ({ item, index, teamMembers, onSolve, onDowngrade, isDark
     const fgColor = "white";
 
     // Preflight special render
-    if (item.source === 'preflight' && item.message.includes('\n')) {
+    if (item.source === VALIDATION_SOURCES.PREFLIGHT && item.message.includes('\n')) {
         return renderPreflightBlock(item.message, index, {
             backgroundColor: config.color, // Preflight is usually active, so opaque. If it could be resolved, we'd apply logic here too.
             color: "white",
@@ -166,7 +167,7 @@ const ValidationItem = ({ item, index, teamMembers, onSolve, onDowngrade, isDark
                     <div style={{ fontSize: "11px", marginBottom: "2px", opacity: 0.8, display: "flex", justifyContent: "space-between" }}>
                         <span>
                             {item.isSystem ?
-                                (item.source === 'system_override' ? 'Rendszer (Visszaminősítve)' : 'Rendszer') :
+                                (item.source === VALIDATION_SOURCES.SYSTEM_OVERRIDE ? 'Rendszer (Visszaminősítve)' : 'Rendszer') :
                                 `${getSenderName(item, teamMembers)} → ${getRecipientName(item, teamMembers)}`
                             }
                         </span>
@@ -275,7 +276,7 @@ export const ValidationSection = ({ article, disabled }) => {
 
     const handleSend = async () => {
         if (!selectedRecipient) {
-            showToast('Hiányzó címzett', 'warning');
+            showToast('Hiányzó címzett', TOAST_TYPES.WARNING);
             return;
         }
 
@@ -290,12 +291,12 @@ export const ValidationSection = ({ article, disabled }) => {
                 createdBy: user.$id
             });
 
-            showToast('Bejegyzés rögzítve', 'success');
+            showToast('Bejegyzés rögzítve', TOAST_TYPES.SUCCESS);
             setDescription('');
             // Reset to default
             setNewItemType(VALIDATION_TYPES.ERROR);
         } catch (e) {
-            showToast('Hiba a küldéskor', 'error', e.message);
+            showToast('Hiba a küldéskor', TOAST_TYPES.ERROR, e.message);
         } finally {
             setIsSending(false);
         }
@@ -309,9 +310,9 @@ export const ValidationSection = ({ article, disabled }) => {
         if (!item.contextId) return;
         try {
             await downgradeSystemError(item, user.$id);
-            showToast('Hiba visszaminősítve', 'success');
+            showToast('Hiba visszaminősítve', TOAST_TYPES.SUCCESS);
         } catch (e) {
-            showToast('Nem sikerült visszaminősíteni', 'error', e.message);
+            showToast('Nem sikerült visszaminősíteni', TOAST_TYPES.ERROR, e.message);
         }
     };
 

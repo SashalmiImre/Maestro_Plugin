@@ -11,7 +11,7 @@ import { useData } from "../../../../core/contexts/DataContext.jsx";
 
 // Utils
 import { WorkflowEngine } from "../../../../core/utils/workflow/workflowEngine.js";
-import { WORKFLOW_STATES, WORKFLOW_CONFIG, MARKERS } from "../../../../core/utils/workflow/workflowConstants.js";
+import { WORKFLOW_STATES, WORKFLOW_CONFIG, MARKERS, TRANSITION_TYPES } from "../../../../core/utils/workflow/workflowConstants.js";
 import { hasTransitionPermission } from "../../../../core/utils/workflow/workflowPermissions.js";
 import { STORAGE_KEYS } from "../../../../core/utils/constants.js";
 import { isValidFileName } from "../../../../core/utils/pathUtils.js";
@@ -334,7 +334,7 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
                             <div style={{ flex: 1 }}>
                                 {(() => {
                                     const backwardTransition = availableTransitions.find(t =>
-                                        t.type === 'backward' || (!t.type && t.target < currentState)
+                                        t.type === TRANSITION_TYPES.BACKWARD || (!t.type && t.target < currentState)
                                     );
 
                                     return backwardTransition ? (
@@ -374,7 +374,7 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
                             <div style={{ flex: 1 }}>
                                 {(() => {
                                     const forwardTransition = availableTransitions.find(t =>
-                                        t.type === 'forward' || (!t.type && t.target > currentState)
+                                        t.type === TRANSITION_TYPES.FORWARD || (!t.type && t.target > currentState)
                                     );
 
                                     return forwardTransition ? (

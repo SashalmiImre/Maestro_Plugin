@@ -6,6 +6,9 @@ import { useConnection } from "../../core/contexts/ConnectionContext.jsx";
 import { useData } from "../../core/contexts/DataContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 
+// Config & Constants
+import { TOAST_TYPES } from "../../core/utils/constants.js";
+
 // Utils
 import { logError } from "../../core/utils/logger.js";
 import { isNetworkError, isAuthError, getAPIErrorMessage } from "../../core/utils/errorUtils.js";
@@ -56,7 +59,7 @@ export const useDeadlines = () => {
                 const attempts = incrementAttempts();
                 setOffline(error, attempts);
             } else {
-                showToast('A határidő létrehozása sikertelen', 'warning', getAPIErrorMessage(error, 'Határidő létrehozása'));
+                showToast('A határidő létrehozása sikertelen', TOAST_TYPES.WARNING, getAPIErrorMessage(error, 'Határidő létrehozása'));
             }
             throw error;
         }
@@ -83,7 +86,7 @@ export const useDeadlines = () => {
                 const attempts = incrementAttempts();
                 setOffline(error, attempts);
             } else {
-                showToast('A határidő frissítése sikertelen', 'warning', getAPIErrorMessage(error, 'Határidő frissítése'));
+                showToast('A határidő frissítése sikertelen', TOAST_TYPES.WARNING, getAPIErrorMessage(error, 'Határidő frissítése'));
             }
             throw error;
         }
@@ -108,7 +111,7 @@ export const useDeadlines = () => {
                 const attempts = incrementAttempts();
                 setOffline(error, attempts);
             } else {
-                showToast('A határidő törlése sikertelen', 'warning', getAPIErrorMessage(error, 'Határidő törlése'));
+                showToast('A határidő törlése sikertelen', TOAST_TYPES.WARNING, getAPIErrorMessage(error, 'Határidő törlése'));
             }
             throw error;
         }

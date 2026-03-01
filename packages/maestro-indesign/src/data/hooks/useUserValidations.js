@@ -13,6 +13,9 @@ import { useData } from "../../core/contexts/DataContext.jsx";
 
 // Utils
 import { log, logError } from "../../core/utils/logger.js";
+// Konstansok
+import { VALIDATION_SOURCES } from "../../core/utils/validationConstants.js";
+import { VALIDATION_TYPES } from "../../core/utils/messageConstants.js";
 import { isAuthError } from "../../core/utils/errorUtils.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../core/config/maestroEvents.js";
 
@@ -136,8 +139,8 @@ export const useUserValidations = (articleId) => {
             recipientUserId: null,
             createdBy: userId,
             description: `Hibajelzés visszaminősítve: ${errorItem.message}`,
-            type: 'warning',
-            source: 'system_override',
+            type: VALIDATION_TYPES.WARNING,
+            source: VALIDATION_SOURCES.SYSTEM_OVERRIDE,
             contextId: errorItem.contextId,
             originalType: 'error'
         });

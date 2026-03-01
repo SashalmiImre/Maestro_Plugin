@@ -11,6 +11,8 @@ import { useUnifiedValidation } from "../../../../data/hooks/useUnifiedValidatio
 
 // Config & Constants
 import { MaestroEvent, dispatchMaestroEvent } from "../../../../core/config/maestroEvents.js";
+import { VALIDATION_SOURCES } from "../../../../core/utils/validationConstants.js";
+import { VALIDATION_TYPES } from "../../../../core/utils/messageConstants.js";
 
 // Feature Components
 import { GeneralSection } from "./GeneralSection.jsx";
@@ -21,7 +23,7 @@ import { ValidationSection } from "./ValidationSection.jsx";
 import { isValidFileName } from "../../../../core/utils/pathUtils.js";
 import { WorkflowEngine } from "../../../../core/utils/workflow/workflowEngine.js";
 import { canUserMoveArticle } from "../../../../core/utils/workflow/workflowPermissions.js";
-import { SCRIPT_LANGUAGE_JAVASCRIPT } from "../../../../core/utils/constants.js";
+import { SCRIPT_LANGUAGE_JAVASCRIPT, TOAST_TYPES } from "../../../../core/utils/constants.js";
 import { WORKFLOW_CONFIG, MARKERS } from "../../../../core/utils/workflow/workflowConstants.js";
 import { log, logError, logWarn } from "../../../../core/utils/logger.js";
 import {
@@ -63,7 +65,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
             if (!isValidFileName(value)) {
                 showToast(
                     'Érvénytelen fájlnév',
-                    'error',
+                    TOAST_TYPES.ERROR,
                     'A név nem tartalmazhat a következő karaktereket: \\ / : * ? " < > |'
                 );
                 return;
@@ -73,7 +75,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
             if (article.lockOwnerId && article.lockOwnerId !== user?.$id) {
                 showToast(
                     'Az átnevezés nem lehetséges',
-                    'error',
+                    TOAST_TYPES.ERROR,
                     'A cikket jelenleg más felhasználó szerkeszti. Az átnevezés az ő nem mentett módosításainak elvesztését okozná.'
                 );
                 return;
@@ -97,9 +99,9 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
 
             if (updated[field] !== value) {
                 logWarn(`[ArticleProperties] A '${field}' mező NEM frissült! Várt: ${value}, Kapott: ${updated[field]}`);
-                showToast('A mező frissítése sikertelen', 'error', `A(z) „${field}" mező nem frissült a várt értékre. Próbáld meg újra, vagy frissítsd az adatokat.`);
+                showToast('A mező frissítése sikertelen', TOAST_TYPES.ERROR, `A(z) „${field}" mező nem frissült a várt értékre. Próbáld meg újra, vagy frissítsd az adatokat.`);
             } else {
-                showToast('Módosítás mentve', 'success');
+                showToast('Módosítás mentve', TOAST_TYPES.SUCCESS);
             }
 
             // Layout változás → átfedés-újravalidálás
@@ -110,7 +112,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
             if (onUpdate) onUpdate(updated);
         } catch (error) {
             logError(`[ArticleProperties] Failed to update ${field}:`, error);
-            showToast('Mentés sikertelen', 'error', error.message || 'Ismeretlen hiba történt a mező frissítése közben.');
+            showToast('Mentés sikertelen', TOAST_TYPES.ERROR, error.message || 'Ismeretlen hiba történt a mező frissítése közben.');
         } finally {
             setIsSyncing(false);
         }
@@ -144,12 +146,12 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
      */
     const handlePageNumberChange = async (newStartPage, offset) => {
         if (!article.filePath) {
-            showToast('Oldalszám módosítás nem lehetséges', 'error', 'A cikkhez nem tartozik fájl útvonal. Ellenőrizd, hogy a cikk megfelelően van-e beállítva.');
+            showToast('Oldalszám módosítás nem lehetséges', TOAST_TYPES.ERROR, 'A cikkhez nem tartozik fájl útvonal. Ellenőrizd, hogy a cikk megfelelően van-e beállítva.');
             return false;
         }
 
         if (article.startPage == null) {
-            showToast('Oldalszám módosítás nem lehetséges', 'error', 'A cikknek még nincs beállítva érvényes kezdőoldala.');
+            showToast('Oldalszám módosítás nem lehetséges', TOAST_TYPES.ERROR, 'A cikknek még nincs beállítva érvényes kezdőoldala.');
             return false;
         }
 
@@ -162,11 +164,11 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
         // Kiadvány-terjedelem validáció
         if (publication?.coverageStart != null && publication?.coverageEnd != null) {
             if (newStartPage < publication.coverageStart) {
-                showToast('Érvénytelen oldalszám', 'error', `A megadott kezdőoldal (${newStartPage}) a kiadvány terjedelme (${publication.coverageStart}–${publication.coverageEnd}) elé esik.`);
+                showToast('Érvénytelen oldalszám', TOAST_TYPES.ERROR, `A megadott kezdőoldal (${newStartPage}) a kiadvány terjedelme (${publication.coverageStart}–${publication.coverageEnd}) elé esik.`);
                 return false;
             }
             if (newEndPage > publication.coverageEnd) {
-                showToast('Érvénytelen oldalszám', 'error', `A cikk végoldala (${newEndPage}) túllépi a kiadvány terjedelmét (${publication.coverageStart}–${publication.coverageEnd}).`);
+                showToast('Érvénytelen oldalszám', TOAST_TYPES.ERROR, `A cikk végoldala (${newEndPage}) túllépi a kiadvány terjedelmét (${publication.coverageStart}–${publication.coverageEnd}).`);
                 return false;
             }
         }
@@ -225,7 +227,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
 
             const updated = await updateArticle(article.$id, updateData);
 
-            showToast('Oldalszámok frissítve', 'success');
+            showToast('Oldalszámok frissítve', TOAST_TYPES.SUCCESS);
 
             // Átfedés-validáció kiváltása
             dispatchMaestroEvent(MaestroEvent.pageRangesChanged, { article: updated });
@@ -245,7 +247,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
                 }
             }
 
-            showToast('Az átszámozás sikertelen', 'error', error.message || 'Ismeretlen hiba történt az oldalszámok módosítása közben.');
+            showToast('Az átszámozás sikertelen', TOAST_TYPES.ERROR, error.message || 'Ismeretlen hiba történt az oldalszámok módosítása közben.');
             return false;
         } finally {
             setIsSyncing(false);
@@ -266,7 +268,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
         if (hasErrors) {
             showToast(
                 'Az állapotváltás nem lehetséges',
-                'error',
+                TOAST_TYPES.ERROR,
                 'A cikkhez javítatlan hibák tartoznak (validáció vagy felhasználói üzenet). Kérjük, javítsd vagy minősítsd vissza őket.'
             );
             setIsSyncing(false);
@@ -278,7 +280,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
         if (!permission.allowed) {
             showToast(
                 'Nincs jogosultságod az állapotváltáshoz',
-                'error',
+                TOAST_TYPES.ERROR,
                 permission.reason
             );
             setIsSyncing(false);
@@ -287,7 +289,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
 
         if (!article.filePath && !article.FilePath) {
             logError("[ArticleProperties] Missing file path for article:", article);
-            showToast('Az állapotváltás nem lehetséges', 'error', 'A cikkhez nem tartozik fájl útvonal. Próbáld frissíteni az adatokat.');
+            showToast('Az állapotváltás nem lehetséges', TOAST_TYPES.ERROR, 'A cikkhez nem tartozik fájl útvonal. Próbáld frissíteni az adatokat.');
             setIsSyncing(false);
             return;
         }
@@ -301,7 +303,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
                     const driveList = validation.unmountedDrives?.join(', ') || '';
                     showToast(
                         'Az állapotváltás nem lehetséges',
-                        'error',
+                        TOAST_TYPES.ERROR,
                         `A preflight ellenőrzés nem tudott lefutni, mert a következő hálózati meghajtó(k) nem elérhetők: ${driveList}. ` +
                         'Kérjük, ellenőrizd a hálózati kapcsolatot, majd próbáld újra.'
                     );
@@ -311,19 +313,19 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
                 // Preflight hibák beírása a ValidationContext-be → megjelennek a ValidationSection-ben
                 const items = [];
                 if (validation.errors?.length > 0) {
-                    items.push(...validation.errors.map(msg => ({ type: 'error', message: msg, source: 'preflight' })));
+                    items.push(...validation.errors.map(msg => ({ type: VALIDATION_TYPES.ERROR, message: msg, source: VALIDATION_SOURCES.PREFLIGHT })));
                 }
                 if (validation.warnings?.length > 0) {
-                    items.push(...validation.warnings.map(msg => ({ type: 'warning', message: msg, source: 'preflight' })));
+                    items.push(...validation.warnings.map(msg => ({ type: VALIDATION_TYPES.WARNING, message: msg, source: VALIDATION_SOURCES.PREFLIGHT })));
                 }
                 if (items.length > 0) {
-                    updateArticleValidation(article.$id, 'preflight', items);
+                    updateArticleValidation(article.$id, VALIDATION_SOURCES.PREFLIGHT, items);
                 }
 
                 const errorDetails = validation.errors?.length > 0
                     ? validation.errors.join('\n')
                     : 'Az ellenőrzés során nem azonosítható hiba merült fel. Próbáld meg újra.';
-                showToast('Az állapotváltás nem lehetséges', 'error', errorDetails);
+                showToast('Az állapotváltás nem lehetséges', TOAST_TYPES.ERROR, errorDetails);
                 return;
             }
 
@@ -332,14 +334,14 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
                 if (result.document) applyArticleUpdate(result.document);
                 if (onUpdate && result.document) onUpdate(result.document);
                 const targetConfig = WORKFLOW_CONFIG[targetState]?.config;
-                showToast(`Állapot: ${targetConfig?.label || 'Frissítve'}`, 'success');
+                showToast(`Állapot: ${targetConfig?.label || 'Frissítve'}`, TOAST_TYPES.SUCCESS);
             } else {
                 logError("[ArticleProperties] Transition error:", result.error);
-                showToast('Az állapotváltás sikertelen', 'error', result.error || 'Ismeretlen hiba történt a végrehajtás során.');
+                showToast('Az állapotváltás sikertelen', TOAST_TYPES.ERROR, result.error || 'Ismeretlen hiba történt a végrehajtás során.');
             }
         } catch (error) {
             logError("[ArticleProperties] Transition exception:", error);
-            showToast('Az állapotváltás sikertelen', 'error', error.message || 'Váratlan hiba történt a végrehajtás során.');
+            showToast('Az állapotváltás sikertelen', TOAST_TYPES.ERROR, error.message || 'Váratlan hiba történt a végrehajtás során.');
         } finally {
             setIsSyncing(false);
         }

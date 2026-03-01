@@ -8,6 +8,7 @@ import {
 } from "./appwriteConfig.js";
 
 import { ID } from "appwrite";
+import { REALTIME_CONFIG } from "../utils/constants.js";
 
 class RealtimeClient {
     constructor() {
@@ -25,8 +26,8 @@ class RealtimeClient {
         // Szerver hiba kezelés: exponenciális backoff és cooldown
         this.consecutiveServerErrors = 0;
         this.serverErrorCooldownUntil = 0;
-        this.MAX_CONSECUTIVE_SERVER_ERRORS = 5;
-        this.SERVER_ERROR_BACKOFF_BASE_MS = 5000; // 5s, 10s, 20s, 40s...
+        this.MAX_CONSECUTIVE_SERVER_ERRORS = REALTIME_CONFIG.MAX_CONSECUTIVE_SERVER_ERRORS;
+        this.SERVER_ERROR_BACKOFF_BASE_MS = REALTIME_CONFIG.SERVER_ERROR_BACKOFF_BASE_MS;
 
         // Unique Client ID for Concurrency Control
         // Persist across reloads to maintain identity
@@ -203,7 +204,7 @@ class RealtimeClient {
                                 } else {
                                     console.error('[Realtime] ❌ Socket still not ready after retry, skipping auth frame');
                                 }
-                            }, 200);
+                            }, REALTIME_CONFIG.AUTH_RETRY_DELAY_MS);
                         }
                     }
 
@@ -227,7 +228,7 @@ class RealtimeClient {
 
                             // Cooldown aktiválása ha túl sok egymás utáni hiba
                             if (this.consecutiveServerErrors >= this.MAX_CONSECUTIVE_SERVER_ERRORS) {
-                                const cooldownMs = 60000; // 1 perc cooldown
+                                const cooldownMs = REALTIME_CONFIG.COOLDOWN_MS;
                                 this.serverErrorCooldownUntil = Date.now() + cooldownMs;
                                 logWarn(
                                     `[Realtime] ⏸️ Szerver hiba cooldown aktiválva (${cooldownMs / 1000}s). ` +
@@ -557,7 +558,7 @@ class RealtimeClient {
     _getServerErrorBackoff() {
         // 5s, 10s, 20s, 40s, max 60s
         const backoff = this.SERVER_ERROR_BACKOFF_BASE_MS * Math.pow(2, this.consecutiveServerErrors - 1);
-        return Math.min(backoff, 60000);
+        return Math.min(backoff, REALTIME_CONFIG.MAX_BACKOFF_MS);
     }
 
     getConnectionStatus() { return this.isConnected; }

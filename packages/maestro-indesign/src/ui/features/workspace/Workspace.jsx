@@ -36,7 +36,7 @@ import { resolvePlatformPath } from "../../../core/utils/pathUtils.js";
 import { generateOpenDocumentScript } from "../../../core/utils/indesign/index.js";
 import { log, logError } from "../../../core/utils/logger.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../core/config/maestroEvents.js";
-import { SCRIPT_LANGUAGE_JAVASCRIPT } from "../../../core/utils/constants.js";
+import { SCRIPT_LANGUAGE_JAVASCRIPT, TOAST_TYPES } from "../../../core/utils/constants.js";
 
 /** Hibaüzenet: a cikkhez nem tartozik fájl útvonal */
 const NO_FILE_PATH_ERROR = {
@@ -151,7 +151,7 @@ export const Workspace = () => {
 
         try {
             await updatePublication(selectedItem.$id, { [field]: value });
-            showToast('Módosítás mentve', 'success');
+            showToast('Módosítás mentve', TOAST_TYPES.SUCCESS);
 
             // Coverage változás esetén újravalidáljuk az összes cikket
             if (field === 'coverageStart' || field === 'coverageEnd') {
@@ -161,7 +161,7 @@ export const Workspace = () => {
             }
         } catch (error) {
             logError('[Workspace] Publication update failed:', error);
-            showToast('A kiadvány mentése sikertelen', 'error', error.message || 'Ismeretlen hiba történt a frissítés közben.');
+            showToast('A kiadvány mentése sikertelen', TOAST_TYPES.ERROR, error.message || 'Ismeretlen hiba történt a frissítés közben.');
         }
     }, [selectedItem, selectedType, updatePublication, showToast]);
 
@@ -179,7 +179,7 @@ export const Workspace = () => {
         try {
             // Zárolás ellenőrzése
             if (article.lockOwnerId && article.lockOwnerId !== user.$id) {
-                showToast('A dokumentum zárolva van', 'warning', 'Ezt a fájlt jelenleg más felhasználó szerkeszti. Próbáld meg később.');
+                showToast('A dokumentum zárolva van', TOAST_TYPES.WARNING, 'Ezt a fájlt jelenleg más felhasználó szerkeszti. Próbáld meg később.');
                 return;
             }
 
@@ -187,7 +187,7 @@ export const Workspace = () => {
 
             if (!article.filePath) {
                 console.error("No file path for article:", article.name);
-                showToast(NO_FILE_PATH_ERROR.title, 'error', NO_FILE_PATH_ERROR.description);
+                showToast(NO_FILE_PATH_ERROR.title, TOAST_TYPES.ERROR, NO_FILE_PATH_ERROR.description);
                 return;
             }
 
@@ -196,7 +196,7 @@ export const Workspace = () => {
             if (mappedPath) {
                 try {
                     await app.open(mappedPath);
-                    showToast(`${article.name} megnyitva`, 'success');
+                    showToast(`${article.name} megnyitva`, TOAST_TYPES.SUCCESS);
                 } catch (openError) {
                     console.warn("Standard app.open failed, trying ExtendScript fallback...", openError);
 
@@ -205,15 +205,15 @@ export const Workspace = () => {
                     if (result !== "success") {
                         throw new Error("ExtendScript open failed: " + result);
                     }
-                    showToast(`${article.name} megnyitva`, 'success');
+                    showToast(`${article.name} megnyitva`, TOAST_TYPES.SUCCESS);
                 }
             } else {
                 console.error("No file path for article");
-                showToast(NO_FILE_PATH_ERROR.title, 'error', NO_FILE_PATH_ERROR.description);
+                showToast(NO_FILE_PATH_ERROR.title, TOAST_TYPES.ERROR, NO_FILE_PATH_ERROR.description);
             }
         } catch (e) {
             console.error("Failed to open article:", e);
-            showToast('A dokumentum megnyitása sikertelen', 'error', e.message || 'Ismeretlen hiba történt.');
+            showToast('A dokumentum megnyitása sikertelen', TOAST_TYPES.ERROR, e.message || 'Ismeretlen hiba történt.');
         }
     }, [user, showToast]);
 
@@ -227,7 +227,7 @@ export const Workspace = () => {
      */
     useEffect(() => {
         if (currentView === 'properties' && selectedItemId && !selectedItem) {
-            showToast('Az elem már nem létezik', 'warning', 'A kiválasztott elemet időközben valaki más törölhette.');
+            showToast('Az elem már nem létezik', TOAST_TYPES.WARNING, 'A kiválasztott elemet időközben valaki más törölhette.');
             handleBackToList();
         }
     }, [currentView, selectedItemId, selectedItem, showToast, handleBackToList]);

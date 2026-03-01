@@ -138,47 +138,6 @@ export const getDocPath = async (doc) => {
 };
 
 /**
- * Kinyeri az oldalszámokat a dokumentum objektumból egyszerű DOM hozzáféréssel.
- * (Ez gyorsabb, mint a szkript futtatása, ha már van referenciánk a dokumentumhoz).
- *
- * Korlátozás: Csak numerikus `page.name` értékeket támogat (pl. "1", "42").
- * Római számok (i, ii, iv...) vagy egyedi címkék esetén null-t ad vissza,
- * mert a `parseInt` nem tudja értelmezni őket. Ha nem szabványos számozásra
- * van szükség, használj alternatív megoldást (pl. ExtendScript alapú kinyerést).
- *
- * @param {Object} doc - InDesign dokumentum objektum.
- * @returns {{startPage: number, endPage: number}|null} Az első és utolsó oldal száma, vagy null ha
- *          a dokumentum érvénytelen, nincsenek oldalak, vagy a számozás nem numerikus.
- */
-export const extractPageNumbers = (doc) => {
-    let isValid = false;
-    try { isValid = doc && doc.isValid; } catch (e) {}
-    if (!isValid) return null;
-    try {
-        const pages = doc.pages;
-        if (!pages) return null;
-
-        const len = pages.length;
-        if (len === 0) return null;
-
-        const firstPage = pages[0] || pages.item(0);
-        const lastPage = pages[len - 1] || pages.item(len - 1);
-
-        if (!firstPage || !lastPage) return null;
-
-        const startVal = parseInt(firstPage.name, 10);
-        const endVal = parseInt(lastPage.name, 10);
-
-        if (isNaN(startVal) || isNaN(endVal)) return null;
-
-        return { startPage: startVal, endPage: endVal };
-    } catch (e) {
-        return null;
-    }
-};
-
-
-/**
  * Feloldja az esemény célpontját (pl. LayoutWindow) a hozzá tartozó dokumentum objektummá.
  * 
  * @param {Object} candidate - Esemény célpont vagy egyéb jelölt objektum.

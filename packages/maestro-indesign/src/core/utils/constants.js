@@ -48,15 +48,6 @@ export const LOCK_TYPE = {
 // =============================================================================
 
 /**
- * Kapcsolat típusok enum.
- */
-export const CONNECTION_TYPES = {
-    EMAGO: 'emago',       // Emago Proxy (korábban render)
-    APPWRITE: 'appwrite', // Appwrite Backend
-    REALTIME: 'realtime'  // Realtime websocket kapcsolat
-};
-
-/**
  * Kapcsolat állapotok enum.
  */
 export const CONNECTION_STATES = {
@@ -135,4 +126,92 @@ export const RECOVERY_CONFIG = {
     MAX_RETRIES: 3,             // Maximum health check próbálkozás az aktív endpoint-on
     RETRY_BASE_MS: 1500         // Backoff alap (1.5s → 3s → 6s)
     // Worst case: aktív 3×5s + 1.5s + 3s = 19.5s, + fallback 1×5s = 24.5s
+};
+
+/**
+ * Recovery trigger azonosítók enum.
+ * A recoveryManager.requestRecovery() hívások trigger paramétere.
+ *
+ * @enum {string}
+ */
+export const RECOVERY_TRIGGERS = {
+    ONLINE: 'online',     // Browser online esemény
+    SLEEP: 'sleep',       // InDesign alvás/ébresztés
+    FOCUS: 'focus',       // Ablak fókusz visszatérés
+    REALTIME: 'realtime'  // Realtime WebSocket disconnect
+};
+
+// =============================================================================
+// Toast Értesítés Típusok
+// =============================================================================
+
+/**
+ * Toast értesítés típusok enum.
+ * Meghatározza a toast üzenetek megjelenési stílusát (szín, ikon).
+ *
+ * @enum {string}
+ */
+export const TOAST_TYPES = {
+    SUCCESS: 'success',   // Sikeres művelet (zöld)
+    ERROR: 'error',       // Hiba (piros)
+    INFO: 'info',         // Információ (kék)
+    WARNING: 'warning',   // Figyelmeztetés (narancs)
+    NEGATIVE: 'negative'  // Kritikus figyelmeztetés
+};
+
+// =============================================================================
+// UI Időzítési Konfiguráció
+// =============================================================================
+
+/**
+ * UI időzítési értékek (milliszekundum).
+ * Animációk, debounce-ok, auto-dismiss timeout-ok.
+ */
+export const UI_TIMING = {
+    AUTH_MESSAGE_DISMISS_MS: 5000,           // Login/Register hibaüzenet eltűnés
+    REGISTRATION_REDIRECT_DELAY_MS: 3000,   // Regisztráció siker → Login átváltás
+    TOAST_EXIT_ANIMATION_MS: 300,           // Toast kilépési animáció idő
+    TOAST_DEFAULT_DURATION_MS: 5000,        // Toast alapértelmezett megjelenítési idő
+    TOAST_ERROR_DURATION_MS: 6000,          // Hibás toast (részletekkel) megjelenítési idő
+    CONNECTION_RESTORED_MESSAGE_MS: 2000,   // "Kapcsolat helyreállt" üzenet időtartam
+    CLICK_DEBOUNCE_MS: 250,                 // Kattintás debounce (dupla kattintás elkerülés)
+    VALIDATION_DEBOUNCE_MS: 300             // Validációs mező debounce
+};
+
+// =============================================================================
+// Adatlekérési Konfiguráció
+// =============================================================================
+
+/**
+ * Adatlekérés és lekérdezés beállításai.
+ */
+export const DATA_QUERY_CONFIG = {
+    PAGE_SIZE: 1000,                        // Appwrite listRows lapméret
+    URGENCY_REFRESH_INTERVAL_MS: 300000,    // Sürgősség újraszámítás (5 perc)
+    MAX_PAGE_SORT_FALLBACK: 999999          // Rendezési fallback hiányzó oldalszámhoz
+};
+
+/**
+ * Adatlekérés timeout értékek (milliszekundum).
+ * Kritikus adatok (publications, articles, validations) hosszabb timeout-tal rendelkeznek.
+ */
+export const FETCH_TIMEOUT_CONFIG = {
+    CRITICAL_DATA_MS: 10000,    // Kritikus: publications, articles, validations
+    NON_CRITICAL_DATA_MS: 8000  // Nem-kritikus: layouts, deadlines
+};
+
+// =============================================================================
+// Realtime WebSocket Konfiguráció
+// =============================================================================
+
+/**
+ * Realtime WebSocket kliens konfigurációja.
+ * Exponenciális backoff, cooldown és szerverhiba kezelés beállításai.
+ */
+export const REALTIME_CONFIG = {
+    AUTH_RETRY_DELAY_MS: 200,               // Auth frame újrapróbálás késleltetés
+    COOLDOWN_MS: 60000,                     // Cooldown túl sok egymás utáni szerverhiba után
+    MAX_BACKOFF_MS: 60000,                  // Maximális exponenciális backoff
+    MAX_CONSECUTIVE_SERVER_ERRORS: 5,       // Ennyi szerverhiba után indul a cooldown
+    SERVER_ERROR_BACKOFF_BASE_MS: 5000      // Szerverhiba backoff alap (5s → 10s → 20s...)
 };

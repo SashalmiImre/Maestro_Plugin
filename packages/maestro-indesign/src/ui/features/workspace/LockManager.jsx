@@ -8,7 +8,7 @@ import { tables, Query, DATABASE_ID, ARTICLES_COLLECTION_ID } from "../../../cor
 
 // Segédfüggvények
 import { resolvePlatformPath, getCrossPlatformPaths } from "../../../core/utils/pathUtils.js";
-import { SCRIPT_LANGUAGE_JAVASCRIPT, LOCK_TYPE } from "../../../core/utils/constants.js";
+import { SCRIPT_LANGUAGE_JAVASCRIPT, LOCK_TYPE, TOAST_TYPES } from "../../../core/utils/constants.js";
 import { withTimeout, withRetry } from "../../../core/utils/promiseUtils.js";
 import { isIndexNotFoundError } from "../../../core/utils/errorUtils.js";
 import { getOpenDocumentPaths, getIndesignApp, generateGetActiveDocumentPathScript } from "../../../core/utils/indesign/index.js";
@@ -154,7 +154,7 @@ export const LockManager = () => {
         } catch (error) {
             console.error('[LockManager] Orphaned lock cleanup hiba:', error);
             if (isIndexNotFoundError(error)) {
-                showToast('Adatbázis konfigurációs hiba', 'error', 'Hiányzó index (lockOwnerId). Kérjük, értesítsd a rendszergazdát.');
+                showToast('Adatbázis konfigurációs hiba', TOAST_TYPES.ERROR, 'Hiányzó index (lockOwnerId). Kérjük, értesítsd a rendszergazdát.');
             }
         }
     };
@@ -274,7 +274,7 @@ export const LockManager = () => {
                     console.log('[LockManager] Fájl zárolva:', article.name, '-', user.name);
                 } else {
                     console.warn('[LockManager] Zárolás sikertelen:', lockResult.error);
-                    showToast('A dokumentum zárolása sikertelen', 'error', lockResult.error || 'Nem sikerült zárolni a fájlt. Próbáld meg újra.');
+                    showToast('A dokumentum zárolása sikertelen', TOAST_TYPES.ERROR, lockResult.error || 'Nem sikerült zárolni a fájlt. Próbáld meg újra.');
                 }
             }
         } catch (error) {
@@ -400,7 +400,7 @@ export const LockManager = () => {
             if (isMountedRef.current) {
                 console.error("Startup lock sync failed:", error);
                 if (isIndexNotFoundError(error)) {
-                    showToast('Adatbázis konfigurációs hiba', 'error', 'Hiányzó index (lockOwnerId). Kérjük, értesítsd a rendszergazdát.');
+                    showToast('Adatbázis konfigurációs hiba', TOAST_TYPES.ERROR, 'Hiányzó index (lockOwnerId). Kérjük, értesítsd a rendszergazdát.');
                 } else {
                     // showToast("Szinkronizációs hiba: " + error.message, "warning"); // Opcionális, ne legyen zavaró
                 }

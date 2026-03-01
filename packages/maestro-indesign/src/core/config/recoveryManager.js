@@ -20,7 +20,7 @@ import { realtime } from "./realtimeClient.js";
 import { endpointManager } from "./appwriteConfig.js";
 import { MaestroEvent, dispatchMaestroEvent } from "./maestroEvents.js";
 import { RECOVERY_CONFIG } from "../utils/constants.js";
-import { log, logError, logWarn, logDebug } from "../utils/logger.js";
+import { log, logError, logWarn } from "../utils/logger.js";
 
 class RecoveryManager {
     constructor() {
@@ -248,7 +248,7 @@ class RecoveryManager {
 
             return response.ok || response.status === 401;
         } catch (error) {
-            logDebug(`[Recovery] _singleHealthCheck hiba (url: ${url}, timeout: ${timeoutMs}ms):`, error);
+            log(`[Recovery] _singleHealthCheck hiba (url: ${url}, timeout: ${timeoutMs}ms):`, error);
             return false;
         }
     }

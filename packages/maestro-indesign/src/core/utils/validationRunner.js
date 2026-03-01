@@ -4,6 +4,7 @@
  */
 
 import { FileSystemValidator, StateComplianceValidator, PublicationStructureValidator, DatabaseIntegrityValidator, PreflightValidator } from "./validators/index.js";
+import { VALIDATOR_TYPES } from "./validationConstants.js";
 
 // Példányok gyorsítótárazása (cache)
 const validators = {
@@ -38,36 +39,36 @@ export const validate = async (target, checkTypes, context = {}) => {
         let result = null;
 
         switch (check) {
-            case 'file_accessible':
-            case 'file_system':
+            case VALIDATOR_TYPES.FILE_ACCESSIBLE:
+            case VALIDATOR_TYPES.FILE_SYSTEM:
                 // Ellenőrzi, hogy a fájl fizikailag létezik-e (Alapkövetelmény)
                 // A dedikált 'validateArticle' függvényt használjuk, amely az InDesign scripten keresztül
                 // ellenőrzi a fájl létezését.
                 result = await validateArticle(target);
                 break;
-                
-            case 'state_compliance':
-                result = await validators.stateCompliance.validate({ 
-                    article: target, 
-                    targetState: context.targetState 
+
+            case VALIDATOR_TYPES.STATE_COMPLIANCE:
+                result = await validators.stateCompliance.validate({
+                    article: target,
+                    targetState: context.targetState
                 });
                 break;
-                
-            case 'database_integrity':
+
+            case VALIDATOR_TYPES.DATABASE_INTEGRITY:
                 result = await validators.databaseIntegrity.validate({
                     article: target,
                     autoCorrect: context.autoCorrect
                 });
                 break;
 
-            case 'publication_structure':
+            case VALIDATOR_TYPES.PUBLICATION_STRUCTURE:
                 result = await validators.publicationStructure.validate({
                     publication: target,
                     articles: context.articles
                 });
                 break;
 
-            case 'preflight_check':
+            case VALIDATOR_TYPES.PREFLIGHT_CHECK:
                 result = await validators.preflight.validate({
                     article: target,
                     options: context.options

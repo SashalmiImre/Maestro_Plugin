@@ -17,7 +17,7 @@ import {
     getIndesignApp
 } from "../../../core/utils/indesign/indesignUtils.js";
 import { WorkflowEngine } from "../../../core/utils/workflow/workflowEngine.js";
-import { LOCK_TYPE, LOCK_WAIT_CONFIG } from "../../../core/utils/constants.js";
+import { LOCK_TYPE, LOCK_WAIT_CONFIG, TOAST_TYPES } from "../../../core/utils/constants.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../core/config/maestroEvents.js";
 
 
@@ -114,7 +114,7 @@ export const DocumentMonitor = () => {
         try {
             // isVerifyingRef.current már a hívó által true-ra van állítva
             dispatchMaestroEvent(MaestroEvent.verificationStarted);
-            toastId = showToast("Lezárt dokumentum ellenőrzése...", "info");
+            toastId = showToast("Lezárt dokumentum ellenőrzése...", TOAST_TYPES.INFO);
 
             // Maestro zárolás
             const lockResult = await WorkflowEngine.lockDocument(article, LOCK_TYPE.SYSTEM, user);

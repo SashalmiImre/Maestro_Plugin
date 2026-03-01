@@ -8,7 +8,7 @@
  */
 
 import React, { createContext, useContext, useState, useCallback, useRef, useEffect, useMemo } from "react";
-import { CONNECTION_STATES } from "../utils/constants.js";
+import { CONNECTION_STATES, UI_TIMING } from "../utils/constants.js";
 import { log } from "../utils/logger.js";
 import { isNetworkError as checkNetworkError, isServerError as checkServerError } from "../utils/errorUtils.js";
 
@@ -52,7 +52,7 @@ export const ConnectionProvider = ({ children }) => {
                     message: null,
                     details: null
                 }));
-            }, 2000);
+            }, UI_TIMING.CONNECTION_RESTORED_MESSAGE_MS);
 
             return () => {
                 if (timeoutRef.current) clearTimeout(timeoutRef.current);

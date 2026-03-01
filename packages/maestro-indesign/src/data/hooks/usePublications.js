@@ -9,6 +9,9 @@ import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 // Appwrite
 import { tables, DATABASE_ID, ARTICLES_COLLECTION_ID, Query } from "../../core/config/appwriteConfig.js";
 
+// Config & Constants
+import { TOAST_TYPES } from "../../core/utils/constants.js";
+
 // Utils
 import { withTimeout } from "../../core/utils/promiseUtils.js";
 import { logError } from "../../core/utils/logger.js";
@@ -72,7 +75,7 @@ export const usePublications = () => {
                 const attempts = incrementAttempts();
                 setOffline(error, attempts);
             } else {
-                showToast('A kiadvány létrehozása sikertelen', 'warning', getAPIErrorMessage(error, 'Kiadvány létrehozása'));
+                showToast('A kiadvány létrehozása sikertelen', TOAST_TYPES.WARNING, getAPIErrorMessage(error, 'Kiadvány létrehozása'));
             }
             throw error;
         }
@@ -129,7 +132,7 @@ export const usePublications = () => {
                 const attempts = incrementAttempts();
                 setOffline(error, attempts);
             } else {
-                showToast('A kiadvány törlése sikertelen', 'warning', getAPIErrorMessage(error, 'Kiadvány törlése'));
+                showToast('A kiadvány törlése sikertelen', TOAST_TYPES.WARNING, getAPIErrorMessage(error, 'Kiadvány törlése'));
             }
             throw error;
         }
@@ -154,7 +157,7 @@ export const usePublications = () => {
                 const attempts = incrementAttempts();
                 setOffline(error, attempts);
             } else {
-                showToast('A kiadvány átnevezése sikertelen', 'warning', getAPIErrorMessage(error, 'Kiadvány átnevezése'));
+                showToast('A kiadvány átnevezése sikertelen', TOAST_TYPES.WARNING, getAPIErrorMessage(error, 'Kiadvány átnevezése'));
             }
             throw error;
         }
@@ -169,6 +172,7 @@ export const usePublications = () => {
     const updatePublication = useCallback(async (id, data) => {
         try {
             await dataUpdatePublication(id, data);
+            setConnected();
         } catch (error) {
             logError('[usePublications] Update failed:', error);
 
@@ -178,11 +182,11 @@ export const usePublications = () => {
                 const attempts = incrementAttempts();
                 setOffline(error, attempts);
             } else {
-                showToast('A kiadvány frissítése sikertelen', 'warning', getAPIErrorMessage(error, 'Kiadvány frissítése'));
+                showToast('A kiadvány frissítése sikertelen', TOAST_TYPES.WARNING, getAPIErrorMessage(error, 'Kiadvány frissítése'));
             }
             throw error;
         }
-    }, [dataUpdatePublication, incrementAttempts, setOffline, showToast]);
+    }, [dataUpdatePublication, setConnected, incrementAttempts, setOffline, showToast]);
 
     return {
         publications,

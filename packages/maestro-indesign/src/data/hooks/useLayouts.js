@@ -6,6 +6,9 @@ import { useConnection } from "../../core/contexts/ConnectionContext.jsx";
 import { useData } from "../../core/contexts/DataContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 
+// Config & Constants
+import { TOAST_TYPES } from "../../core/utils/constants.js";
+
 // Utils
 import { logError } from "../../core/utils/logger.js";
 import { isNetworkError, isAuthError, getAPIErrorMessage } from "../../core/utils/errorUtils.js";
@@ -58,7 +61,7 @@ export const useLayouts = () => {
                 const attempts = incrementAttempts();
                 setOffline(error, attempts);
             } else {
-                showToast('Az elrendezés létrehozása sikertelen', 'warning', getAPIErrorMessage(error, 'Elrendezés létrehozása'));
+                showToast('Az elrendezés létrehozása sikertelen', TOAST_TYPES.WARNING, getAPIErrorMessage(error, 'Elrendezés létrehozása'));
             }
             throw error;
         }
@@ -85,7 +88,7 @@ export const useLayouts = () => {
                 const attempts = incrementAttempts();
                 setOffline(error, attempts);
             } else {
-                showToast('Az elrendezés átnevezése sikertelen', 'warning', getAPIErrorMessage(error, 'Elrendezés átnevezése'));
+                showToast('Az elrendezés átnevezése sikertelen', TOAST_TYPES.WARNING, getAPIErrorMessage(error, 'Elrendezés átnevezése'));
             }
             throw error;
         }
@@ -101,7 +104,7 @@ export const useLayouts = () => {
     const deleteLayout = useCallback(async (layoutId) => {
         // Utolsó layout nem törölhető
         if (layouts.length <= 1) {
-            showToast('Törlés nem lehetséges', 'warning', 'Legalább egy elrendezésnek lennie kell.');
+            showToast('Törlés nem lehetséges', TOAST_TYPES.WARNING, 'Legalább egy elrendezésnek lennie kell.');
             return;
         }
 
@@ -141,7 +144,7 @@ export const useLayouts = () => {
                 const attempts = incrementAttempts();
                 setOffline(error, attempts);
             } else {
-                showToast('Az elrendezés törlése sikertelen', 'warning', getAPIErrorMessage(error, 'Elrendezés törlése'));
+                showToast('Az elrendezés törlése sikertelen', TOAST_TYPES.WARNING, getAPIErrorMessage(error, 'Elrendezés törlése'));
             }
             throw error;
         }

@@ -43,7 +43,6 @@ export {
     getIndesignApp,
     findActiveDocument,
     getDocPath,
-    extractPageNumbers,
     resolveTargetToDoc,
     getOpenDocumentPaths,
     getFileTimestamp,

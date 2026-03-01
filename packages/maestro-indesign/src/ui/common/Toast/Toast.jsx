@@ -1,5 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import './Toast.css';
+// Konstansok
+import { UI_TIMING } from '../../../core/utils/constants.js';
 
 export const Toast = ({ id, message, type, details, onClose, duration }) => {
     const [isExiting, setIsExiting] = useState(false);
@@ -17,12 +19,12 @@ export const Toast = ({ id, message, type, details, onClose, duration }) => {
         setIsExiting(true);
         exitTimerRef.current = setTimeout(() => {
             onClose(id);
-        }, 300); // Match animation duration
+        }, UI_TIMING.TOAST_EXIT_ANIMATION_MS); // Match animation duration
     }, [id, onClose]);
 
     // Handle auto-dismiss with hover pause
     useEffect(() => {
-        const DISMISS_DURATION = duration || (type === 'error' && details ? 6000 : 5000);
+        const DISMISS_DURATION = duration || (type === 'error' && details ? UI_TIMING.TOAST_ERROR_DURATION_MS : UI_TIMING.TOAST_DEFAULT_DURATION_MS);
 
         if (isHovered) {
             // Clear timer when hovering and record pause start

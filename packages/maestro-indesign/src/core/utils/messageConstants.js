@@ -37,14 +37,6 @@ export const VALIDATION_TYPE_CONFIG = {
     [VALIDATION_TYPES.SUCCESS]: { label: 'Megoldva', color: '#2d9d78', icon: 'Checkmark' }
 };
 
-// Validáció Források
-export const VALIDATION_SOURCES = {
-    USER: 'user',        // Felhasználói bejegyzés
-    PREFLIGHT: 'preflight', // Rendszer: Preflight
-    STRUCTURE: 'structure', // Rendszer: Struktúra ellenőrzés
-    SYSTEM: 'system'     // Rendszer: Egyéb általános
-};
-
 /**
  * Visszaadja a címzett megjelenítendő nevét.
  * Ha konkrét felhasználó a címzett, megkeresi a nevét a csapatlistában.

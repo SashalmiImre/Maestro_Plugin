@@ -2,6 +2,8 @@ import React, { useState, useEffect } from "react";
 
 // Contexts
 import { useUser } from "../../../../core/contexts/UserContext.jsx";
+// Konstansok
+import { UI_TIMING } from "../../../../core/utils/constants.js";
 
 /** Jelszó minimális hossza (Appwrite követelmény). */
 const MIN_PASSWORD_LENGTH = 8;
@@ -19,7 +21,7 @@ export const Register = ({ onSwitchToLogin }) => {
     // Hibaüzenet automatikus eltüntetése
     useEffect(() => {
         if (message && !isSuccess) {
-            const t = setTimeout(() => setMessage(""), 5000);
+            const t = setTimeout(() => setMessage(""), UI_TIMING.AUTH_MESSAGE_DISMISS_MS);
             return () => clearTimeout(t);
         }
     }, [message, isSuccess]);
@@ -27,7 +29,7 @@ export const Register = ({ onSwitchToLogin }) => {
     // Sikeres regisztráció után automatikus átváltás a Login nézetre
     useEffect(() => {
         if (isSuccess) {
-            const t = setTimeout(() => onSwitchToLogin(), 3000);
+            const t = setTimeout(() => onSwitchToLogin(), UI_TIMING.REGISTRATION_REDIRECT_DELAY_MS);
             return () => clearTimeout(t);
         }
     }, [isSuccess, onSwitchToLogin]);

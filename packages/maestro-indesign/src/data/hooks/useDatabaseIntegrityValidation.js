@@ -15,6 +15,7 @@ import { useEffect, useRef, useCallback } from "react";
 import { MaestroEvent } from "../../core/config/maestroEvents.js";
 import { useData } from "../../core/contexts/DataContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
+import { TOAST_TYPES } from "../../core/utils/constants.js";
 import { DatabaseIntegrityValidator } from "../../core/utils/validators/index.js";
 import { log, logError } from "../../core/utils/logger.js";
 
@@ -47,7 +48,7 @@ export const useDatabaseIntegrityValidation = () => {
 
             if (result.isValid && result.warnings?.length > 0) {
                 log(`[useDatabaseIntegrityValidation] Javítás alkalmazva: ${result.warnings[0]}`);
-                showToast('Adatok automatikusan javítva', 'success', `A(z) „${article.name}" cikk adatai frissültek a dokumentum alapján.`);
+                showToast('Adatok automatikusan javítva', TOAST_TYPES.SUCCESS, `A(z) „${article.name}" cikk adatai frissültek a dokumentum alapján.`);
 
                 // Azonnali helyi frissítés a szerver válaszával
                 if (result.correctedArticle) {

@@ -17,11 +17,11 @@ import { useValidation } from "../../core/contexts/ValidationContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 import { PublicationStructureValidator } from "../../core/utils/validators/PublicationStructureValidator.js";
 import { tables, DATABASE_ID, VALIDATIONS_COLLECTION_ID, ID, Query } from "../../core/config/appwriteConfig.js";
+import { VALIDATION_SOURCES } from "../../core/utils/validationConstants.js";
+import { VALIDATION_TYPES } from "../../core/utils/messageConstants.js";
 import { log, logError } from "../../core/utils/logger.js";
 import { withRetry } from "../../core/utils/promiseUtils.js";
-
-const VALIDATION_SOURCE = "structure";
-const PAGE_SIZE = 1000;
+import { DATA_QUERY_CONFIG, TOAST_TYPES } from "../../core/utils/constants.js";
 
 // Egyetlen megosztott példány
 const structureValidator = new PublicationStructureValidator();
@@ -41,7 +41,7 @@ async function fetchAllValidationRows(baseQueries) {
                 tableId: VALIDATIONS_COLLECTION_ID,
                 queries: [
                     ...baseQueries,
-                    Query.limit(PAGE_SIZE),
+                    Query.limit(DATA_QUERY_CONFIG.PAGE_SIZE),
                     Query.offset(offset)
                 ]
             }),
@@ -55,8 +55,8 @@ async function fetchAllValidationRows(baseQueries) {
 
         allRows.push(...response.rows);
 
-        if (response.rows.length < PAGE_SIZE) break;
-        offset += PAGE_SIZE;
+        if (response.rows.length < DATA_QUERY_CONFIG.PAGE_SIZE) break;
+        offset += DATA_QUERY_CONFIG.PAGE_SIZE;
     }
 
     return allRows;
@@ -96,7 +96,7 @@ export const useOverlapValidation = () => {
         const loadExistingValidations = async () => {
             try {
                 const allRows = await fetchAllValidationRows([
-                    Query.equal('source', VALIDATION_SOURCE)
+                    Query.equal('source', VALIDATION_SOURCES.STRUCTURE)
                 ]);
 
                 if (allRows.length === 0) return;
@@ -110,10 +110,10 @@ export const useOverlapValidation = () => {
                     
                     const items = [];
                     if (doc.errors && doc.errors.length > 0) {
-                        items.push(...doc.errors.map(msg => ({ type: 'error', message: msg, source: VALIDATION_SOURCE })));
+                        items.push(...doc.errors.map(msg => ({ type: VALIDATION_TYPES.ERROR, message: msg, source: VALIDATION_SOURCES.STRUCTURE })));
                     }
                     if (doc.warnings && doc.warnings.length > 0) {
-                        items.push(...doc.warnings.map(msg => ({ type: 'warning', message: msg, source: VALIDATION_SOURCE })));
+                        items.push(...doc.warnings.map(msg => ({ type: VALIDATION_TYPES.WARNING, message: msg, source: VALIDATION_SOURCES.STRUCTURE })));
                     }
 
                     if (items.length > 0) {
@@ -129,7 +129,7 @@ export const useOverlapValidation = () => {
 
                 // Batchben frissítjük a ValidationContext-et
                 for (const { resultsMap, allArticleIds } of Object.values(byPublication)) {
-                    updatePublicationValidation(resultsMap, allArticleIds, VALIDATION_SOURCE);
+                    updatePublicationValidation(resultsMap, allArticleIds, VALIDATION_SOURCES.STRUCTURE);
                 }
 
                 log(`[useOverlapValidation] ${allRows.length} validáció betöltve az adatbázisból.`);
@@ -152,7 +152,7 @@ export const useOverlapValidation = () => {
             // 1. Meglévő validációs dokumentumok lekérése ehhez a publikációhoz
             const existingRows = await fetchAllValidationRows([
                 Query.equal('publicationId', publicationId),
-                Query.equal('source', VALIDATION_SOURCE)
+                Query.equal('source', VALIDATION_SOURCES.STRUCTURE)
             ]);
 
             const existingByArticle = new Map();
@@ -200,7 +200,7 @@ export const useOverlapValidation = () => {
                                 data: {
                                     articleId,
                                     publicationId,
-                                    source: VALIDATION_SOURCE,
+                                    source: VALIDATION_SOURCES.STRUCTURE,
                                     ...data
                                 }
                             }),
@@ -268,10 +268,10 @@ export const useOverlapValidation = () => {
         for (const [articleId, result] of resultsMap) {
             const items = [];
             if (result.errors && result.errors.length > 0) {
-                items.push(...result.errors.map(msg => ({ type: 'error', message: msg, source: VALIDATION_SOURCE })));
+                items.push(...result.errors.map(msg => ({ type: VALIDATION_TYPES.ERROR, message: msg, source: VALIDATION_SOURCES.STRUCTURE })));
             }
             if (result.warnings && result.warnings.length > 0) {
-                items.push(...result.warnings.map(msg => ({ type: 'warning', message: msg, source: VALIDATION_SOURCE })));
+                items.push(...result.warnings.map(msg => ({ type: VALIDATION_TYPES.WARNING, message: msg, source: VALIDATION_SOURCES.STRUCTURE })));
             }
             if (items.length > 0) {
                 itemsMap.set(articleId, items);
@@ -290,7 +290,7 @@ export const useOverlapValidation = () => {
         if (articlesWithErrors > 0) {
             showToast(
                 'Struktúra hibák észlelve',
-                'error',
+                TOAST_TYPES.ERROR,
                 `${articlesWithErrors} cikknél átfedés vagy határon kívüli oldalak találhatók.`
             );
         }
@@ -321,7 +321,7 @@ export const useOverlapValidation = () => {
         // Eredmények beírása a ValidationContext-be (azonnali UI frissítés)
         const allArticleIds = siblingArticles.map(a => a.$id);
         const itemsMap = transformResultsToItems(resultsMap);
-        updatePublicationValidation(itemsMap, allArticleIds, VALIDATION_SOURCE);
+        updatePublicationValidation(itemsMap, allArticleIds, VALIDATION_SOURCES.STRUCTURE);
 
         // Eredmények mentése az Appwrite-ba (háttérben)
         persistToDatabase(publicationId, resultsMap);
@@ -349,7 +349,7 @@ export const useOverlapValidation = () => {
         // Eredmények beírása a ValidationContext-be
         const allArticleIds = pubArticles.map(a => a.$id);
         const itemsMap = transformResultsToItems(resultsMap);
-        updatePublicationValidation(itemsMap, allArticleIds, VALIDATION_SOURCE);
+        updatePublicationValidation(itemsMap, allArticleIds, VALIDATION_SOURCES.STRUCTURE);
 
         // Eredmények mentése az Appwrite-ba
         persistToDatabase(publication.$id, resultsMap);
@@ -393,7 +393,7 @@ export const useOverlapValidation = () => {
 
         const allArticleIds = siblingArticles.map(a => a.$id);
         const itemsMap = transformResultsToItems(resultsMap);
-        updatePublicationValidation(itemsMap, allArticleIds, VALIDATION_SOURCE);
+        updatePublicationValidation(itemsMap, allArticleIds, VALIDATION_SOURCES.STRUCTURE);
         persistToDatabase(publicationId, resultsMap);
 
         // Toast értesítés (konfigurációs változás → user nem feltétlenül látja a ValidationSection-t)
@@ -423,7 +423,7 @@ export const useOverlapValidation = () => {
 
         const allArticleIds = pubArticles.map(a => a.$id);
         const itemsMap = transformResultsToItems(resultsMap);
-        updatePublicationValidation(itemsMap, allArticleIds, VALIDATION_SOURCE);
+        updatePublicationValidation(itemsMap, allArticleIds, VALIDATION_SOURCES.STRUCTURE);
         persistToDatabase(publicationId, resultsMap);
 
         notifyIfErrors(resultsMap);
@@ -455,7 +455,7 @@ export const useOverlapValidation = () => {
 
         const allArticleIds = pubArticles.map(a => a.$id);
         const itemsMap = transformResultsToItems(resultsMap);
-        updatePublicationValidation(itemsMap, allArticleIds, VALIDATION_SOURCE);
+        updatePublicationValidation(itemsMap, allArticleIds, VALIDATION_SOURCES.STRUCTURE);
         persistToDatabase(publicationId, resultsMap);
     }, [updatePublicationValidation, persistToDatabase]);
 
