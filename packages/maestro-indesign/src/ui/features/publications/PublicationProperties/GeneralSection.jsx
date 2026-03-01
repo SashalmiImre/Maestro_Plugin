@@ -21,7 +21,7 @@ import { STORAGE_KEYS } from "../../../../core/utils/constants.js";
  * @param {Object} props.publication - A kiadvány objektum
  * @param {Function} props.onFieldUpdate - Mező frissítés callback: (fieldName, value) => void
  */
-export const GeneralSection = ({ publication, onFieldUpdate }) => {
+export const GeneralSection = ({ publication, onFieldUpdate, disabled, permissionReason }) => {
     // Lokális state az Enter/blur mentéshez
     const [localCoverageStart, setLocalCoverageStart] = useState(publication.coverageStart || "");
     const [localCoverageEnd, setLocalCoverageEnd] = useState(publication.coverageEnd || "");
@@ -66,6 +66,8 @@ export const GeneralSection = ({ publication, onFieldUpdate }) => {
                             value={localCoverageStart}
                             onInput={(e) => setLocalCoverageStart(e.target.value)}
                             onValidate={handleCoverageSave("coverageStart", localCoverageStart)}
+                            disabled={disabled || undefined}
+                            title={disabled ? permissionReason : undefined}
                             style={{ width: "100%" }}
                         />
                     </div>
@@ -77,6 +79,8 @@ export const GeneralSection = ({ publication, onFieldUpdate }) => {
                             value={localCoverageEnd}
                             onInput={(e) => setLocalCoverageEnd(e.target.value)}
                             onValidate={handleCoverageSave("coverageEnd", localCoverageEnd)}
+                            disabled={disabled || undefined}
+                            title={disabled ? permissionReason : undefined}
                             style={{ width: "100%" }}
                         />
                     </div>
@@ -88,6 +92,8 @@ export const GeneralSection = ({ publication, onFieldUpdate }) => {
                             value={localName}
                             onInput={(e) => setLocalName(e.target.value)}
                             onValidate={handleNameSave}
+                            disabled={disabled || undefined}
+                            title={disabled ? permissionReason : undefined}
                             style={{ width: "100%" }}
                         />
                     </div>

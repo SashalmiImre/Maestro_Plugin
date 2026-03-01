@@ -90,7 +90,7 @@ const buildDatetime = (datePart, timePart) => {
  * @param {Function} props.onFieldUpdate - Mező frissítés callback: (fieldName, value) => void
  * @param {Function} props.onValidationChange - Callback: (hasErrors: boolean) => void
  */
-export const DeadlinesSection = ({ publication, onFieldUpdate, onValidationChange }) => {
+export const DeadlinesSection = ({ publication, onFieldUpdate, onValidationChange, disabled, permissionReason }) => {
     const { deadlines, createDeadline, updateDeadline, deleteDeadline } = useDeadlines();
     const { showToast } = useToast();
 
@@ -331,6 +331,8 @@ export const DeadlinesSection = ({ publication, onFieldUpdate, onValidationChang
                                 onFieldUpdate("excludeWeekends", !(publication?.excludeWeekends ?? true));
                             }
                         }}
+                        disabled={disabled}
+                        title={disabled ? permissionReason : undefined}
                         style={{ marginBottom: "10px" }}
                     >
                         Hétvégék kihagyása
@@ -354,6 +356,7 @@ export const DeadlinesSection = ({ publication, onFieldUpdate, onValidationChang
                                     value={getFieldValue(deadline.$id, 'startPage', deadline.startPage)}
                                     onInput={(e) => handleFieldInput(deadline.$id, 'startPage', e.target.value)}
                                     onValidate={() => handlePageFieldSave(deadline.$id, 'startPage', deadline.startPage)}
+                                    disabled={disabled || undefined}
                                     style={{ width: "100%" }}
                                 />
                             </div>
@@ -365,6 +368,7 @@ export const DeadlinesSection = ({ publication, onFieldUpdate, onValidationChang
                                     value={getFieldValue(deadline.$id, 'endPage', deadline.endPage)}
                                     onInput={(e) => handleFieldInput(deadline.$id, 'endPage', e.target.value)}
                                     onValidate={() => handlePageFieldSave(deadline.$id, 'endPage', deadline.endPage)}
+                                    disabled={disabled || undefined}
                                     style={{ width: "100%" }}
                                 />
                             </div>
@@ -377,6 +381,7 @@ export const DeadlinesSection = ({ publication, onFieldUpdate, onValidationChang
                                     onInput={(e) => handleFieldInput(deadline.$id, 'date', e.target.value)}
                                     onValidate={() => handleDatetimeSave(deadline.$id, 'date', deadline)}
                                     invalid={!!invalidFields[`${deadline.$id}.date`]}
+                                    disabled={disabled || undefined}
                                     style={{ width: "100%" }}
                                 />
                             </div>
@@ -389,6 +394,7 @@ export const DeadlinesSection = ({ publication, onFieldUpdate, onValidationChang
                                     onInput={(e) => handleFieldInput(deadline.$id, 'time', e.target.value)}
                                     onValidate={() => handleDatetimeSave(deadline.$id, 'time', deadline)}
                                     invalid={!!invalidFields[`${deadline.$id}.time`]}
+                                    disabled={disabled || undefined}
                                     style={{ width: "100%" }}
                                 />
                             </div>
@@ -397,7 +403,8 @@ export const DeadlinesSection = ({ publication, onFieldUpdate, onValidationChang
                                 variant="negative"
                                 size="s"
                                 onClick={() => handleDeleteRequest(deadline.$id)}
-                                title="Határidő törlése"
+                                disabled={disabled || undefined}
+                                title={disabled ? permissionReason : "Határidő törlése"}
                             >
                                 ✕
                             </sp-button>
@@ -410,6 +417,8 @@ export const DeadlinesSection = ({ publication, onFieldUpdate, onValidationChang
                         variant="secondary"
                         size="s"
                         onClick={handleAddDeadline}
+                        disabled={disabled || undefined}
+                        title={disabled ? permissionReason : undefined}
                         style={{ marginTop: "4px", alignSelf: "flex-start" }}
                     >
                         + Új határidő

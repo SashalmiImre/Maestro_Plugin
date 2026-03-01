@@ -23,6 +23,7 @@ import { ValidationSection } from "./ValidationSection.jsx";
 import { isValidFileName } from "../../../../core/utils/pathUtils.js";
 import { WorkflowEngine } from "../../../../core/utils/workflow/workflowEngine.js";
 import { canUserMoveArticle } from "../../../../core/utils/workflow/workflowPermissions.js";
+import { useElementPermissions, useContributorPermissions } from "../../../../data/hooks/useElementPermission.js";
 import { SCRIPT_LANGUAGE_JAVASCRIPT, TOAST_TYPES } from "../../../../core/utils/constants.js";
 import { WORKFLOW_CONFIG, MARKERS } from "../../../../core/utils/workflow/workflowConstants.js";
 import { log, logError, logWarn } from "../../../../core/utils/logger.js";
@@ -48,6 +49,15 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
     const { hasErrors } = useUnifiedValidation(article);
     const [isSyncing, setIsSyncing] = useState(false);
     const isIgnored = ((typeof article?.markers === 'number' ? article.markers : 0) & MARKERS.IGNORE) !== 0;
+
+    // Elem jogosultságok
+    const permissions = useElementPermissions([
+        'articleName', 'articlePages', 'articleLayout',
+        'validationForm', 'validationActions'
+    ]);
+
+    // Per-dropdown contributor jogosultságok (állapotfüggő)
+    const contributorPermissions = useContributorPermissions(article.state);
 
     // ── Mező frissítés ───────────────────────────────────────────────────────
 
@@ -393,14 +403,20 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
                     onPageNumberChange={handlePageNumberChange}
                     onStateTransition={handleStateTransition}
                     isSyncing={isSyncing}
+                    permissions={permissions}
                 />
 
-                <ValidationSection article={article} disabled={isIgnored} />
+                <ValidationSection
+                    article={article}
+                    disabled={isIgnored}
+                    permissions={permissions}
+                />
 
                 <ContributorsSection
                     article={article}
                     onFieldUpdate={handleFieldUpdate}
                     disabled={isIgnored}
+                    contributorPermissions={contributorPermissions}
                 />
             </div>
         </div>

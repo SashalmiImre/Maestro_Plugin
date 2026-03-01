@@ -49,7 +49,7 @@ import { isValidFileName } from "../../../../core/utils/pathUtils.js";
  * @param {boolean} props.isSyncing - Whether an update is in progress (disables controls)
  * @returns {JSX.Element} The GeneralSection component
  */
-export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChange, onStateTransition, isSyncing }) => {
+export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChange, onStateTransition, isSyncing, permissions }) => {
     const { layouts } = useData();
 
     /**
@@ -277,7 +277,8 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
                                 value={localStartPage}
                                 onInput={(e) => setLocalStartPage(e.target.value)}
                                 onValidate={handleStartPageSave}
-                                disabled={isIgnored || isSyncing ? true : undefined}
+                                disabled={isIgnored || isSyncing || !permissions?.articlePages?.allowed ? true : undefined}
+                                title={!permissions?.articlePages?.allowed ? permissions.articlePages.reason : undefined}
                                 style={{ width: "100%" }}
                             />
                         </div>
@@ -289,7 +290,8 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
                                 value={localEndPage}
                                 onInput={(e) => setLocalEndPage(e.target.value)}
                                 onValidate={handleEndPageSave}
-                                disabled={isIgnored || isSyncing ? true : undefined}
+                                disabled={isIgnored || isSyncing || !permissions?.articlePages?.allowed ? true : undefined}
+                                title={!permissions?.articlePages?.allowed ? permissions.articlePages.reason : undefined}
                                 style={{ width: "100%" }}
                             />
                         </div>
@@ -301,7 +303,8 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
                                 value={localName}
                                 onInput={(e) => setLocalName(e.target.value)}
                                 onValidate={(e) => onFieldUpdate("name", e?.target?.value ?? localName)}
-                                disabled={isIgnored || isSyncing ? true : undefined}
+                                disabled={isIgnored || isSyncing || !permissions?.articleName?.allowed ? true : undefined}
+                                title={!permissions?.articleName?.allowed ? permissions.articleName.reason : undefined}
                                 invalid={localName.length > 0 && !isValidFileName(localName)}
                                 style={{ width: "100%" }}
                             />
@@ -312,7 +315,8 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
                                 id="layout-dropdown"
                                 value={article.layout}
                                 onChange={(val) => onFieldUpdate('layout', val)}
-                                disabled={isIgnored || isSyncing ? true : undefined}
+                                disabled={isIgnored || isSyncing || !permissions?.articleLayout?.allowed ? true : undefined}
+                                title={!permissions?.articleLayout?.allowed ? permissions.articleLayout.reason : undefined}
                                 style={{ width: "100%" }}
                             >
                                 <sp-menu slot="options" size="m">

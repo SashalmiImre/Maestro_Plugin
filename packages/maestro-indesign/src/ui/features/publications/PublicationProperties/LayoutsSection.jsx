@@ -29,7 +29,7 @@ import { logError } from "../../../../core/utils/logger.js";
  * @param {Object} props
  * @param {Object} props.publication - A kiadvány objektum
  */
-export const LayoutsSection = ({ publication }) => {
+export const LayoutsSection = ({ publication, disabled, permissionReason }) => {
     const { layouts, createLayout, renameLayout, deleteLayout } = useLayouts();
     const { showToast } = useToast();
 
@@ -190,6 +190,8 @@ export const LayoutsSection = ({ publication }) => {
                                     value={getDisplayName(layout)}
                                     onInput={(e) => handleNameInput(layout.$id, e.target.value)}
                                     onValidate={() => handleRenameSave(layout.$id, layout.name)}
+                                    disabled={disabled || undefined}
+                                    title={disabled ? permissionReason : undefined}
                                     style={{ width: "100%" }}
                                 />
                             </div>
@@ -198,8 +200,8 @@ export const LayoutsSection = ({ publication }) => {
                                 variant="negative"
                                 size="s"
                                 onClick={() => handleDeleteRequest(layout)}
-                                disabled={isLastLayout || undefined}
-                                title={isLastLayout ? "Legalább egy elrendezésnek lennie kell" : "Elrendezés törlése"}
+                                disabled={isLastLayout || disabled || undefined}
+                                title={disabled ? permissionReason : (isLastLayout ? "Legalább egy elrendezésnek lennie kell" : "Elrendezés törlése")}
                             >
                                 ✕
                             </sp-button>
@@ -212,7 +214,8 @@ export const LayoutsSection = ({ publication }) => {
                         variant="secondary"
                         size="s"
                         onClick={handleAddLayout}
-                        disabled={isBusy || undefined}
+                        disabled={isBusy || disabled || undefined}
+                        title={disabled ? permissionReason : undefined}
                         style={{ marginTop: "4px", alignSelf: "flex-start" }}
                     >
                         + Új elrendezés

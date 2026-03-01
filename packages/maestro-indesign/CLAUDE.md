@@ -120,12 +120,19 @@
     - Ld. `docs/diagrams/data-flow-architecture.md`
 
 5. **Jogosultsági Rendszer (Workflow Permissions)**
-    - **Állapot-alapú**: Minden workflow állapothoz csapatok vannak rendelve (`STATE_PERMISSIONS`), amelyek mozgathatják a cikkeket onnan.
+    - **Állapot-alapú átmenet**: Minden workflow állapothoz csapatok vannak rendelve (`STATE_PERMISSIONS`), amelyek mozgathatják a cikkeket onnan.
     - **Kétszintű jogosultság**: (1) **Csapattagság** (`user.teamIds`) — alap jogosultság a munkahelyi pozíció alapján (`teams.list()` lekérés login/recovery/Realtime-kor). (2) **Label override** (`user.labels`) — plusz jogosultságok adminisztrátori hozzárendeléssel.
     - **Fallback**: Ha nincs senki hozzárendelve a releváns csapatok contributor mezőiből → csapattagság VAGY label szükséges.
     - **Háromszintű védelem**: UI gomb disabled → handler toast → engine guard.
     - **Realtime szinkron**: A `teams` Realtime csatorna → `teamMembershipChanged` MaestroEvent → UserContext frissíti a `user.teamIds`-t → UI azonnal reagál.
-    - **Konfiguráció**: `workflowConstants.js` (`STATE_PERMISSIONS`, `TEAM_ARTICLE_FIELD`), `workflowPermissions.js` (`canUserMoveArticle`).
+    - **UI Elem Jogosultságok**: Deklaratív, központi konfiguráció (`elementPermissions.js`) határozza meg, mely csapatok szerkeszthetik az egyes UI elemcsoportokat. Csapat/label nélküli felhasználó teljes read-only módot kap.
+      - `ARTICLE_ELEMENT_PERMISSIONS` / `PUBLICATION_ELEMENT_PERMISSIONS` — elemcsoport → csapat-slug tömb vagy `ANY_TEAM` szimbólum.
+      - `checkElementPermission(permission, user)` — állapotfüggetlen ellenőrzés (cikk és kiadvány mezők).
+      - `canUserAccessInState(user, articleState)` — állapotfüggő ellenőrzés (fájlmegnyitás + parancsok): designers/artDirectors mindig, mások csak `STATE_PERMISSIONS` szerinti állapotaikban.
+      - `canEditContributorDropdown(user, teamSlug, articleState)` — per-dropdown contributor jogosultság: vezetők (`LEADER_TEAMS`) mindig, nem-vezetők csak a saját csapatjuknak megfelelő dropdown-ot, és csak a `STATE_PERMISSIONS` szerinti állapotaikban. Label-ek ugyanúgy kiterjesztik a hozzáférést.
+      - `useElementPermission(key)` / `useElementPermissions(keys[])` / `useContributorPermissions(articleState)` hookok (`useElementPermission.js`) — React komponensekben.
+      - **Kompozíció**: `disabled={isIgnored || isSyncing || !perm.allowed}` + tooltip a `reason`-nel.
+    - **Konfiguráció**: `workflowConstants.js` (`STATE_PERMISSIONS`, `TEAM_ARTICLE_FIELD`), `workflowPermissions.js` (`canUserMoveArticle`), `elementPermissions.js` (UI elem jogosultságok).
     - Ld. `docs/WORKFLOW_PERMISSIONS.md`
 
 6. **Kapcsolat-helyreállítás (RecoveryManager) & Dual-Proxy Failover**
@@ -234,6 +241,7 @@ Maestro/
 │   │           ├── workflowConstants.js   ← Állapotok, átmenetek, jogosultságok, STATE_PERMISSIONS
 │   │           ├── workflowEngine.js      ← executeTransition (→ StateComplianceValidator), lockDocument, unlockDocument
 │   │           ├── workflowPermissions.js ← canUserMoveArticle, hasTransitionPermission
+│   │           ├── elementPermissions.js  ← UI elem jogosultságok (konfig + checkElementPermission + canUserAccessInState)
 │   │           └── index.js
 │   │
 │   ├── data/                     ← Adat hook-ok réteg (Context ↔ UI híd)
@@ -248,7 +256,8 @@ Maestro/
 │   │       ├── useOverlapValidation.js          ← Átfedés detektálás esemény-feliratkozó hook
 │   │       ├── useDeadlines.js                  ← Határidők CRUD
 │   │       ├── useLayouts.js                    ← Layoutok CRUD + layoutChanged esemény
-│   │       └── useUrgency.js                    ← Sürgősség-számítás hook (percenkénti frissítés)
+│   │       ├── useUrgency.js                    ← Sürgősség-számítás hook (percenkénti frissítés)
+│   │       └── useElementPermission.js          ← UI elem jogosultság hookok (useElementPermission, useElementPermissions)
 │   │
 │   ├── ui/                       ← React Komponensek
 │   │   ├── common/               ← Újrafelhasználható UI elemek

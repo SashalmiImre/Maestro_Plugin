@@ -55,7 +55,7 @@ const ROLE_LABELS = {
  * @param {Object} props.publication - A kiadvány objektum
  * @param {Function} props.onFieldUpdate - Mező frissítés callback: (fieldName, value) => void
  */
-export const ContributorsSection = ({ publication, onFieldUpdate }) => {
+export const ContributorsSection = ({ publication, onFieldUpdate, disabled, permissionReason }) => {
     // Mount-kor a cache invalidálása, hogy friss csapattaglistát kérjünk
     useEffect(() => {
         invalidateTeamMembersCache();
@@ -167,6 +167,8 @@ export const ContributorsSection = ({ publication, onFieldUpdate }) => {
                             emptyLabel="Nincs hozzárendelve"
                             value={publication.defaultWriterId}
                             onChange={(val) => handleDropdownChange('defaultWriterId', val)}
+                            disabled={disabled || undefined}
+                            title={disabled ? permissionReason : undefined}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -186,6 +188,8 @@ export const ContributorsSection = ({ publication, onFieldUpdate }) => {
                             emptyLabel="Nincs hozzárendelve"
                             value={publication.defaultImageEditorId}
                             onChange={(val) => handleDropdownChange('defaultImageEditorId', val)}
+                            disabled={disabled || undefined}
+                            title={disabled ? permissionReason : undefined}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -209,6 +213,8 @@ export const ContributorsSection = ({ publication, onFieldUpdate }) => {
                             emptyLabel="Nincs hozzárendelve"
                             value={publication.defaultEditorId}
                             onChange={(val) => handleDropdownChange('defaultEditorId', val)}
+                            disabled={disabled || undefined}
+                            title={disabled ? permissionReason : undefined}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -228,6 +234,8 @@ export const ContributorsSection = ({ publication, onFieldUpdate }) => {
                             emptyLabel="Nincs hozzárendelve"
                             value={publication.defaultDesignerId}
                             onChange={(val) => handleDropdownChange('defaultDesignerId', val)}
+                            disabled={disabled || undefined}
+                            title={disabled ? permissionReason : undefined}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -251,6 +259,8 @@ export const ContributorsSection = ({ publication, onFieldUpdate }) => {
                             emptyLabel="Nincs hozzárendelve"
                             value={publication.defaultManagingEditorId}
                             onChange={(val) => handleDropdownChange('defaultManagingEditorId', val)}
+                            disabled={disabled || undefined}
+                            title={disabled ? permissionReason : undefined}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -270,6 +280,8 @@ export const ContributorsSection = ({ publication, onFieldUpdate }) => {
                             emptyLabel="Nincs hozzárendelve"
                             value={publication.defaultArtDirectorId}
                             onChange={(val) => handleDropdownChange('defaultArtDirectorId', val)}
+                            disabled={disabled || undefined}
+                            title={disabled ? permissionReason : undefined}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -293,6 +305,8 @@ export const ContributorsSection = ({ publication, onFieldUpdate }) => {
                             emptyLabel="Nincs hozzárendelve"
                             value={publication.defaultProofwriterId}
                             onChange={(val) => handleDropdownChange('defaultProofwriterId', val)}
+                            disabled={disabled || undefined}
+                            title={disabled ? permissionReason : undefined}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">

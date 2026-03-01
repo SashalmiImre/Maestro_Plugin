@@ -106,7 +106,7 @@ const renderPreflightBlock = (text, index, cardStyle) => {
 
 // ── ValidationItem Component ───────────────────────────────────────────────────
 
-const ValidationItem = ({ item, index, teamMembers, onSolve, onDowngrade, isDarkTheme }) => {
+const ValidationItem = ({ item, index, teamMembers, onSolve, onDowngrade, isDarkTheme, actionsAllowed = true }) => {
     const [isHovered, setIsHovered] = useState(false);
     const config = VALIDATION_TYPE_CONFIG[item.type] || VALIDATION_TYPE_CONFIG.INFO;
     const isResolved = item.isResolved;
@@ -190,14 +190,14 @@ const ValidationItem = ({ item, index, teamMembers, onSolve, onDowngrade, isDark
                 {/* Actions */}
                 <div style={{ marginLeft: "8px" }}>
                     {/* System Error -> Warning (Downgrade) */}
-                    {item.isSystem && item.type === VALIDATION_TYPES.ERROR && item.contextId && (
+                    {item.isSystem && item.type === VALIDATION_TYPES.ERROR && item.contextId && actionsAllowed && (
                         <sp-action-button size="s" quiet onClick={() => onDowngrade(item)} title="Hiba visszaminősítése figyelmeztetéssé">
                             <svg slot="icon" viewBox="0 0 18 18"><path d="M9 13.5a.75.75 0 0 1-.75-.75V8.25a.75.75 0 0 1 1.5 0v4.5A.75.75 0 0 1 9 13.5zm0-7.5a.75.75 0 1 1 .75.75A.75.75 0 0 1 9 6zM9 1.5a7.5 7.5 0 1 0 7.5 7.5A7.5 7.5 0 0 0 9 1.5z" /></svg>
                         </sp-action-button>
                     )}
 
                     {/* User Message -> Solved */}
-                    {!item.isSystem && !isResolved && (
+                    {!item.isSystem && !isResolved && actionsAllowed && (
                         <sp-button size="s" variant="primary" quiet onClick={() => onSolve(item)} title="Megoldva">
                             ✓
                         </sp-button>
@@ -208,7 +208,7 @@ const ValidationItem = ({ item, index, teamMembers, onSolve, onDowngrade, isDark
     );
 };
 
-export const ValidationSection = ({ article, disabled }) => {
+export const ValidationSection = ({ article, disabled, permissions }) => {
     const { user } = useUser();
     const { unifiedList, isLoading, addValidation, resolveValidation, downgradeSystemError } = useUnifiedValidation(article);
     const { showToast } = useToast();
@@ -359,7 +359,7 @@ export const ValidationSection = ({ article, disabled }) => {
                                 value={newItemType}
                                 onChange={setNewItemType}
                                 placeholder="Típus"
-                                disabled={disabled || undefined}
+                                disabled={disabled || !permissions?.validationForm?.allowed || undefined}
                                 style={{ width: "100%" }}
                             >
                                 <sp-menu slot="options">
@@ -376,7 +376,7 @@ export const ValidationSection = ({ article, disabled }) => {
                                 value={selectedRecipient}
                                 onChange={setSelectedRecipient}
                                 placeholder="Címzett..."
-                                disabled={disabled || undefined}
+                                disabled={disabled || !permissions?.validationForm?.allowed || undefined}
                                 style={{ width: "100%" }}
                             >
                                 <sp-menu slot="options">
@@ -393,14 +393,14 @@ export const ValidationSection = ({ article, disabled }) => {
                             placeholder="Írd le a problémát..."
                             value={description}
                             onInput={(e) => setDescription(e.target.value)}
-                            disabled={disabled || undefined}
+                            disabled={disabled || !permissions?.validationForm?.allowed || undefined}
                             style={{ flex: 1, marginRight: "8px" }}
                         ></sp-textfield>
 
                         <sp-button
                             variant="primary"
                             onClick={handleSend}
-                            disabled={disabled || isSending ? true : undefined}
+                            disabled={disabled || isSending || !permissions?.validationForm?.allowed ? true : undefined}
                         >
                             Küldés
                         </sp-button>
@@ -431,6 +431,7 @@ export const ValidationSection = ({ article, disabled }) => {
                             onSolve={handleSolve}
                             onDowngrade={handleDowngrade}
                             isDarkTheme={isDarkTheme}
+                            actionsAllowed={permissions?.validationActions?.allowed !== false}
                         />
                     ))}
                 </div>

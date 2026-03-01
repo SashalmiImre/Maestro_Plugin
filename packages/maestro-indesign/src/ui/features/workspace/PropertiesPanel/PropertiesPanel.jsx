@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import { ArticleProperties } from "../../articles/ArticleProperties/ArticleProperties.jsx";
 import { PublicationProperties } from "../../publications/PublicationProperties/PublicationProperties.jsx";
 import { WORKFLOW_CONFIG, MARKERS } from "../../../../core/utils/workflow/workflowConstants.js";
@@ -9,6 +9,8 @@ import { useData } from "../../../../core/contexts/DataContext.jsx";
 import { useToast } from "../../../common/Toast/ToastContext.jsx";
 import { TOAST_TYPES } from "../../../../core/utils/constants.js";
 import { executeCommand } from "../../../../core/commands/index.js";
+import { useElementPermissions } from "../../../../data/hooks/useElementPermission.js";
+import { canUserAccessInState } from "../../../../core/utils/workflow/elementPermissions.js";
 
 export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onPublicationUpdate, onBack, onOpen, runAndPersistPreflight }) => {
     // Hooks
@@ -17,6 +19,13 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
     const { showToast } = useToast();
     const [isSyncing, setIsSyncing] = useState(false);
     const [hasDeadlineErrors, setHasDeadlineErrors] = useState(false);
+
+    // Elem jogosultságok
+    const perm = useElementPermissions(['ignoreToggle']);
+    const stateAccess = useMemo(
+        () => type === 'article' ? canUserAccessInState(user, selectedItem?.state) : { allowed: true },
+        [type, user?.teamIds, user?.labels, selectedItem?.state]
+    );
 
     // Defensive guard
     const item = selectedItem || {};
@@ -137,7 +146,8 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
                     <sp-button
                         variant="accent"
                         onClick={handleOpen}
-                        disabled={!canOpen || undefined}
+                        disabled={!canOpen || !stateAccess.allowed || undefined}
+                        title={!stateAccess.allowed ? stateAccess.reason : undefined}
                     >
                         Megnyitás
                     </sp-button>
@@ -168,7 +178,7 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
                                 key={cmd.id}
                                 variant="secondary"
                                 onClick={() => handleCommand(cmd.id)}
-                                disabled={isIgnored || isSyncing || undefined}
+                                disabled={isIgnored || isSyncing || !stateAccess.allowed || undefined}
                                 size="s"
                             >
                                 {cmd.label}
@@ -180,7 +190,8 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
                     <CustomCheckbox
                         checked={isIgnored}
                         onChange={handleToggleIgnore}
-                        disabled={isSyncing}
+                        disabled={isSyncing || !perm.ignoreToggle.allowed}
+                        title={!perm.ignoreToggle.allowed ? perm.ignoreToggle.reason : undefined}
                         style={{ marginLeft: "8px", flexShrink: 0 }}
                     >
                         Kimarad

@@ -41,11 +41,40 @@ import { STORAGE_KEYS } from "../../../../core/utils/constants.js";
  * @param {Function} props.onFieldUpdate - Callback to update article field: (fieldName, userId) => void
  * @returns {JSX.Element} The ContributorsSection component
  */
-export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
+/**
+ * Cikk contributor mező → csapat slug leképezés.
+ * A contributorPermissions objektum kulcsa a teamSlug.
+ */
+const FIELD_TO_TEAM = {
+    writerId:         "writers",
+    editorId:         "editors",
+    imageEditorId:    "imageEditors",
+    designerId:       "designers",
+    proofwriterId:    "proofwriters",
+    artDirectorId:    "artDirectors",
+    managingEditorId: "managingEditors"
+};
+
+export const ContributorsSection = ({ article, onFieldUpdate, disabled, contributorPermissions = {} }) => {
     // Mount-kor a cache invalidálása, hogy friss csapattaglistát kérjünk
     useEffect(() => {
         invalidateTeamMembersCache();
     }, []);
+
+    /** Meghatározza, hogy az adott contributor dropdown disabled-e. */
+    const isDropdownDisabled = (fieldName) => {
+        if (disabled) return true;
+        const teamSlug = FIELD_TO_TEAM[fieldName];
+        const perm = contributorPermissions[teamSlug];
+        return perm ? !perm.allowed : false;
+    };
+
+    /** Visszaadja a tooltip reason-t az adott dropdown-hoz. */
+    const getDropdownReason = (fieldName) => {
+        if (disabled) return undefined;
+        const teamSlug = FIELD_TO_TEAM[fieldName];
+        return contributorPermissions[teamSlug]?.reason;
+    };
 
     // Fetch team members for each role
     const { members: editors } = useTeamMembers(TEAMS.EDITORS);
@@ -74,7 +103,8 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
                             emptyLabel="Nincs hozzárendelve"
                             value={article.writerId}
                             onChange={(val) => onFieldUpdate('writerId', val || null)}
-                            disabled={disabled || undefined}
+                            disabled={isDropdownDisabled('writerId') || undefined}
+                            title={getDropdownReason('writerId')}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -94,7 +124,8 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
                             emptyLabel="Nincs hozzárendelve"
                             value={article.imageEditorId}
                             onChange={(val) => onFieldUpdate('imageEditorId', val || null)}
-                            disabled={disabled || undefined}
+                            disabled={isDropdownDisabled('imageEditorId') || undefined}
+                            title={getDropdownReason('imageEditorId')}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -118,7 +149,8 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
                             emptyLabel="Nincs hozzárendelve"
                             value={article.editorId}
                             onChange={(val) => onFieldUpdate('editorId', val || null)}
-                            disabled={disabled || undefined}
+                            disabled={isDropdownDisabled('editorId') || undefined}
+                            title={getDropdownReason('editorId')}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -138,7 +170,8 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
                             emptyLabel="Nincs hozzárendelve"
                             value={article.designerId}
                             onChange={(val) => onFieldUpdate('designerId', val || null)}
-                            disabled={disabled || undefined}
+                            disabled={isDropdownDisabled('designerId') || undefined}
+                            title={getDropdownReason('designerId')}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -162,7 +195,8 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
                             emptyLabel="Nincs hozzárendelve"
                             value={article.managingEditorId}
                             onChange={(val) => onFieldUpdate('managingEditorId', val || null)}
-                            disabled={disabled || undefined}
+                            disabled={isDropdownDisabled('managingEditorId') || undefined}
+                            title={getDropdownReason('managingEditorId')}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -182,7 +216,8 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
                             emptyLabel="Nincs hozzárendelve"
                             value={article.artDirectorId}
                             onChange={(val) => onFieldUpdate('artDirectorId', val || null)}
-                            disabled={disabled || undefined}
+                            disabled={isDropdownDisabled('artDirectorId') || undefined}
+                            title={getDropdownReason('artDirectorId')}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">
@@ -206,7 +241,8 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled }) => {
                             emptyLabel="Nincs hozzárendelve"
                             value={article.proofwriterId}
                             onChange={(val) => onFieldUpdate('proofwriterId', val || null)}
-                            disabled={disabled || undefined}
+                            disabled={isDropdownDisabled('proofwriterId') || undefined}
+                            title={getDropdownReason('proofwriterId')}
                             style={{ width: "100%" }}
                         >
                             <sp-menu slot="options" size="m">

@@ -1,10 +1,13 @@
-import React, { useState } from "react";
+import React from "react";
 
 // Feature Components
 import { GeneralSection } from "./GeneralSection.jsx";
 import { ContributorsSection } from "./ContributorsSection.jsx";
 import { LayoutsSection } from "./LayoutsSection.jsx";
 import { DeadlinesSection } from "./DeadlinesSection.jsx";
+
+// Hooks
+import { useElementPermissions } from "../../../../data/hooks/useElementPermission.js";
 
 /**
  * PublicationProperties Component
@@ -20,6 +23,12 @@ import { DeadlinesSection } from "./DeadlinesSection.jsx";
  * @param {Function} [props.onValidationChange] - Validáció állapot callback: (hasErrors: boolean) => void
  */
 export const PublicationProperties = ({ publication, onFieldUpdate, onValidationChange }) => {
+    // Kiadvány-szintű elem jogosultságok
+    const perm = useElementPermissions([
+        'publicationGeneral', 'publicationLayouts',
+        'publicationDeadlines', 'publicationContributors'
+    ]);
+
     return (
         <div style={{
             padding: "16px",
@@ -42,21 +51,29 @@ export const PublicationProperties = ({ publication, onFieldUpdate, onValidation
                 <GeneralSection
                     publication={publication}
                     onFieldUpdate={onFieldUpdate}
+                    disabled={!perm.publicationGeneral.allowed}
+                    permissionReason={perm.publicationGeneral.reason}
                 />
 
                 <LayoutsSection
                     publication={publication}
+                    disabled={!perm.publicationLayouts.allowed}
+                    permissionReason={perm.publicationLayouts.reason}
                 />
 
                 <DeadlinesSection
                     publication={publication}
                     onFieldUpdate={onFieldUpdate}
                     onValidationChange={onValidationChange}
+                    disabled={!perm.publicationDeadlines.allowed}
+                    permissionReason={perm.publicationDeadlines.reason}
                 />
 
                 <ContributorsSection
                     publication={publication}
                     onFieldUpdate={onFieldUpdate}
+                    disabled={!perm.publicationContributors.allowed}
+                    permissionReason={perm.publicationContributors.reason}
                 />
             </div>
         </div>
