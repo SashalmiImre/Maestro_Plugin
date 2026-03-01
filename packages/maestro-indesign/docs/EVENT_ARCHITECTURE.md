@@ -57,6 +57,7 @@ Rendszer-szintű események a session kezeléshez és komponens zároláshoz.
 | **Ellenőrzés Indult**      | `verificationStarted`  | `DocumentMonitor`                | `undefined` | Jelzi a `LockManager`-nek, hogy SZÜNETELTESSE a felhasználói zárolást (Maestro dolgozik). |
 | **Ellenőrzés Befejeződött** | `verificationEnded`    | `DocumentMonitor`                | `undefined` | Jelzi a `LockManager`-nek, hogy FOLYTASSA a felhasználói zárolást.          |
 | **Endpoint Váltás**         | `endpointSwitched`     | `EndpointManager`                | `{ isPrimary, endpoint }` | Proxy endpoint váltás történt (primary ↔ fallback). Toast értesítést jelenít meg. |
+| **Csapattagság Változott**  | `teamMembershipChanged`| `DataContext` (Realtime)         | `{ teamId }`              | Csapattag hozzáadva/eltávolítva. A `useTeamMembers` hook cache-t invalidál és újralekér. |
 
 ## Eseményfolyamatok (Szekvencia Diagramok)
 

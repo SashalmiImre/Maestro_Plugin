@@ -24,6 +24,7 @@ import { log, logError } from "../utils/logger.js";
 import { withTimeout, withRetry } from "../utils/promiseUtils.js";
 import { isNetworkError, isAuthError } from "../utils/errorUtils.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../config/maestroEvents.js";
+import { FETCH_TIMEOUT_CONFIG, TOAST_TYPES } from "../utils/constants.js";
 
 /** Név szerinti komparátor rendezéshez. */
 const compareByName = (a, b) => (a?.name ?? '').localeCompare(b?.name ?? '');
@@ -133,7 +134,7 @@ export const DataProvider = ({ children }) => {
                             Query.notEqual("$id", cacheBustId)
                         ]
                     }),
-                    10000, "fetchPublications"
+                    FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS, "fetchPublications"
                 ),
                 { operationName: "fetchPublications" }
             );
@@ -156,7 +157,7 @@ export const DataProvider = ({ children }) => {
                                 Query.notEqual("$id", cacheBustId)
                             ]
                         }),
-                        10000, "fetchArticles"
+                        FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS, "fetchArticles"
                     ),
                     { operationName: "fetchArticles" }
                 );
@@ -172,7 +173,7 @@ export const DataProvider = ({ children }) => {
                                 Query.limit(100)
                             ]
                         }),
-                        8000, "fetchLayouts"
+                        FETCH_TIMEOUT_CONFIG.NON_CRITICAL_DATA_MS, "fetchLayouts"
                     ),
                     { operationName: "fetchLayouts" }
                 );
@@ -188,7 +189,7 @@ export const DataProvider = ({ children }) => {
                                 Query.limit(100)
                             ]
                         }),
-                        8000, "fetchDeadlines"
+                        FETCH_TIMEOUT_CONFIG.NON_CRITICAL_DATA_MS, "fetchDeadlines"
                     ),
                     { operationName: "fetchDeadlines" }
                 );
@@ -231,7 +232,7 @@ export const DataProvider = ({ children }) => {
                 setLayouts(layoutList.sort(compareByOrder));
             } else {
                 logError('[DataContext] Layoutok lekérése sikertelen:', layoutsResult.reason);
-                showToast('Layoutok betöltése sikertelen', 'error', 'A layoutok nem töltődtek be. Próbáld újra később.');
+                showToast('Layoutok betöltése sikertelen', TOAST_TYPES.ERROR, 'A layoutok nem töltődtek be. Próbáld újra később.');
             }
 
             // Határidők feldolgozása (nem-kritikus — allSettled)
@@ -240,7 +241,7 @@ export const DataProvider = ({ children }) => {
                 setDeadlines(deadlineList.sort(compareByStartPage));
             } else {
                 logError('[DataContext] Határidők lekérése sikertelen:', deadlinesResult.reason);
-                showToast('Határidők betöltése sikertelen', 'error', 'A határidők nem töltődtek be. Próbáld újra később.');
+                showToast('Határidők betöltése sikertelen', TOAST_TYPES.ERROR, 'A határidők nem töltődtek be. Próbáld újra később.');
             }
 
             // 3. Validációk lekérése (Ha vannak cikkek)
@@ -266,7 +267,7 @@ export const DataProvider = ({ children }) => {
                                     Query.limit(chunkIds.length * 5)
                                 ]
                             }),
-                            10000, "fetchValidationChunk"
+                            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS, "fetchValidationChunk"
                         ),
                         { operationName: "fetchValidationChunk" }
                     )
@@ -309,14 +310,14 @@ export const DataProvider = ({ children }) => {
                 // Timeout ≠ offline: a szerver elérhető lehet, csak a lekérés lassú
                 const isTimeout = error.message?.includes('időtúllépés');
                 if (isTimeout) {
-                    showToast('Lassú kapcsolat', 'warning', 'Az adatlekérés időtúllépés miatt megszakadt.');
+                    showToast('Lassú kapcsolat', TOAST_TYPES.WARNING, 'Az adatlekérés időtúllépés miatt megszakadt.');
                 } else {
                     // Valódi hálózati hiba — offline overlay
                     const attempts = incrementAttempts();
                     setOffline(error, attempts);
                 }
             } else {
-                showToast('Adatok betöltése sikertelen', 'error', error.message);
+                showToast('Adatok betöltése sikertelen', TOAST_TYPES.ERROR, error.message);
             }
         } finally {
             if (connectingDelayTimerId) clearTimeout(connectingDelayTimerId);
@@ -396,7 +397,7 @@ export const DataProvider = ({ children }) => {
                 rowId: ID.unique(),
                 data
             }),
-            10000,
+            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: createPublication"
         );
         setPublications(prev => {
@@ -421,7 +422,7 @@ export const DataProvider = ({ children }) => {
                 rowId: publicationId,
                 data
             }),
-            10000,
+            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: updatePublication"
         );
         setPublications(prev => prev.map(publication => publication.$id === publicationId ? result : publication).sort(compareByName));
@@ -440,7 +441,7 @@ export const DataProvider = ({ children }) => {
                 tableId: PUBLICATIONS_COLLECTION_ID,
                 rowId: publicationId
             }),
-            10000,
+            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: deletePublication"
         );
         setPublications(prev => prev.filter(publication => publication.$id !== publicationId));
@@ -464,7 +465,7 @@ export const DataProvider = ({ children }) => {
                 rowId: ID.unique(),
                 data
             }),
-            10000,
+            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: createArticle"
         );
         setArticles(prev => {
@@ -508,7 +509,7 @@ export const DataProvider = ({ children }) => {
                 tableId: ARTICLES_COLLECTION_ID,
                 rowId: articleId
             }),
-            10000,
+            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: deleteArticle"
         );
         setArticles(prev => prev.filter(article => article.$id !== articleId));
@@ -544,7 +545,7 @@ export const DataProvider = ({ children }) => {
                 rowId: ID.unique(),
                 data
             }),
-            10000,
+            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: createValidation"
         );
         const normalized = { ...result, id: result.$id, $id: result.$id };
@@ -570,7 +571,7 @@ export const DataProvider = ({ children }) => {
                 rowId: validationId,
                 data
             }),
-            10000,
+            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: updateValidation"
         );
         const normalized = { ...result, id: result.$id, $id: result.$id };
@@ -590,7 +591,7 @@ export const DataProvider = ({ children }) => {
                 tableId: USER_VALIDATIONS_COLLECTION_ID,
                 rowId: validationId
             }),
-            10000,
+            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: deleteValidation"
         );
         setValidations(prev => prev.filter(validation => validation.$id !== validationId));
@@ -614,7 +615,7 @@ export const DataProvider = ({ children }) => {
                 rowId: ID.unique(),
                 data
             }),
-            10000,
+            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: createLayout"
         );
         setLayouts(prev => {
@@ -639,7 +640,7 @@ export const DataProvider = ({ children }) => {
                 rowId: layoutId,
                 data
             }),
-            10000,
+            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: updateLayout"
         );
         setLayouts(prev => prev.map(layout => layout.$id === layoutId ? result : layout).sort(compareByOrder));
@@ -658,7 +659,7 @@ export const DataProvider = ({ children }) => {
                 tableId: LAYOUTS_COLLECTION_ID,
                 rowId: layoutId
             }),
-            10000,
+            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: deleteLayout"
         );
         setLayouts(prev => prev.filter(layout => layout.$id !== layoutId));
@@ -682,7 +683,7 @@ export const DataProvider = ({ children }) => {
                 rowId: ID.unique(),
                 data
             }),
-            10000,
+            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: createDeadline"
         );
         setDeadlines(prev => {
@@ -707,7 +708,7 @@ export const DataProvider = ({ children }) => {
                 rowId: deadlineId,
                 data
             }),
-            10000,
+            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: updateDeadline"
         );
         setDeadlines(prev => prev.map(deadline => deadline.$id === deadlineId ? result : deadline).sort(compareByStartPage));
@@ -726,7 +727,7 @@ export const DataProvider = ({ children }) => {
                 tableId: DEADLINES_COLLECTION_ID,
                 rowId: deadlineId
             }),
-            10000,
+            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: deleteDeadline"
         );
         setDeadlines(prev => prev.filter(deadline => deadline.$id !== deadlineId));
@@ -746,7 +747,8 @@ export const DataProvider = ({ children }) => {
             `databases.${DATABASE_ID}.collections.${ARTICLES_COLLECTION_ID}.documents`,
             `databases.${DATABASE_ID}.collections.${USER_VALIDATIONS_COLLECTION_ID}.documents`,
             `databases.${DATABASE_ID}.collections.${LAYOUTS_COLLECTION_ID}.documents`,
-            `databases.${DATABASE_ID}.collections.${DEADLINES_COLLECTION_ID}.documents`
+            `databases.${DATABASE_ID}.collections.${DEADLINES_COLLECTION_ID}.documents`,
+            'teams'
         ];
 
         const unsubscribe = realtime.subscribe(channels, (response) => {
@@ -881,6 +883,14 @@ export const DataProvider = ({ children }) => {
                         return prev;
                     });
                 }
+            }
+
+            // --- Csapattagság ---
+            // A `teams` csatornáról jövő membership események (pl. teams.designers.memberships.*.create)
+            else if (event.includes('teams.') && event.includes('.memberships.')) {
+                const teamId = payload.teamId;
+                log(`[DataContext] Csapattagság változás (Realtime): team=${teamId}`);
+                dispatchMaestroEvent(MaestroEvent.teamMembershipChanged, { teamId });
             }
         });
 

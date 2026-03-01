@@ -5,6 +5,7 @@ A munkafolyamat állapotátmeneteit csapat-alapú jogosultsági rendszer védi. 
 **Forrásfájlok:**
 - Konfiguráció: `src/core/utils/workflow/workflowConstants.js` (`STATE_PERMISSIONS`, `TEAM_ARTICLE_FIELD`)
 - Logika: `src/core/utils/workflow/workflowPermissions.js` (`canUserMoveArticle`, `hasTransitionPermission`)
+- User adatok: `src/core/contexts/UserContext.jsx` (`user.teamIds`, `user.labels`)
 
 ---
 
@@ -41,6 +42,19 @@ Meghatározza, melyik csapat melyik cikkmező értékéhez van kötve a jogosult
 
 ---
 
+## Kétszintű jogosultság
+
+A jogosultság két egymást kiegészítő forrásból származik:
+
+| Forrás | Mező | Beállítás | Cél |
+|--------|------|-----------|-----|
+| **Csapattagság** | `user.teamIds` | Appwrite Console → Teams → tag hozzáadás | Alap jogosultság a munkahelyi pozíció alapján |
+| **Label override** | `user.labels` | Appwrite Console → User → Labels | Plusz jogosultságok egyedi hozzárendeléssel |
+
+Mindkettő csapat slug-okat tartalmaz (pl. `"designers"`, `"editors"`). A permission ellenőrzés mindkettőt vizsgálja — ha **bármelyikben** megtalálható a releváns csapat slug-ja, a jogosultság megvan.
+
+---
+
 ## Jogosultsági logika
 
 A `canUserMoveArticle(article, currentState, user)` függvény dönt:
@@ -50,13 +64,13 @@ A `canUserMoveArticle(article, currentState, user)` függvény dönt:
    └─ IGEN → bárki mozgathatja (pl. ARCHIVABLE végállapot)
 
 2. A releváns csapatok contributor mezőiből van-e bárki hozzárendelve?
-   └─ NEM → csak a releváns csapatok tagjai mozgathatják (labels ellenőrzés)
+   └─ NEM → csapattagság (teamIds) VAGY label szükséges
 
 3. A jelenlegi felhasználó az egyik hozzárendelt személy?
    └─ IGEN → mozgathatja (saját anyag)
 
-4. A felhasználó labels tömbje tartalmazza valamelyik releváns csapat slug-ját?
-   └─ IGEN → mozgathatja (label override)
+4. A felhasználó csapat tagja (teamIds) VAGY labels tartalmazza a releváns slug-ot?
+   └─ IGEN → mozgathatja (csapattagság / label override)
 
 5. Egyik sem teljesül → NEM mozgathatja
 ```
@@ -66,24 +80,27 @@ A `canUserMoveArticle(article, currentState, user)` függvény dönt:
 Egy cikk `DESIGN_APPROVAL` (1) állapotban van, `artDirectorId = "user_A"`:
 
 - **user_A** kiválasztja → **mozgathatja** (ő a hozzárendelt Art Director)
-- **user_B** (Art Directors csapat tagja, de nincs hozzárendelve) → **NEM mozgathatja** (van hozzárendelt, de nem ő az)
+- **user_B** (Art Directors csapat tagja) → **mozgathatja** (csapattagság)
 - **user_C** (`labels: ["artDirectors"]`) → **mozgathatja** (label override)
-- Ha az `artDirectorId` **üres** → csak az Art Directors csapat tagjai (`labels: ["artDirectors"]`) mozgathatják
+- **user_D** (nem tag, nincs label) → **NEM mozgathatja**
+- Ha az `artDirectorId` **üres** → csak az Art Directors csapat tagjai (`teamIds` vagy `labels`) mozgathatják
 
 ---
 
-## Label Override
+## Realtime szinkronizáció
 
-Az Appwrite felhasználók `labels` tömbje (Server SDK-ból vagy Console-ból állítható) felülírhatja a hozzárendelés-alapú jogosultságot.
+### Csapattagság (`user.teamIds`)
+A `UserContext` a `teams.list()` API-val kérdezi le a bejelentkezett felhasználó csapatait. A `teamIds` mező frissül:
+- **Login**: `enrichUserWithTeams()` → `teams.list()` → `user.teamIds`
+- **App indulás**: `checkUserStatus` → `enrichUserWithTeams()`
+- **Team tagság változás**: `teams` Realtime csatorna → `teamMembershipChanged` MaestroEvent → `teams.list()` → `user.teamIds` frissül
+- **Recovery** (sleep/wake): `dataRefreshRequested` → `account.get()` + `teams.list()` → teljes frissítés
 
-**Használati eset:** Egy főszerkesztő, aki bármely cikket mozgathat a szerkesztői állapotokból, anélkül hogy minden cikkhez hozzá kellene rendelni.
+### Labels (`user.labels`)
+- **Login/Recovery**: `account.get()` → `user.labels`
+- **Realtime**: `account` csatorna → payload tartalmazza a friss `labels` tömböt
 
-**Beállítás:** Az Appwrite Console-ban a felhasználó `labels` tömbjébe a csapat slug-ját kell felvenni:
-```
-labels: ["editors", "managingEditors"]
-```
-
-**Realtime szinkron:** A `labels` tömb a bejelentkezéskor kerül lekérdezésre (`account.get()`), majd az Appwrite Realtime `account` csatornán keresztül automatikusan frissül, ha az admin megváltoztatja a szerveren. Nem szükséges újra bejelentkezni vagy a plugint újratölteni.
+Mindkét szinkronizáció azonnali UI frissítést eredményez (a `user` state változása React re-render-t vált ki).
 
 ---
 
@@ -123,7 +140,7 @@ A jogosultsági rendszer az alábbi contributor mezőket használja a cikkeken:
 | `artDirectorId` | string (36) | Művészeti vezető | Művészeti vezető |
 | `managingEditorId` | string (36) | Vezetőszerkesztő | Vezetőszerkesztő |
 
-A dropdown-ok a `ContributorsSection.jsx` komponensben találhatók, és a `useTeamMembers` hook-kal kérdezik le az egyes csapatok tagjait.
+A dropdown-ok a `ContributorsSection.jsx` komponensben találhatók, és a `useTeamMembers` hook-kal kérdezik le az egyes csapatok tagjait (Realtime szinkronnal).
 
 ---
 

@@ -121,9 +121,10 @@
 
 5. **Jogosultsági Rendszer (Workflow Permissions)**
     - **Állapot-alapú**: Minden workflow állapothoz csapatok vannak rendelve (`STATE_PERMISSIONS`), amelyek mozgathatják a cikkeket onnan.
-    - **Fallback**: Ha nincs senki hozzárendelve a releváns csapatok contributor mezőiből → csak a releváns csapatok tagjai mozgathatják (labels ellenőrzés).
-    - **Label override**: Appwrite user `labels` tömb felülírja a jogosultságot (team slug = label).
+    - **Kétszintű jogosultság**: (1) **Csapattagság** (`user.teamIds`) — alap jogosultság a munkahelyi pozíció alapján (`teams.list()` lekérés login/recovery/Realtime-kor). (2) **Label override** (`user.labels`) — plusz jogosultságok adminisztrátori hozzárendeléssel.
+    - **Fallback**: Ha nincs senki hozzárendelve a releváns csapatok contributor mezőiből → csapattagság VAGY label szükséges.
     - **Háromszintű védelem**: UI gomb disabled → handler toast → engine guard.
+    - **Realtime szinkron**: A `teams` Realtime csatorna → `teamMembershipChanged` MaestroEvent → UserContext frissíti a `user.teamIds`-t → UI azonnal reagál.
     - **Konfiguráció**: `workflowConstants.js` (`STATE_PERMISSIONS`, `TEAM_ARTICLE_FIELD`), `workflowPermissions.js` (`canUserMoveArticle`).
     - Ld. `docs/WORKFLOW_PERMISSIONS.md`
 
@@ -239,7 +240,7 @@ Maestro/
 │   │   └── hooks/
 │   │       ├── useArticles.js                   ← CRUD + megnyitás/bezárás + szűrés kiadvány szerint
 │   │       ├── usePublications.js               ← CRUD + lefedettség kezelés
-│   │       ├── useTeamMembers.js                ← Csapattagok listázása
+│   │       ├── useTeamMembers.js                ← Csapattagok listázása (Realtime szinkronnal)
 │   │       ├── useUserValidations.js            ← Felhasználói validációs üzenetek CRUD
 │   │       ├── useUnifiedValidation.js          ← Rendszer + felhasználói validációk összefésülése
 │   │       ├── useWorkflowValidation.js         ← Preflight + workflow validáció (esemény-vezérelt)
@@ -318,6 +319,9 @@ InDesign `afterSave` → `DocumentMonitor` → `dispatch(documentSaved)` → Val
 ### Realtime Adatfolyam
 Appwrite DB változás → WebSocket esemény → `realtimeClient.js` → `DataContext` handler → `setArticles()`/`setPublications()` → React újra-renderelési kaszkád.
 
+### Csapattagság Szinkronizáció
+Appwrite `memberships` Realtime csatorna → `DataContext` handler → `teamMembershipChanged` MaestroEvent → `useTeamMembers` hook cache invalidálás + Cloud Function újralekérés. Recovery-nél (`dataRefreshRequested`) szintén frissül.
+
 > Részletes diagram: `docs/diagrams/data-flow-architecture.md`
 
 ### Kapcsolat-helyreállítás (Sleep/Wake)
@@ -387,8 +391,9 @@ index.jsx
 - `isOnline`, `isConnecting` — UI indikátorokhoz (spinner, overlay)
 
 ### ValidationContext API
-- `getArticleValidation(articleId)`, `getPublicationValidation(pubId)`
-- `updateArticleValidation(articleId, results)`, `updatePublicationValidation(pubId, results)`
+- `validationResults` — összefésült Map (articleId → { errors, warnings })
+- `updateArticleValidation(articleId, source, results)`, `updatePublicationValidation(pubId, source, results)`
+- `clearArticleValidation(articleId, source)` — egy forrás eredményeinek törlése
 
 ---
 

@@ -3,6 +3,11 @@
  * Meghatározza, hogy egy adott felhasználó mozgathatja-e a cikket
  * a jelenlegi állapotából.
  *
+ * Jogosultsági források (prioritás sorrendben):
+ * 1. Hozzárendelt felhasználó (article contributor mező) — közvetlen jogosultság
+ * 2. Csapattagság (user.teamIds) — alap jogosultság a munkahelyi pozíció alapján
+ * 3. Label override (user.labels) — plusz jogosultságok adminisztrátori hozzárendeléssel
+ *
  * @module utils/workflow/workflowPermissions
  */
 
@@ -16,16 +21,18 @@ import { STATE_PERMISSIONS, TEAM_ARTICLE_FIELD } from "./workflowConstants.js";
  * 2. Az állapothoz rendelt csapatok közül megnézi, van-e bármelyikhez
  *    hozzárendelt felhasználó a cikken (a TEAM_ARTICLE_FIELD leképezés alapján).
  * 3. Ha NINCS senki hozzárendelve egyetlen releváns csapatból sem →
- *    csak a releváns csapatok tagjai mozgathatják (labels ellenőrzés).
+ *    csapattagság (teamIds) vagy label szükséges.
  * 4. Ha VAN hozzárendelt felhasználó → a jelenlegi felhasználónak:
  *    a) az egyik hozzárendelt felhasználónak kell lennie, VAGY
- *    b) rendelkeznie kell az egyik releváns csapat slug-jával a labels tömbben.
+ *    b) a releváns csapat tagjának kell lennie (teamIds), VAGY
+ *    c) rendelkeznie kell az egyik releváns csapat slug-jával a labels tömbben.
  *
  * @param {Object} article - A cikk objektum (tartalmazza a contributor mezőket).
  * @param {number} currentState - A cikk jelenlegi állapota.
  * @param {Object} user - Az Appwrite felhasználó objektum.
  * @param {string} user.$id - A felhasználó egyedi azonosítója.
- * @param {string[]} [user.labels] - A felhasználó címkéi (label override-ok).
+ * @param {string[]} [user.teamIds] - A felhasználó csapattagságai (alap jogosultság).
+ * @param {string[]} [user.labels] - A felhasználó címkéi (label override).
  * @returns {{ allowed: boolean, reason?: string }}
  */
 export function canUserMoveArticle(article, currentState, user) {
@@ -48,13 +55,16 @@ export function canUserMoveArticle(article, currentState, user) {
         }
     }
 
-    // 3. Ha NINCS senki hozzárendelve → csak a releváns csapatok tagjai mozgathatják
+    // Segéd: csapattagság VAGY label alapján van-e jogosultság
+    const userTeams = user.teamIds || [];
+    const userLabels = user.labels || [];
+    const hasTeamAccess = requiredTeams.some(slug =>
+        userTeams.includes(slug) || userLabels.includes(slug)
+    );
+
+    // 3. Ha NINCS senki hozzárendelve → csapattagság vagy label szükséges
     if (assignedUserIds.size === 0) {
-        const userLabels = user.labels || [];
-        const isMemberOfRelevantTeam = requiredTeams.some(
-            teamSlug => userLabels.includes(teamSlug)
-        );
-        if (isMemberOfRelevantTeam) {
+        if (hasTeamAccess) {
             return { allowed: true };
         }
         return {
@@ -69,12 +79,8 @@ export function canUserMoveArticle(article, currentState, user) {
         return { allowed: true };
     }
 
-    // 4b. Label override: a felhasználó rendelkezik a releváns csapat címkéjével?
-    const userLabels = user.labels || [];
-    const hasOverrideLabel = requiredTeams.some(
-        teamSlug => userLabels.includes(teamSlug)
-    );
-    if (hasOverrideLabel) {
+    // 4b. Csapattagság vagy label override
+    if (hasTeamAccess) {
         return { allowed: true };
     }
 
@@ -82,7 +88,7 @@ export function canUserMoveArticle(article, currentState, user) {
     return {
         allowed: false,
         reason: "Nincs jogosultságod a cikk mozgatásához ebből az állapotból. " +
-                "Csak a hozzárendelt munkatárs vagy az adott csapat címkével rendelkező felhasználó végezheti el az állapotváltást."
+                "Csak a hozzárendelt munkatárs vagy az adott csapat tagja/címkével rendelkező felhasználó végezheti el az állapotváltást."
     };
 }
 

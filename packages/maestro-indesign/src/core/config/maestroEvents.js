@@ -53,6 +53,10 @@ export const MaestroEvent = Object.freeze({
     /** Felhasználó bejelentkezett vagy kijelentkezett. Detail: { isLoggedIn } */
     authStateChanged: 'maestro:auth-state-changed',
 
+    // --- Csapat ---
+    /** Csapattagság megváltozott (tag hozzáadva/eltávolítva). Detail: { teamId } */
+    teamMembershipChanged: 'maestro:team-membership-changed',
+
     // --- Adat / Frissítés ---
     /** Adatfrissítés szükséges (pl. alvásból ébredés, realtime reconnect). Nincs detail. */
     dataRefreshRequested: 'maestro:data-refresh-requested',

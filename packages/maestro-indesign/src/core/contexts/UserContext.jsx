@@ -8,7 +8,7 @@
 
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import { useConnection } from "../contexts/ConnectionContext.jsx";
-import { account, executeLogin, handleSignOut, clearLocalSession, ID, VERIFICATION_URL } from "../config/appwriteConfig.js";
+import { account, teams, executeLogin, handleSignOut, clearLocalSession, ID, VERIFICATION_URL } from "../config/appwriteConfig.js";
 import { realtime } from "../config/realtimeClient.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../config/maestroEvents.js";
 import { log } from "../utils/logger.js";
@@ -66,6 +66,24 @@ export function AuthorizationProvider({ children }) {
     const { startConnecting, setConnected } = useConnection();
 
     /**
+     * User objektum gazdagítása csapattagsági adatokkal.
+     * A teams.list() visszaadja azokat a csapatokat, amelyeknek a felhasználó tagja.
+     * A teamIds mezőt a jogosultsági rendszer (canUserMoveArticle) használja.
+     *
+     * @param {Object} userData - Appwrite user objektum
+     * @returns {Promise<Object>} Gazdagított user objektum teamIds mezővel
+     */
+    const enrichUserWithTeams = async (userData) => {
+        try {
+            const result = await teams.list();
+            return { ...userData, teamIds: result.teams.map(t => t.$id) };
+        } catch (error) {
+            log('[UserContext] Csapattagság lekérése sikertelen', 'warn');
+            return { ...userData, teamIds: userData.teamIds || [] };
+        }
+    };
+
+    /**
      * Bejelentkezés végrehajtása email címmel és jelszóval.
      * Kezeli a meglévő munkameneteket és szükség esetén újra hitelesít.
      * 
@@ -116,8 +134,9 @@ export function AuthorizationProvider({ children }) {
                 }
             }
             const currentUser = await account.get();
-            setUser(currentUser);
-            return currentUser;
+            const enrichedUser = await enrichUserWithTeams(currentUser);
+            setUser(enrichedUser);
+            return enrichedUser;
         } catch (error) {
             console.error("Bejelentkezés sikertelen:", error);
             throw error;
@@ -210,11 +229,12 @@ export function AuthorizationProvider({ children }) {
             const { payload } = response;
             if (!payload || !payload.$id) return;
 
-            // Csak akkor frissítünk, ha az adat tényleg változott
+            // Csak akkor frissítünk, ha az adat tényleg változott.
+            // A payload-ban nincs teamIds (az Appwrite nem küldi), ezért megőrizzük a meglévőt.
             setUser(prev => {
                 if (prev && prev.$updatedAt === payload.$updatedAt) return prev;
                 log('[UserContext] Felhasználói adat frissítve (Realtime)');
-                return payload;
+                return { ...payload, teamIds: prev?.teamIds || [] };
             });
         });
 
@@ -223,23 +243,24 @@ export function AuthorizationProvider({ children }) {
         };
     }, [user?.$id]);
 
-    // Felhasználói adatok frissítése recovery-nél (labels, prefs stb.)
-    // Az Appwrite Realtime `account` csatorna nem mindig tüzel szerver-oldali
-    // label módosításra (proxy-n keresztül), ezért a recovery-t is használjuk
-    // az adatok szinkronizálására.
+    // Felhasználói adatok frissítése recovery-nél (labels, prefs, teamIds stb.)
     useEffect(() => {
         if (!user) return;
 
         const handleRefresh = async () => {
             try {
                 const updatedUser = await account.get();
+                const enrichedUser = await enrichUserWithTeams(updatedUser);
                 // Csak akkor frissítünk, ha az adat tényleg változott.
                 // Enélkül az account.get() mindig új referenciát ad, ami felesleges
                 // re-rendereket okoz a teljes fában (LockManager useEffect[user] stb.)
                 setUser(prev => {
-                    if (prev && prev.$updatedAt === updatedUser.$updatedAt) return prev;
+                    if (prev && prev.$updatedAt === enrichedUser.$updatedAt
+                        && JSON.stringify(prev.teamIds) === JSON.stringify(enrichedUser.teamIds)) {
+                        return prev;
+                    }
                     log('[UserContext] Felhasználói adatok frissítve (recovery)');
-                    return updatedUser;
+                    return enrichedUser;
                 });
             } catch (error) {
                 // 401 → sessionExpired event kezeli, egyéb hiba nem kritikus
@@ -251,13 +272,39 @@ export function AuthorizationProvider({ children }) {
         return () => window.removeEventListener(MaestroEvent.dataRefreshRequested, handleRefresh);
     }, [user?.$id]);
 
+    // Csapattagság Realtime szinkronizálása
+    // A DataContext a `teams` csatornán figyeli a tagság-változásokat és dispatch-eli
+    // a teamMembershipChanged MaestroEvent-et. Itt frissítjük a user.teamIds-t.
+    useEffect(() => {
+        if (!user) return;
+
+        const handleTeamChange = async () => {
+            try {
+                const result = await teams.list();
+                const teamIds = result.teams.map(t => t.$id);
+                setUser(prev => {
+                    if (!prev) return prev;
+                    if (JSON.stringify(prev.teamIds) === JSON.stringify(teamIds)) return prev;
+                    log('[UserContext] Csapattagság frissítve (Realtime)');
+                    return { ...prev, teamIds };
+                });
+            } catch (error) {
+                log('[UserContext] Csapattagság frissítése sikertelen', 'warn');
+            }
+        };
+
+        window.addEventListener(MaestroEvent.teamMembershipChanged, handleTeamChange);
+        return () => window.removeEventListener(MaestroEvent.teamMembershipChanged, handleTeamChange);
+    }, [user?.$id]);
+
     // Kezdeti állapot ellenőrzése (pl. oldal újratöltés után)
     useEffect(() => {
         const checkUserStatus = async () => {
             try {
                 startConnecting("Felhasználó betöltése...");
                 const accountDetails = await account.get();
-                setUser(accountDetails);
+                const enrichedUser = await enrichUserWithTeams(accountDetails);
+                setUser(enrichedUser);
                 setConnected();
             } catch (error) {
                 // Nincs bejelentkezve vagy hálózati hiba, de vendég/kijelentkezettként kezeljük a kontextus szempontjából

@@ -4,12 +4,16 @@ import { functions, GET_TEAM_MEMBERS_FUNCTION_ID } from "../../core/config/appwr
 // React
 import { useState, useEffect, useCallback } from "react";
 
+// Config
+import { MaestroEvent } from "../../core/config/maestroEvents.js";
+
 // Utils
 import { withRetry } from "../../core/utils/promiseUtils.js";
+import { logWarn, logError } from "../../core/utils/logger.js";
 
 export const getTeamMembers = async (teamId) => {
     if (!teamId) return [];
-    
+
     try {
         // Use withRetry to handle transient network errors (502, 503, etc.)
         const execution = await withRetry(async () => {
@@ -21,7 +25,7 @@ export const getTeamMembers = async (teamId) => {
 
         if (execution.status === "completed") {
             if (!execution.responseBody) {
-                console.warn(`[useTeamMembers] Empty response body for team ${teamId}`);
+                logWarn(`[useTeamMembers] Empty response body for team ${teamId}`);
                 return [];
             }
 
@@ -29,8 +33,8 @@ export const getTeamMembers = async (teamId) => {
             try {
                 response = JSON.parse(execution.responseBody);
             } catch (e) {
-                console.error(`[useTeamMembers] JSON parse error for team ${teamId}:`, e);
-                console.error(`[useTeamMembers] Response length: ${execution.responseBody.length}`);
+                logError(`[useTeamMembers] JSON parse error for team ${teamId}:`, e);
+                logError(`[useTeamMembers] Response length: ${execution.responseBody.length}`);
                 return [];
             }
 
@@ -42,12 +46,12 @@ export const getTeamMembers = async (teamId) => {
                     userEmail: m.email
                 }));
             } else {
-                console.warn(`Cloud Function error for ${teamId}:`, response.message);
+                logWarn(`Cloud Function error for ${teamId}:`, response.message);
                 // Don't throw for logic errors, just return empty to avoid UI crash loop
                 return [];
             }
         } else {
-            console.error(`Execution failed for ${teamId}: status=${execution.status}`);
+            logError(`Execution failed for ${teamId}: status=${execution.status}`);
             // Log but return empty list to prevent crash loop
             return [];
         }
@@ -55,16 +59,16 @@ export const getTeamMembers = async (teamId) => {
         // Suppress specific Appwrite cloud function timeout errors
         const msg = err.message || "";
         if (msg.includes("Synchronous function execution timed out")) {
-             console.warn(`[useTeamMembers] Function execution warning for ${teamId}: Server timed out. Returning empty list.`);
+             logWarn(`[useTeamMembers] Function execution warning for ${teamId}: Server timed out. Returning empty list.`);
              return [];
         }
 
-        console.error(`Failed to fetch members for team ${teamId}:`, err);
+        logError(`Failed to fetch members for team ${teamId}:`, err);
         // If the function doesn't exist yet (404), warn gracefully
         if (err.code === 404) {
-             console.warn(`Function '${GET_TEAM_MEMBERS_FUNCTION_ID}' not found or execution failed. Check Appwrite config.`);
+             logWarn(`Function '${GET_TEAM_MEMBERS_FUNCTION_ID}' not found or execution failed. Check Appwrite config.`);
         }
-        
+
         // Return empty array instead of throwing to prevent UI loops
         return [];
     }
@@ -79,6 +83,14 @@ const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
  */
 export function invalidateTeamMembersCache() {
     Object.keys(CACHE).forEach(key => delete CACHE[key]);
+}
+
+/**
+ * Egyetlen csapat cache-ének invalidálása.
+ * @param {string} teamId - A csapat azonosítója
+ */
+export function invalidateTeamMembersCacheForTeam(teamId) {
+    if (CACHE[teamId]) delete CACHE[teamId];
 }
 
 export const useTeamMembers = (teamId) => {
@@ -115,6 +127,33 @@ export const useTeamMembers = (teamId) => {
     useEffect(() => {
         fetchMembers();
     }, [fetchMembers]);
+
+    // Realtime: csapattagság változás → cache invalidálás + újralekérés
+    useEffect(() => {
+        if (!teamId) return;
+
+        const handleMembershipChanged = (event) => {
+            const changedTeamId = event.detail?.teamId;
+            if (changedTeamId === teamId) {
+                invalidateTeamMembersCacheForTeam(teamId);
+                fetchMembers();
+            }
+        };
+
+        // Recovery: cache invalidálás + újralekérés
+        const handleRecovery = () => {
+            invalidateTeamMembersCacheForTeam(teamId);
+            fetchMembers();
+        };
+
+        window.addEventListener(MaestroEvent.teamMembershipChanged, handleMembershipChanged);
+        window.addEventListener(MaestroEvent.dataRefreshRequested, handleRecovery);
+
+        return () => {
+            window.removeEventListener(MaestroEvent.teamMembershipChanged, handleMembershipChanged);
+            window.removeEventListener(MaestroEvent.dataRefreshRequested, handleRecovery);
+        };
+    }, [teamId, fetchMembers]);
 
     return { members, loading, refetch: fetchMembers };
 };
