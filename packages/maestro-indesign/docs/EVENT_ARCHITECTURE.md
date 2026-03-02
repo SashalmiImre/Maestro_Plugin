@@ -43,7 +43,7 @@ Ezek az események adatváltozásokat jeleznek, amelyek újravalidálást vagy U
 | **Layout Változott**        | `layoutChanged`              | `ArticleProperties`, `useLayouts`                  | `{ article }` vagy `{ articles, publicationId }` | Layout változáskor (egyedi) vagy layout törléskor (tömeges) tüzel. Átfedés validációt indít.      |
 | **Lefedettség Változott**   | `publicationCoverageChanged` | `Workspace`                                        | `{ publication }`                 | A kiadvány oldalkorlátainak változásakor tüzel. A kiadvány összes cikkére validációt indít.        |
 | **Cikkek Hozzáadva**        | `articlesAdded`              | `Publication`                                      | `{ publicationId }`              | Új cikkek hozzáadása után tüzel. Átfedés/struktúra validációt indít (PublicationStructureValidator). |
-| **Állapot Változott**       | `stateChanged`               | `WorkflowEngine`                                   | `{ article, oldState, newState }` | Sikeres workflow átmenet után tüzel.                                                               |
+| **Állapot Változott**       | `stateChanged`               | `WorkflowEngine`                                   | `{ article, previousState, newState }` | Sikeres workflow átmenet után tüzel.                                                               |
 
 ### 3. Infrastruktúra & Koordináció
 Rendszer-szintű események a session kezeléshez és komponens zároláshoz.
@@ -58,6 +58,7 @@ Rendszer-szintű események a session kezeléshez és komponens zároláshoz.
 | **Ellenőrzés Befejeződött** | `verificationEnded`    | `DocumentMonitor`                | `undefined` | Jelzi a `LockManager`-nek, hogy FOLYTASSA a felhasználói zárolást.          |
 | **Endpoint Váltás**         | `endpointSwitched`     | `EndpointManager`                | `{ isPrimary, endpoint }` | Proxy endpoint váltás történt (primary ↔ fallback). Toast értesítést jelenít meg. |
 | **Csapattagság Változott**  | `teamMembershipChanged`| `DataContext` (Realtime)         | `{ teamId }`              | Csapattag hozzáadva/eltávolítva. A `useTeamMembers` hook cache-t invalidál és újralekér. |
+| **Auth Állapot Változott**  | `authStateChanged`     | `UserContext`                    | `{ isLoggedIn }`           | Felhasználó bejelentkezett vagy kijelentkezett. A UI routing login/workspace nézet között vált. |
 
 ## Eseményfolyamatok (Szekvencia Diagramok)
 
