@@ -18,10 +18,13 @@ governing permissions and limitations under the License.
 // --- Polyfill-ek (más importok előtt kell betölteni) ---
 import "../polyfill.js";
 
+// Diagnostic keys (dependency-free, import early)
+import { DIAGNOSTIC_KEYS } from "./diagnosticKeys.js";
+
 // --- Diagnosztika: előző munkamenet hibáinak kiolvasása és új hibák rögzítése ---
 // Module-szinten regisztrálva (nem useEffect-ben), hogy a React init előtti hibák is elkaphatók legyenek.
 (function initErrorCapture() {
-    const KEYS = { error: 'maestro.lastError', rejection: 'maestro.lastRejection' };
+    const KEYS = DIAGNOSTIC_KEYS;
 
     // Előző munkamenet hibáinak megjelenítése induláskor, majd törlése
     [KEYS.error, KEYS.rejection].forEach(key => {

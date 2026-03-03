@@ -11,6 +11,9 @@ export const SCRIPT_LANGUAGE_JAVASCRIPT = 1246973031;
 
 // LocalStorage Kulcsok
 // Az alkalmazás állapotának mentéséhez használt kulcsok.
+import { DIAGNOSTIC_KEYS } from "../diagnosticKeys.js";
+export { DIAGNOSTIC_KEYS };
+
 export const STORAGE_KEYS = {
     EXPANDED_PUBLICATION_ID: "maestro.expandedPublicationId", // Kinyitott kiadvány ID-ja
     HIDE_RESOLVED_MESSAGES: "maestro.hideResolvedMessages",   // Megoldott üzenetek elrejtése
@@ -22,8 +25,8 @@ export const STORAGE_KEYS = {
     SECTION_PUBLICATION_LAYOUTS_COLLAPSED: "maestro.section.publication.layouts.collapsed",           // Kiadvány elrendezések szekció
     SECTION_PUBLICATION_CONTRIBUTORS_COLLAPSED: "maestro.section.publication.contributors.collapsed", // Kiadvány munkatársak szekció
     SECTION_PUBLICATION_DEADLINES_COLLAPSED: "maestro.section.publication.deadlines.collapsed",         // Kiadvány határidők szekció
-    LAST_ERROR:      "maestro.lastError",      // Diagnosztika: előző munkamenet JavaScript hibája
-    LAST_REJECTION:  "maestro.lastRejection"   // Diagnosztika: előző munkamenet unhandled Promise rejection-je
+    LAST_ERROR:      DIAGNOSTIC_KEYS.error,      // Diagnosztika: előző munkamenet JavaScript hibája
+    LAST_REJECTION:  DIAGNOSTIC_KEYS.rejection   // Diagnosztika: előző munkamenet unhandled Promise rejection-je
 };
 
 // Útvonal Konfiguráció

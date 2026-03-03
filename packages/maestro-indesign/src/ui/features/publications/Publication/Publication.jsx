@@ -1,5 +1,5 @@
 // React
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useMemo } from "react";
 
 // Components
 import { ArticleTable } from "../../articles/ArticleTable.jsx";
@@ -111,15 +111,18 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
         return filtered;
     }, [articles, statusFilters, showIgnored]);
 
+    const canOpenPublicationProperties = useMemo(() => {
+        return checkElementPermission(PUBLICATION_ELEMENT_PERMISSIONS.publicationProperties, user).allowed;
+    }, [user]);
+
     const handlePublicationDoubleClick = useCallback((e) => {
         e.stopPropagation();
-        const perm = checkElementPermission(PUBLICATION_ELEMENT_PERMISSIONS.publicationProperties, user);
-        if (!perm.allowed) {
+        if (!canOpenPublicationProperties) {
             showToast('Nincs jogosultság', 'error', 'A kiadvány beállításait csak vezető szerkesztők és művészeti vezetők nyithatják meg.');
             return;
         }
         onShowProperties?.(publication, 'publication');
-    }, [onShowProperties, publication, user, showToast]);
+    }, [onShowProperties, publication, canOpenPublicationProperties, showToast]);
 
     const handleChevronClick = useCallback((e) => {
         e.stopPropagation();
@@ -250,7 +253,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                     <sp-heading size="xxs"
                         onDoubleClick={handlePublicationDoubleClick}
                         style={{
-                            cursor: checkElementPermission(PUBLICATION_ELEMENT_PERMISSIONS.publicationProperties, user).allowed ? "pointer" : "default",
+                            cursor: canOpenPublicationProperties ? "pointer" : "default",
                             margin: 0,
                             color: isDriveAccessible ? "var(--spectrum-global-color-blue-400)" : "var(--spectrum-global-color-red-400)"
                         }}>
