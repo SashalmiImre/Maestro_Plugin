@@ -265,7 +265,7 @@ class RealtimeClient {
 
                     console.log(`[Realtime] 🔒 Closed: Code=${event.code} Reason=${event.reason}`);
                     this.realtime?.stopHeartbeat();
-                    this.realtime.onCloseCallbacks.forEach(callback => callback());
+                    this.realtime?.onCloseCallbacks?.forEach(callback => callback());
 
                     // Debug: Időmérés szakadások között
                     const now = Date.now();
@@ -287,7 +287,13 @@ class RealtimeClient {
 
                     // 1000 (Normal Closure) → szándékos lezárás, nem kell reconnect
                     if (event.code === 1000) {
-                        this.realtime.reconnect = true;
+                        if (this.realtime) this.realtime.reconnect = true;
+                        return;
+                    }
+
+                    // 1001 (Going Away) → alkalmazás / böngésző bezárul, ne reconnectelj
+                    if (event.code === 1001) {
+                        log('[Realtime] 🚪 Going Away (1001) — alkalmazás bezárása, reconnect mellőzve');
                         return;
                     }
 
@@ -326,6 +332,8 @@ class RealtimeClient {
                         const remainingMs = this.serverErrorCooldownUntil - Date.now();
                         console.log(`[Realtime] ⏸️ Cooldown aktív, várakozás ${Math.ceil(remainingMs / 1000)}s...`);
                         await this.realtime.sleep(remainingMs);
+                        // Sleep után ellenőrzés: disconnect() hívhatott közben
+                        if (!this.realtime || !this.shouldReconnect) return;
                         // Cooldown után nullázzuk a számlálót és újrapróbálkozunk
                         this.consecutiveServerErrors = 0;
                         this.serverErrorCooldownUntil = 0;
@@ -345,6 +353,8 @@ class RealtimeClient {
 
                     console.log(`[Realtime] Reconnecting in ${timeout / 1000}s...`);
                     await this.realtime.sleep(timeout);
+                    // Sleep után ellenőrzés: disconnect() hívhatott közben (null-dereferencia védelem)
+                    if (!this.realtime || !this.shouldReconnect) return;
                     this.realtime.reconnectAttempts++;
                     try {
                         await this.realtime.createSocket();
@@ -392,7 +402,7 @@ class RealtimeClient {
         });
     }
 
-    _attemptSdkSubscription(channel) {
+    async _attemptSdkSubscription(channel) {
         if (this.subscriptions.has(channel)) return;
 
         // Ensure we have a valid instance
@@ -402,11 +412,15 @@ class RealtimeClient {
             log(`[Realtime] 🔄 Subscribing: ${channel}`);
         }
 
+        // Null placeholder: megakadályozza a dupla feliratkozást az async setup közben
+        this.subscriptions.set(channel, null);
+
         try {
-            const unsubscribe = this.realtime.subscribe(channel, (response) => {
+            // Az Appwrite Realtime.subscribe() async — tároljuk a visszatérő close() funkciót
+            const sub = await this.realtime.subscribe(channel, (response) => {
                 this._notifyConnectionChange(true);
                 this.lastActivity = Date.now();
-                
+
                 // Callback-ek meghívása
                 // Megjegyzés: A végtelen ciklusokat az adatok összehasonlítása akadályozza meg
                 // (a validátorok csak akkor írnak, ha eltérés van)
@@ -417,13 +431,21 @@ class RealtimeClient {
                 }
             });
 
-            this.subscriptions.set(channel, unsubscribe);
+            if (!this.subscriptions.has(channel)) {
+                // disconnect() törölte közben — azonnal lezárjuk
+                try { sub.close().catch(() => {}); } catch (_) {}
+                return;
+            }
+
+            // close() async — a .catch() biztosítja, hogy ne legyen unhandled rejection
+            this.subscriptions.set(channel, () => sub.close().catch(() => {}));
             this._notifyConnectionChange(true);
 
         } catch (err) {
             logError(`[Realtime] Subscription failed: ${channel}`, err);
             this._notifyError(err);
             this._notifyConnectionChange(false);
+            this.subscriptions.delete(channel);  // placeholder törlése hiba esetén
         }
     }
 
@@ -448,7 +470,10 @@ class RealtimeClient {
                 this.callbacks.delete(channel);
                 if (this.subscriptions.has(channel)) {
                     const unsub = this.subscriptions.get(channel);
-                    if (typeof unsub === "function") unsub();
+                    // unsub lehet null (setup folyamatban) vagy close() wrapper funkció
+                    if (typeof unsub === "function") {
+                        try { unsub(); } catch (e) {}
+                    }
                     this.subscriptions.delete(channel);
                 }
             }
@@ -463,6 +488,12 @@ class RealtimeClient {
      * Védelem: ha már fut egy reconnect, a második hívást kihagyjuk.
      */
     reconnect() {
+        // Shutdown védelem: disconnect() után ne reconnecteljünk
+        if (!this.shouldReconnect) {
+            log('[Realtime] 🛑 reconnect() kihagyva — disconnect() már meghívva');
+            return;
+        }
+
         // Párhuzamos reconnect védelem
         if (this.isReconnecting) {
             log('[Realtime] ⏳ Reconnect már folyamatban, kihagyva');
@@ -490,15 +521,20 @@ class RealtimeClient {
             }
 
             // 3. Feliratkozások leiratkozása
+            // No-op createSocket: megakadályozza, hogy az unsub() socket-újraépítést indítson
+            if (this.realtime) {
+                this.realtime.createSocket = () => Promise.resolve();
+            }
             this.subscriptions.forEach((unsub) => {
-                try { if (typeof unsub === "function") unsub(); } catch (e) {}
+                if (typeof unsub === "function") {
+                    try { unsub(); } catch (e) {}
+                }
             });
             this.subscriptions.clear();
 
             // 4. INSTANCE MEGSEMMISÍTÉSE
             this.realtime = null;
             this.client = null;
-            this.shouldReconnect = true;
             this._subscribedChannels = new Set(); // Csatorna-nyilvántartás törlése az újraépítéshez
 
             // Szerver hiba számláló nullázása az újraépítésnél
@@ -538,14 +574,34 @@ class RealtimeClient {
     disconnect() {
         this.shouldReconnect = false;
 
+        // Leállítás utáni socket-újraépítési kísérletek megakadályozása.
+        // Az Appwrite SDK close/unsubscribe callback-jei createSocket()-ot hívhatnak
+        // (pl. a 1ms debounce lejárta után); a no-op csere megelőzi az unhandled rejection-t.
+        if (this.realtime) {
+            this.realtime.createSocket = () => Promise.resolve();
+        }
+
+        // Socket lezárása 1000-es kóddal a cleanup előtt
+        if (this.realtime?.socket) {
+            try {
+                this.realtime.stopHeartbeat();
+                this.realtime.socket.close(1000, 'Plugin shutdown');
+            } catch (e) { /* ignore */ }
+        }
+
+        // Feliratkozások cleanup: close() wrapper funkciók meghívása
         this.subscriptions.forEach((unsub) => {
-            try { if (typeof unsub === "function") unsub(); } catch (e) {}
+            if (typeof unsub === "function") {
+                try { unsub(); } catch (e) {}
+            }
         });
         this.subscriptions.clear();
         this.callbacks.clear();
-        this._notifyConnectionChange(false);
+
+        // _notifyConnectionChange() helyett közvetlen értékadás:
+        // kilépéskor nem akarunk recovery-t triggerelni a connection listener-eken keresztül
+        this.isConnected = false;
         this.lastActivity = null;
-        // Cleanup
         this.realtime = null;
         this.client = null;
     }

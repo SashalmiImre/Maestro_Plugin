@@ -8,6 +8,7 @@ import { FilterBar } from "./FilterBar.jsx";
 // Custom Hooks
 import { useArticles } from "../../../../data/hooks/useArticles.js";
 import { useUser } from "../../../../core/contexts/UserContext.jsx";
+import { useToast } from "../../../common/Toast/ToastContext.jsx";
 
 // Utils
 import { WORKFLOW_STATES, MARKERS } from "../../../../core/utils/workflow/workflowConstants.js";
@@ -15,9 +16,11 @@ import { DRIVE_CHECK_INTERVAL_MS } from "../../../../core/utils/constants.js";
 import { log } from "../../../../core/utils/logger.js";
 import { checkPathAccessible, resolvePlatformPath } from "../../../../core/utils/pathUtils.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../../core/config/maestroEvents.js";
+import { checkElementPermission, PUBLICATION_ELEMENT_PERMISSIONS } from "../../../../core/utils/workflow/elementPermissions.js";
 
 export const Publication = React.memo(({ publication, onDelete, onRename, onShowProperties, isExpanded, onToggle }) => {
     const { user } = useUser();
+    const { showToast } = useToast();
     const {
         articles,
         addArticle,
@@ -110,8 +113,13 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
 
     const handlePublicationDoubleClick = useCallback((e) => {
         e.stopPropagation();
+        const perm = checkElementPermission(PUBLICATION_ELEMENT_PERMISSIONS.publicationProperties, user);
+        if (!perm.allowed) {
+            showToast('Nincs jogosultság', 'error', 'A kiadvány beállításait csak vezető szerkesztők és művészeti vezetők nyithatják meg.');
+            return;
+        }
         onShowProperties?.(publication, 'publication');
-    }, [onShowProperties, publication]);
+    }, [onShowProperties, publication, user, showToast]);
 
     const handleChevronClick = useCallback((e) => {
         e.stopPropagation();
@@ -242,7 +250,8 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                     <sp-heading size="xxs"
                         onDoubleClick={handlePublicationDoubleClick}
                         style={{
-                            cursor: "pointer", margin: 0,
+                            cursor: checkElementPermission(PUBLICATION_ELEMENT_PERMISSIONS.publicationProperties, user).allowed ? "pointer" : "default",
+                            margin: 0,
                             color: isDriveAccessible ? "var(--spectrum-global-color-blue-400)" : "var(--spectrum-global-color-red-400)"
                         }}>
                         {publication.name?.toUpperCase()}

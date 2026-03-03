@@ -18,6 +18,44 @@ governing permissions and limitations under the License.
 // --- Polyfill-ek (más importok előtt kell betölteni) ---
 import "../polyfill.js";
 
+// --- Diagnosztika: előző munkamenet hibáinak kiolvasása és új hibák rögzítése ---
+// Module-szinten regisztrálva (nem useEffect-ben), hogy a React init előtti hibák is elkaphatók legyenek.
+(function initErrorCapture() {
+    const KEYS = { error: 'maestro.lastError', rejection: 'maestro.lastRejection' };
+
+    // Előző munkamenet hibáinak megjelenítése induláskor, majd törlése
+    [KEYS.error, KEYS.rejection].forEach(key => {
+        try {
+            const val = localStorage.getItem(key);
+            if (val) {
+                console.warn(`[Startup] ⚠️ Előző munkamenet hibája (${key}):`, JSON.parse(val));
+                localStorage.removeItem(key);
+            }
+        } catch (_) {}
+    });
+
+    // Jövőbeli JavaScript hibák rögzítése
+    window.addEventListener('error', (e) => {
+        try {
+            localStorage.setItem(KEYS.error, JSON.stringify({
+                message: e.message, filename: e.filename,
+                lineno: e.lineno, colno: e.colno,
+                ts: new Date().toISOString()
+            }));
+        } catch (_) {}
+    });
+
+    // Jövőbeli unhandled Promise rejection-ök rögzítése
+    window.addEventListener('unhandledrejection', (e) => {
+        try {
+            localStorage.setItem(KEYS.rejection, JSON.stringify({
+                reason: String(e.reason),
+                ts: new Date().toISOString()
+            }));
+        } catch (_) {}
+    });
+})();
+
 // --- Vendor / Framework ---
 import React from "react";
 import { entrypoints } from "uxp";
@@ -67,6 +105,8 @@ import { ConnectionProvider } from "./contexts/ConnectionContext.jsx";
 
 // --- Config & Constants ---
 import { account, handleSignOut, RECOVERY_URL } from "./config/appwriteConfig.js";
+import { realtime } from "./config/realtimeClient.js";
+import { recoveryManager } from "./config/recoveryManager.js";
 
 // --- Components & Assets ---
 import { PanelController } from "./controllers/panelController.jsx";
@@ -263,10 +303,26 @@ const resetPassword = async () => {
     }
 };
 
+// --- Graceful shutdown ---
+// Az UXP nem mindig hívja meg a plugin.destroy() hookot (pl. InDesign kilépésnél,
+// UXP DevTools "Stop"-nál). A window 'unload' event fallbackként szolgál,
+// így a cleanup mindenképpen lefut.
+let _isCleanedUp = false;
+function _gracefulShutdown(source) {
+    if (_isCleanedUp) return;
+    _isCleanedUp = true;
+    console.log(`[Plugin] 🛑 Graceful shutdown (${source})`);
+    try { recoveryManager.cancel(); } catch (_) {}
+    try { realtime.disconnect(); } catch (_) {}
+}
+window.addEventListener('unload', () => _gracefulShutdown('unload'));
+
 entrypoints.setup({
     plugin: {
         create() { },
-        destroy() { },
+        destroy() {
+            _gracefulShutdown('destroy()');
+        },
     },
     panels: {
         main: {

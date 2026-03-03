@@ -21,7 +21,9 @@ export const STORAGE_KEYS = {
     SECTION_PUBLICATION_GENERAL_COLLAPSED: "maestro.section.publication.general.collapsed",           // Kiadvány általános szekció
     SECTION_PUBLICATION_LAYOUTS_COLLAPSED: "maestro.section.publication.layouts.collapsed",           // Kiadvány elrendezések szekció
     SECTION_PUBLICATION_CONTRIBUTORS_COLLAPSED: "maestro.section.publication.contributors.collapsed", // Kiadvány munkatársak szekció
-    SECTION_PUBLICATION_DEADLINES_COLLAPSED: "maestro.section.publication.deadlines.collapsed"        // Kiadvány határidők szekció
+    SECTION_PUBLICATION_DEADLINES_COLLAPSED: "maestro.section.publication.deadlines.collapsed",         // Kiadvány határidők szekció
+    LAST_ERROR:      "maestro.lastError",      // Diagnosztika: előző munkamenet JavaScript hibája
+    LAST_REJECTION:  "maestro.lastRejection"   // Diagnosztika: előző munkamenet unhandled Promise rejection-je
 };
 
 // Útvonal Konfiguráció

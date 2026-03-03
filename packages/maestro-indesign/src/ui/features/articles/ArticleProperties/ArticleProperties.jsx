@@ -4,15 +4,12 @@ import React, { useState } from "react";
 // Contexts & Custom Hooks
 import { useUser } from "../../../../core/contexts/UserContext.jsx";
 import { useData } from "../../../../core/contexts/DataContext.jsx";
-import { useValidation } from "../../../../core/contexts/ValidationContext.jsx";
 import { useToast } from "../../../common/Toast/ToastContext.jsx";
 import { useArticles } from "../../../../data/hooks/useArticles.js";
 import { useUnifiedValidation } from "../../../../data/hooks/useUnifiedValidation.js";
 
 // Config & Constants
 import { MaestroEvent, dispatchMaestroEvent } from "../../../../core/config/maestroEvents.js";
-import { VALIDATION_SOURCES } from "../../../../core/utils/validationConstants.js";
-import { VALIDATION_TYPES } from "../../../../core/utils/messageConstants.js";
 
 // Feature Components
 import { GeneralSection } from "./GeneralSection.jsx";
@@ -43,7 +40,6 @@ import {
 export const ArticleProperties = ({ article, publication, onUpdate }) => {
     const { user } = useUser();
     const { updateArticle, applyArticleUpdate } = useData();
-    const { updateArticleValidation } = useValidation();
     const { renameArticle } = useArticles(article?.publicationId, null, false);
     const { showToast } = useToast();
     const { hasErrors } = useUnifiedValidation(article);
@@ -318,18 +314,6 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
                         'Kérjük, ellenőrizd a hálózati kapcsolatot, majd próbáld újra.'
                     );
                     return;
-                }
-
-                // Preflight hibák beírása a ValidationContext-be → megjelennek a ValidationSection-ben
-                const items = [];
-                if (validation.errors?.length > 0) {
-                    items.push(...validation.errors.map(msg => ({ type: VALIDATION_TYPES.ERROR, message: msg, source: VALIDATION_SOURCES.PREFLIGHT })));
-                }
-                if (validation.warnings?.length > 0) {
-                    items.push(...validation.warnings.map(msg => ({ type: VALIDATION_TYPES.WARNING, message: msg, source: VALIDATION_SOURCES.PREFLIGHT })));
-                }
-                if (items.length > 0) {
-                    updateArticleValidation(article.$id, VALIDATION_SOURCES.PREFLIGHT, items);
                 }
 
                 const errorDetails = validation.errors?.length > 0

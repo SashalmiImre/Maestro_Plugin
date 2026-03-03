@@ -67,6 +67,7 @@ export const ARTICLE_ELEMENT_PERMISSIONS = {
  * @type {Object.<string, string[]|Symbol>}
  */
 export const PUBLICATION_ELEMENT_PERMISSIONS = {
+    publicationProperties:   ["managingEditors", "artDirectors"],
     publicationGeneral:      ["editors", "managingEditors", "artDirectors"],
     publicationLayouts:      ["designers", "artDirectors"],
     publicationDeadlines:    ["editors", "managingEditors", "artDirectors"],

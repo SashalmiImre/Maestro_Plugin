@@ -146,7 +146,11 @@
     - Sorrend: health check → realtime reconnect → adat frissítés.
     - Sleep detection (InDesign `IdleTask` gap > 60s) → `recoveryManager.requestRecovery('sleep')`.
     - **Szinkron Resubscribe**: A `reconnect()` szinkron építi újra a feliratkozásokat (nincs `setTimeout`), megakadályozva az `isConnected` flag ideiglenesen hamis állapotát.
+    - **Plugin Graceful Shutdown**: Az `index.jsx` `window.unload` eseményre iratkozik fel (az UXP `plugin.destroy()` hook nem mindig fut le, pl. InDesign kilépéskor). Shutdown-kor `recoveryManager.cancel()` → `realtime.disconnect()` sorrendben fut — megelőzi, hogy in-flight recovery egy már leállított kontextusban hozzon létre új WebSocket-et (crash). Az `_isCleanedUp` flag biztosítja, hogy a cleanup csak egyszer fusson le.
+    - **Startup Error Capture**: Az `index.jsx` modul-szinten (React init előtt) regisztrál `error` és `unhandledrejection` listenereket. Az előző munkamenet esetleges összeomlásának részleteit localStorage-ba menti (`maestro.lastError`, `maestro.lastRejection`), és induláskor konzolra írja, majd törli.
+    - **Recovery Cancellation**: A `RecoveryManager.cancel()` beállítja a `_isCancelled` flag-et, amely in-flight `_executeRecovery()` futást is leállít (health check await után ellenőrzött). Az aktív HTTP fetch kérések `AbortController`-eken keresztül (`_activeControllers` Set) azonnal megszakíthatók. Retry delay Promise-ok szintén megszakíthatók a `_retryReject` függvényen keresztül.
     - **Ghost Socket Védelem**: Socket generáció-számláló (`_socketGeneration`) a `realtimeClient.js`-ben. A close handler ignorálja a régi socket-ek close event-jeit, megakadályozva a végtelen reconnect ciklust.
+    - **WebSocket 1001 (Going Away)**: Az alkalmazás/böngésző bezárásakor küldött 1001 close code-ot a close handler felismeri és nem indít reconnect-et (szemben az 1000-es normál lezárással, ahol a `realtime.reconnect` flag marad).
     - **Dinamikus Csatorna-kezelés**: A `_subscribedChannels` Set nyomon követi az aktív socket csatornáit. Ha új csatorna érkezik (pl. az `account` a database channels után), a `createSocket` lezárja a régi socketet és újat hoz létre az összes csatornával. Ez megoldja az eltérő React render ciklusokból adódó subscription-sorrend problémát.
     - **Explicit Socket Cleanup**: A `reconnect()` metódus explicit `close(1000)` hívással zárja le a régi WebSocket-et az új létrehozása előtt.
     - **Dinamikus Endpoint (Realtime)**: A `realtimeClient.js` `_initClient()` metódusa `endpointManager.getEndpoint()`-ot használ → `reconnect()` automatikusan felveszi az aktuális (primary/fallback) endpoint-ot.
@@ -189,7 +193,7 @@ Maestro/
 │   ├── polyfill.js               ← UXP polyfill-ek
 │   │
 │   ├── core/                     ← Üzleti logika & infrastruktúra
-│   │   ├── index.jsx             ← App bootstrap, belépési pont, hamburgermenü handlerek (jelszókezelés, kijelentkezés)
+│   │   ├── index.jsx             ← App bootstrap, belépési pont, hamburgermenü handlerek (jelszókezelés, kijelentkezés), graceful shutdown, startup error capture
 │   │   ├── Main.jsx              ← Gyökér komponens (sleep/focus detektálás, RecoveryManager trigger)
 │   │   ├── config/
 │   │   │   ├── appwriteConfig.js       ← Appwrite kliens, EndpointManager (dual-proxy), db/collection/bucket ID-k, VERIFICATION_URL, RECOVERY_URL

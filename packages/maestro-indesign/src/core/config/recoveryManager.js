@@ -27,11 +27,20 @@ class RecoveryManager {
         /** @type {boolean} Folyamatban van-e recovery */
         this.isRecovering = false;
 
-        /** @type {number} Utolsó recovery időbélyege (debounce-hoz) */
+        /** @type {number} Utolsó recovery időbélyega (debounce-hoz) */
         this.lastRecoveryAt = 0;
 
         /** @type {number|null} Pending requestRecovery timeout ID */
         this._pendingTimeout = null;
+
+        /** @type {boolean} Plugin leállítás alatt van-e (in-flight recovery megszakítás) */
+        this._isCancelled = false;
+
+        /** @type {Set<AbortController>} Aktív fetch kérések abort controller-ei */
+        this._activeControllers = new Set();
+
+        /** @type {Function|null} Aktív retry delay reject függvénye (megszakításhoz) */
+        this._retryReject = null;
     }
 
     /**
@@ -88,8 +97,10 @@ class RecoveryManager {
      * @private
      */
     async _executeRecovery(trigger) {
+        if (this._isCancelled) return;
         if (this.isRecovering) return;
 
+        this._isCancelled = false;
         this.isRecovering = true;
         this.lastRecoveryAt = Date.now();
         log(`[Recovery] 🔄 Recovery indítása (trigger: "${trigger}")`);
@@ -97,6 +108,12 @@ class RecoveryManager {
         try {
             // 1. Health check — van-e hálózat?
             const serverReachable = await this._healthCheckWithRetry();
+
+            // Plugin leállítás közben megszakított recovery
+            if (this._isCancelled) {
+                log('[Recovery] 🛑 Recovery megszakítva (plugin leállítás)');
+                return;
+            }
 
             if (!serverReachable) {
                 logWarn('[Recovery] ❌ Szerver nem elérhető a retry-ok után sem');
@@ -190,37 +207,53 @@ class RecoveryManager {
      */
     async _tryEndpointHealth(url, maxRetries, retryBaseMs, timeoutMs) {
         for (let attempt = 1; attempt <= maxRetries; attempt++) {
+            const controller = new AbortController();
+            this._activeControllers.add(controller);
+
+            let timeoutId;
             try {
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+                timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
                 const response = await fetch(url, {
                     method: 'GET',
                     signal: controller.signal
                 });
-                clearTimeout(timeoutId);
 
                 if (response.ok) return true;
 
                 if (response.status === 401) {
                     log('[Recovery] Session lejárt (401)');
                     dispatchMaestroEvent(MaestroEvent.sessionExpired);
-                    return true; // Hálózat OK, session kezelés külön fut
+                    return true;
                 }
 
                 logWarn(`[Recovery] Health check HTTP ${response.status} (${attempt}/${maxRetries})`);
             } catch (error) {
                 if (error.name === 'AbortError') {
+                    if (this._isCancelled) return false;
                     logWarn(`[Recovery] Health check timeout (${attempt}/${maxRetries})`);
                 } else {
                     logWarn(`[Recovery] Health check hiba (${attempt}/${maxRetries}):`, error.message);
                 }
+            } finally {
+                clearTimeout(timeoutId);
+                this._activeControllers.delete(controller);
             }
+
+            if (this._isCancelled) return false;
 
             if (attempt < maxRetries) {
                 const delayMs = retryBaseMs * Math.pow(2, attempt - 1);
                 log(`[Recovery] Újrapróbálás ${delayMs / 1000}s múlva...`);
-                await new Promise(resolve => setTimeout(resolve, delayMs));
+                await new Promise((resolve, reject) => {
+                    this._retryReject = reject;
+                    setTimeout(() => {
+                        this._retryReject = null;
+                        resolve();
+                    }, delayMs);
+                }).catch(() => {});
+
+                if (this._isCancelled) return false;
             }
         }
 
@@ -236,20 +269,27 @@ class RecoveryManager {
      * @private
      */
     async _singleHealthCheck(url, timeoutMs) {
+        const controller = new AbortController();
+        this._activeControllers.add(controller);
+
+        let timeoutId;
         try {
-            const controller = new AbortController();
-            const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+            timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
             const response = await fetch(url, {
                 method: 'GET',
                 signal: controller.signal
             });
-            clearTimeout(timeoutId);
 
             return response.ok || response.status === 401;
         } catch (error) {
-            log(`[Recovery] _singleHealthCheck hiba (url: ${url}, timeout: ${timeoutMs}ms):`, error);
+            if (error.name !== 'AbortError') {
+                log(`[Recovery] _singleHealthCheck hiba (url: ${url}, timeout: ${timeoutMs}ms):`, error);
+            }
             return false;
+        } finally {
+            clearTimeout(timeoutId);
+            this._activeControllers.delete(controller);
         }
     }
 
@@ -258,10 +298,19 @@ class RecoveryManager {
      * Használat: komponens unmount-kor.
      */
     cancel() {
+        this._isCancelled = true;
         if (this._pendingTimeout) {
             clearTimeout(this._pendingTimeout);
             this._pendingTimeout = null;
         }
+        if (this._retryReject) {
+            this._retryReject();
+            this._retryReject = null;
+        }
+        for (const controller of this._activeControllers) {
+            controller.abort();
+        }
+        this._activeControllers.clear();
         this.isRecovering = false;
     }
 }
