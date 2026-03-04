@@ -48,11 +48,11 @@ import { STORAGE_KEYS } from "../../../../core/utils/constants.js";
 const FIELD_TO_TEAM = {
     writerId:         "writers",
     editorId:         "editors",
-    imageEditorId:    "imageEditors",
+    imageEditorId:    "image_editors",
     designerId:       "designers",
     proofwriterId:    "proofwriters",
-    artDirectorId:    "artDirectors",
-    managingEditorId: "managingEditors"
+    artDirectorId:    "art_directors",
+    managingEditorId: "managing_editors"
 };
 
 export const ContributorsSection = ({ article, onFieldUpdate, disabled, contributorPermissions = {} }) => {

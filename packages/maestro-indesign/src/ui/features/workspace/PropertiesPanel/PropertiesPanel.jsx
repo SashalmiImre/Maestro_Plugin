@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { ArticleProperties } from "../../articles/ArticleProperties/ArticleProperties.jsx";
 import { PublicationProperties } from "../../publications/PublicationProperties/PublicationProperties.jsx";
-import { WORKFLOW_CONFIG, MARKERS } from "../../../../core/utils/workflow/workflowConstants.js";
+import { WORKFLOW_CONFIG, MARKERS, COMMANDS } from "../../../../core/utils/workflow/workflowConstants.js";
 import { CustomCheckbox } from "../../../common/CustomCheckbox.jsx";
 import { WorkflowEngine } from "../../../../core/utils/workflow/workflowEngine.js";
 import { useUser } from "../../../../core/contexts/UserContext.jsx";
@@ -39,10 +39,25 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
     const safeWorkflowConfig = WORKFLOW_CONFIG || {};
     if (!WORKFLOW_CONFIG) console.warn("[PropertiesPanel] WORKFLOW_CONFIG is undefined!");
 
-    // Get available commands for current state (if article)
-    const commands = (type === 'article' && item && item.state !== undefined && safeWorkflowConfig[item.state]?.commands)
-        ? safeWorkflowConfig[item.state].commands
-        : [];
+    // Az aktuális állapothoz tartozó parancsok feloldva a COMMANDS regiszterből
+    const commands = useMemo(() => {
+        if (type !== 'article' || item.state === undefined) return [];
+        const stateCommandIds = safeWorkflowConfig[item.state]?.commands ?? [];
+        return stateCommandIds.filter(id => COMMANDS[id]).map(id => ({ id, ...COMMANDS[id] }));
+    }, [type, item.state]);
+
+    // Parancsonkénti jogosultság: user.teamIds vagy user.labels alapján
+    const commandPermissions = useMemo(() => {
+        const result = {};
+        for (const cmd of commands) {
+            const allowed =
+                !cmd.teams?.length ||
+                user?.teamIds?.some(t => cmd.teams.includes(t)) ||
+                user?.labels?.some(l => cmd.teams.includes(l));
+            result[cmd.id] = { allowed, reason: allowed ? undefined : 'Nincs jogosultságod ehhez a parancshoz' };
+        }
+        return result;
+    }, [commands, user?.teamIds, user?.labels]);
 
     const handleOpen = async () => {
         if (canOpen && onOpen) {
@@ -171,19 +186,23 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
                         alignItems: "center",
                         flexWrap: "wrap"
                     }}>
-                        {commands.map(cmd => (
-                            <sp-button
-                                quiet
-                                style={{ flexShrink: 0 }}
-                                key={cmd.id}
-                                variant="secondary"
-                                onClick={() => handleCommand(cmd.id)}
-                                disabled={isIgnored || isSyncing || !stateAccess.allowed || undefined}
-                                size="s"
-                            >
-                                {cmd.label}
-                            </sp-button>
-                        ))}
+                        {commands.map(cmd => {
+                            const cmdPerm = commandPermissions[cmd.id] ?? { allowed: false };
+                            return (
+                                <sp-button
+                                    quiet
+                                    style={{ flexShrink: 0 }}
+                                    key={cmd.id}
+                                    variant="secondary"
+                                    onClick={() => handleCommand(cmd.id)}
+                                    disabled={isIgnored || isSyncing || !cmdPerm.allowed || undefined}
+                                    title={!cmdPerm.allowed ? cmdPerm.reason : undefined}
+                                    size="s"
+                                >
+                                    {cmd.label}
+                                </sp-button>
+                            );
+                        })}
                     </div>
 
                     {/* Kimarad checkbox on the right */}

@@ -44,9 +44,9 @@ export const ANY_TEAM = Symbol('ANY_TEAM');
  */
 export const ARTICLE_ELEMENT_PERMISSIONS = {
     // ── GeneralSection ─────────────────────────────────────────
-    articleName:         ["editors", "designers", "managingEditors", "artDirectors"],
-    articlePages:        ["designers", "artDirectors"],
-    articleLayout:       ["designers", "artDirectors"],
+    articleName:         ["editors", "designers", "managing_editors", "art_directors"],
+    articlePages:        ["designers", "art_directors"],
+    articleLayout:       ["designers", "art_directors"],
 
     // ── ContributorsSection — per-dropdown jogosultság (ld. canEditContributorDropdown)
 
@@ -55,7 +55,7 @@ export const ARTICLE_ELEMENT_PERMISSIONS = {
     validationActions:   ANY_TEAM,
 
     // ── PropertiesPanel fejléc ─────────────────────────────────
-    ignoreToggle:        ["editors", "designers", "managingEditors", "artDirectors"],
+    ignoreToggle:        ["editors", "designers", "managing_editors", "art_directors"],
 };
 
 // ─── Kiadvány-szintű jogosultságok ─────────────────────────────────────────
@@ -67,11 +67,11 @@ export const ARTICLE_ELEMENT_PERMISSIONS = {
  * @type {Object.<string, string[]|Symbol>}
  */
 export const PUBLICATION_ELEMENT_PERMISSIONS = {
-    publicationProperties:   ["managingEditors", "artDirectors"],
-    publicationGeneral:      ["editors", "managingEditors", "artDirectors"],
-    publicationLayouts:      ["designers", "artDirectors"],
-    publicationDeadlines:    ["editors", "managingEditors", "artDirectors"],
-    publicationContributors: ["editors", "managingEditors", "artDirectors"],
+    publicationProperties:   ["managing_editors", "art_directors"],
+    publicationGeneral:      ["editors", "managing_editors", "art_directors"],
+    publicationLayouts:      ["designers", "art_directors"],
+    publicationDeadlines:    ["editors", "managing_editors", "art_directors"],
+    publicationContributors: ["editors", "managing_editors", "art_directors"],
 };
 
 // ─── Jogosultság-ellenőrző függvények ──────────────────────────────────────
@@ -132,7 +132,7 @@ export function canUserAccessInState(user, articleState) {
         return { allowed: false, reason: "Nincs bejelentkezett felhasználó." };
     }
 
-    const alwaysAllowed = ["designers", "artDirectors"];
+    const alwaysAllowed = ["designers", "art_directors"];
     const userTeams = user.teamIds || [];
     const userLabels = user.labels || [];
 
@@ -158,14 +158,14 @@ export function canUserAccessInState(user, articleState) {
  *
  * @type {string[]}
  */
-export const LEADER_TEAMS = ["managingEditors", "artDirectors"];
+export const LEADER_TEAMS = ["managing_editors", "art_directors"];
 
 /**
  * Ellenőrzi, hogy a felhasználó szerkesztheti-e az adott contributor
  * dropdown-ot a cikk aktuális állapotában.
  *
  * Szabályok:
- * 1. Vezetők (managingEditors, artDirectors) → bármely dropdown, bármely állapot.
+ * 1. Vezetők (managing_editors, art_directors) → bármely dropdown, bármely állapot.
  * 2. Nem-vezetők → csak a saját csapatjuknak/label-jüknek megfelelő dropdown,
  *    és csak ha a cikk állapota számukra aktív (STATE_PERMISSIONS).
  *

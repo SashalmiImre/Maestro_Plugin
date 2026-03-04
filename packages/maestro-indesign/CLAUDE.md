@@ -397,7 +397,8 @@ index.jsx
 - **Jelszókezelés** (hamburgermenü, `index.jsx`-ben, React kontextuson kívül):
   - **Jelszó módosítás**: InDesign natív dialog → `account.updatePassword()` — bejelentkezést igényel.
   - **Elfelejtett jelszó**: InDesign natív dialog (email) → `account.createRecovery(email, RECOVERY_URL)` → proxy `/reset-password` oldal a böngészőben.
-- **Realtime szinkron**: Az Appwrite Realtime `account` csatornára feliratkozva a `user` objektum (beleértve `labels`, `name`, `prefs`) automatikusan frissül, ha a szerveren módosítják (Console/Server SDK)
+- **Realtime szinkron (labels/prefs)**: Az Appwrite Realtime `account` csatornára feliratkozva a `user` objektum (beleértve `labels`, `name`, `prefs`) automatikusan frissül, ha a szerveren módosítják (Console/Server SDK)
+- **Realtime szinkron (teamIds)**: Az `account` csatorna `response.events[]` tömbjét is figyeli — ha tartalmaz `.memberships.` stringet (szerver-oldali tagságváltozás), `teams.list()` hívással frissíti a `user.teamIds`-t. Fallback a `teams` csatorna → `teamMembershipChanged` MaestroEvent útvonal mellé.
 - **Recovery szinkron**: A `dataRefreshRequested` MaestroEvent-re is feliratkozik — minden recovery-nél (sleep/wake, reconnect, focus) `account.get()`-tel frissíti a user adatokat. Ez biztosítja a labels/prefs szinkront akkor is, ha az Appwrite Realtime `account` csatorna nem tüzel proxy-n keresztül (pl. szerver-oldali label módosításnál).
 
 ### ConnectionContext API

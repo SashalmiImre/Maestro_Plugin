@@ -2,6 +2,23 @@
 import { VALIDATOR_TYPES } from "../validationConstants.js";
 
 /**
+ * Parancs-regiszter: az összes elérhető parancs definíciója.
+ * Az egyes állapotokban megjelenő parancsokat a WORKFLOW_CONFIG határozza meg.
+ * A jogosultságot (melyik csapatok futtathatják) itt kell konfigurálni.
+ *
+ * @type {Object.<string, { label: string, teams: string[] }>}
+ */
+export const COMMANDS = {
+    'export_pdf':              { label: 'PDF írás',                 teams: ['designers', 'editors', 'managing_editors', 'art_directors'] },
+    'export_final_pdf':        { label: 'Végleges PDF írás',        teams: ['designers', 'art_directors'] },
+    'collect_images':          { label: 'Képek összegyűjtése',      teams: ['designers', 'art_directors'] },
+    'collect_selected_images': { label: 'Kijelölt képek gyűjtése',  teams: ['designers', 'art_directors'] },
+    'preflight_check':         { label: 'Preflight',                teams: ['designers', 'art_directors'] },
+    'archive':                 { label: 'Archiválás',               teams: ['designers', 'art_directors'] },
+    'print_output':            { label: 'Levilágítás',              teams: ['designers', 'art_directors'] }
+};
+
+/**
  * Munkafolyamat állapotok enumerációja.
  * Ezek az értékek kerülnek mentésre az adatbázisban a cikkek `state` mezőjében.
  * 
@@ -61,7 +78,7 @@ export const TRANSITION_TYPES = {
  *     requiredToEnter: Array<string|Object>, // Feltételek az állapotba lépéshez (BLOKKOLÓ - kötelező megfelelni)
  *     requiredToExit: Array<string|Object> // Feltételek az állapot elhagyásához (BLOKKOLÓ - kötelező teljesíteni)
  *   },
- *   commands: Array<{id: string, label: string}>
+ *   commands: string[]
  * }>}
  */
 export const WORKFLOW_CONFIG = {
@@ -88,9 +105,7 @@ export const WORKFLOW_CONFIG = {
             requiredToEnter: [VALIDATOR_TYPES.FILE_ACCESSIBLE, VALIDATOR_TYPES.PAGE_NUMBER_CHECK, VALIDATOR_TYPES.FILENAME_VERIFICATION],
             requiredToExit: []
         },
-        commands: [
-            { id: 'export_pdf', label: 'PDF írás' }
-        ]
+        commands: ['export_pdf']
     },
     [WORKFLOW_STATES.WAITING_FOR_START]: {
         config: { label: "Elindításra vár", color: "var(--status-waiting-for-start)", icon: "" },
@@ -103,10 +118,7 @@ export const WORKFLOW_CONFIG = {
             requiredToEnter: [VALIDATOR_TYPES.FILE_ACCESSIBLE, VALIDATOR_TYPES.PAGE_NUMBER_CHECK, VALIDATOR_TYPES.FILENAME_VERIFICATION],
             requiredToExit: []
         },
-        commands: [
-            { id: 'export_pdf', label: 'PDF írás' },
-            { id: 'collect_images', label: 'Képek összegyűjtése' }
-        ]
+        commands: ['export_pdf', 'collect_images']
     },
     [WORKFLOW_STATES.EDITORIAL_APPROVAL]: {
         config: { label: "Szerkesztői ellenőrzés", color: "var(--status-editorial-approval)", icon: "" },
@@ -119,10 +131,7 @@ export const WORKFLOW_CONFIG = {
             requiredToEnter: [VALIDATOR_TYPES.FILE_ACCESSIBLE, VALIDATOR_TYPES.PAGE_NUMBER_CHECK, VALIDATOR_TYPES.FILENAME_VERIFICATION],
             requiredToExit: []
         },
-        commands: [
-            { id: 'export_pdf', label: 'PDF írás' },
-            { id: 'collect_images', label: 'Képek összegyűjtése' }
-        ]
+        commands: ['export_pdf', 'collect_images']
     },
     [WORKFLOW_STATES.CONTENT_REVISION]: {
         config: { label: "Korrektúrázás", color: "var(--status-content-revision)", icon: "" },
@@ -135,10 +144,7 @@ export const WORKFLOW_CONFIG = {
             requiredToEnter: [VALIDATOR_TYPES.FILE_ACCESSIBLE, VALIDATOR_TYPES.PAGE_NUMBER_CHECK, VALIDATOR_TYPES.FILENAME_VERIFICATION],
             requiredToExit: []
         },
-        commands: [
-            { id: 'export_pdf', label: 'PDF írás' },
-            { id: 'collect_images', label: 'Képek összegyűjtése' }
-        ]
+        commands: ['export_pdf', 'collect_images']
     },
     [WORKFLOW_STATES.FINAL_APPROVAL]: {
         config: { label: "Végső ellenőrzés", color: "var(--status-final-approval)", icon: "" },
@@ -153,10 +159,7 @@ export const WORKFLOW_CONFIG = {
             requiredToEnter: [VALIDATOR_TYPES.FILE_ACCESSIBLE],
             requiredToExit: []
         },
-        commands: [
-            { id: 'export_final_pdf', label: 'Végleges PDF írás' },
-            { id: 'preflight_check', label: 'Preflight' }
-        ]
+        commands: ['export_final_pdf', 'preflight_check']
     },
     [WORKFLOW_STATES.PRINTABLE]: {
         config: { label: "Nyomdakész", color: "var(--status-printable)", icon: "" },
@@ -176,9 +179,7 @@ export const WORKFLOW_CONFIG = {
                 { validator: VALIDATOR_TYPES.PREFLIGHT_CHECK, options: { profile: "Levil", profileFile: "Levil.idpp" } }
             ]
         },
-        commands: [
-            { id: 'preflight_check', label: 'Preflight' }
-        ]
+        commands: ['preflight_check']
     },
     [WORKFLOW_STATES.ARCHIVABLE]: {
         config: { label: "Archiválható", color: "var(--status-archivable)", icon: "" },
@@ -188,10 +189,7 @@ export const WORKFLOW_CONFIG = {
             requiredToEnter: [VALIDATOR_TYPES.FILE_ACCESSIBLE],
             requiredToExit: []
         },
-        commands: [
-             { id: 'archive', label: 'Archiválás' },
-             { id: 'print_output', label: 'Levilágítás' }
-        ]
+        commands: ['archive', 'print_output']
     }
 };
 
@@ -231,13 +229,13 @@ export const STATE_DURATIONS = {
  * @type {Object.<number, string[]>}
  */
 export const STATE_PERMISSIONS = {
-    [WORKFLOW_STATES.DESIGNING]:           ["designers", "artDirectors"],
-    [WORKFLOW_STATES.DESIGN_APPROVAL]:     ["artDirectors"],
-    [WORKFLOW_STATES.WAITING_FOR_START]:   ["designers", "artDirectors"],
-    [WORKFLOW_STATES.EDITORIAL_APPROVAL]:  ["editors", "managingEditors"],
+    [WORKFLOW_STATES.DESIGNING]:           ["designers", "art_directors"],
+    [WORKFLOW_STATES.DESIGN_APPROVAL]:     ["art_directors"],
+    [WORKFLOW_STATES.WAITING_FOR_START]:   ["designers", "art_directors"],
+    [WORKFLOW_STATES.EDITORIAL_APPROVAL]:  ["editors", "managing_editors"],
     [WORKFLOW_STATES.CONTENT_REVISION]:    ["proofwriters"],
-    [WORKFLOW_STATES.FINAL_APPROVAL]:      ["editors", "managingEditors"],
-    [WORKFLOW_STATES.PRINTABLE]:           ["designers", "artDirectors"]
+    [WORKFLOW_STATES.FINAL_APPROVAL]:      ["editors", "managing_editors"],
+    [WORKFLOW_STATES.PRINTABLE]:           ["designers", "art_directors"]
 };
 
 /**
@@ -248,11 +246,11 @@ export const STATE_PERMISSIONS = {
  * @type {Object.<string, string>}
  */
 export const TEAM_ARTICLE_FIELD = {
-    "designers":        "designerId",
-    "artDirectors":     "artDirectorId",
-    "editors":          "editorId",
-    "managingEditors":  "managingEditorId",
-    "proofwriters":     "proofwriterId",
-    "writers":          "writerId",
-    "imageEditors":     "imageEditorId"
+    "designers":         "designerId",
+    "art_directors":     "artDirectorId",
+    "editors":           "editorId",
+    "managing_editors":  "managingEditorId",
+    "proofwriters":      "proofwriterId",
+    "writers":           "writerId",
+    "image_editors":     "imageEditorId"
 };

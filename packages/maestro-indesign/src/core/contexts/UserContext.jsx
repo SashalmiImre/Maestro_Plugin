@@ -225,8 +225,30 @@ export function AuthorizationProvider({ children }) {
     useEffect(() => {
         if (!user) return;
 
-        const unsubscribe = realtime.subscribe('account', (response) => {
-            const { payload } = response;
+        const unsubscribe = realtime.subscribe('account', async (response) => {
+            const { events, payload } = response;
+
+            // Tagság-változás: az account payload nem tartalmaz teamIds-t,
+            // de az events tömbben megjelenik a memberships esemény
+            // (pl. users.ID.memberships.ID.create / .delete)
+            const hasMembershipEvent = events?.some(e => e.includes('.memberships.'));
+            if (hasMembershipEvent) {
+                try {
+                    const result = await teams.list();
+                    const teamIds = result.teams.map(t => t.$id);
+                    setUser(prev => {
+                        if (!prev) return prev;
+                        if (JSON.stringify(prev.teamIds) === JSON.stringify(teamIds)) return prev;
+                        log('[UserContext] Csapattagság frissítve (Realtime / account csatorna)');
+                        return { ...prev, teamIds };
+                    });
+                } catch (error) {
+                    log('[UserContext] Csapattagság frissítése sikertelen (account event)', 'warn');
+                }
+                return;
+            }
+
+            // Egyéb account változás (labels, name, prefs)
             if (!payload || !payload.$id) return;
 
             // Csak akkor frissítünk, ha az adat tényleg változott.

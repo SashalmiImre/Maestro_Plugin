@@ -3,7 +3,7 @@
 A munkafolyamat állapotátmeneteit csapat-alapú jogosultsági rendszer védi. A rendszer meghatározza, hogy egy adott felhasználó mozgathatja-e a cikket a jelenlegi állapotából — előre és hátra egyaránt.
 
 **Forrásfájlok:**
-- Konfiguráció: `src/core/utils/workflow/workflowConstants.js` (`STATE_PERMISSIONS`, `TEAM_ARTICLE_FIELD`)
+- Konfiguráció: `src/core/utils/workflow/workflowConstants.js` (`STATE_PERMISSIONS`, `TEAM_ARTICLE_FIELD`, `COMMANDS`)
 - Logika: `src/core/utils/workflow/workflowPermissions.js` (`canUserMoveArticle`, `hasTransitionPermission`)
 - User adatok: `src/core/contexts/UserContext.jsx` (`user.teamIds`, `user.labels`)
 
@@ -63,27 +63,21 @@ A `canUserMoveArticle(article, currentState, user)` függvény dönt:
 1. Nincs STATE_PERMISSIONS bejegyzés az állapothoz?
    └─ IGEN → bárki mozgathatja (pl. ARCHIVABLE végállapot)
 
-2. A releváns csapatok contributor mezőiből van-e bárki hozzárendelve?
-   └─ NEM → csapattagság (teamIds) VAGY label szükséges
-
-3. A jelenlegi felhasználó az egyik hozzárendelt személy?
-   └─ IGEN → mozgathatja (saját anyag)
-
-4. A felhasználó csapat tagja (teamIds) VAGY labels tartalmazza a releváns slug-ot?
-   └─ IGEN → mozgathatja (csapattagság / label override)
-
-5. Egyik sem teljesül → NEM mozgathatja
+2. A felhasználónak csapattagsága (teamIds) VAGY label override-ja van a releváns csapatokhoz?
+   └─ IGEN → mozgathatja
+   └─ NEM  → NEM mozgathatja
 ```
+
+A közvetlen hozzárendelés (contributor mező) **nem ad** önálló átmenet-jogosultságot — csapattagság vagy label mindig szükséges. Ez megakadályozza, hogy egy véletlenül rossz mezőbe beállított felhasználó (pl. editor a `designerId`-ban) a csapatától független jogot kapjon.
 
 ### Példa
 
-Egy cikk `DESIGN_APPROVAL` (1) állapotban van, `artDirectorId = "user_A"`:
+Egy cikk `DESIGN_APPROVAL` (1) állapotban van:
 
-- **user_A** kiválasztja → **mozgathatja** (ő a hozzárendelt Art Director)
-- **user_B** (Art Directors csapat tagja) → **mozgathatja** (csapattagság)
-- **user_C** (`labels: ["artDirectors"]`) → **mozgathatja** (label override)
+- **user_A** (Art Directors csapat tagja) → **mozgathatja** (csapattagság)
+- **user_B** (`labels: ["art_directors"]`) → **mozgathatja** (label override)
+- **user_C** (Editor csapat tagja, de az `artDirectorId` mezőbe van beállítva) → **NEM mozgathatja** (az Editors csapat nem szerepel a DESIGN_APPROVAL STATE_PERMISSIONS-ben)
 - **user_D** (nem tag, nincs label) → **NEM mozgathatja**
-- Ha az `artDirectorId` **üres** → csak az Art Directors csapat tagjai (`teamIds` vagy `labels`) mozgathatják
 
 ---
 
@@ -93,7 +87,8 @@ Egy cikk `DESIGN_APPROVAL` (1) állapotban van, `artDirectorId = "user_A"`:
 A `UserContext` a `teams.list()` API-val kérdezi le a bejelentkezett felhasználó csapatait. A `teamIds` mező frissül:
 - **Login**: `enrichUserWithTeams()` → `teams.list()` → `user.teamIds`
 - **App indulás**: `checkUserStatus` → `enrichUserWithTeams()`
-- **Team tagság változás**: `teams` Realtime csatorna → `teamMembershipChanged` MaestroEvent → `teams.list()` → `user.teamIds` frissül
+- **Team tagság változás (kliens-oldali)**: `teams` Realtime csatorna → `teamMembershipChanged` MaestroEvent → `teams.list()` → `user.teamIds` frissül
+- **Team tagság változás (szerver-oldali)**: `account` Realtime csatorna → `events[]` tartalmaz `.memberships.` stringet → `teams.list()` → `user.teamIds` azonnali frissítés *(fallback, ha az admin szerveren változtatja a tagságot)*
 - **Recovery** (sleep/wake): `dataRefreshRequested` → `account.get()` + `teams.list()` → teljes frissítés
 
 ### Labels (`user.labels`)
@@ -193,7 +188,22 @@ A kiadvány ContributorsSection-ben csak a vezetők szerkeszthetik a dropdown-ok
 | Elem | Szabály |
 |------|---------|
 | Fájl megnyitás | Designers/Art Directors: mindig. Mások: csak ha a cikk a STATE_PERMISSIONS szerinti állapotban van |
-| Parancsok (export, collect, preflight, archive, print) | Ugyanaz mint a fájl megnyitás |
+
+### Parancsonkénti jogosultságok (`COMMANDS` regiszter)
+
+Az egyes parancsokhoz csapatszintű jogosultság van rendelve a `COMMANDS` objektumban (`workflowConstants.js`). Az állapot csak azt határozza meg, mely parancsok **jelennek meg** — hogy egy adott felhasználó **futtathatja-e**, azt a `teams[]` lista dönti.
+
+| Parancs | Engedélyezett csapatok |
+|---------|----------------------|
+| `export_pdf` | Designers, Editors, Managing Editors, Art Directors |
+| `export_final_pdf` | Designers, Art Directors |
+| `collect_images` | Designers, Art Directors |
+| `collect_selected_images` | Designers, Art Directors |
+| `preflight_check` | Designers, Art Directors |
+| `archive` | Designers, Art Directors |
+| `print_output` | Designers, Art Directors |
+
+Az ellenőrzés: `user.teamIds` vagy `user.labels` tartalmaz-e valamelyik engedélyezett csapatot. Ha nem, a gomb `disabled` + tooltip jelenik meg.
 
 ### Kiadvány-szintű elemek
 
@@ -223,6 +233,17 @@ A `workflowConstants.js` fájlban a `STATE_PERMISSIONS` objektumot kell módosí
 ```javascript
 export const STATE_PERMISSIONS = {
     [WORKFLOW_STATES.DESIGNING]: ["designers", "art_directors"],
+    // ...
+};
+```
+
+### Új parancs jogosultság módosítása
+
+A `workflowConstants.js` fájlban a `COMMANDS` objektumban kell módosítani a `teams[]` tömböt:
+
+```javascript
+export const COMMANDS = {
+    'export_pdf': { label: 'PDF írás', teams: ['designers', 'editors', 'art_directors'] },
     // ...
 };
 ```
