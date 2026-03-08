@@ -2,6 +2,7 @@ const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const cors = require('cors');
 const sdk = require('node-appwrite');
+const Groq = require('groq-sdk');
 
 /**
  * Maestro CORS Proxy Server
@@ -42,6 +43,94 @@ app.get(['/v1/health', '/maestro-proxy/v1/health'], (req, res) => {
         message: 'Maestro CORS Proxy is running'
     });
 });
+
+// --- AI Klaszterezés Endpoint ---
+
+/**
+ * Szövegkeret-klaszterezés AI segítségével.
+ *
+ * A plugin elküldi a deduplikált story-kat (pozíció, betűméret, szövegrészlet),
+ * az AI pedig logikai cikkekbe csoportosítja és típusosztályozza őket.
+ *
+ * Env var: GROQ_API_KEY (ha nincs beállítva, 501-et ad vissza → plugin fallback).
+ */
+app.post(
+    ['/api/cluster-article', '/maestro-proxy/api/cluster-article'],
+    express.json({ limit: '500kb' }),
+    async (req, res) => {
+        const apiKey = process.env.GROQ_API_KEY;
+        if (!apiKey) {
+            return res.status(501).json({ error: 'AI szolgáltatás nincs konfigurálva' });
+        }
+
+        const { stories } = req.body;
+        if (!stories || !Array.isArray(stories) || stories.length === 0) {
+            return res.status(400).json({ error: 'Hiányzó vagy érvénytelen stories adat' });
+        }
+
+        try {
+            const groq = new Groq({ apiKey });
+
+            // Story-k kompakt szöveges formátuma a prompthoz
+            const storyLines = stories.map(s =>
+                `[story:${s.storyId}] oldal:${s.pageIdx} ` +
+                `pos:(${Math.round(s.bounds[1])},${Math.round(s.bounds[0])})–` +
+                `(${Math.round(s.bounds[3])},${Math.round(s.bounds[2])}) ` +
+                `${s.charCount}kar ${s.fontSize}pt` +
+                (s.styleName ? ` stílus:"${s.styleName}"` : '') +
+                `\n"${s.text}"`
+            ).join('\n\n');
+
+            const prompt = `Egy magyar magazin oldalpárjának szöveg-story-jait kapod. Minden story egy vagy több összefűzött szövegkeretből áll (az InDesign threading miatt).
+
+Feladatod:
+1. Csoportosítsd a story-kat logikai cikkekbe (klaszterekbe)
+2. Minden story-hoz rendelj típust
+
+STORY-K:
+${storyLines}
+
+KLASZTEREZÉSI SZABÁLYOK:
+- Tematikusan összetartozó szövegek egy klaszterbe (pl. egy celebről szóló cím + leírás + képaláírás)
+- Különböző személyekről/témákról szóló szövegek KÜLÖN klaszterbe
+- A fő oldal-cím és bevezető szöveg (ha van) külön klaszter
+- Rövid, önálló szövegek (pl. idézet rovat, képaláírás) lehetnek külön klaszter
+- Pozíció figyelembevétele: közeli szövegek valószínűbben összetartoznak
+
+TÍPUSOK (pontosan egyet rendelj minden story-hoz):
+- CIM: főcím vagy egy minicikk címe (jellemzően nagy betűméret, rövid szöveg)
+- LEAD: bevezető szöveg (a fő cím utáni összefoglaló)
+- KENYERSZOVEG: fő szövegtörzs
+- KEPALAIRAS: képaláírás (rövid, jellemzően kis betűméret)
+- KERETES: keretes cikk (önálló dobozban lévő szöveg)
+- KOZCIM: alcím
+- KIEMELES: kiemelt idézet vagy szöveg (pull quote)
+
+Válaszolj KIZÁRÓLAG érvényes JSON-nel, semmilyen más szöveggel:
+{"clusters":[{"storyIds":["id1","id2"],"types":{"id1":"CIM","id2":"KENYERSZOVEG"}}]}`;
+
+            const completion = await groq.chat.completions.create({
+                model: 'llama-3.3-70b-versatile',
+                max_tokens: 4096,
+                messages: [{ role: 'user', content: prompt }]
+            });
+
+            const responseText = completion.choices[0].message.content;
+
+            // JSON kinyerése — ha markdown code block-ba csomagolta, kivágjuk
+            const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+            const jsonStr = jsonMatch ? jsonMatch[1].trim() : responseText.trim();
+            const parsed = JSON.parse(jsonStr);
+
+            console.log(`[AI] Klaszterezés: ${stories.length} story → ${parsed.clusters.length} klaszter`);
+            res.json(parsed);
+
+        } catch (error) {
+            console.error('[AI] Klaszterezés hiba:', error.message);
+            res.status(500).json({ error: error.message });
+        }
+    }
+);
 
 // --- Közös HTML sablon ---
 
