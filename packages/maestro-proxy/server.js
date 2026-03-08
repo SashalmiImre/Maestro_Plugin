@@ -68,6 +68,63 @@ app.post(
             return res.status(400).json({ error: 'Hiányzó vagy érvénytelen stories adat' });
         }
 
+        // Validate each story object structure
+        for (let i = 0; i < stories.length; i++) {
+            const s = stories[i];
+
+            // Check if story is an object
+            if (typeof s !== 'object' || s === null) {
+                console.error(`[AI] Klaszterezés hiba: story[${i}] is not an object`);
+                return res.status(400).json({ error: `Invalid story at index ${i}: not an object` });
+            }
+
+            // Check required string/number properties
+            if (typeof s.storyId !== 'string' && typeof s.storyId !== 'number') {
+                console.error(`[AI] Klaszterezés hiba: story[${i}].storyId is not string/number`);
+                return res.status(400).json({ error: `Invalid story at index ${i}: storyId must be string or number` });
+            }
+
+            if (typeof s.pageIdx !== 'number') {
+                console.error(`[AI] Klaszterezés hiba: story[${i}].pageIdx is not a number`);
+                return res.status(400).json({ error: `Invalid story at index ${i}: pageIdx must be a number` });
+            }
+
+            if (typeof s.text !== 'string') {
+                console.error(`[AI] Klaszterezés hiba: story[${i}].text is not a string`);
+                return res.status(400).json({ error: `Invalid story at index ${i}: text must be a string` });
+            }
+
+            // Check bounds array
+            if (!Array.isArray(s.bounds) || s.bounds.length < 4) {
+                console.error(`[AI] Klaszterezés hiba: story[${i}].bounds is not an array with length >= 4`);
+                return res.status(400).json({ error: `Invalid story at index ${i}: bounds must be an array with at least 4 elements` });
+            }
+
+            for (let j = 0; j < 4; j++) {
+                if (typeof s.bounds[j] !== 'number') {
+                    console.error(`[AI] Klaszterezés hiba: story[${i}].bounds[${j}] is not a number`);
+                    return res.status(400).json({ error: `Invalid story at index ${i}: bounds must contain numeric values` });
+                }
+            }
+
+            // Check numeric properties
+            if (typeof s.charCount !== 'number') {
+                console.error(`[AI] Klaszterezés hiba: story[${i}].charCount is not a number`);
+                return res.status(400).json({ error: `Invalid story at index ${i}: charCount must be a number` });
+            }
+
+            if (typeof s.fontSize !== 'number') {
+                console.error(`[AI] Klaszterezés hiba: story[${i}].fontSize is not a number`);
+                return res.status(400).json({ error: `Invalid story at index ${i}: fontSize must be a number` });
+            }
+
+            // styleName is optional, but if present must be string
+            if (s.styleName !== undefined && typeof s.styleName !== 'string') {
+                console.error(`[AI] Klaszterezés hiba: story[${i}].styleName is not a string`);
+                return res.status(400).json({ error: `Invalid story at index ${i}: styleName must be a string` });
+            }
+        }
+
         try {
             const groq = new Groq({ apiKey });
 
@@ -115,19 +172,46 @@ Válaszolj KIZÁRÓLAG érvényes JSON-nel, semmilyen más szöveggel:
                 messages: [{ role: 'user', content: prompt }]
             });
 
+            // Validate AI response structure
+            if (!completion.choices || !Array.isArray(completion.choices) || completion.choices.length === 0) {
+                console.error('[AI] Klaszterezés hiba: No choices in AI response');
+                return res.status(500).json({ error: 'Invalid AI response' });
+            }
+
             const responseText = completion.choices[0].message.content;
+            if (typeof responseText !== 'string') {
+                console.error('[AI] Klaszterezés hiba: Response text is not a string');
+                return res.status(500).json({ error: 'Invalid AI response' });
+            }
 
             // JSON kinyerése — ha markdown code block-ba csomagolta, kivágjuk
-            const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
-            const jsonStr = jsonMatch ? jsonMatch[1].trim() : responseText.trim();
-            const parsed = JSON.parse(jsonStr);
+            let parsed;
+            try {
+                const jsonMatch = responseText.match(/```(?:json)?\s*([\s\S]*?)```/);
+                const jsonStr = jsonMatch ? jsonMatch[1].trim() : responseText.trim();
+                parsed = JSON.parse(jsonStr);
+            } catch (parseError) {
+                console.error('[AI] Klaszterezés hiba: JSON parse failed:', parseError);
+                return res.status(500).json({ error: 'Invalid AI response' });
+            }
+
+            // Validate parsed response structure
+            if (!parsed.clusters || !Array.isArray(parsed.clusters)) {
+                console.error('[AI] Klaszterezés hiba: parsed.clusters is not an array');
+                return res.status(500).json({ error: 'Invalid AI response' });
+            }
+
+            if (!stories || !Array.isArray(stories)) {
+                console.error('[AI] Klaszterezés hiba: stories is not defined or not an array');
+                return res.status(500).json({ error: 'Invalid input data' });
+            }
 
             console.log(`[AI] Klaszterezés: ${stories.length} story → ${parsed.clusters.length} klaszter`);
             res.json(parsed);
 
         } catch (error) {
-            console.error('[AI] Klaszterezés hiba:', error.message);
-            res.status(500).json({ error: error.message });
+            console.error('[AI] Klaszterezés hiba:', error);
+            res.status(500).json({ error: 'Internal server error' });
         }
     }
 );
