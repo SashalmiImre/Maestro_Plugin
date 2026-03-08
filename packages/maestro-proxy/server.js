@@ -84,9 +84,21 @@ app.post(
                 return res.status(400).json({ error: `Invalid story at index ${i}: storyId must be string or number` });
             }
 
+            // If storyId is numeric, ensure it's finite
+            if (typeof s.storyId === 'number' && !Number.isFinite(s.storyId)) {
+                console.error(`[AI] Klaszterezés hiba: story[${i}].storyId is NaN or Infinity`);
+                return res.status(400).json({ error: `Invalid story at index ${i}: storyId must be a finite number` });
+            }
+
             if (typeof s.pageIdx !== 'number') {
                 console.error(`[AI] Klaszterezés hiba: story[${i}].pageIdx is not a number`);
                 return res.status(400).json({ error: `Invalid story at index ${i}: pageIdx must be a number` });
+            }
+
+            // Ensure pageIdx is finite
+            if (!Number.isFinite(s.pageIdx)) {
+                console.error(`[AI] Klaszterezés hiba: story[${i}].pageIdx is NaN or Infinity`);
+                return res.status(400).json({ error: `Invalid story at index ${i}: pageIdx must be a finite number` });
             }
 
             if (typeof s.text !== 'string') {
@@ -105,6 +117,12 @@ app.post(
                     console.error(`[AI] Klaszterezés hiba: story[${i}].bounds[${j}] is not a number`);
                     return res.status(400).json({ error: `Invalid story at index ${i}: bounds must contain numeric values` });
                 }
+
+                // Ensure bounds element is finite
+                if (!Number.isFinite(s.bounds[j])) {
+                    console.error(`[AI] Klaszterezés hiba: story[${i}].bounds[${j}] is NaN or Infinity`);
+                    return res.status(400).json({ error: `Invalid story at index ${i}: bounds values must be finite numbers` });
+                }
             }
 
             // Check numeric properties
@@ -113,9 +131,21 @@ app.post(
                 return res.status(400).json({ error: `Invalid story at index ${i}: charCount must be a number` });
             }
 
+            // Ensure charCount is finite
+            if (!Number.isFinite(s.charCount)) {
+                console.error(`[AI] Klaszterezés hiba: story[${i}].charCount is NaN or Infinity`);
+                return res.status(400).json({ error: `Invalid story at index ${i}: charCount must be a finite number` });
+            }
+
             if (typeof s.fontSize !== 'number') {
                 console.error(`[AI] Klaszterezés hiba: story[${i}].fontSize is not a number`);
                 return res.status(400).json({ error: `Invalid story at index ${i}: fontSize must be a number` });
+            }
+
+            // Ensure fontSize is finite
+            if (!Number.isFinite(s.fontSize)) {
+                console.error(`[AI] Klaszterezés hiba: story[${i}].fontSize is NaN or Infinity`);
+                return res.status(400).json({ error: `Invalid story at index ${i}: fontSize must be a finite number` });
             }
 
             // styleName is optional, but if present must be string
@@ -178,7 +208,20 @@ Válaszolj KIZÁRÓLAG érvényes JSON-nel, semmilyen más szöveggel:
                 return res.status(500).json({ error: 'Invalid AI response' });
             }
 
-            const responseText = completion.choices[0].message.content;
+            // Null-safety check for message object
+            const choice = completion.choices[0];
+            if (!choice || typeof choice !== 'object') {
+                console.error('[AI] Klaszterezés hiba: choice is not an object');
+                return res.status(500).json({ error: 'Invalid AI response' });
+            }
+
+            const message = choice.message;
+            if (!message || typeof message !== 'object') {
+                console.error('[AI] Klaszterezés hiba: message is not an object');
+                return res.status(500).json({ error: 'Invalid AI response' });
+            }
+
+            const responseText = message.content;
             if (typeof responseText !== 'string') {
                 console.error('[AI] Klaszterezés hiba: Response text is not a string');
                 return res.status(500).json({ error: 'Invalid AI response' });
@@ -199,11 +242,6 @@ Válaszolj KIZÁRÓLAG érvényes JSON-nel, semmilyen más szöveggel:
             if (!parsed.clusters || !Array.isArray(parsed.clusters)) {
                 console.error('[AI] Klaszterezés hiba: parsed.clusters is not an array');
                 return res.status(500).json({ error: 'Invalid AI response' });
-            }
-
-            if (!stories || !Array.isArray(stories)) {
-                console.error('[AI] Klaszterezés hiba: stories is not defined or not an array');
-                return res.status(500).json({ error: 'Invalid input data' });
             }
 
             console.log(`[AI] Klaszterezés: ${stories.length} story → ${parsed.clusters.length} klaszter`);
