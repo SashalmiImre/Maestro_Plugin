@@ -183,6 +183,8 @@ KLASZTEREZÉSI SZABÁLYOK:
 - A fő oldal-cím és bevezető szöveg (ha van) külön klaszter
 - Rövid, önálló szövegek (pl. idézet rovat, képaláírás) lehetnek külön klaszter
 - Pozíció figyelembevétele: közeli szövegek valószínűbben összetartoznak
+- FONTOS: Rövid névfeliratok (pl. "Drew Barrymore", "Céline Dion") MINDIG ahhoz a klaszterhez tartoznak, amelyik az adott személyről szóló szöveget tartalmazza — NE legyenek önálló klaszterben!
+- FONTOS: Rövid feliratok (pl. "Édesanyja persze csak jót akart", "Megküzdött a babapofiért") MINDIG a legközelebbi, tartalmilag kapcsolódó story-val egy klaszterbe kerülnek!
 
 TÍPUSOK (pontosan egyet rendelj minden story-hoz):
 - CIM: főcím vagy egy minicikk címe (jellemzően nagy betűméret, rövid szöveg)
@@ -199,6 +201,7 @@ Válaszolj KIZÁRÓLAG érvényes JSON-nel, semmilyen más szöveggel:
             const completion = await groq.chat.completions.create({
                 model: 'llama-3.3-70b-versatile',
                 max_tokens: 4096,
+                temperature: 0,
                 messages: [{ role: 'user', content: prompt }]
             });
 
