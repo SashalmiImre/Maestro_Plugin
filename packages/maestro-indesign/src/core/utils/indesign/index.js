@@ -37,6 +37,15 @@ export {
     generateCollectImagesScript
 } from "./exportScripts.js";
 
+// Archiválás
+export {
+    generateListInddFilesScript,
+    generateCreateArchiveFoldersScript,
+    generateExtractArticleDataScript,
+    generateSaveTextFilesScript,
+    generateCopyInddScript
+} from "./archivingScripts.js";
+
 // InDesign UXP utility-k
 export {
     getIndesignModule,

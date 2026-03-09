@@ -20,6 +20,24 @@ import { log } from "../utils/logger.js";
 const UserContext = createContext();
 
 /**
+ * Sorrend-független string[] egyenlőség ellenőrzés (teamIds összehasonlításához).
+ * Compares unique elements using Sets to handle duplicates correctly.
+ * @param {string[]|undefined} a
+ * @param {string[]|undefined} b
+ * @returns {boolean}
+ */
+const sameTeamIds = (a, b) => {
+    if (a === b) return true;
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+    
+    const setA = new Set(a);
+    const setB = new Set(b);
+    
+    if (setA.size !== setB.size) return false;
+    return Array.from(setA).every(id => setB.has(id));
+};
+
+/**
  * Maszkolja az email címet biztonsági okokból (pl. naplózáshoz).
  * @param {string} email - A maszkolandó email cím.
  * @returns {string} A maszkolt email (pl. t***@domain.com).
@@ -64,6 +82,27 @@ export function AuthorizationProvider({ children }) {
     }, [user]);
 
     const { startConnecting, setConnected } = useConnection();
+
+    /**
+     * Csapattagságot frissít teams.list() alapján és setUser-rel alkalmazza.
+     * Ha az adat nem változott, nem okoz re-rendert.
+     *
+     * @param {string} logLabel - Naplózásban megjelenő kontextus-azonosító.
+     */
+    const refreshTeamIds = async (logLabel) => {
+        try {
+            const result = await teams.list();
+            const teamIds = result.teams.map(t => t.$id);
+            setUser(prev => {
+                if (!prev) return prev;
+                if (sameTeamIds(prev.teamIds, teamIds)) return prev;
+                log(`[UserContext] Csapattagság frissítve (${logLabel})`);
+                return { ...prev, teamIds };
+            });
+        } catch (error) {
+            log(`[UserContext] Csapattagság frissítése sikertelen (${logLabel})`, 'warn');
+        }
+    };
 
     /**
      * User objektum gazdagítása csapattagsági adatokkal.
@@ -233,18 +272,7 @@ export function AuthorizationProvider({ children }) {
             // (pl. users.ID.memberships.ID.create / .delete)
             const hasMembershipEvent = events?.some(e => e.includes('.memberships.'));
             if (hasMembershipEvent) {
-                try {
-                    const result = await teams.list();
-                    const teamIds = result.teams.map(t => t.$id);
-                    setUser(prev => {
-                        if (!prev) return prev;
-                        if (JSON.stringify(prev.teamIds) === JSON.stringify(teamIds)) return prev;
-                        log('[UserContext] Csapattagság frissítve (Realtime / account csatorna)');
-                        return { ...prev, teamIds };
-                    });
-                } catch (error) {
-                    log('[UserContext] Csapattagság frissítése sikertelen (account event)', 'warn');
-                }
+                await refreshTeamIds('Realtime / account csatorna');
                 return;
             }
 
@@ -278,7 +306,7 @@ export function AuthorizationProvider({ children }) {
                 // re-rendereket okoz a teljes fában (LockManager useEffect[user] stb.)
                 setUser(prev => {
                     if (prev && prev.$updatedAt === enrichedUser.$updatedAt
-                        && JSON.stringify(prev.teamIds) === JSON.stringify(enrichedUser.teamIds)) {
+                        && sameTeamIds(prev.teamIds, enrichedUser.teamIds)) {
                         return prev;
                     }
                     log('[UserContext] Felhasználói adatok frissítve (recovery)');
@@ -300,20 +328,7 @@ export function AuthorizationProvider({ children }) {
     useEffect(() => {
         if (!user) return;
 
-        const handleTeamChange = async () => {
-            try {
-                const result = await teams.list();
-                const teamIds = result.teams.map(t => t.$id);
-                setUser(prev => {
-                    if (!prev) return prev;
-                    if (JSON.stringify(prev.teamIds) === JSON.stringify(teamIds)) return prev;
-                    log('[UserContext] Csapattagság frissítve (Realtime)');
-                    return { ...prev, teamIds };
-                });
-            } catch (error) {
-                log('[UserContext] Csapattagság frissítése sikertelen', 'warn');
-            }
-        };
+        const handleTeamChange = () => refreshTeamIds('Realtime');
 
         window.addEventListener(MaestroEvent.teamMembershipChanged, handleTeamChange);
         return () => window.removeEventListener(MaestroEvent.teamMembershipChanged, handleTeamChange);

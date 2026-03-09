@@ -10,7 +10,8 @@ import { useToast } from "../../../common/Toast/ToastContext.jsx";
 import { TOAST_TYPES } from "../../../../core/utils/constants.js";
 import { executeCommand } from "../../../../core/commands/index.js";
 import { useElementPermissions } from "../../../../data/hooks/useElementPermission.js";
-import { canUserAccessInState } from "../../../../core/utils/workflow/elementPermissions.js";
+import { canUserAccessInState, checkElementPermission } from "../../../../core/utils/workflow/elementPermissions.js";
+import { logError } from "../../../../core/utils/logger.js";
 
 export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onPublicationUpdate, onBack, onOpen, runAndPersistPreflight }) => {
     // Hooks
@@ -33,38 +34,19 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
     const canOpen = type === 'article' && item.filePath;
     const isIgnored = type === 'article' && (item.markers & MARKERS.IGNORE) !== 0;
 
-    console.log("[PropertiesPanel] Rendering item:", item.name, "State:", item.state);
-
-    // Safety check for imported constants
-    const safeWorkflowConfig = WORKFLOW_CONFIG || {};
-    if (!WORKFLOW_CONFIG) console.warn("[PropertiesPanel] WORKFLOW_CONFIG is undefined!");
-
     // Az aktuális állapothoz tartozó parancsok feloldva a COMMANDS regiszterből
     const commands = useMemo(() => {
         if (type !== 'article' || item.state === undefined) return [];
-        const stateCommandIds = safeWorkflowConfig[item.state]?.commands ?? [];
+        const stateCommandIds = WORKFLOW_CONFIG[item.state]?.commands ?? [];
         return stateCommandIds.filter(id => COMMANDS[id]).map(id => ({ id, ...COMMANDS[id] }));
     }, [type, item.state]);
-
-    // Parancsonkénti jogosultság: user.teamIds vagy user.labels alapján
-    const commandPermissions = useMemo(() => {
-        const result = {};
-        for (const cmd of commands) {
-            const allowed =
-                !cmd.teams?.length ||
-                user?.teamIds?.some(t => cmd.teams.includes(t)) ||
-                user?.labels?.some(l => cmd.teams.includes(l));
-            result[cmd.id] = { allowed, reason: allowed ? undefined : 'Nincs jogosultságod ehhez a parancshoz' };
-        }
-        return result;
-    }, [commands, user?.teamIds, user?.labels]);
 
     const handleOpen = async () => {
         if (canOpen && onOpen) {
             try {
                 await onOpen(item);
             } catch (error) {
-                console.error("Failed to open file:", error);
+                logError("Failed to open file:", error);
             }
         }
     };
@@ -86,7 +68,7 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
                 }
             }
         } catch (error) {
-            console.error("Command execution error:", error);
+            logError("Command execution error:", error);
             showToast("Váratlan hiba", TOAST_TYPES.ERROR, error.message || "Ismeretlen hiba történt a parancs végrehajtása közben.");
         } finally {
             setIsSyncing(false);
@@ -108,11 +90,11 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
                 }
             } else {
                 const errorMessage = result.error?.message || (typeof result.error === 'string' ? result.error : 'Ismeretlen hiba');
-                console.error("Marker toggle error:", result.error);
+                logError("Marker toggle error:", result.error);
                 showToast('A jelölő módosítása sikertelen', TOAST_TYPES.ERROR, errorMessage);
             }
         } catch (error) {
-            console.error("Marker toggle exception:", error);
+            logError("Marker toggle exception:", error);
             showToast('A jelölő módosítása sikertelen', TOAST_TYPES.ERROR, error.message || 'Váratlan hiba történt.');
         } finally {
             setIsSyncing(false);
@@ -187,7 +169,7 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
                         flexWrap: "wrap"
                     }}>
                         {commands.map(cmd => {
-                            const cmdPerm = commandPermissions[cmd.id] ?? { allowed: false };
+                            const cmdPerm = checkElementPermission(cmd.teams, user);
                             return (
                                 <sp-button
                                     quiet

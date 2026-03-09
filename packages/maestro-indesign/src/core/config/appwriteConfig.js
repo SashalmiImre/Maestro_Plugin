@@ -47,6 +47,14 @@ class EndpointManager {
     /** Az aktív endpoint health check URL-je. */
     getHealthEndpoint() { return `${this.activeEndpoint}/health`; }
 
+    /** 
+     * Az aktív endpoint proxy base URL-je (/v1 suffix nélkül).
+     * Használható AI, verification és egyéb proxy-n keresztüli helperendpointokhoz.
+     */
+    getProxyBase() { 
+        return this.activeEndpoint.replace(/\/v1$/, ''); 
+    }
+
     /** Igaz, ha a primary (Railway) az aktív endpoint. */
     getIsPrimary() { return this.isPrimary; }
 

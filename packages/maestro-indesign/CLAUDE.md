@@ -182,6 +182,7 @@ Maestro/
 │   ├── WORKFLOW_PERMISSIONS.md
 │   ├── URGENCY_SYSTEM.md
 │   ├── PROXY_SERVER.md
+│   ├── ARCHIVING_TEXT_EXTRACTION.md  ← Archiválási szövegkinyerés: clustering, típusosztályozás, XML/TXT generálás
 │   └── diagrams/
 │       ├── data-flow-architecture.md
 │       ├── open-file-flow.md
@@ -223,6 +224,7 @@ Maestro/
 │   │       ├── pathUtils.js            ← Fájlútvonal segédfüggvények (UXP ↔ InDesign leképezés)
 │   │       ├── namingUtils.js          ← Név formázó helperek
 │   │       ├── promiseUtils.js         ← Promise segédfüggvények (withTimeout, withRetry)
+│   │       ├── archivingProcessor.js    ← Hibrid AI + szabály-alapú clustering (Union-Find, polygon clipping, TXT/XML output)
 │   │       ├── urgencyUtils.js         ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színek)
 │   │       ├── validationRunner.js     ← Validátor futtatás orchestrálása + standalone fájl létezés ellenőrzés
 │   │       ├── validators/             ← Tiszta validációs logika osztályok
@@ -239,6 +241,7 @@ Maestro/
 │   │       │   ├── documentScripts.js  ← Dokumentum-szintű ExtendScript generátorok
 │   │       │   ├── exportScripts.js    ← PDF/nyomtatás export scriptek
 │   │       │   ├── preflightScripts.js ← Preflight ellenőrzés scriptek
+│   │       │   ├── archivingScripts.js ← Archiválási ExtendScript generátorok (adatkinyerés, fájlmentés, másolás)
 │   │       │   ├── scriptHelpers.js    ← Közös script építőelemek
 │   │       │   └── index.js
 │   │       └── workflow/                  ← Cikk állapotgép
@@ -361,6 +364,7 @@ Appwrite `memberships` Realtime csatorna → `DataContext` handler → `teamMemb
 | `docs/WORKFLOW_PERMISSIONS.md`            | Jogosultsági rendszer: csapat-alapú állapotátmenet-védelem          |
 | `docs/URGENCY_SYSTEM.md`                  | Sürgősség-számítás: munkaidő, ünnepnapok, ratio, progresszív sáv   |
 | `docs/VALIDATION_MECHANISM.md`            | Egységes validációs és üzenetküldő rendszer működése                |
+| `docs/ARCHIVING_TEXT_EXTRACTION.md`       | Archiválási szövegkinyerés: clustering, típusosztályozás, XML/TXT   |
 | `CONTRIBUTING.md`                         | Fejlesztési szabályok, JSDoc policy, import sorrend, PR workflow    |
 
 ---
@@ -398,7 +402,7 @@ index.jsx
   - **Jelszó módosítás**: InDesign natív dialog → `account.updatePassword()` — bejelentkezést igényel.
   - **Elfelejtett jelszó**: InDesign natív dialog (email) → `account.createRecovery(email, RECOVERY_URL)` → proxy `/reset-password` oldal a böngészőben.
 - **Realtime szinkron (labels/prefs)**: Az Appwrite Realtime `account` csatornára feliratkozva a `user` objektum (beleértve `labels`, `name`, `prefs`) automatikusan frissül, ha a szerveren módosítják (Console/Server SDK)
-- **Realtime szinkron (teamIds)**: Az `account` csatorna `response.events[]` tömbjét is figyeli — ha tartalmaz `.memberships.` stringet (szerver-oldali tagságváltozás), `teams.list()` hívással frissíti a `user.teamIds`-t. Fallback a `teams` csatorna → `teamMembershipChanged` MaestroEvent útvonal mellé.
+- **Realtime szinkron (teamIds)**: Az `account` csatorna `response.events[]` tömbjét is figyeli — ha tartalmaz `.memberships.` stringet (szerver-oldali tagságváltozás), `teams.list()` hívással frissíti a `user.teamIds`-t. Fallback a `teams` csatorna → `teamMembershipChanged` MaestroEvent útvonal mellé. A `sameTeamIds()` helper Set-alapú duplikátum-mentes összehasonlítást végez, hogy a szinkron ne okozzon felesleges re-rendereket.
 - **Recovery szinkron**: A `dataRefreshRequested` MaestroEvent-re is feliratkozik — minden recovery-nél (sleep/wake, reconnect, focus) `account.get()`-tel frissíti a user adatokat. Ez biztosítja a labels/prefs szinkront akkor is, ha az Appwrite Realtime `account` csatorna nem tüzel proxy-n keresztül (pl. szerver-oldali label módosításnál).
 
 ### ConnectionContext API
@@ -416,7 +420,7 @@ index.jsx
 ### Végpontok & ID-k
 A konfigurációs konstansok: `src/core/config/appwriteConfig.js`
 
-- **Endpoint**: Dual-proxy failover-rel (`EndpointManager`): Railway (primary) → emago.hu (fallback). Mindig `endpointManager.getEndpoint()`-ot használj az aktuális endpoint lekéréséhez — a korábbi `APPWRITE_ENDPOINT` statikus export el lett távolítva.
+- **Endpoint**: Dual-proxy failover-rel (`EndpointManager`): Railway (primary) → emago.hu (fallback). Mindig `endpointManager.getEndpoint()`-ot használj az aktuális endpoint lekéréséhez — a korábbi `APPWRITE_ENDPOINT` statikus export el lett távolítva. Az `endpointManager.getProxyBase()` a proxy gyökér URL-t adja vissza (a `/v1` suffix nélkül) — az AI clustering (`/api/cluster-article`) és egyéb proxy-szintű endpointokhoz.
 - **Project ID**, **Database ID**, **Collection ID-k** (Articles, Publications, Messages), **Bucket ID** (Storage).
 - **Team ID-k**: Team-alapú hozzáférés-kezelés és jogosultságkezelés. Csapatok: `editors`, `designers`, `writers`, `image_editors`, `art_directors`, `managing_editors`, `proofwriters`.
 
