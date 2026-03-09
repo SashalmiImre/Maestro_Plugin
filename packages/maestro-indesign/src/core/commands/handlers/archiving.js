@@ -3,7 +3,7 @@
  *
  * Hibrid archiválási folyamat:
  *  1. InDesign script kinyeri a nyers adatokat (szövegkeretek, grafikai elemek) JSON-ként
- *  2. AI klaszterezés a proxy szerveren (Claude Haiku) — ha elérhető
+ *  2. AI klaszterezés a proxy szerveren (Groq Llama 3.3 70B, GROQ_API_KEY env) — ha elérhető
  *     Fallback: szabály-alapú klaszterezés + típusosztályozás (`archivingProcessor.js`)
  *  3. TXT + XML generálás a klaszterezés eredményéből
  *  4. InDesign script menti a TXT és XML fájlokat

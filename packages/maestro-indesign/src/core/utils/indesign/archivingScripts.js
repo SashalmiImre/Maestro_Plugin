@@ -436,7 +436,10 @@ export function generateSaveTextFilesScript(txtOutputPath, xmlOutputPath, txtCon
             var f = new File(fp);
             f.encoding = 'UTF-8';
             if (!f.open('w')) return false;
-            f.write(content);
+            if (!f.write(content)) {
+                f.close();
+                return false;
+            }
             f.close();
             return true;
         }

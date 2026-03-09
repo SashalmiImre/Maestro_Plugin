@@ -88,7 +88,7 @@ archiving.js handler
   │    ├─ prepareStoriesForAI(rawData)
   │    │    └─ storyId alapú deduplikálás, súlyozott avgFs, első 200 char, bounds
   │    │
-  │    ├─ POST /api/cluster-article → proxy (Claude Haiku, 15s timeout)
+  │    ├─ POST /api/cluster-article → proxy (Groq Llama 3.3 70B, 15s timeout, GROQ_API_KEY env)
   │    │    └─ visszatér: { clusters: [{ storyIds, types }] }
   │    │
   │    ├─ ha OK → buildOutputFromAIClusters(rawData, aiResponse)
@@ -107,7 +107,7 @@ archiving.js handler
 
 A proxy szerver (`maestro-proxy/server.js`) `/api/cluster-article` endpointja:
 - Fogadja a story summarykat (pozíció, betűméret, szövegtöredék, storyId)
-- Elküldi Claude Haiku-nak magyar prompt-tal
+- Elküldi Groq Llama 3.3 70B-nek magyar prompt-tal (GROQ_API_KEY env var szükséges, groq-sdk kliens)
 - Visszaadja a klasztereket és típusosztályozást: `{ clusters: [{ storyIds, types }] }`
 
 **Előny mozaik layoutoknál**: Az AI szemantikailag érti a szövegek összetartozását — ahol a szabály-alapú közelség-küszöb (~30pt) hibásan összeolvasztaná a független mini-cikkeket, az AI képes elkülöníteni őket.
@@ -309,7 +309,7 @@ Az InDesign bekezdésstílus-neve alapján a rendszer azonosítja a típust (fel
 | Logikailag összekötő elem — polygon tényleges terület (Shoelace + Sutherland-Hodgman) | ✅ Implementálva |
 | KIEMELÉS típus (`<KIEMELES>` tag) | ✅ Implementálva |
 | Hibrid architektúra (InDesign csak adatgyűjt, plugin dolgoz fel) | ✅ Implementálva |
-| AI klaszterezés (Claude Haiku, proxy endpoint) | ✅ Implementálva |
+| AI klaszterezés (Groq Llama 3.3 70B, proxy endpoint, GROQ_API_KEY) | ✅ Implementálva |
 | AI fallback szabály-alapúra (timeout, hiba, üres válasz) | ✅ Implementálva |
 | Story deduplikálás storyId alapján (AI előkészítés) | ✅ Implementálva |
 | Kredit önálló típus (jelenleg KEPALAIRAS) | 🔄 Jövőbeli finomhangolás |
