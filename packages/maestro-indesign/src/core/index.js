@@ -18,13 +18,10 @@ governing permissions and limitations under the License.
 // --- Polyfill-ek (más importok előtt kell betölteni) ---
 import "../polyfill.js";
 
-// Diagnostic keys (dependency-free, import early)
-import { DIAGNOSTIC_KEYS } from "./diagnosticKeys.js";
-
 // --- Diagnosztika: előző munkamenet hibáinak kiolvasása és új hibák rögzítése ---
 // Module-szinten regisztrálva (nem useEffect-ben), hogy a React init előtti hibák is elkaphatók legyenek.
 (function initErrorCapture() {
-    const KEYS = DIAGNOSTIC_KEYS;
+    const KEYS = { error: 'maestro.lastError', rejection: 'maestro.lastRejection' };
 
     // Előző munkamenet hibáinak megjelenítése induláskor, majd törlése
     [KEYS.error, KEYS.rejection].forEach(key => {
@@ -117,28 +114,18 @@ import { Main } from "./Main.jsx";
 import "../index.css";
 
 // UXP Performance API polyfill — React 19 kompatibilitás
+// Az UXP performance.mark/measure hiányosan implementált; elnyelve a hibákat,
+// hogy a React belső mérései ne okozzanak crash-t.
 if (typeof window !== "undefined" && window.performance) {
     const originalMeasure = window.performance.measure;
-    window.performance.measure = function (name, startMark, endMark) {
-        try {
-            if (originalMeasure) {
-                return originalMeasure.apply(this, arguments);
-            }
-        } catch (error) {
-            // UXP-ben nem támogatott, biztonságosan figyelmen kívül hagyjuk
-        }
+    window.performance.measure = function () {
+        try { if (originalMeasure) return originalMeasure.apply(this, arguments); } catch (_) {}
     };
 
     const originalMark = window.performance.mark;
-    window.performance.mark = function (name) {
-        try {
-            if (originalMark) {
-                return originalMark.apply(this, arguments);
-            }
-        } catch (error) {
-            // UXP-ben nem támogatott, biztonságosan figyelmen kívül hagyjuk
-        }
-    }
+    window.performance.mark = function () {
+        try { if (originalMark) return originalMark.apply(this, arguments); } catch (_) {}
+    };
 }
 
 const mainController = new PanelController(() => (
@@ -155,14 +142,38 @@ const mainController = new PanelController(() => (
     id: "main",
 });
 
+/**
+ * Ellenőrzi, hogy van-e aktív session az aktuális felhasználónak.
+ * 
+ * Leteszteli account.get() pozitív szándékkal:
+ * - Ha sikeres: true (van aktív session).
+ * - Ha 401/unauthorized hiba: false (nincs session, nem kell újrapróbálni).
+ * - Ha más hiba (hálózat, 5xx): rethrow-ol (az hívó kezeli).
+ * 
+ * @returns {Promise<boolean>} true ha aktív session, false ha nincs (401).
+ * @throws {Error} Hálózati/szerver hibák újrapróbálkozáshoz.
+ */
+const hasActiveSession = async () => {
+    try {
+        await account.get();
+        return true; // Sikeres — aktív session
+    } catch (error) {
+        // 401 vagy authorization scope hiba — nincs session
+        if (error.code === 401 || error.type === 'general_unauthorized_scope') {
+            return false;
+        }
+        // Más hibák (hálózat, 5xx, etc.) — rethrow
+        console.warn("hasActiveSession: nem auth hiba(", error.code || error.type, "):", error.message);
+        throw error;
+    }
+};
+
 /** Kijelentkezés megerősítő dialógussal (InDesign natív dialog, React kontextuson kívül). */
 const confirmSignOut = async () => {
     // Ellenőrizzük, hogy van-e aktív session (React kontextuson kívül vagyunk)
-    try {
-        await account.get();
-    } catch {
-        // Nincs aktív session — nem kell kijelentkezni
-        return;
+    const isActive = await hasActiveSession();
+    if (!isActive) {
+        return; // Nincs aktív session — nem kell kijelentkezni
     }
 
     const inDesignApp = require("indesign").app;
@@ -203,9 +214,8 @@ const showMessage = (title, message) => {
 /** Jelszó módosítása bejelentkezett felhasználónak (InDesign natív dialog). */
 const changePassword = async () => {
     // Ellenőrizzük, hogy van-e aktív session
-    try {
-        await account.get();
-    } catch {
+    const isActive = await hasActiveSession();
+    if (!isActive) {
         return; // Nincs aktív session
     }
 
@@ -323,9 +333,7 @@ window.addEventListener('unload', () => _gracefulShutdown('unload'));
 entrypoints.setup({
     plugin: {
         create() { },
-        destroy() {
-            _gracefulShutdown('destroy()');
-        },
+        destroy() { _gracefulShutdown('destroy()'); },
     },
     panels: {
         main: {
@@ -335,18 +343,8 @@ entrypoints.setup({
                 { id: "changePassword", label: "Jelszó módosítása" },
                 { id: "resetPassword", label: "Elfelejtett jelszó" },
             ],
-            show(rootNode) {
-                console.log("[Entrypoints] Panel show() életciklus hook meghívva");
-                if (mainController.show) {
-                    mainController.show.call(mainController, rootNode);
-                }
-            },
-            hide() {
-                console.log("[Entrypoints] Panel hide() életciklus hook meghívva");
-                if (mainController.hide) {
-                    mainController.hide.call(mainController);
-                }
-            },
+            show(rootNode) { mainController.show(rootNode); },
+            hide() { mainController.hide(); },
             async invokeMenu(id) {
                 switch (id) {
                     case "signOut":

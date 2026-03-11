@@ -205,6 +205,8 @@ export const USER_VALIDATIONS_COLLECTION_ID = "uservalidations";
 export const VALIDATIONS_COLLECTION_ID = "validations";
 export const LAYOUTS_COLLECTION_ID = "layouts";
 export const DEADLINES_COLLECTION_ID = "deadlines";
+export const LAYOUT_PRECEDENTS_COLLECTION_ID = "layoutprecedents";
+export const LAYOUT_SCREENSHOTS_BUCKET_ID = "layoutscreenshots";
 
 export const TEAMS = {
     EDITORS: "editors",

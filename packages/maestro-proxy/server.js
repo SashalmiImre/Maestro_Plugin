@@ -257,6 +257,11 @@ Válaszolj KIZÁRÓLAG érvényes JSON-nel, semmilyen más szöveggel:
     }
 );
 
+// --- Tördelő AI (Layout Analysis) ---
+
+const layoutAIRouter = require('./routes/layoutAI');
+app.use(layoutAIRouter);
+
 // --- Közös HTML sablon ---
 
 /** Alap stílusok az összes Maestro oldalhoz. */

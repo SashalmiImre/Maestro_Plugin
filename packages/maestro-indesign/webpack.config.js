@@ -38,7 +38,7 @@ const shared = {
   mode: process.env.NODE_ENV === 'production' ? 'production' : 'development',
   // Source maps engedélyezve: eval-cheap-source-map gyorsabb rebuild-eket biztosít fejlesztés közben
   devtool: 'eval-cheap-source-map',
-  entry: resolve(__dirname, "src/core/index.jsx"),
+  entry: resolve(__dirname, "src/core/index.js"),
   output: {
     path: resolve(__dirname, "dist"), // the bundle output path
     filename: "bundle.js", // the name of the bundle

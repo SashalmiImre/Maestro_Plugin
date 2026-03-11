@@ -11,9 +11,6 @@ export const SCRIPT_LANGUAGE_JAVASCRIPT = 1246973031;
 
 // LocalStorage Kulcsok
 // Az alkalmazás állapotának mentéséhez használt kulcsok.
-import { DIAGNOSTIC_KEYS } from "../diagnosticKeys.js";
-export { DIAGNOSTIC_KEYS };
-
 export const STORAGE_KEYS = {
     EXPANDED_PUBLICATION_ID: "maestro.expandedPublicationId", // Kinyitott kiadvány ID-ja
     HIDE_RESOLVED_MESSAGES: "maestro.hideResolvedMessages",   // Megoldott üzenetek elrejtése
@@ -25,8 +22,6 @@ export const STORAGE_KEYS = {
     SECTION_PUBLICATION_LAYOUTS_COLLAPSED: "maestro.section.publication.layouts.collapsed",           // Kiadvány elrendezések szekció
     SECTION_PUBLICATION_CONTRIBUTORS_COLLAPSED: "maestro.section.publication.contributors.collapsed", // Kiadvány munkatársak szekció
     SECTION_PUBLICATION_DEADLINES_COLLAPSED: "maestro.section.publication.deadlines.collapsed",         // Kiadvány határidők szekció
-    LAST_ERROR:      DIAGNOSTIC_KEYS.error,      // Diagnosztika: előző munkamenet JavaScript hibája
-    LAST_REJECTION:  DIAGNOSTIC_KEYS.rejection   // Diagnosztika: előző munkamenet unhandled Promise rejection-je
 };
 
 // Útvonal Konfiguráció
@@ -220,3 +215,16 @@ export const REALTIME_CONFIG = {
     MAX_CONSECUTIVE_SERVER_ERRORS: 5,       // Ennyi szerverhiba után indul a cooldown
     SERVER_ERROR_BACKOFF_BASE_MS: 5000      // Szerverhiba backoff alap (5s → 10s → 20s...)
 };
+
+// =============================================================================
+// Tördelő AI (Layout Analysis) Konfiguráció
+// =============================================================================
+
+/** Layout AI elemzés timeout (ms) — Vision API lassabb, mint szöveges AI. */
+export const LAYOUT_AI_TIMEOUT_MS = 30000;
+
+/** JPEG export minőség (0-100). */
+export const LAYOUT_JPEG_QUALITY = 85;
+
+/** JPEG export felbontás (DPI) — 150 elég a Vision AI-nak, kis fájlméret. */
+export const LAYOUT_JPEG_DPI = 150;
