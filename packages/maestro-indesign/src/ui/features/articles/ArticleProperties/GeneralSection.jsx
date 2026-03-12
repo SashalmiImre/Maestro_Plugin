@@ -11,7 +11,7 @@ import { useData } from "../../../../core/contexts/DataContext.jsx";
 
 // Utils
 import { WorkflowEngine } from "../../../../core/utils/workflow/workflowEngine.js";
-import { WORKFLOW_STATES, WORKFLOW_CONFIG, MARKERS, TRANSITION_TYPES } from "../../../../core/utils/workflow/workflowConstants.js";
+import { WORKFLOW_STATES, WORKFLOW_CONFIG, MARKERS, TRANSITION_TYPES, STATE_PERMISSIONS, TEAM_ARTICLE_FIELD } from "../../../../core/utils/workflow/workflowConstants.js";
 import { hasTransitionPermission } from "../../../../core/utils/workflow/workflowPermissions.js";
 import { STORAGE_KEYS } from "../../../../core/utils/constants.js";
 import { isValidFileName } from "../../../../core/utils/pathUtils.js";
@@ -83,6 +83,16 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
 
     // Jogosultsági ellenőrzés: a felhasználó mozgathatja-e a cikket?
     const canTransition = user ? hasTransitionPermission(article, currentState, user) : false;
+
+    // Ellenőrzi, hogy a jelenlegi állapot felelős csapataiból van-e hozzárendelt munkatárs
+    const hasRequiredContributor = (() => {
+        const teams = STATE_PERMISSIONS[currentState];
+        if (!teams || teams.length === 0) return true;
+        return teams.some(slug => {
+            const field = TEAM_ARTICLE_FIELD[slug];
+            return field && article[field];
+        });
+    })();
 
     // Local state for Name field to allow "Enter to save" behavior
     const [localName, setLocalName] = useState(article.name || "");
@@ -348,8 +358,8 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
                                             size="m"
                                             style={{ borderRadius: "12px 0 0 12px", width: "100%" }}
                                             onClick={() => onStateTransition(backwardTransition.target)}
-                                            disabled={isIgnored || isSyncing || !canTransition ? true : undefined}
-                                            title={!canTransition ? "Nincs jogosultságod az állapotváltáshoz" : undefined}
+                                            disabled={isIgnored || isSyncing || !canTransition || !hasRequiredContributor ? true : undefined}
+                                            title={!canTransition ? "Nincs jogosultságod az állapotváltáshoz" : !hasRequiredContributor ? "Előbb rendelj hozzá felelős munkatársat" : undefined}
                                         >
                                             ← {backwardTransition.label}
                                         </sp-button>
@@ -388,8 +398,8 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
                                             size="m"
                                             style={{ borderRadius: "0 12px 12px 0", width: "100%" }}
                                             onClick={() => onStateTransition(forwardTransition.target)}
-                                            disabled={isIgnored || isSyncing || !canTransition ? true : undefined}
-                                            title={!canTransition ? "Nincs jogosultságod az állapotváltáshoz" : undefined}
+                                            disabled={isIgnored || isSyncing || !canTransition || !hasRequiredContributor ? true : undefined}
+                                            title={!canTransition ? "Nincs jogosultságod az állapotváltáshoz" : !hasRequiredContributor ? "Előbb rendelj hozzá felelős munkatársat" : undefined}
                                         >
                                             {forwardTransition.label} →
                                         </sp-button>

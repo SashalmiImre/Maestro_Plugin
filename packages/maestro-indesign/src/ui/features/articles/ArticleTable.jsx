@@ -1,8 +1,7 @@
 import React, { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { WorkflowStatus } from "../publications/Publication/WorkflowStatus.jsx";
-import { useTeamMembers } from "../../../data/hooks/useTeamMembers.js";
+import { useAllTeamMembers } from "../../../data/hooks/useAllTeamMembers.js";
 import { useUrgency } from "../../../data/hooks/useUrgency.js";
-import { TEAMS } from "../../../core/config/appwriteConfig.js";
 import { LOCK_TYPE, UI_TIMING, DATA_QUERY_CONFIG } from "../../../core/utils/constants.js";
 import { VALIDATION_SOURCES } from "../../../core/utils/validationConstants.js";
 import { VALIDATION_TYPES } from "../../../core/utils/messageConstants.js";
@@ -29,20 +28,13 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
         };
     }, []);
 
-    const { members: editors } = useTeamMembers(TEAMS.EDITORS);
-    const { members: designers } = useTeamMembers(TEAMS.DESIGNERS);
-    const { members: writers } = useTeamMembers(TEAMS.WRITERS);
-    const { members: imageEditors } = useTeamMembers(TEAMS.IMAGE_EDITORS);
-
-    const combinedMembers = useMemo(() => {
-        return [...editors, ...designers, ...writers, ...imageEditors];
-    }, [editors, designers, writers, imageEditors]);
+    const { members: allMembers } = useAllTeamMembers();
 
     const getUserName = useCallback((userId) => {
         if (!userId) return null;
-        const found = combinedMembers.find(m => m.userId === userId);
+        const found = allMembers.find(m => m.userId === userId);
         return found ? found.userName : "Más";
-    }, [combinedMembers]);
+    }, [allMembers]);
 
     const getLockLabel = useCallback((article) => {
         if (!article.lockOwnerId) return null;

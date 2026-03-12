@@ -8,6 +8,10 @@
  * és az eredményeket a ValidationContext-be + Appwrite-ba írja.
  *
  * Induláskor betölti a meglévő validációs eredményeket az adatbázisból.
+ *
+ * Realtime szinkronizáció: Feliratkozik a `VALIDATIONS_COLLECTION_ID` Realtime
+ * csatornára, így más felhasználók által írt validációs eredmények is azonnal
+ * megjelennek a lokális ValidationContext-ben.
  */
 
 import { useEffect, useRef, useCallback } from "react";
@@ -17,6 +21,7 @@ import { useValidation } from "../../core/contexts/ValidationContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 import { PublicationStructureValidator } from "../../core/utils/validators/PublicationStructureValidator.js";
 import { tables, DATABASE_ID, VALIDATIONS_COLLECTION_ID, ID, Query } from "../../core/config/appwriteConfig.js";
+import { realtime } from "../../core/config/realtimeClient.js";
 import { VALIDATION_SOURCES } from "../../core/utils/validationConstants.js";
 import { VALIDATION_TYPES } from "../../core/utils/messageConstants.js";
 import { log, logError } from "../../core/utils/logger.js";
@@ -68,7 +73,7 @@ async function fetchAllValidationRows(baseQueries) {
  */
 export const useOverlapValidation = () => {
     const { articles, publications, layouts } = useData();
-    const { updatePublicationValidation } = useValidation();
+    const { updatePublicationValidation, updateArticleValidation, clearArticleValidation } = useValidation();
     const { showToast } = useToast();
 
     // Ref-ek, hogy az event handler mindig a friss adatot lássa
@@ -459,6 +464,7 @@ export const useOverlapValidation = () => {
         persistToDatabase(publicationId, resultsMap);
     }, [updatePublicationValidation, persistToDatabase]);
 
+    // ── MaestroEvent feliratkozások (lokális események) ──
     useEffect(() => {
         window.addEventListener(MaestroEvent.pageRangesChanged, handlePageRangesChanged);
         window.addEventListener(MaestroEvent.publicationCoverageChanged, handlePublicationCoverageChanged);
@@ -474,4 +480,51 @@ export const useOverlapValidation = () => {
             window.removeEventListener(MaestroEvent.documentClosed, handleDocumentClosed);
         };
     }, [handlePageRangesChanged, handlePublicationCoverageChanged, handleLayoutChanged, handleArticlesAdded, handleDocumentClosed]);
+
+    // ── Realtime feliratkozás (más felhasználók validációs változásai) ──
+    // A VALIDATIONS_COLLECTION_ID csatornára iratkozunk fel, így ha egy másik kliens
+    // ír/frissít/töröl struktúra-validációt, az azonnal megjelenik a lokális UI-ban.
+    useEffect(() => {
+        const channel = `databases.${DATABASE_ID}.collections.${VALIDATIONS_COLLECTION_ID}.documents`;
+
+        const unsubscribe = realtime.subscribe([channel], (response) => {
+            const { events, payload } = response;
+            const event = events[0];
+
+            // Csak struktúra-validációkat dolgozunk fel
+            if (payload.source !== VALIDATION_SOURCES.STRUCTURE) return;
+
+            // Csak az aktív publikáció cikkeit érintő validációk relevánsak
+            const currentArticles = articlesRef.current;
+            const isRelevant = currentArticles.some(a => a.$id === payload.articleId);
+            if (!isRelevant) return;
+
+            if (event.includes(".create") || event.includes(".update")) {
+                const items = [];
+                if (payload.errors && payload.errors.length > 0) {
+                    items.push(...payload.errors.map(msg => ({
+                        type: VALIDATION_TYPES.ERROR,
+                        message: msg,
+                        source: VALIDATION_SOURCES.STRUCTURE
+                    })));
+                }
+                if (payload.warnings && payload.warnings.length > 0) {
+                    items.push(...payload.warnings.map(msg => ({
+                        type: VALIDATION_TYPES.WARNING,
+                        message: msg,
+                        source: VALIDATION_SOURCES.STRUCTURE
+                    })));
+                }
+                updateArticleValidation(payload.articleId, VALIDATION_SOURCES.STRUCTURE, items);
+            } else if (event.includes(".delete")) {
+                clearArticleValidation(payload.articleId, VALIDATION_SOURCES.STRUCTURE);
+            }
+        });
+
+        log('[useOverlapValidation] Realtime feliratkozás a validációs csatornára.');
+
+        return () => {
+            if (typeof unsubscribe === 'function') unsubscribe();
+        };
+    }, [updateArticleValidation, clearArticleValidation]);
 };

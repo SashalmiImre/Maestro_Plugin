@@ -5,6 +5,7 @@ import React, { useState, useCallback, useEffect, useMemo } from "react";
 import { ArticleTable } from "../../articles/ArticleTable.jsx";
 import { ConfirmDialog } from "../../../common/ConfirmDialog.jsx";
 import { FilterBar } from "./FilterBar.jsx";
+
 // Custom Hooks
 import { useArticles } from "../../../../data/hooks/useArticles.js";
 import { useUser } from "../../../../core/contexts/UserContext.jsx";

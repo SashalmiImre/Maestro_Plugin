@@ -254,3 +254,27 @@ export const TEAM_ARTICLE_FIELD = {
     "writers":           "writerId",
     "image_editors":     "imageEditorId"
 };
+
+/**
+ * Normalizál egy slug-ot a label összehasonlításhoz: eltávolítja az underscore-okat.
+ * Az Appwrite labels nem engedélyez underscore-t, ezért a team slug-okat (pl. "art_directors")
+ * és a felhasználói label-eket (pl. "artdirectors") normalizálva hasonlítjuk össze.
+ *
+ * @param {string} value
+ * @returns {string}
+ */
+const normalizeSlug = (value) => value.replace(/_/g, "").toLowerCase();
+
+/**
+ * Ellenőrzi, hogy a felhasználói label-ek között megtalálható-e a megadott team slug.
+ * Normalizált összehasonlítást végez (underscore-mentes), mert az Appwrite labels
+ * nem támogatja az underscore karaktert.
+ *
+ * @param {string[]} userLabels - A felhasználó Appwrite label-jei (pl. ["artdirectors"]).
+ * @param {string} slug - A team slug (pl. "art_directors").
+ * @returns {boolean}
+ */
+export function labelMatchesSlug(userLabels, slug) {
+    const normalizedSlug = normalizeSlug(slug);
+    return userLabels.some(label => normalizeSlug(label) === normalizedSlug);
+}

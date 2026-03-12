@@ -11,7 +11,7 @@
  * @module utils/workflow/workflowPermissions
  */
 
-import { STATE_PERMISSIONS } from "./workflowConstants.js";
+import { STATE_PERMISSIONS, labelMatchesSlug } from "./workflowConstants.js";
 
 /**
  * Ellenőrzi, hogy a felhasználó mozgathatja-e a cikket az aktuális állapotából.
@@ -42,7 +42,7 @@ export function canUserMoveArticle(article, currentState, user) {
     const userTeams = user.teamIds || [];
     const userLabels = user.labels || [];
     const hasTeamAccess = requiredTeams.some(slug =>
-        userTeams.includes(slug) || userLabels.includes(slug)
+        userTeams.includes(slug) || labelMatchesSlug(userLabels, slug)
     );
 
     if (hasTeamAccess) {

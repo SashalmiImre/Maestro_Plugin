@@ -14,7 +14,7 @@
  * @module utils/workflow/elementPermissions
  */
 
-import { STATE_PERMISSIONS } from "./workflowConstants.js";
+import { STATE_PERMISSIONS, labelMatchesSlug } from "./workflowConstants.js";
 
 // ─── Jogosultsági szintek ───────────────────────────────────────────────────
 
@@ -104,7 +104,7 @@ export function checkElementPermission(permission, user) {
     // Konkrét csapat-slug tömb
     if (Array.isArray(permission)) {
         const hasAccess = permission.some(slug =>
-            userTeams.includes(slug) || userLabels.includes(slug)
+            userTeams.includes(slug) || labelMatchesSlug(userLabels, slug)
         );
         if (hasAccess) {
             return { allowed: true };
@@ -137,13 +137,13 @@ export function canUserAccessInState(user, articleState) {
     const userLabels = user.labels || [];
 
     // Tervezők és művészeti vezetők mindig hozzáférhetnek
-    if (alwaysAllowed.some(slug => userTeams.includes(slug) || userLabels.includes(slug))) {
+    if (alwaysAllowed.some(slug => userTeams.includes(slug) || labelMatchesSlug(userLabels, slug))) {
         return { allowed: true };
     }
 
     // Mások: van-e STATE_PERMISSIONS jogosultságuk ehhez az állapothoz?
     const stateTeams = STATE_PERMISSIONS[articleState];
-    if (stateTeams?.some(slug => userTeams.includes(slug) || userLabels.includes(slug))) {
+    if (stateTeams?.some(slug => userTeams.includes(slug) || labelMatchesSlug(userLabels, slug))) {
         return { allowed: true };
     }
 
@@ -185,12 +185,12 @@ export function canEditContributorDropdown(user, teamSlug, articleState) {
     const userLabels = user.labels || [];
 
     // Vezetők mindig szerkeszthetnek bármely dropdown-ot
-    if (LEADER_TEAMS.some(slug => userTeams.includes(slug) || userLabels.includes(slug))) {
+    if (LEADER_TEAMS.some(slug => userTeams.includes(slug) || labelMatchesSlug(userLabels, slug))) {
         return { allowed: true };
     }
 
     // Nem-vezető: a felhasználó tagja-e (teamIds/labels) ennek a csapatnak?
-    const isMemberOfTeam = userTeams.includes(teamSlug) || userLabels.includes(teamSlug);
+    const isMemberOfTeam = userTeams.includes(teamSlug) || labelMatchesSlug(userLabels, teamSlug);
     if (!isMemberOfTeam) {
         return { allowed: false, reason: "Nincs jogosultságod ehhez a mezőhöz." };
     }
