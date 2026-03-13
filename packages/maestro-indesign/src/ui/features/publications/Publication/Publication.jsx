@@ -12,7 +12,7 @@ import { useUser } from "../../../../core/contexts/UserContext.jsx";
 import { useToast } from "../../../common/Toast/ToastContext.jsx";
 
 // Utils
-import { WORKFLOW_STATES, MARKERS } from "../../../../core/utils/workflow/workflowConstants.js";
+import { WORKFLOW_STATES, MARKERS, TEAM_ARTICLE_FIELD, labelMatchesSlug } from "../../../../core/utils/workflow/workflowConstants.js";
 import { DRIVE_CHECK_INTERVAL_MS } from "../../../../core/utils/constants.js";
 import { log } from "../../../../core/utils/logger.js";
 import { checkPathAccessible, resolvePlatformPath } from "../../../../core/utils/pathUtils.js";
@@ -85,9 +85,10 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
     const [filterOpen, setFilterOpen] = useState(false);
     const [statusFilters, setStatusFilters] = useState(Object.values(WORKFLOW_STATES));
     const [showIgnored, setShowIgnored] = useState(true);
+    const [showOnlyMine, setShowOnlyMine] = useState(false);
 
     const allStatuses = Object.values(WORKFLOW_STATES);
-    const isFilterActive = statusFilters.length !== allStatuses.length || !showIgnored;
+    const isFilterActive = statusFilters.length !== allStatuses.length || !showIgnored || showOnlyMine;
 
     const handleFilterClick = (e) => {
         e.stopPropagation();
@@ -97,20 +98,42 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
     const resetFilters = () => {
         setStatusFilters(Object.values(WORKFLOW_STATES));
         setShowIgnored(true);
+        setShowOnlyMine(false);
     };
+
+    /** A felhasználó csapattagságaihoz tartozó contributor mezőnevek */
+    const userContributorFields = useMemo(() => {
+        const fields = new Set();
+
+        // Csapattagságból
+        (user?.teamIds || []).forEach(slug => {
+            const field = TEAM_ARTICLE_FIELD[slug];
+            if (field) fields.add(field);
+        });
+
+        // Label override-ból (a csapatok slug normalizációjával)
+        if (user?.labels?.length) {
+            for (const [slug, field] of Object.entries(TEAM_ARTICLE_FIELD)) {
+                if (labelMatchesSlug(user.labels, slug)) fields.add(field);
+            }
+        }
+
+        return Array.from(fields);
+    }, [user?.teamIds, user?.labels]);
 
     const filteredArticles = React.useMemo(() => {
         const filtered = articles.filter(article => {
             const statusMatch = statusFilters.includes(article.state || 0);
             const articleMarkers = typeof article.markers === 'number' ? article.markers : 0;
             const markerMatch = showIgnored || (articleMarkers & MARKERS.IGNORE) === 0;
+            const ownerMatch = !showOnlyMine || userContributorFields.some(field => article[field] === user?.$id);
 
-            return statusMatch && markerMatch;
+            return statusMatch && markerMatch && ownerMatch;
         });
 
         log(`[Publication] Articles stats: Total fetched: ${articles.length}, Shown: ${filtered.length}. Filtered out: ${articles.length - filtered.length}`);
         return filtered;
-    }, [articles, statusFilters, showIgnored]);
+    }, [articles, statusFilters, showIgnored, showOnlyMine, userContributorFields, user?.$id]);
 
     const canOpenPublicationProperties = useMemo(() => {
         return checkElementPermission(PUBLICATION_ELEMENT_PERMISSIONS.publicationProperties, user).allowed;
@@ -350,6 +373,8 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                         onStatusFiltersChange={setStatusFilters}
                         showIgnored={showIgnored}
                         onShowIgnoredChange={setShowIgnored}
+                        showOnlyMine={showOnlyMine}
+                        onShowOnlyMineChange={setShowOnlyMine}
                         isFilterActive={isFilterActive}
                         onReset={resetFilters}
                     />

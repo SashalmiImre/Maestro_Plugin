@@ -22,6 +22,8 @@ const statusOptions = Object.values(WORKFLOW_STATES).map(state => {
  * @param {Function} props.onStatusFiltersChange - (newFilters: number[]) => void
  * @param {boolean} props.showIgnored - Kimaradó cikkek mutatása
  * @param {Function} props.onShowIgnoredChange - (show: boolean) => void
+ * @param {boolean} props.showOnlyMine - Csak saját cikkek mutatása
+ * @param {Function} props.onShowOnlyMineChange - (show: boolean) => void
  * @param {boolean} props.isFilterActive - Van-e aktív (nem alapértelmezett) szűrő
  * @param {Function} props.onReset - Szűrők alaphelyzetbe állítása
  */
@@ -30,6 +32,8 @@ const FilterBar = React.memo(({
     onStatusFiltersChange,
     showIgnored,
     onShowIgnoredChange,
+    showOnlyMine,
+    onShowOnlyMineChange,
     isFilterActive,
     onReset
 }) => {
@@ -144,6 +148,21 @@ const FilterBar = React.memo(({
                         </CustomCheckbox>
                     </div>
                 ))}
+            </div>
+
+            {/* Tulajdonos szűrő */}
+            <div style={{
+                borderTop: "1px solid var(--spectrum-global-color-gray-300)",
+                marginTop: "4px",
+                paddingTop: "4px"
+            }}>
+                <CustomCheckbox
+                    checked={showOnlyMine}
+                    onChange={() => onShowOnlyMineChange(!showOnlyMine)}
+                    size="s"
+                >
+                    <span style={{ verticalAlign: "middle" }}>Csak a saját cikkeim</span>
+                </CustomCheckbox>
             </div>
         </div>
     );
