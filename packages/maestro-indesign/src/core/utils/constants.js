@@ -216,15 +216,3 @@ export const REALTIME_CONFIG = {
     SERVER_ERROR_BACKOFF_BASE_MS: 5000      // Szerverhiba backoff alap (5s → 10s → 20s...)
 };
 
-// =============================================================================
-// Tördelő AI (Layout Analysis) Konfiguráció
-// =============================================================================
-
-/** Layout AI elemzés timeout (ms) — Vision API lassabb, mint szöveges AI. */
-export const LAYOUT_AI_TIMEOUT_MS = 30000;
-
-/** JPEG export minőség (0-100). */
-export const LAYOUT_JPEG_QUALITY = 85;
-
-/** JPEG export felbontás (DPI) — 150 elég a Vision AI-nak, kis fájlméret. */
-export const LAYOUT_JPEG_DPI = 150;

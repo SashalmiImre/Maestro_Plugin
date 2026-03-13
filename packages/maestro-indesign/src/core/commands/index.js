@@ -3,7 +3,6 @@ import { handleCollectImages } from "./handlers/collectImages.js";
 import { handleArchiving } from "./handlers/archiving.js";
 import { handlePrinting } from "./handlers/printing.js";
 import { handlePreflightCheck } from "./handlers/preflightCheck.js";
-import { handleAnalyzeLayout, handleAnalyzeFromFolder } from "./handlers/layoutAI.js";
 
 /**
  * Registry mapping command IDs to their handler functions.
@@ -15,9 +14,7 @@ const COMMAND_REGISTRY = {
     'collect_selected_images': handleCollectImages,
     'archive': handleArchiving,
     'print_output': handlePrinting,
-    'preflight_check': handlePreflightCheck,
-    'analyze_layout': handleAnalyzeLayout,
-    'analyze_layout_folder': handleAnalyzeFromFolder
+    'preflight_check': handlePreflightCheck
 };
 
 /**
