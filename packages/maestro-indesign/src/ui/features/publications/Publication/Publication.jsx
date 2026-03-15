@@ -90,7 +90,9 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                 const parsed = JSON.parse(saved);
                 if (Array.isArray(parsed)) return parsed;
             }
-        } catch { /* hibás JSON — fallback */ }
+        } catch (error) {
+            console.error(`[Publication] Error parsing statusFilters from localStorage (key: ${STORAGE_KEYS.FILTER_STATUS}):`, error);
+        }
         return Object.values(WORKFLOW_STATES);
     });
     const [showIgnored, setShowIgnored] = useState(
