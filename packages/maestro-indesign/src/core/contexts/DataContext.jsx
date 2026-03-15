@@ -107,13 +107,23 @@ export const DataProvider = ({ children }) => {
         if (hasMigratedRef.current) return;
 
         try {
+            // 0. Normalizálj publikációkat — kanonikus rootPath-okat készítsd elő
+            // Ezt később használd a cikk loop-ban, hogy elkerüld a redundáns toCanonicalPath hívásokat
+            const normalizedPubs = pubs.map(pub => {
+                if (pub.rootPath && isLegacyRootPath(pub.rootPath)) {
+                    return { ...pub, rootPath: toCanonicalPath(pub.rootPath) };
+                }
+                return pub;
+            });
+
             // 1. Publikációk: gyűjtsd össze az összes update ígéretet párhuzamosan
             const pubPromises = [];
             const pubUpdates = new Map();
 
-            for (const pub of pubs) {
+            for (let i = 0; i < pubs.length; i++) {
+                const pub = pubs[i];
                 if (pub.rootPath && isLegacyRootPath(pub.rootPath)) {
-                    const canonical = toCanonicalPath(pub.rootPath);
+                    const canonical = normalizedPubs[i].rootPath;
                     log(`[DataContext] Migráció: pub rootPath "${pub.rootPath}" → "${canonical}"`);
 
                     pubPromises.push(
@@ -144,15 +154,14 @@ export const DataProvider = ({ children }) => {
             }
 
             // 2. Cikkek: gyűjtsd össze az összes update ígéretet párhuzamosan
+            // Használd normalizedPubs-t, hogy elkerüld a redundáns toCanonicalPath hívásokat
             const articlePromises = [];
             const articleUpdates = new Map();
 
             for (const article of arts) {
                 if (article.filePath && isAbsoluteFilePath(article.filePath)) {
-                    const pub = pubs.find(p => p.$id === article.publicationId);
-                    const pubRoot = pub?.rootPath && isLegacyRootPath(pub.rootPath)
-                        ? toCanonicalPath(pub.rootPath)
-                        : pub?.rootPath;
+                    const pub = normalizedPubs.find(p => p.$id === article.publicationId);
+                    const pubRoot = pub?.rootPath;
                     if (!pubRoot) continue;
 
                     const relative = toRelativeArticlePath(article.filePath, pubRoot);
