@@ -209,8 +209,8 @@ export const toRelativeArticlePath = (absolutePath, canonicalRoot) => {
         return canonicalFile.substring(root.length + 1);
     }
 
-    // Ha már relatív, visszaadjuk
-    return absolutePath;
+    // Ha már relatív, visszaadjuk kanonikus formátumban
+    return canonicalFile;
 };
 
 /**
