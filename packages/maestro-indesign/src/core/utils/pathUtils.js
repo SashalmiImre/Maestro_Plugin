@@ -396,13 +396,6 @@ export const isValidFileName = (name) => {
     return !INVALID_FILENAME_CHARS.test(trimmed);
 };
 
-/**
- * Ellenőrzi, hogy egy natív fájl/mappa útvonal elérhető-e (a meghajtó csatlakoztatva van-e).
- * ExtendScript `Folder(path).exists`-et használ, ami Mac-en és Windows-on is működik.
- *
- * @param {string} nativePath - A vizsgálandó natív útvonal.
- * @returns {Promise<boolean>} Igaz, ha az útvonal elérhető, egyébként hamis.
- */
 // =============================================================================
 // Lazy migráció (régi formátumú path-ok felismerése)
 // =============================================================================
@@ -441,6 +434,13 @@ export const isAbsoluteFilePath = (filePath) => {
     return normalized.startsWith("/") || /^[a-zA-Z]:/.test(normalized);
 };
 
+/**
+ * Ellenőrzi, hogy egy natív fájl/mappa útvonal elérhető-e (a meghajtó csatlakoztatva van-e).
+ * ExtendScript `Folder(path).exists`-et használ, ami Mac-en és Windows-on is működik.
+ *
+ * @param {string} nativePath - A vizsgálandó natív útvonal.
+ * @returns {Promise<boolean>} Igaz, ha az útvonal elérhető, egyébként hamis.
+ */
 export const checkPathAccessible = async (nativePath) => {
     if (!nativePath) return false;
     try {
