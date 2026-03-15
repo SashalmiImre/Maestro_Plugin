@@ -3,12 +3,11 @@
  * A tényleges ellenőrzéseket egyszerűsített Validator osztályoknak delegálja.
  */
 
-import { FileSystemValidator, StateComplianceValidator, PublicationStructureValidator, DatabaseIntegrityValidator, PreflightValidator } from "./validators/index.js";
+import { StateComplianceValidator, PublicationStructureValidator, DatabaseIntegrityValidator, PreflightValidator } from "./validators/index.js";
 import { VALIDATOR_TYPES } from "./validationConstants.js";
 
 // Példányok gyorsítótárazása (cache)
 const validators = {
-    fileSystem: new FileSystemValidator(),
     stateCompliance: new StateComplianceValidator(),
     publicationStructure: new PublicationStructureValidator(),
     databaseIntegrity: new DatabaseIntegrityValidator(),

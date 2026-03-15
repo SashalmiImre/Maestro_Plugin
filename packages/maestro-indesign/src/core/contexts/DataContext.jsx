@@ -106,69 +106,92 @@ export const DataProvider = ({ children }) => {
     const migratePathsIfNeeded = useCallback(async (pubs, arts) => {
         if (hasMigratedRef.current) return;
 
-        let migrationCount = 0;
+        try {
+            // 1. Publikációk: gyűjtsd össze az összes update ígéretet párhuzamosan
+            const pubPromises = [];
+            const pubUpdates = new Map();
 
-        // Publikációk: rootPath konvertálása kanonikus formátumra
-        const pubUpdates = new Map();
-        for (const pub of pubs) {
-            if (pub.rootPath && isLegacyRootPath(pub.rootPath)) {
-                const canonical = toCanonicalPath(pub.rootPath);
-                log(`[DataContext] Migráció: pub rootPath "${pub.rootPath}" → "${canonical}"`);
-                try {
-                    await tables.updateRow({
-                        databaseId: DATABASE_ID,
-                        tableId: PUBLICATIONS_COLLECTION_ID,
-                        rowId: pub.$id,
-                        data: { rootPath: canonical }
-                    });
-                    pubUpdates.set(pub.$id, canonical);
-                    migrationCount++;
-                } catch (e) {
-                    logError(`[DataContext] Migráció sikertelen (pub ${pub.$id}):`, e);
+            for (const pub of pubs) {
+                if (pub.rootPath && isLegacyRootPath(pub.rootPath)) {
+                    const canonical = toCanonicalPath(pub.rootPath);
+                    log(`[DataContext] Migráció: pub rootPath "${pub.rootPath}" → "${canonical}"`);
+
+                    pubPromises.push(
+                        tables.updateRow({
+                            databaseId: DATABASE_ID,
+                            tableId: PUBLICATIONS_COLLECTION_ID,
+                            rowId: pub.$id,
+                            data: { rootPath: canonical }
+                        })
+                            .then(() => {
+                                pubUpdates.set(pub.$id, canonical);
+                            })
+                            .catch(e => {
+                                logError(`[DataContext] Migráció sikertelen (pub ${pub.$id}):`, e);
+                            })
+                    );
                 }
             }
-        }
-        // Kötegelt state frissítés (egyetlen re-render)
-        if (pubUpdates.size > 0) {
-            setPublications(prev => prev.map(p => pubUpdates.has(p.$id) ? { ...p, rootPath: pubUpdates.get(p.$id) } : p));
-        }
 
-        // Cikkek: filePath konvertálása relatív formátumra
-        const articleUpdates = new Map();
-        for (const article of arts) {
-            if (article.filePath && isAbsoluteFilePath(article.filePath)) {
-                const pub = pubs.find(p => p.$id === article.publicationId);
-                const pubRoot = pub?.rootPath && isLegacyRootPath(pub.rootPath)
-                    ? toCanonicalPath(pub.rootPath)
-                    : pub?.rootPath;
-                if (!pubRoot) continue;
+            // Várakozz az összes pub update-re párhuzamosan
+            if (pubPromises.length > 0) {
+                await Promise.all(pubPromises);
+            }
 
-                const relative = toRelativeArticlePath(article.filePath, pubRoot);
-                if (relative === article.filePath) continue;
+            // Alkalmzd a pub frissítéseket egyetlen state update-ben
+            if (pubUpdates.size > 0) {
+                setPublications(prev => prev.map(p => pubUpdates.has(p.$id) ? { ...p, rootPath: pubUpdates.get(p.$id) } : p));
+            }
 
-                log(`[DataContext] Migráció: article filePath "${article.filePath}" → "${relative}"`);
-                try {
-                    await tables.updateRow({
-                        databaseId: DATABASE_ID,
-                        tableId: ARTICLES_COLLECTION_ID,
-                        rowId: article.$id,
-                        data: { filePath: relative }
-                    });
-                    articleUpdates.set(article.$id, relative);
-                    migrationCount++;
-                } catch (e) {
-                    logError(`[DataContext] Migráció sikertelen (article ${article.$id}):`, e);
+            // 2. Cikkek: gyűjtsd össze az összes update ígéretet párhuzamosan
+            const articlePromises = [];
+            const articleUpdates = new Map();
+
+            for (const article of arts) {
+                if (article.filePath && isAbsoluteFilePath(article.filePath)) {
+                    const pub = pubs.find(p => p.$id === article.publicationId);
+                    const pubRoot = pub?.rootPath && isLegacyRootPath(pub.rootPath)
+                        ? toCanonicalPath(pub.rootPath)
+                        : pub?.rootPath;
+                    if (!pubRoot) continue;
+
+                    const relative = toRelativeArticlePath(article.filePath, pubRoot);
+                    if (relative === article.filePath) continue;
+
+                    log(`[DataContext] Migráció: article filePath "${article.filePath}" → "${relative}"`);
+
+                    articlePromises.push(
+                        tables.updateRow({
+                            databaseId: DATABASE_ID,
+                            tableId: ARTICLES_COLLECTION_ID,
+                            rowId: article.$id,
+                            data: { filePath: relative }
+                        })
+                            .then(() => {
+                                articleUpdates.set(article.$id, relative);
+                            })
+                            .catch(e => {
+                                logError(`[DataContext] Migráció sikertelen (article ${article.$id}):`, e);
+                            })
+                    );
                 }
             }
-        }
-        // Kötegelt state frissítés (egyetlen re-render)
-        if (articleUpdates.size > 0) {
-            setArticles(prev => prev.map(a => articleUpdates.has(a.$id) ? { ...a, filePath: articleUpdates.get(a.$id) } : a));
-        }
 
-        // Ha nem volt migrálnivaló, ne iteráljunk újra a következő fetch-nél
-        if (migrationCount === 0) {
+            // Várakozz az összes article update-re párhuzamosan
+            if (articlePromises.length > 0) {
+                await Promise.all(articlePromises);
+            }
+
+            // Alkalmzd az article frissítéseket egyetlen state update-ben
+            if (articleUpdates.size > 0) {
+                setArticles(prev => prev.map(a => articleUpdates.has(a.$id) ? { ...a, filePath: articleUpdates.get(a.$id) } : a));
+            }
+
+            // Migráció készen: ne iteráljunk újra a következő fetch-nél
             hasMigratedRef.current = true;
+        } catch (e) {
+            logError('[DataContext] Migráció hiba:', e);
+            hasMigratedRef.current = true; // Még hiba esetén is jelöld meg, hogy ne próbálkozz újra
         }
     }, []);
 

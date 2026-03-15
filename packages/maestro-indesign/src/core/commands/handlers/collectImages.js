@@ -35,7 +35,7 @@ export const handleCollectImages = async (context) => {
     const publicationPath = pathUtils.toNativePath(canonicalRoot);
 
     // Relatív filePath → abszolút natív útvonal az InDesign scriptekhez
-    const nativeFilePath = pathUtils.toAbsoluteArticlePath(item.filePath, publication.rootPath);
+    const nativeFilePath = pathUtils.toAbsoluteArticlePath(item.filePath, canonicalRoot);
 
     // 1. Állapotellenőrzés (Nyitva van-e?)
     let isOpen = false;
