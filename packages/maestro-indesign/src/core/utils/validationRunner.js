@@ -5,6 +5,7 @@
 
 import { StateComplianceValidator, PublicationStructureValidator, DatabaseIntegrityValidator, PreflightValidator } from "./validators/index.js";
 import { VALIDATOR_TYPES } from "./validationConstants.js";
+import { toAbsoluteArticlePath, escapePathForExtendScript } from "./pathUtils.js";
 
 // Példányok gyorsítótárazása (cache)
 const validators = {
@@ -105,7 +106,6 @@ export const validate = async (target, checkTypes, context = {}) => {
  * @returns {Promise<Object>} { isValid, errors[], warnings[] }
  */
 export const validateArticle = async (article, publicationRootPath) => {
-    const { toAbsoluteArticlePath, escapePathForExtendScript } = require("./pathUtils.js");
     const results = { isValid: true, errors: [], warnings: [] };
     const path = article.filePath || article.FilePath;
 
@@ -119,7 +119,7 @@ export const validateArticle = async (article, publicationRootPath) => {
         const mappedPath = toAbsoluteArticlePath(decodeURI(path), publicationRootPath || "");
         const safePath = escapePathForExtendScript(mappedPath);
         const script = `var f = new File("${safePath}"); f.exists;`;
-        
+
         const exists = await require("indesign").app.doScript(
             script,
             require("indesign").ScriptLanguage.JAVASCRIPT
