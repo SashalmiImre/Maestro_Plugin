@@ -14,7 +14,7 @@ import { useToast } from "../../../common/Toast/ToastContext.jsx";
 // Utils
 import { WORKFLOW_STATES, MARKERS, TEAM_ARTICLE_FIELD, labelMatchesSlug } from "../../../../core/utils/workflow/workflowConstants.js";
 import { DRIVE_CHECK_INTERVAL_MS, STORAGE_KEYS } from "../../../../core/utils/constants.js";
-import { log } from "../../../../core/utils/logger.js";
+import { log, logError } from "../../../../core/utils/logger.js";
 import { checkPathAccessible, toNativePath } from "../../../../core/utils/pathUtils.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../../core/config/maestroEvents.js";
 import { checkElementPermission, PUBLICATION_ELEMENT_PERMISSIONS } from "../../../../core/utils/workflow/elementPermissions.js";
@@ -91,7 +91,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                 if (Array.isArray(parsed)) return parsed;
             }
         } catch (error) {
-            console.error(`[Publication] Error parsing statusFilters from localStorage (key: ${STORAGE_KEYS.FILTER_STATUS}):`, error);
+            logError(`[Publication] Error parsing statusFilters from localStorage (key: ${STORAGE_KEYS.FILTER_STATUS}):`, error);
         }
         return Object.values(WORKFLOW_STATES);
     });
