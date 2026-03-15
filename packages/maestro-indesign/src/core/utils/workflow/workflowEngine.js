@@ -56,10 +56,10 @@ export class WorkflowEngine {
      * @returns {string[]} return.errors - Hibaüzenetek tömbje (megakadályozza az átmenetet).
      * @returns {string[]} return.warnings - Figyelmeztetések tömbje (nem blokkol).
      */
-    static async validateTransition(article, targetState) {
+    static async validateTransition(article, targetState, publicationRootPath) {
         // Állapot-specifikus ellenőrzések (fájl létezés, oldalszám, fájlnév, preflight)
         // delegálva a StateComplianceValidator-nak
-        return validate(article, VALIDATOR_TYPES.STATE_COMPLIANCE, { targetState });
+        return validate(article, VALIDATOR_TYPES.STATE_COMPLIANCE, { targetState, publicationRootPath });
     }
 
     /**
@@ -78,7 +78,7 @@ export class WorkflowEngine {
      * @returns {Object} [return.document] - A frissített dokumentum az Appwrite-ból (siker esetén).
      * @returns {string} [return.error] - Hibaüzenet (kudarc esetén).
      */
-    static async executeTransition(article, targetState, user) {
+    static async executeTransition(article, targetState, user, publicationRootPath) {
         try {
             // 0. Jogosultsági ellenőrzés (a validáció ELŐTT — a drága preflight ne fusson feleslegesen)
             const permission = canUserMoveArticle(article, article.state, user);
@@ -87,7 +87,7 @@ export class WorkflowEngine {
             }
 
             // 1. Átmenet validálása
-            const validation = await WorkflowEngine.validateTransition(article, targetState);
+            const validation = await WorkflowEngine.validateTransition(article, targetState, publicationRootPath);
             if (!validation.isValid) {
                 return { success: false, error: validation.errors.join(", ") };
             }

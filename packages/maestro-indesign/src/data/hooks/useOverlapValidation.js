@@ -53,14 +53,15 @@ async function fetchAllValidationRows(baseQueries) {
             { operationName: "fetchValidationRows" }
         );
 
-        if (!response || !Array.isArray(response.rows)) {
+        const items = response?.documents || response?.rows;
+        if (!Array.isArray(items)) {
             logError('[useOverlapValidation] Hibás válasz a tables.listRows-tól:', response);
             break;
         }
 
-        allRows.push(...response.rows);
+        allRows.push(...items);
 
-        if (response.rows.length < DATA_QUERY_CONFIG.PAGE_SIZE) break;
+        if (items.length < DATA_QUERY_CONFIG.PAGE_SIZE) break;
         offset += DATA_QUERY_CONFIG.PAGE_SIZE;
     }
 

@@ -44,7 +44,7 @@ export const validate = async (target, checkTypes, context = {}) => {
                 // Ellenőrzi, hogy a fájl fizikailag létezik-e (Alapkövetelmény)
                 // A dedikált 'validateArticle' függvényt használjuk, amely az InDesign scripten keresztül
                 // ellenőrzi a fájl létezését.
-                result = await validateArticle(target);
+                result = await validateArticle(target, context.publicationRootPath);
                 break;
 
             case VALIDATOR_TYPES.STATE_COMPLIANCE:
@@ -105,11 +105,11 @@ export const validate = async (target, checkTypes, context = {}) => {
  * @param {Object} article - A validálandó cikk (filePath vagy FilePath mezővel)
  * @returns {Promise<Object>} { isValid, errors[], warnings[] }
  */
-export const validateArticle = async (article) => {
-    const { resolvePlatformPath, escapePathForExtendScript } = require("./pathUtils.js");
+export const validateArticle = async (article, publicationRootPath) => {
+    const { toAbsoluteArticlePath, escapePathForExtendScript } = require("./pathUtils.js");
     const results = { isValid: true, errors: [], warnings: [] };
     const path = article.filePath || article.FilePath;
-    
+
     if (!path) {
         results.isValid = false;
         results.errors.push(`Nincs fájl útvonal megadva. (ID: ${article.$id})`);
@@ -117,7 +117,7 @@ export const validateArticle = async (article) => {
     }
 
     try {
-        const mappedPath = resolvePlatformPath(decodeURI(path));
+        const mappedPath = toAbsoluteArticlePath(decodeURI(path), publicationRootPath || "");
         const safePath = escapePathForExtendScript(mappedPath);
         const script = `var f = new File("${safePath}"); f.exists;`;
         

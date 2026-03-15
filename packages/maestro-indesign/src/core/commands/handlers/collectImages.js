@@ -28,22 +28,26 @@ export const handleCollectImages = async (context) => {
         return { success: false, error: "Nincs érvényes cikk kiválasztva." };
     }
 
-    const publicationPath = publication.rootPath || publication.path;
-    if (!publicationPath) {
+    const canonicalRoot = publication.rootPath || publication.path;
+    if (!canonicalRoot) {
         return { success: false, error: "A publikáció útvonala nem található." };
     }
+    const publicationPath = pathUtils.toNativePath(canonicalRoot);
+
+    // Relatív filePath → abszolút natív útvonal az InDesign scriptekhez
+    const nativeFilePath = pathUtils.toAbsoluteArticlePath(item.filePath, publication.rootPath);
 
     // 1. Állapotellenőrzés (Nyitva van-e?)
     let isOpen = false;
     let docId = null;
     try {
-        const checkOpenScript = generateIsDocumentOpenScript(item.filePath);
+        const checkOpenScript = generateIsDocumentOpenScript(nativeFilePath);
         const isOpenResult = await executeScript(checkOpenScript);
         isOpen = isOpenResult === "true";
 
         if (isOpen) {
             // Ha nyitva van, lekérjük az ID-t a session kezeléshez
-            const idScript = generateGetDocumentIdScript(item.filePath);
+            const idScript = generateGetDocumentIdScript(nativeFilePath);
             const result = await executeScript(idScript);
             if (!result.startsWith("ERROR")) {
                 docId = result;
@@ -142,7 +146,7 @@ export const handleCollectImages = async (context) => {
             targetFolderPath,
             publicationPath,
             onlySelected,
-            isOpen ? null : item.filePath
+            isOpen ? null : nativeFilePath
         );
 
         const result = await executeScript(script);

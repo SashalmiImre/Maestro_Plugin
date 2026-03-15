@@ -17,6 +17,7 @@ import { withTimeout } from "../../core/utils/promiseUtils.js";
 import { logError } from "../../core/utils/logger.js";
 import { isNetworkError, isAuthError, getAPIErrorMessage } from "../../core/utils/errorUtils.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../core/config/maestroEvents.js";
+import { toCanonicalPath } from "../../core/utils/pathUtils.js";
 
 /**
  * React Hook a kiadványok kezelésére
@@ -46,8 +47,11 @@ export const usePublications = () => {
      * @param {Object} folder - A kiválasztott mappa objektum (name, nativePath)
      */
     const createPublication = useCallback(async (folder) => {
-        // Duplikáció ellenőrzése
-        const isDuplicate = publications.some(publication => publication.rootPath === folder.nativePath);
+        // Natív útvonal → kanonikus formátum (platform-független DB tároláshoz)
+        const canonicalRoot = toCanonicalPath(folder.nativePath);
+
+        // Duplikáció ellenőrzése kanonikus formátumban
+        const isDuplicate = publications.some(publication => publication.rootPath === canonicalRoot);
         if (isDuplicate) {
             throw new Error("Ez a kiadvány már létezik!");
         }
@@ -55,7 +59,7 @@ export const usePublications = () => {
         try {
             const pub = await dataCreatePublication({
                 name: folder.name,
-                rootPath: folder.nativePath
+                rootPath: canonicalRoot
             });
 
             // Automatikus "A" layout létrehozása az új kiadványhoz

@@ -7,7 +7,7 @@ import { useToast } from "../../common/Toast/ToastContext.jsx";
 import { useData } from "../../../core/contexts/DataContext.jsx";
 
 // Segédprogramok (Utils)
-import { getCrossPlatformPaths } from "../../../core/utils/pathUtils.js";
+import { toCanonicalPath, getArticleCanonicalPath } from "../../../core/utils/pathUtils.js";
 import {
     findActiveDocument,
     getDocPath,
@@ -42,12 +42,13 @@ import { MaestroEvent, dispatchMaestroEvent } from "../../../core/config/maestro
 export const DocumentMonitor = () => {
     const { user } = useUser();
     const { showToast, removeToast } = useToast();
-    const { articles, applyArticleUpdate } = useData();
+    const { articles, publications, applyArticleUpdate } = useData();
 
     // Referenciák
     const isDocumentMonitorMountedRef = useRef(true);
     const isVerifyingRef = useRef(false);
     const latestArticlesRef = useRef(articles);
+    const publicationsRef = useRef(publications);
     const previousLocksRef = useRef({});
     const pendingUnlockRef = useRef(new Set());
 
@@ -62,19 +63,22 @@ export const DocumentMonitor = () => {
      */
     const lastValidatedTimestampsRef = useRef({});
 
-    // Mindig frissítjük a ref-et, ha változik a context adat
-    useEffect(() => {
-        latestArticlesRef.current = articles;
-    }, [articles]);
+    // Mindig frissítjük a ref-eket, ha változik a context adat
+    useEffect(() => { latestArticlesRef.current = articles; }, [articles]);
+    useEffect(() => { publicationsRef.current = publications; }, [publications]);
 
     /**
      * Megkeres egy cikket a globális Context-ben a fájl útvonala alapján.
+     * Kanonikus útvonal-összehasonlítást használ (platform-független).
      */
-    const fetchArticle = (path) => {
+    const fetchArticle = (nativePath) => {
         try {
-            if (!latestArticlesRef.current || latestArticlesRef.current.length === 0) return null;
-            const searchPaths = getCrossPlatformPaths(path);
-            return latestArticlesRef.current.find(a => searchPaths.includes(a.filePath)) || null;
+            if (!latestArticlesRef.current?.length) return null;
+            const searchCanonical = toCanonicalPath(nativePath).toLowerCase();
+            const pubs = publicationsRef.current;
+            return latestArticlesRef.current.find(a => {
+                return getArticleCanonicalPath(a, pubs).toLowerCase() === searchCanonical;
+            }) || null;
         } catch (error) {
             console.error("[DocumentMonitor] fetchArticle hiba:", error);
             return null;
@@ -259,10 +263,9 @@ export const DocumentMonitor = () => {
                 if (appInstance) {
                     const openPaths = await getOpenDocumentPaths(appInstance);
                     if (openPaths) {
-                        const crossPlatformPaths = getCrossPlatformPaths(unlockTarget.filePath);
+                        const articleCanonical = getArticleCanonicalPath(unlockTarget, publicationsRef.current).toLowerCase();
                         const isOpen = openPaths.some(p => {
-                            const pNorm = p.replace(/\\/g, "/").toLowerCase();
-                            return crossPlatformPaths.some(cp => cp.toLowerCase() === pNorm);
+                            return toCanonicalPath(p).toLowerCase() === articleCanonical;
                         });
 
                         if (isOpen) {

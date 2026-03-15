@@ -7,6 +7,9 @@ import { ValidatedTextField } from "../../../common/ValidatedTextField.jsx";
 // Config & Constants
 import { STORAGE_KEYS } from "../../../../core/utils/constants.js";
 
+// Utils
+import { toNativePath } from "../../../../core/utils/pathUtils.js";
+
 /**
  * GeneralSection Component (Publication)
  *
@@ -103,7 +106,7 @@ export const GeneralSection = ({ publication, onFieldUpdate, disabled, permissio
                 {publication.rootPath && (
                     <div style={{ marginTop: "12px" }}>
                         <sp-detail style={{ marginBottom: "4px" }}>GYÖKÉRKÖNYVTÁR</sp-detail>
-                        <sp-body style={{ wordBreak: "break-all" }}>{publication.rootPath}</sp-body>
+                        <sp-body style={{ wordBreak: "break-all" }}>{toNativePath(publication.rootPath)}</sp-body>
                     </div>
                 )}
             </div>

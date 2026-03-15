@@ -23,10 +23,14 @@ export const handlePrinting = async (context) => {
         return { success: false, error: "Nincs érvényes cikk kiválasztva." };
     }
 
-    const publicationPath = publication.rootPath || publication.path;
-    if (!publicationPath) {
+    const canonicalRoot = publication.rootPath || publication.path;
+    if (!canonicalRoot) {
         return { success: false, error: "A publikáció útvonala nem található." };
     }
+    const publicationPath = pathUtils.toNativePath(canonicalRoot);
+
+    // Relatív filePath → abszolút natív útvonal az InDesign scriptekhez
+    const nativeFilePath = pathUtils.toAbsoluteArticlePath(item.filePath, canonicalRoot);
 
     // 1. Layout név feloldása (fájlnévben használjuk)
     const layout = (layouts || []).find(l => l.$id === item.layout);
@@ -50,7 +54,7 @@ export const handlePrinting = async (context) => {
     let lockedItem = null;
 
     try {
-        const checkOpenScript = generateIsDocumentOpenScript(item.filePath);
+        const checkOpenScript = generateIsDocumentOpenScript(nativeFilePath);
         const isOpenResult = await executeScript(checkOpenScript);
         const isAlreadyOpen = isOpenResult === "true";
 
@@ -65,7 +69,7 @@ export const handlePrinting = async (context) => {
             }
             lockedBySystem = true;
             lockedItem = lockResult.document;
-            sourcePath = item.filePath;
+            sourcePath = nativeFilePath;
         } else {
             console.log("[Command] Document is already open.");
         }

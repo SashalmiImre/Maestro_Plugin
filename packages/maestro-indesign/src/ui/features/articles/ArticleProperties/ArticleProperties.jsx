@@ -301,7 +301,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
         }
 
         try {
-            const validation = await WorkflowEngine.validateTransition(article, targetState);
+            const validation = await WorkflowEngine.validateTransition(article, targetState, publication?.rootPath);
             if (!validation.isValid) {
                 setIsSyncing(false);
                 // Csatolatlan meghajtó → specifikus toast, a validációs eredményeket nem bántjuk
@@ -323,7 +323,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
                 return;
             }
 
-            const result = await WorkflowEngine.executeTransition(article, targetState, user);
+            const result = await WorkflowEngine.executeTransition(article, targetState, user, publication?.rootPath);
             if (result.success) {
                 if (result.document) applyArticleUpdate(result.document);
                 if (onUpdate && result.document) onUpdate(result.document);

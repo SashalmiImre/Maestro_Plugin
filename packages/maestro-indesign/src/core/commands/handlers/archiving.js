@@ -52,10 +52,14 @@ export const handleArchiving = async (context) => {
         return { success: false, error: "Nincs érvényes cikk kiválasztva." };
     }
 
-    const publicationPath = publication?.rootPath || publication?.path;
-    if (!publicationPath) {
+    const canonicalRoot = publication?.rootPath || publication?.path;
+    if (!canonicalRoot) {
         return { success: false, error: "A publikáció rootPath útvonala nem elérhető." };
     }
+    const publicationPath = pathUtils.toNativePath(canonicalRoot);
+
+    // Relatív filePath → abszolút natív útvonal az InDesign scriptekhez
+    const nativeFilePath = pathUtils.toAbsoluteArticlePath(item.filePath, canonicalRoot);
 
     const archivPath = pathUtils.joinPath(publicationPath, ARCHIV_FOLDER_NAME);
 
@@ -82,7 +86,7 @@ export const handleArchiving = async (context) => {
 
     try {
         // 3. Nyers adatok kinyerése az InDesign fájlból (JSON)
-        const extractScript = generateExtractArticleDataScript(item.filePath);
+        const extractScript = generateExtractArticleDataScript(nativeFilePath);
         const extractResult = await executeScript(extractScript);
 
         if (!extractResult || extractResult.startsWith("ERROR:")) {
@@ -114,7 +118,7 @@ export const handleArchiving = async (context) => {
         }
 
         // 6. INDD fájl másolása az archívba
-        const copyScript  = generateCopyInddScript(item.filePath, inddOutputPath);
+        const copyScript  = generateCopyInddScript(nativeFilePath, inddOutputPath);
         const copyResult  = await executeScript(copyScript);
 
         if (!copyResult || copyResult.startsWith("ERROR:")) {

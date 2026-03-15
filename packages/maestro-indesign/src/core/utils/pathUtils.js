@@ -5,7 +5,7 @@
  * @module utils/pathUtils
  */
 
-import { PC_DRIVE_LETTER } from "./constants.js";
+import { MOUNT_PREFIX } from "./constants.js";
 import os from "os";
 
 /**
@@ -74,16 +74,12 @@ export const isFileInFolder = (filePath, folderPath) => {
     return normalizedFile.startsWith(folderPrefix);
 };
 
-// TODO: PC meghajtó betűjel ellenőrzése felhasználóval. Jelenleg Z:-t feltételezünk.
-/** Root útvonal PC hálózati meghajtókhoz (constants.js-ből importálva) */
-const PC_ROOT = PC_DRIVE_LETTER;
-
 /**
  * Belső segédfüggvény bármely útvonal normalizálására.
  * - Forward slash-eket használ.
  * - NFC normalizálást végez a karakterkódoláson.
  * - Kezeli az URI-kódolt útvonalakat (decode).
- * 
+ *
  * @private
  * @param {string} path - A normalizálandó útvonal.
  * @returns {string} A teljesen normalizált (dekódolt, NFC) útvonal.
@@ -102,113 +98,177 @@ const normalize = (path) => {
 };
 
 /**
- * Leképezi (Mappeli) a fájl útvonalat Mac és Windows platformok között.
- * Ha hálózati útvonalat talál, elvégzi a konverziót.
- * 
- * - Windows-on: Mac hálózati útvonalakat (/Volumes/Name/...) konvertál Windows-ra (Z:/Name/...)
- * - Mac-en: Windows hálózati útvonalakat (Z:/...) konvertál Mac-re (/Volumes/...)
- * - Egyéb esetben (helyi fájlok) nem módosít.
- * 
- * @param {string} path - A konvertálandó fájl útvonal.
- * @returns {string} A platform-specifikus útvonal.
+ * Visszaadja az aktuális platform mount prefix-ét.
+ * @private
+ * @returns {string} A platform mount prefix (pl. "/Volumes" vagy "C:/Volumes").
  */
-export const resolvePlatformPath = (path) => {
-    if (!path) return "";
-    
-    // Platform detektálás (Node/UXP)
-    let platform = "darwin"; // Default fallback
+const getMountPrefix = () => {
+    let platform = "darwin";
     try {
         if (typeof os !== 'undefined') {
             platform = os.platform();
-        } else {
-             // Fallback teszt környezethez vagy ha az os modul hiányzik
-             // A teszt scriptben mockolhatjuk vagy itt kezeljük.
-             // Most feltételezzük a Mac-et fejlesztéshez, de az 'os' importnak működnie kell.
         }
     } catch(e) {
-        console.warn("OS modul nem elérhető, alapértelemezett 'darwin' használata.");
+        console.warn("[PathUtils] OS modul nem elérhető, alapértelmezett 'darwin' használata.");
+    }
+    return MOUNT_PREFIX[platform] || MOUNT_PREFIX.darwin;
+};
+
+// =============================================================================
+// Kanonikus útvonal konverzió (natív ↔ DB formátum)
+// =============================================================================
+
+/**
+ * Natív útvonal → kanonikus formátum (DB-ben tároláshoz).
+ * Leválasztja a platform-specifikus mount prefix-et.
+ *
+ * Mac:  /Volumes/Story/2026/March → /Story/2026/March
+ * Win:  C:/Volumes/Story/2026/March → /Story/2026/March
+ * Win:  C:\Volumes\Story\2026\March → /Story/2026/March
+ *
+ * Helyi (nem hálózati) útvonal változatlanul marad.
+ *
+ * @param {string} nativePath - A natív fájl/mappa útvonal.
+ * @returns {string} A kanonikus útvonal (platform-prefix nélkül).
+ */
+export const toCanonicalPath = (nativePath) => {
+    if (!nativePath) return "";
+
+    const processed = normalize(nativePath);
+    const prefix = getMountPrefix();
+
+    // Ha a path a mount prefix-szel kezdődik, levágjuk
+    if (processed.startsWith(prefix + "/") || processed === prefix) {
+        return processed.substring(prefix.length) || "/";
     }
 
-    let processedPath = normalize(path);
-
-    if (platform === "win32") {
-        // PC: /Volumes/VolName/... -> Z:/VolName/... konverzió
-        // Csak akkor konvertálunk, ha Mac Volume útvonalról van szó
-        const macMatch = processedPath.match(/^\/Volumes\/([^\/]+)(.*)/);
-        if (macMatch) {
-            // macMatch[1] = Kötet Neve, macMatch[2] = Maradék
-            // Pl: /Volumes/Story/File.indd -> Z:/Story/File.indd
-            // A Z: betűjelet dinamikusan a konstansból vesszük.
-            return `${PC_DRIVE_LETTER}/${macMatch[1]}${macMatch[2]}`; 
-        }
-    } else if (platform === "darwin") {
-        // Mac: Z:/... -> /Volumes/... konverzió (feltételezve, hogy a PC meghajtó a hálózati megosztás)
-        // Ellenőrizzük, hogy a path azzal a betűjellel kezdődik-e, amit PC-n hálózatnak használunk
-        if (processedPath.toUpperCase().startsWith(PC_DRIVE_LETTER)) {
-             // Z:/Folder/File.indd -> /Volumes/Folder/File.indd
-             // Levágjuk a "Z:" részt (2 karakter)
-             const pathAfterDrive = processedPath.substring(2); 
-             return `/Volumes${pathAfterDrive}`;
+    // Ellenőrizzük mindkét platform prefix-ét (pl. Mac-en kapott Win path)
+    for (const pfx of Object.values(MOUNT_PREFIX)) {
+        if (pfx !== prefix && (processed.startsWith(pfx + "/") || processed === pfx)) {
+            return processed.substring(pfx.length) || "/";
         }
     }
 
-    return processedPath;
+    // Helyi fájl — nem kanonizálható, visszaadjuk normalizáltan
+    return processed;
 };
 
 /**
- * Generálja az összes lehetséges cross-platform útvonal variánst egy adott útvonalhoz.
- * Hasznos fájlok keresésekor a hálózaton.
- * 
- * Visszatérési értékek (tömb):
- * - Normalizált bemeneti útvonal
- * - Ha hálózati: a másik platformnak megfelelő variáns (Z: <-> /Volumes/)
- * - Windows stílusú útvonal backslash-ekkel
- * 
- * @param {string} path - A fájl útvonal.
- * @returns {string[]} Az összes lehetséges útvonal variáns tömbje.
+ * Kanonikus útvonal → natív (aktuális platform prefix-szel).
+ *
+ * Mac: /Story/2026/March → /Volumes/Story/2026/March
+ * Win: /Story/2026/March → C:/Volumes/Story/2026/March
+ *
+ * Már natív vagy helyi útvonal változatlanul marad.
+ *
+ * @param {string} canonicalPath - A kanonikus útvonal (DB-ből).
+ * @returns {string} A platform-specifikus natív útvonal.
  */
-export const getCrossPlatformPaths = (path) => {
-    if (!path) return [];
-    
-    // 1. Bemenet normalizálása
-    const p1 = normalize(path);
-    
-    // 2. Variánsok generálása
-    const paths = new Set();
-    paths.add(p1);
+export const toNativePath = (canonicalPath) => {
+    if (!canonicalPath) return "";
 
-    // Segédfüggvény: PC variáns hozzáadása backslash-sel is
-    const addPcVariant = (pathWithForwardSlashes) => {
-        paths.add(pathWithForwardSlashes);
-        paths.add(pathWithForwardSlashes.replace(/\//g, "\\"));
-    };
-    
-    // A) Bemenet: Mac Volume (/Volumes/Name/...)
-    const macMatch = p1.match(/^\/Volumes\/([^\/]+)(.*)/);
-    if (macMatch) {
-        // Generálunk PC variánst: Z:/Name/...
-        const pcPath = `${PC_DRIVE_LETTER}/${macMatch[1]}${macMatch[2]}`;
-        addPcVariant(pcPath);
-    } 
-    // B) Bemenet: PC Drive (Z:/...) ami a hálózati meghajtónk
-    else if (p1.toUpperCase().startsWith(PC_DRIVE_LETTER)) {
-        addPcVariant(p1); // Self
-        
-        // Generálunk Mac variánst: /Volumes/...
-        // A PC_DRIVE_LETTER-t (pl "Z:") levágjuk:
-        const pathAfterDrive = p1.substring(PC_DRIVE_LETTER.length);
-        paths.add(`/Volumes${pathAfterDrive}`);
-    }
-    // C) Egyéb (pl. C:/Local vagy /Users/Local vagy más nem hálózati drive)
-    else {
-        // Ha nem a megosztott Z: drive, akkor csak sima path normalizálás van.
-        // Ha ez egy Windows path (bármilyen betűvel), akkor adjunk backslash verziót is
-        if (p1.match(/^[a-zA-Z]:\//)) {
-             addPcVariant(p1);
+    const processed = normalize(canonicalPath);
+
+    // Ha már natív formátumban van (mount prefix-szel kezdődik), nem konvertálunk
+    for (const pfx of Object.values(MOUNT_PREFIX)) {
+        if (processed.startsWith(pfx + "/") || processed === pfx) {
+            // Másik platform prefix-e → konvertálás az aktuális platformra
+            const canonical = processed.substring(pfx.length) || "/";
+            return getMountPrefix() + canonical;
         }
     }
-    
-    return Array.from(paths);
+
+    // Kanonikus path → prefix hozzáfűzése
+    if (processed.startsWith("/")) {
+        return getMountPrefix() + processed;
+    }
+
+    // Helyi fájl vagy relatív path — visszaadjuk normalizáltan
+    return processed;
+};
+
+/**
+ * Abszolút article útvonal → relatív a kiadvány kanonikus rootPath-jához.
+ *
+ * Abszolút: /Story/.maestro/article.indd, root: /Story → .maestro/article.indd
+ * Natív:    /Volumes/Story/.maestro/article.indd, root: /Story → .maestro/article.indd
+ *
+ * @param {string} absolutePath - Az abszolút fájl útvonal (natív vagy kanonikus).
+ * @param {string} canonicalRoot - A kiadvány kanonikus rootPath-ja.
+ * @returns {string} A relatív útvonal a root-hoz képest.
+ */
+export const toRelativeArticlePath = (absolutePath, canonicalRoot) => {
+    if (!absolutePath || !canonicalRoot) return absolutePath || "";
+
+    // Mindkettőt kanonikusra hozzuk
+    const canonicalFile = toCanonicalPath(absolutePath);
+    const root = normalize(canonicalRoot).replace(/\/$/, "");
+
+    // Ha a fájl a root alatt van, levágjuk a root részt
+    if (canonicalFile.startsWith(root + "/")) {
+        return canonicalFile.substring(root.length + 1);
+    }
+
+    // Ha már relatív, visszaadjuk
+    return absolutePath;
+};
+
+/**
+ * Relatív article útvonal → abszolút natív.
+ *
+ * .maestro/article.indd + /Story → /Volumes/Story/.maestro/article.indd (Mac)
+ * .maestro/article.indd + /Story → C:/Volumes/Story/.maestro/article.indd (Win)
+ *
+ * @param {string} relativePath - A relatív fájl útvonal (a pub root-hoz képest).
+ * @param {string} canonicalRoot - A kiadvány kanonikus rootPath-ja.
+ * @returns {string} Az abszolút natív útvonal.
+ */
+export const toAbsoluteArticlePath = (relativePath, canonicalRoot) => {
+    if (!relativePath || !canonicalRoot) return relativePath || "";
+
+    // Ha már abszolút (natív vagy kanonikus), egyszerűen natívra konvertáljuk
+    if (relativePath.startsWith("/") || /^[a-zA-Z]:/.test(relativePath)) {
+        return toNativePath(relativePath);
+    }
+
+    // Relatív → kanonikus abszolút → natív
+    const root = normalize(canonicalRoot).replace(/\/$/, "");
+    const canonical = `${root}/${normalize(relativePath)}`;
+    return toNativePath(canonical);
+};
+
+/**
+ * Visszaadja a cikk teljes kanonikus útvonalát a kiadvány rootPath-ja alapján.
+ * Relatív filePath → rootPath + filePath (kanonikus).
+ * Abszolút (legacy) filePath → toCanonicalPath().
+ *
+ * @param {Object} article - A cikk (filePath, publicationId mezőkkel).
+ * @param {Array} publications - A kiadványok tömbje (mindegyiknek van $id és rootPath mezője).
+ * @returns {string} Kanonikus útvonal (pl. /Story/.maestro/article.indd).
+ */
+export const getArticleCanonicalPath = (article, publications) => {
+    if (!article?.filePath) return "";
+    if (isAbsoluteFilePath(article.filePath)) {
+        return toCanonicalPath(article.filePath);
+    }
+    const pub = publications?.find(p => p.$id === article.publicationId);
+    if (pub?.rootPath) {
+        const root = normalize(pub.rootPath).replace(/\/$/, "");
+        return `${root}/${normalize(article.filePath)}`;
+    }
+    return article.filePath;
+};
+
+/**
+ * Backward compatibility wrapper — kanonikus vagy natív útvonalat natívra konvertál.
+ *
+ * @param {string} path - Bármilyen formátumú útvonal (kanonikus, natív, régi formátumú).
+ * @returns {string} A platform-specifikus natív útvonal.
+ * @deprecated Használd a toNativePath()-t új kódban.
+ */
+export const resolvePlatformPath = (path) => {
+    if (!path) return "";
+    return toNativePath(path);
 };
 
 /**
@@ -340,12 +400,47 @@ export const isValidFileName = (name) => {
  * Ellenőrzi, hogy egy natív fájl/mappa útvonal elérhető-e (a meghajtó csatlakoztatva van-e).
  * ExtendScript `Folder(path).exists`-et használ, ami Mac-en és Windows-on is működik.
  *
- * // TODO: A PC-s meghajtójelölések (betűjelek, UNC útvonalak) kezelését pontosítani kell
- * //       a tényleges hálózati környezet alapján.
- *
  * @param {string} nativePath - A vizsgálandó natív útvonal.
  * @returns {Promise<boolean>} Igaz, ha az útvonal elérhető, egyébként hamis.
  */
+// =============================================================================
+// Lazy migráció (régi formátumú path-ok felismerése)
+// =============================================================================
+
+/**
+ * Ellenőrzi, hogy egy rootPath régi (natív) formátumban van-e.
+ * Régi formátum: /Volumes/...-mal vagy drive betűvel (pl. Z:/) kezdődik.
+ * Kanonikus formátum: /ShareName/... (nem /Volumes/).
+ *
+ * @param {string} rootPath - A vizsgálandó rootPath.
+ * @returns {boolean} true ha régi formátumú, false ha kanonikus vagy üres.
+ */
+export const isLegacyRootPath = (rootPath) => {
+    if (!rootPath) return false;
+    const normalized = rootPath.replace(/\\/g, "/");
+    // Bármely MOUNT_PREFIX-szel kezdődik → régi formátum
+    for (const pfx of Object.values(MOUNT_PREFIX)) {
+        if (normalized.startsWith(pfx + "/") || normalized === pfx) return true;
+    }
+    // Drive letter-rel kezdődik (pl. Z:/) → régi formátum
+    if (/^[a-zA-Z]:\//.test(normalized)) return true;
+    return false;
+};
+
+/**
+ * Ellenőrzi, hogy egy article filePath abszolút (régi formátumú) vagy relatív.
+ * Abszolút: /...-mal vagy drive betűvel kezdődik.
+ * Relatív: pl. .maestro/article.indd
+ *
+ * @param {string} filePath - A vizsgálandó filePath.
+ * @returns {boolean} true ha abszolút (régi), false ha relatív.
+ */
+export const isAbsoluteFilePath = (filePath) => {
+    if (!filePath) return false;
+    const normalized = filePath.replace(/\\/g, "/");
+    return normalized.startsWith("/") || /^[a-zA-Z]:/.test(normalized);
+};
+
 export const checkPathAccessible = async (nativePath) => {
     if (!nativePath) return false;
     try {

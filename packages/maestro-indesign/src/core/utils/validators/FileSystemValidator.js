@@ -3,7 +3,7 @@
  */
 
 import { ValidatorBase } from "./ValidatorBase.js";
-import { resolvePlatformPath } from "../pathUtils.js";
+import { toAbsoluteArticlePath } from "../pathUtils.js";
 const { File } = require("uxp").storage.localFileSystem;
 
 export class FileSystemValidator extends ValidatorBase {

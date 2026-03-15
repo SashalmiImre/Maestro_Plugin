@@ -22,10 +22,14 @@ export const handleExportPdf = async (context) => {
         return { success: false, error: "Nincs érvényes cikk kiválasztva." };
     }
 
-    const publicationPath = publication.rootPath || publication.path;
-    if (!publicationPath) {
+    const canonicalRoot = publication.rootPath || publication.path;
+    if (!canonicalRoot) {
         return { success: false, error: "A publikáció útvonala nem található." };
     }
+    const publicationPath = pathUtils.toNativePath(canonicalRoot);
+
+    // Relatív filePath → abszolút natív útvonal az InDesign scriptekhez
+    const nativeFilePath = pathUtils.toAbsoluteArticlePath(item.filePath, canonicalRoot);
 
     // 1. Path resolution
     // PDF folder is inside publication folder
@@ -61,7 +65,7 @@ export const handleExportPdf = async (context) => {
 
     try {
         // Check if document is open
-        const checkOpenScript = generateIsDocumentOpenScript(item.filePath);
+        const checkOpenScript = generateIsDocumentOpenScript(nativeFilePath);
         const isOpenResult = await executeScript(checkOpenScript);
         const isAlreadyOpen = isOpenResult === "true";
 
@@ -79,7 +83,7 @@ export const handleExportPdf = async (context) => {
         }
 
         // 3. Execute Export Script
-        const exportScript = generateExportPdfScript(item.filePath, outputPath);
+        const exportScript = generateExportPdfScript(nativeFilePath, outputPath);
         const result = await executeScript(exportScript);
         
         const parsedResult = parseExecutionStatus(result);

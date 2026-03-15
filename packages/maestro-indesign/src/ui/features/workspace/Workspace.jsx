@@ -32,7 +32,7 @@ import { useData } from "../../../core/contexts/DataContext.jsx";
 import { useWorkflowValidation } from "../../../data/hooks/useWorkflowValidation.js";
 
 // Utils
-import { resolvePlatformPath } from "../../../core/utils/pathUtils.js";
+import { toAbsoluteArticlePath, toNativePath } from "../../../core/utils/pathUtils.js";
 import { generateOpenDocumentScript } from "../../../core/utils/indesign/index.js";
 import { log, logError } from "../../../core/utils/logger.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../core/config/maestroEvents.js";
@@ -191,7 +191,9 @@ export const Workspace = () => {
                 return;
             }
 
-            const mappedPath = resolvePlatformPath(article.filePath);
+            // Relatív filePath → abszolút natív útvonal (a kiadvány rootPath-ja alapján)
+            const pub = publications.find(p => p.$id === article.publicationId);
+            const mappedPath = pub ? toAbsoluteArticlePath(article.filePath, pub.rootPath) : toNativePath(article.filePath);
 
             if (mappedPath) {
                 try {

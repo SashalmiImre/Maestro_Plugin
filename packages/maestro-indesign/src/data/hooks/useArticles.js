@@ -18,7 +18,7 @@ import {
     generateRenameOpenDocumentScript,
     generateRollbackRenameScript
 } from "../../core/utils/indesign/index.js";
-import { isFileInFolder, resolvePlatformPath, convertNativePathToUrl, parsePath, joinPath } from "../../core/utils/pathUtils.js";
+import { isFileInFolder, toNativePath, toCanonicalPath, toRelativeArticlePath, toAbsoluteArticlePath, convertNativePathToUrl, parsePath, joinPath } from "../../core/utils/pathUtils.js";
 import { log, logError, logWarn } from "../../core/utils/logger.js";
 import { SCRIPT_LANGUAGE_JAVASCRIPT, TOAST_TYPES } from "../../core/utils/constants.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../core/config/maestroEvents.js";
@@ -48,6 +48,10 @@ export const useArticles = (publicationId, publicationRoot) => {
     const publication = useMemo(() => publications.find(p => p.$id === publicationId), [publications, publicationId]);
     const publicationRef = useRef(publication);
     publicationRef.current = publication;
+
+    // Ref a publications tömbhöz — a callback-ek ne függjenek a publications referenciától
+    const publicationsRef = useRef(publications);
+    publicationsRef.current = publications;
     
     // Értesítések kezelése (Toast üzenetek)
     const { showToast } = useToast();
@@ -79,25 +83,28 @@ export const useArticles = (publicationId, publicationRoot) => {
     const addArticle = useCallback(async (file) => {
         const fs = require("uxp").storage.localFileSystem;
 
+        // A publicationRoot kanonikus formátumban van (DB-ből) → natív feloldás
+        const nativeRoot = toNativePath(publicationRoot);
+
         // --- 0. Útvonal validáció ---
         // Csak olyan fájl adható hozzá, ami fizikailag a kiadvány mappájában (vagy almappájában) van.
-        if (!isFileInFolder(file.nativePath, publicationRoot)) {
-            throw new Error(`A fájl nem található a kiadvány mappájában! (${publicationRoot})`);
+        if (!isFileInFolder(file.nativePath, nativeRoot)) {
+            throw new Error(`A fájl nem található a kiadvány mappájában! (${nativeRoot})`);
         }
 
         // --- 1. Hozzáférés szerzése a kiadvány mappájához ---
         let rootEntry = null;
         try {
-            let rootUrl = convertNativePathToUrl(publicationRoot);
+            let rootUrl = convertNativePathToUrl(nativeRoot);
             rootEntry = await fs.getEntryWithUrl(rootUrl);
         } catch (e) {
              logWarn("Közvetlen mappa-hozzáférés sikertelen:", e);
-             throw new Error(`Nem sikerült írási jogot szerezni a kiadvány mappájához (${publicationRoot}).`);
+             throw new Error(`Nem sikerült írási jogot szerezni a kiadvány mappájához (${nativeRoot}).`);
         }
 
         if (!rootEntry) {
-            logError("A gyökér mappa entry nem található.", { publicationRoot });
-            throw new Error(`Nem sikerült írási jogot szerezni a kiadvány mappájához (${publicationRoot}).`);
+            logError("A gyökér mappa entry nem található.", { nativeRoot });
+            throw new Error(`Nem sikerült írási jogot szerezni a kiadvány mappájához (${nativeRoot}).`);
         }
 
         // --- 2. A .maestro mappa előkészítése ---
@@ -176,8 +183,9 @@ export const useArticles = (publicationId, publicationRoot) => {
         }
 
         // --- 6. Adatbázis ellenőrzés ---
-        // Ellenőrizzük, hogy az adatbázisban szerepel-e már ez az útvonal
-        const isDuplicateDB = articles.some(a => a.filePath === copiedFile.nativePath);
+        // A filePath-t relatívan tároljuk a kiadvány kanonikus root-jához képest
+        const relativeFilePath = toRelativeArticlePath(copiedFile.nativePath, publicationRoot);
+        const isDuplicateDB = articles.some(a => a.filePath === relativeFilePath);
         if (isDuplicateDB) {
              return { status: "skipped", reason: "db_duplicate", fileName: file.name };
         }
@@ -190,7 +198,7 @@ export const useArticles = (publicationId, publicationRoot) => {
             await createArticle({
                 name: file.name.replace(/\.[^/.]+$/, ""), // Kiterjesztés levágása a névből
                 layout: layouts[0]?.$id ?? null,
-                filePath: copiedFile.nativePath,
+                filePath: relativeFilePath,
                 publicationId: publicationId,
                 state: 0,
                 startPage: startPage,
@@ -240,8 +248,9 @@ export const useArticles = (publicationId, publicationRoot) => {
                 throw new Error(`Nincs fájl útvonal a cikkhez: ${article.name}`);
             }
 
-            // Útvonal feloldása (Mac/Windows kompatibilitás)
-            const mappedPath = resolvePlatformPath(article.filePath);
+            // Relatív filePath → abszolút natív útvonal (a kiadvány rootPath-ja alapján)
+            const pub = publicationsRef.current.find(p => p.$id === article.publicationId);
+            const mappedPath = pub ? toAbsoluteArticlePath(article.filePath, pub.rootPath) : toNativePath(article.filePath);
 
             if (mappedPath) {
                 try {
@@ -249,7 +258,7 @@ export const useArticles = (publicationId, publicationRoot) => {
                     await app.open(mappedPath);
                 } catch (openError) {
                     logWarn("Standard app.open sikertelen, próba ExtendScriptekkel...", openError);
-                    
+
                     // Fallback: ExtendScript alapú megnyitás
                     const script = generateOpenDocumentScript(mappedPath);
                     const result = app.doScript(script, SCRIPT_LANGUAGE_JAVASCRIPT, []);
@@ -282,17 +291,22 @@ export const useArticles = (publicationId, publicationRoot) => {
         if (!newName || newName.trim() === "" || newName === article.name) return article;
 
         log(`[useArticles] Cikk átnevezése: ${article.name} -> ${newName}`);
-        
+
         const originalName = article.name;
         const originalPath = article.filePath;
 
+        // Relatív filePath → abszolút natív útvonal a fájlműveletekhez
+        const pub = publicationsRef.current.find(p => p.$id === article.publicationId);
+        const nativeOriginalPath = pub ? toAbsoluteArticlePath(originalPath, pub.rootPath) : toNativePath(originalPath);
+
         let newNativePath;
+        let newRelativePath;
         let originalFileName;
 
         // --- Fázis 1: Fizikai fájl átnevezése ---
         let wasDocumentOpen = false;
         try {
-            const { parentPath, fileName, extension } = parsePath(originalPath);
+            const { parentPath, fileName, extension } = parsePath(nativeOriginalPath);
             originalFileName = fileName;
             const newFileName = newName + extension;
             newNativePath = joinPath(parentPath, newFileName);
@@ -301,22 +315,26 @@ export const useArticles = (publicationId, publicationRoot) => {
                 return article; // Nincs változás
             }
 
-            log(`[useArticles] Fájl átnevezése: ${originalPath} -> ${newNativePath}`);
+            // Az új relatív path a DB frissítéshez
+            const { parentPath: relParent, extension: relExt } = parsePath(originalPath);
+            newRelativePath = relParent ? joinPath(relParent, newName + relExt) : (newName + relExt);
+
+            log(`[useArticles] Fájl átnevezése: ${nativeOriginalPath} -> ${newNativePath}`);
 
             const app = require("indesign").app;
 
             // Ellenőrizzük, hogy a dokumentum nyitva van-e InDesign-ban
-            const isOpenResult = app.doScript(generateIsDocumentOpenScript(originalPath), SCRIPT_LANGUAGE_JAVASCRIPT, []);
+            const isOpenResult = app.doScript(generateIsDocumentOpenScript(nativeOriginalPath), SCRIPT_LANGUAGE_JAVASCRIPT, []);
             wasDocumentOpen = String(isOpenResult).trim() === "true";
 
             let script;
             if (wasDocumentOpen) {
                 // Ha nyitva van: Save As az új útvonalra + régi fájl törlése
                 log(`[useArticles] Dokumentum nyitva van, Save As használata az átnevezéshez`);
-                script = generateRenameOpenDocumentScript(originalPath, newNativePath);
+                script = generateRenameOpenDocumentScript(nativeOriginalPath, newNativePath);
             } else {
                 // Ha nincs nyitva: egyszerű fájl-átnevezés
-                script = generateRenameFileScript(originalPath, newNativePath);
+                script = generateRenameFileScript(nativeOriginalPath, newNativePath);
             }
 
             // DocumentMonitor loop megelőzése a programozott mentésnél.
@@ -339,7 +357,7 @@ export const useArticles = (publicationId, publicationRoot) => {
         try {
             const updated = await updateArticle(article.$id, {
                 name: newName,
-                filePath: newNativePath
+                filePath: newRelativePath
             });
 
             showToast('Cikk sikeresen átnevezve', TOAST_TYPES.SUCCESS);

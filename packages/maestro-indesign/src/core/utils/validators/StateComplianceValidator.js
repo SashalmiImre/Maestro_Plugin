@@ -8,7 +8,7 @@ import { ValidatorBase } from "./ValidatorBase.js";
 import { PreflightValidator } from "./PreflightValidator.js";
 import { WORKFLOW_CONFIG } from "../workflow/workflowConstants.js";
 import { VALIDATOR_TYPES } from "../validationConstants.js";
-import { isValidFileName, resolvePlatformPath, escapePathForExtendScript } from "../pathUtils.js";
+import { isValidFileName, toAbsoluteArticlePath, escapePathForExtendScript } from "../pathUtils.js";
 
 /** Gyorsítótárazott PreflightValidator példány. */
 const preflightValidator = new PreflightValidator();
@@ -55,7 +55,7 @@ export class StateComplianceValidator extends ValidatorBase {
 
             switch (validatorName) {
                 case VALIDATOR_TYPES.FILE_ACCESSIBLE:
-                    await this._checkFileAccessible(article, results);
+                    await this._checkFileAccessible(article, results, context.publicationRootPath);
                     break;
 
                 case VALIDATOR_TYPES.PAGE_NUMBER_CHECK:
@@ -97,8 +97,11 @@ export class StateComplianceValidator extends ValidatorBase {
 
     /**
      * Fájl létezés ellenőrzése InDesign ExtendScript-tel.
+     * @param {Object} article - A validálandó cikk
+     * @param {Object} results - Eredmény objektum
+     * @param {string} [publicationRootPath] - Kiadvány kanonikus rootPath (relatív filePath feloldásához)
      */
-    async _checkFileAccessible(article, results) {
+    async _checkFileAccessible(article, results, publicationRootPath) {
         const path = article.filePath || article.FilePath;
         if (!path) {
             results.isValid = false;
@@ -106,7 +109,7 @@ export class StateComplianceValidator extends ValidatorBase {
             return;
         }
         try {
-            const mappedPath = resolvePlatformPath(decodeURI(path));
+            const mappedPath = toAbsoluteArticlePath(decodeURI(path), publicationRootPath || "");
             const safePath = escapePathForExtendScript(mappedPath);
             const script = `var f = new File("${safePath}"); f.exists;`;
             const exists = await require("indesign").app.doScript(

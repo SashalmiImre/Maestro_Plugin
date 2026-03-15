@@ -22,10 +22,21 @@ export const STORAGE_KEYS = {
     SECTION_PUBLICATION_LAYOUTS_COLLAPSED: "maestro.section.publication.layouts.collapsed",           // Kiadvány elrendezések szekció
     SECTION_PUBLICATION_CONTRIBUTORS_COLLAPSED: "maestro.section.publication.contributors.collapsed", // Kiadvány munkatársak szekció
     SECTION_PUBLICATION_DEADLINES_COLLAPSED: "maestro.section.publication.deadlines.collapsed",         // Kiadvány határidők szekció
+    FILTER_STATUS: "maestro.filter.status",                   // Kiválasztott workflow állapotok (JSON tömb)
+    FILTER_SHOW_IGNORED: "maestro.filter.showIgnored",        // Kimarad cikkek mutatása (boolean string)
+    FILTER_SHOW_ONLY_MINE: "maestro.filter.showOnlyMine",     // Csak saját cikkek (boolean string)
 };
 
 // Útvonal Konfiguráció
-export const PC_DRIVE_LETTER = "Z:"; // A hálózati meghajtó betűjele Windowson
+/**
+ * Hálózati megosztások mount point-ja platformonként.
+ * Mac-en a rendszer automatikusan a /Volumes alá mountol.
+ * Windows-en az IT symlink-ekkel állítja be (mklink /D C:\Volumes\ShareName \\server\ShareName).
+ */
+export const MOUNT_PREFIX = {
+    darwin: "/Volumes",      // macOS — rendszer mount point
+    win32: "C:/Volumes"      // Windows — IT által beállított symlink mappa
+};
 
 // =============================================================================
 // Dokumentum Zárolás (Lock) Típusok

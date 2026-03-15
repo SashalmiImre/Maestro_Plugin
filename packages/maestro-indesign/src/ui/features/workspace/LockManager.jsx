@@ -3,11 +3,12 @@ import React, { useEffect, useRef } from "react";
 
 // Contextusok és Egyedi Hook-ok
 import { useUser } from "../../../core/contexts/UserContext.jsx";
+import { useData } from "../../../core/contexts/DataContext.jsx";
 import { useToast } from "../../common/Toast/ToastContext.jsx";
 import { tables, Query, DATABASE_ID, ARTICLES_COLLECTION_ID } from "../../../core/config/appwriteConfig.js";
 
 // Segédfüggvények
-import { resolvePlatformPath, getCrossPlatformPaths } from "../../../core/utils/pathUtils.js";
+import { toCanonicalPath, toRelativeArticlePath, getArticleCanonicalPath } from "../../../core/utils/pathUtils.js";
 import { SCRIPT_LANGUAGE_JAVASCRIPT, LOCK_TYPE, TOAST_TYPES } from "../../../core/utils/constants.js";
 import { withTimeout, withRetry } from "../../../core/utils/promiseUtils.js";
 import { isIndexNotFoundError } from "../../../core/utils/errorUtils.js";
@@ -35,12 +36,16 @@ import { MaestroEvent } from "../../../core/config/maestroEvents.js";
 export const LockManager = () => {
     // 1. Felhasználói környezet
     const { user } = useUser();
+    const { publications } = useData();
     const { showToast } = useToast();
 
-    // Ref a user aktuális értékéhez — a closure-ök mindig a friss user objektumot lássák,
-    // miközben az effect dependency [user?.$id]-re épül (nem triggerelődik feleslegesen).
+    // Ref-ek a closure-ök számára — mindig a friss értékeket lássák,
+    // miközben az effect dependency nem triggerelődik feleslegesen.
     const userRef = useRef(user);
     useEffect(() => { userRef.current = user; }, [user]);
+
+    const publicationsRef = useRef(publications);
+    useEffect(() => { publicationsRef.current = publications; }, [publications]);
 
     // 2. Ref-ek a komponens élettartamának követésére
     // Segít elkerülni a memóriaszivárgást aszinkron műveleteknél, ha a komponens már nincs felcsatolva.
@@ -50,20 +55,40 @@ export const LockManager = () => {
     const isVerifyingRef = useRef(false);
 
     /**
+     * Natív InDesign útvonalból DB-lekérdezéshez használható útvonal-variánsokat generál.
+     * Tartalmazza a relatív útvonalat (új formátum) és a kanonikus teljes útvonalat (legacy).
+     *
+     * @param {string} nativePath - Az InDesign natív fájl útvonala.
+     * @returns {string[]} Lehetséges filePath variánsok a DB lekérdezéshez.
+     */
+    const nativePathToQueryVariants = (nativePath) => {
+        const canonical = toCanonicalPath(nativePath);
+        const variants = new Set();
+        // Kanonikus teljes útvonal (legacy, migráció előtti cikkekhez)
+        variants.add(canonical);
+        // Relatív útvonal (új formátumú cikkekhez)
+        for (const pub of publicationsRef.current) {
+            const relative = toRelativeArticlePath(nativePath, pub.rootPath);
+            if (relative !== nativePath && relative !== canonical) {
+                variants.add(relative);
+                break;
+            }
+        }
+        return [...variants];
+    };
+
+    /**
      * Cikk keresése útvonal alapján a lekérdezés eredményében.
-     * Kereszt-platformos egyezést is vizsgál (Mac/Win útvonalak).
+     * Kanonikus útvonal-összehasonlítást használ (platform-független).
      *
      * @param {Array} rows - Az adatbázisból lekérdezett cikkek.
-     * @param {string} path - A keresett fájl natív útvonala.
+     * @param {string} nativePath - A keresett fájl natív útvonala.
      * @returns {Object|undefined} A megtalált cikk, vagy undefined.
      */
-    const findArticleByPath = (rows, path) => {
-        const mappedPath = resolvePlatformPath(path);
-        const searchPaths = getCrossPlatformPaths(path) || [];
+    const findArticleByPath = (rows, nativePath) => {
+        const searchCanonical = toCanonicalPath(nativePath).toLowerCase();
         return rows?.find(article => {
-            const dbPaths = getCrossPlatformPaths(article.filePath) || [];
-            return dbPaths.some(dbPath => dbPath.toLowerCase() === mappedPath.toLowerCase())
-                || searchPaths.some(searchPath => searchPath.toLowerCase() === article.filePath.toLowerCase());
+            return getArticleCanonicalPath(article, publicationsRef.current).toLowerCase() === searchCanonical;
         });
     };
 
@@ -173,14 +198,11 @@ export const LockManager = () => {
         // Query 1: Amit ÉN zároltam (hogy feloldhassam, ha már nincs nyitva)
         const cleanupQuery = [Query.equal("lockOwnerId", user.$id)];
 
-        // Útvonal variációk generálása (Mac/Win validációhoz)
+        // Útvonal variánsok generálása (relatív + kanonikus a DB lekérdezéshez)
         let pathVariants = [];
         if (openPaths.length > 0) {
             openPaths.forEach(openPath => {
-                const paths = getCrossPlatformPaths(openPath);
-                if (paths && Array.isArray(paths)) {
-                    pathVariants.push(...paths);
-                }
+                pathVariants.push(...nativePathToQueryVariants(openPath));
             });
         }
 
@@ -242,7 +264,7 @@ export const LockManager = () => {
         const user = userRef.current;
         if (!user || !isMountedRef.current) return;
         try {
-            const searchPaths = getCrossPlatformPaths(path) || [];
+            const searchVariants = nativePathToQueryVariants(path);
 
             // 1. Megkeressük a cikket az útvonal alapján
             const response = await withRetry(
@@ -250,7 +272,7 @@ export const LockManager = () => {
                     tables.listRows({
                         databaseId: DATABASE_ID,
                         tableId: ARTICLES_COLLECTION_ID,
-                        queries: [Query.equal("filePath", searchPaths)],
+                        queries: [Query.equal("filePath", searchVariants)],
                         limit: 10
                     }),
                     10000,
@@ -294,14 +316,14 @@ export const LockManager = () => {
         const user = userRef.current;
         if (!user || !isMountedRef.current) return;
         try {
-            const searchPaths = getCrossPlatformPaths(path) || [];
+            const searchVariants = nativePathToQueryVariants(path);
 
             const response = await withRetry(
                 () => withTimeout(
                     tables.listRows({
                         databaseId: DATABASE_ID,
                         tableId: ARTICLES_COLLECTION_ID,
-                        queries: [Query.equal("filePath", searchPaths)],
+                        queries: [Query.equal("filePath", searchVariants)],
                         limit: 10
                     }),
                     10000,
@@ -350,7 +372,8 @@ export const LockManager = () => {
                 console.warn('[LockManager] Nincs érvényes dokumentum lista');
                 return;
             }
-            const openDocPaths = rawOpenDocPaths.map(rawPath => resolvePlatformPath(rawPath));
+            // Kanonikus útvonalak az összehasonlításhoz (platform-független)
+            const openDocCanonicals = rawOpenDocPaths.map(rawPath => toCanonicalPath(rawPath).toLowerCase());
 
             // Releváns cikkek lekérése
             const response = await fetchRelevantArticles(rawOpenDocPaths);
@@ -365,9 +388,9 @@ export const LockManager = () => {
                 try {
                     if (!article.filePath) continue;
 
-                    const mappedPath = resolvePlatformPath(article.filePath);
+                    const articleCanonical = getArticleCanonicalPath(article, publicationsRef.current).toLowerCase();
                     // Ellenőrizzük, hogy a DB-beli cikk nyitva van-e a helyi gépen
-                    const isLocallyOpen = openDocPaths.some(openPath => openPath.toLowerCase() === mappedPath.toLowerCase());
+                    const isLocallyOpen = openDocCanonicals.some(openCanonical => openCanonical === articleCanonical);
 
                     // Ha a Maestro rendszer zárolta (validálás folyamatban), ne nyúljunk hozzá!
                     if (article.lockType === LOCK_TYPE.SYSTEM) {

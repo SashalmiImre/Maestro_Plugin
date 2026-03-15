@@ -13,9 +13,9 @@ import { useToast } from "../../../common/Toast/ToastContext.jsx";
 
 // Utils
 import { WORKFLOW_STATES, MARKERS, TEAM_ARTICLE_FIELD, labelMatchesSlug } from "../../../../core/utils/workflow/workflowConstants.js";
-import { DRIVE_CHECK_INTERVAL_MS } from "../../../../core/utils/constants.js";
+import { DRIVE_CHECK_INTERVAL_MS, STORAGE_KEYS } from "../../../../core/utils/constants.js";
 import { log } from "../../../../core/utils/logger.js";
-import { checkPathAccessible, resolvePlatformPath } from "../../../../core/utils/pathUtils.js";
+import { checkPathAccessible, toNativePath } from "../../../../core/utils/pathUtils.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../../core/config/maestroEvents.js";
 import { checkElementPermission, PUBLICATION_ELEMENT_PERMISSIONS } from "../../../../core/utils/workflow/elementPermissions.js";
 
@@ -35,7 +35,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
     // Egyszeri elérhetőség-ellenőrzés mount-kor (összecsukott állapotban is fusson)
     useEffect(() => {
         let mounted = true;
-        checkPathAccessible(resolvePlatformPath(publication.rootPath))
+        checkPathAccessible(toNativePath(publication.rootPath))
             .then(accessible => { if (mounted) setIsDriveAccessible(accessible); });
         return () => { mounted = false; };
     }, [publication.rootPath]);
@@ -52,7 +52,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
             isChecking = true;
             try {
                 const accessible = await checkPathAccessible(
-                    resolvePlatformPath(publication.rootPath)
+                    toNativePath(publication.rootPath)
                 );
                 if (mounted) setIsDriveAccessible(accessible);
             } finally {
@@ -81,11 +81,24 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
     const [dialogOpen, setDialogOpen] = useState(false);
     const [dialogConfig, setDialogConfig] = useState({ title: "", message: "", isAlert: false });
 
-    // Filter state
+    // Filter state (localStorage-ból inicializálva)
     const [filterOpen, setFilterOpen] = useState(false);
-    const [statusFilters, setStatusFilters] = useState(Object.values(WORKFLOW_STATES));
-    const [showIgnored, setShowIgnored] = useState(true);
-    const [showOnlyMine, setShowOnlyMine] = useState(false);
+    const [statusFilters, setStatusFilters] = useState(() => {
+        try {
+            const saved = localStorage.getItem(STORAGE_KEYS.FILTER_STATUS);
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (Array.isArray(parsed)) return parsed;
+            }
+        } catch { /* hibás JSON — fallback */ }
+        return Object.values(WORKFLOW_STATES);
+    });
+    const [showIgnored, setShowIgnored] = useState(
+        () => localStorage.getItem(STORAGE_KEYS.FILTER_SHOW_IGNORED) !== 'false'
+    );
+    const [showOnlyMine, setShowOnlyMine] = useState(
+        () => localStorage.getItem(STORAGE_KEYS.FILTER_SHOW_ONLY_MINE) === 'true'
+    );
 
     const allStatuses = Object.values(WORKFLOW_STATES);
     const isFilterActive = statusFilters.length !== allStatuses.length || !showIgnored || showOnlyMine;
@@ -95,10 +108,28 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
         setFilterOpen(!filterOpen);
     };
 
+    const handleStatusFiltersChange = useCallback((newFilters) => {
+        setStatusFilters(newFilters);
+        localStorage.setItem(STORAGE_KEYS.FILTER_STATUS, JSON.stringify(newFilters));
+    }, []);
+
+    const handleShowIgnoredChange = useCallback((value) => {
+        setShowIgnored(value);
+        localStorage.setItem(STORAGE_KEYS.FILTER_SHOW_IGNORED, String(value));
+    }, []);
+
+    const handleShowOnlyMineChange = useCallback((value) => {
+        setShowOnlyMine(value);
+        localStorage.setItem(STORAGE_KEYS.FILTER_SHOW_ONLY_MINE, String(value));
+    }, []);
+
     const resetFilters = () => {
         setStatusFilters(Object.values(WORKFLOW_STATES));
         setShowIgnored(true);
         setShowOnlyMine(false);
+        localStorage.removeItem(STORAGE_KEYS.FILTER_STATUS);
+        localStorage.removeItem(STORAGE_KEYS.FILTER_SHOW_IGNORED);
+        localStorage.removeItem(STORAGE_KEYS.FILTER_SHOW_ONLY_MINE);
     };
 
     /** A felhasználó csapattagságaihoz tartozó contributor mezőnevek */
@@ -288,28 +319,12 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                 {(isHovered || isFilterActive) && (
                     <sp-body style={{ margin: 0 }}>
                         <div style={{ display: "flex", alignItems: "center" }}>
-                            <div
-                                onClick={handleFilterClick}
-                                title="Szűrés"
-                                style={{
-                                    display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    cursor: "pointer",
-                                    color: isFilterActive ? "var(--spectrum-global-color-static-blue-600)" : "inherit"
-                                }}
-                            >
-                                <sp-icon-filter
-                                    size="s"
-                                    style={{ width: "14px", height: "14px", display: "inline-block" }}
-                                ></sp-icon-filter>
-                            </div>
                             {isHovered && (
                                 <>
                                     <div
                                         onClick={handleAddArticleClick}
                                         title="Cikk hozzáadása"
-                                        style={{ cursor: "pointer", display: "flex", alignItems: "center", marginLeft: "8px" }}
+                                        style={{ cursor: "pointer", display: "flex", alignItems: "center" }}
                                     >
                                         <sp-icon-add
                                             size="s"
@@ -329,6 +344,23 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                                     </div>
                                 </>
                             )}
+                            <div
+                                onClick={handleFilterClick}
+                                title="Szűrés"
+                                style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    cursor: "pointer",
+                                    marginLeft: "8px",
+                                    color: isFilterActive ? "var(--spectrum-global-color-static-blue-600)" : "inherit"
+                                }}
+                            >
+                                <sp-icon-filter
+                                    size="s"
+                                    style={{ width: "14px", height: "14px", display: "inline-block" }}
+                                ></sp-icon-filter>
+                            </div>
                         </div>
                     </sp-body>
                 )}
@@ -370,11 +402,11 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                 filterOpen && isExpanded && (
                     <FilterBar
                         statusFilters={statusFilters}
-                        onStatusFiltersChange={setStatusFilters}
+                        onStatusFiltersChange={handleStatusFiltersChange}
                         showIgnored={showIgnored}
-                        onShowIgnoredChange={setShowIgnored}
+                        onShowIgnoredChange={handleShowIgnoredChange}
                         showOnlyMine={showOnlyMine}
-                        onShowOnlyMineChange={setShowOnlyMine}
+                        onShowOnlyMineChange={handleShowOnlyMineChange}
                         isFilterActive={isFilterActive}
                         onReset={resetFilters}
                     />

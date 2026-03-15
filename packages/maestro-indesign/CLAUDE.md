@@ -162,6 +162,14 @@
     - **Mappa-elérhetőség Polling**: A `Publication.jsx` kétszintű ellenőrzést végez a `rootPath` mappára: (1) egyszeri ellenőrzés mount-kor (összecsukott állapotban is, a fejléc színéhez), (2) folyamatos `setInterval` polling (2s, `DRIVE_CHECK_INTERVAL_MS`) a kinyitott (`isExpanded`) kiadványnál. A fejléc (név + chevron) kék (`--spectrum-global-color-blue-400`) alapállapotban, piros (`--spectrum-global-color-red-400`) ha a mappa nem elérhető. Kinyitott állapotban piros figyelmeztető banner jelenik meg. A banner szövege lefedi a törölt mappa és a nem csatlakoztatott meghajtó esetét is.
     - Ld. `docs/diagrams/network-architecture.md`, `docs/REALTIME_ARCHITECTURE.md`, `docs/PROXY_SERVER.md`
 
+7. **Cross-Platform Útvonalkezelés**
+    - **Kanonikus formátum**: A DB-ben platform-független útvonalak: `/ShareName/relative/path` (pl. `/Story/2026/March`). Article `filePath` relatív a kiadvány `rootPath`-jához (pl. `.maestro/article.indd`).
+    - **MOUNT_PREFIX** (`constants.js`): `{ darwin: "/Volumes", win32: "C:/Volumes" }`. Mac-en a rendszer automatikusan ide mountol, Windows-en IT állítja be symlink-ekkel (`mklink /D C:\Volumes\ShareName \\server\ShareName`).
+    - **Konverziós függvények** (`pathUtils.js`): `toCanonicalPath()` (natív → DB), `toNativePath()` (DB → natív), `toRelativeArticlePath()` (abszolút → relatív), `toAbsoluteArticlePath()` (relatív → natív abszolút).
+    - **Lazy migráció** (`DataContext.jsx`): `migratePathsIfNeeded()` automatikusan konvertálja a régi formátumú útvonalakat (abszolút natív) kanonikus/relatív formátumra az adatbázisban, fetch után futva.
+    - **LockManager / DocumentMonitor**: Kanonikus útvonal-összehasonlítást használnak (`getArticleCanonicalPath()`) a cross-platform egyeztetéshez. A `nativePathToQueryVariants()` generálja a DB lekérdezéshez szükséges útvonal-variánsokat (relatív + legacy kanonikus).
+    - **Edge case-ek**: Helyi (nem hálózati) fájlok nem kanonizálhatók — cross-platform nem működik velük. Ha a Windows symlink hiányzik, `checkPathAccessible()` false → piros fejléc.
+
 ---
 
 ## Projektstruktúra
@@ -219,9 +227,9 @@ Maestro/
 │   │   └── utils/
 │   │       ├── logger.js               ← logInfo, logWarning, logError, logDebug
 │   │       ├── errorUtils.js           ← Hibaosztályozás (Hálózati, Auth, stb.)
-│   │       ├── constants.js            ← Alkalmazás-szintű konstansok
+│   │       ├── constants.js            ← Alkalmazás-szintű konstansok (MOUNT_PREFIX, LOCK_TYPE, stb.)
 │   │       ├── messageConstants.js     ← Felhasználónak megjelenő üzenet stringek
-│   │       ├── pathUtils.js            ← Fájlútvonal segédfüggvények (UXP ↔ InDesign leképezés)
+│   │       ├── pathUtils.js            ← Cross-platform útvonalkezelés (kanonikus ↔ natív konverzió, MOUNT_PREFIX)
 │   │       ├── namingUtils.js          ← Név formázó helperek
 │   │       ├── promiseUtils.js         ← Promise segédfüggvények (withTimeout, withRetry)
 │   │       ├── archivingProcessor.js    ← Hibrid AI + szabály-alapú clustering (Union-Find, polygon clipping, TXT/XML output)

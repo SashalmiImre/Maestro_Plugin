@@ -25,6 +25,7 @@ import { withTimeout, withRetry } from "../utils/promiseUtils.js";
 import { isNetworkError, isAuthError } from "../utils/errorUtils.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../config/maestroEvents.js";
 import { FETCH_TIMEOUT_CONFIG, TOAST_TYPES } from "../utils/constants.js";
+import { isLegacyRootPath, isAbsoluteFilePath, toCanonicalPath, toRelativeArticlePath } from "../utils/pathUtils.js";
 
 /** Név szerinti komparátor rendezéshez. */
 const compareByName = (a, b) => (a?.name ?? '').localeCompare(b?.name ?? '');
@@ -89,6 +90,87 @@ export const DataProvider = ({ children }) => {
     useEffect(() => {
         activePublicationIdRef.current = activePublicationId;
     }, [activePublicationId]);
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Lazy migráció (régi formátumú útvonalak konvertálása)
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /** Flag: a migráció már lefutott és nem talált legacy path-okat. */
+    const hasMigratedRef = useRef(false);
+
+    /**
+     * Háttérben konvertálja a régi formátumú útvonalakat kanonikus/relatív formátumra.
+     * Nem blokkolja a UI-t — best-effort DB frissítés.
+     * Az első sikeres (üres) futás után nem iterál újra.
+     */
+    const migratePathsIfNeeded = useCallback(async (pubs, arts) => {
+        if (hasMigratedRef.current) return;
+
+        let migrationCount = 0;
+
+        // Publikációk: rootPath konvertálása kanonikus formátumra
+        const pubUpdates = new Map();
+        for (const pub of pubs) {
+            if (pub.rootPath && isLegacyRootPath(pub.rootPath)) {
+                const canonical = toCanonicalPath(pub.rootPath);
+                log(`[DataContext] Migráció: pub rootPath "${pub.rootPath}" → "${canonical}"`);
+                try {
+                    await tables.updateRow({
+                        databaseId: DATABASE_ID,
+                        tableId: PUBLICATIONS_COLLECTION_ID,
+                        rowId: pub.$id,
+                        data: { rootPath: canonical }
+                    });
+                    pubUpdates.set(pub.$id, canonical);
+                    migrationCount++;
+                } catch (e) {
+                    logError(`[DataContext] Migráció sikertelen (pub ${pub.$id}):`, e);
+                }
+            }
+        }
+        // Kötegelt state frissítés (egyetlen re-render)
+        if (pubUpdates.size > 0) {
+            setPublications(prev => prev.map(p => pubUpdates.has(p.$id) ? { ...p, rootPath: pubUpdates.get(p.$id) } : p));
+        }
+
+        // Cikkek: filePath konvertálása relatív formátumra
+        const articleUpdates = new Map();
+        for (const article of arts) {
+            if (article.filePath && isAbsoluteFilePath(article.filePath)) {
+                const pub = pubs.find(p => p.$id === article.publicationId);
+                const pubRoot = pub?.rootPath && isLegacyRootPath(pub.rootPath)
+                    ? toCanonicalPath(pub.rootPath)
+                    : pub?.rootPath;
+                if (!pubRoot) continue;
+
+                const relative = toRelativeArticlePath(article.filePath, pubRoot);
+                if (relative === article.filePath) continue;
+
+                log(`[DataContext] Migráció: article filePath "${article.filePath}" → "${relative}"`);
+                try {
+                    await tables.updateRow({
+                        databaseId: DATABASE_ID,
+                        tableId: ARTICLES_COLLECTION_ID,
+                        rowId: article.$id,
+                        data: { filePath: relative }
+                    });
+                    articleUpdates.set(article.$id, relative);
+                    migrationCount++;
+                } catch (e) {
+                    logError(`[DataContext] Migráció sikertelen (article ${article.$id}):`, e);
+                }
+            }
+        }
+        // Kötegelt state frissítés (egyetlen re-render)
+        if (articleUpdates.size > 0) {
+            setArticles(prev => prev.map(a => articleUpdates.has(a.$id) ? { ...a, filePath: articleUpdates.get(a.$id) } : a));
+        }
+
+        // Ha nem volt migrálnivaló, ne iteráljunk újra a következő fetch-nél
+        if (migrationCount === 0) {
+            hasMigratedRef.current = true;
+        }
+    }, []);
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Adatlekérés (Fetch)
@@ -225,6 +307,10 @@ export const DataProvider = ({ children }) => {
             const articleList = articlesResponse.documents || articlesResponse.rows || [];
             const sortedArticles = articleList.sort(compareByName);
             setArticles(sortedArticles);
+
+            // Lazy migráció: régi formátumú path-ok konvertálása kanonikus/relatív formátumra
+            // A migráció háttérben fut, nem blokkolja a UI megjelenést.
+            migratePathsIfNeeded(sortedPublications, sortedArticles);
 
             // Layoutok feldolgozása (nem-kritikus — allSettled)
             if (layoutsResult.status === 'fulfilled') {
