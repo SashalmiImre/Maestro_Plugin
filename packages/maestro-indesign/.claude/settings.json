@@ -1,5 +1,5 @@
 {
-  "effortLevel": "max",
+  "effortLevel": "high",
   "permissions": {
     "allow": [
       "WebFetch(domain:github.com)"
