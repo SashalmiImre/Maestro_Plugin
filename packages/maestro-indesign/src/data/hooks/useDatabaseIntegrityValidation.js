@@ -16,6 +16,7 @@ import { MaestroEvent } from "../../core/config/maestroEvents.js";
 import { useData } from "../../core/contexts/DataContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 import { TOAST_TYPES } from "../../core/utils/constants.js";
+import { toAbsoluteArticlePath } from "../../core/utils/pathUtils.js";
 import { DatabaseIntegrityValidator } from "../../core/utils/validators/index.js";
 import { log, logError } from "../../core/utils/logger.js";
 
@@ -24,9 +25,11 @@ import { log, logError } from "../../core/utils/logger.js";
  * PublicationList szinten kell bekötni (a DocumentMonitor mellé).
  */
 export const useDatabaseIntegrityValidation = () => {
-    const { applyArticleUpdate } = useData();
+    const { applyArticleUpdate, publications } = useData();
     const { showToast } = useToast();
     const validator = useRef(new DatabaseIntegrityValidator());
+    const publicationsRef = useRef(publications);
+    useEffect(() => { publicationsRef.current = publications; }, [publications]);
 
     // Serialization: Promise chain a gyors egymás utáni mentések kezelésére
     const queueRef = useRef(Promise.resolve());
@@ -41,9 +44,16 @@ export const useDatabaseIntegrityValidation = () => {
         try {
             log(`[useDatabaseIntegrityValidation] Validáció futtatása: "${article.name}"`);
 
+            // Relatív filePath → abszolút natív útvonal (ExtendScript File() nem tud relatívat feloldani)
+            const pub = publicationsRef.current?.find(p => p.$id === article.publicationId);
+            const absoluteFilePath = pub?.rootPath
+                ? toAbsoluteArticlePath(article.filePath, pub.rootPath)
+                : article.filePath;
+
             const result = await validator.current.validate({
                 article,
-                autoCorrect: true
+                autoCorrect: true,
+                absoluteFilePath
             });
 
             if (result.isValid && result.warnings?.length > 0) {

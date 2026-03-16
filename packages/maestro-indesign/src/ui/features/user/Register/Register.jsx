@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { useUser } from "../../../../core/contexts/UserContext.jsx";
 // Konstansok
 import { UI_TIMING } from "../../../../core/utils/constants.js";
+import { logError } from "../../../../core/utils/logger.js";
 
 /** Jelszó minimális hossza (Appwrite követelmény). */
 const MIN_PASSWORD_LENGTH = 8;
@@ -64,7 +65,7 @@ export const Register = ({ onSwitchToLogin }) => {
             setIsSuccess(true);
             setMessage("Ellenőrizd az email fiókodat a regisztráció megerősítéséhez!");
         } catch (err) {
-            console.error("Regisztráció sikertelen:", err);
+            logError("Regisztráció sikertelen:", err);
             setMessage(err?.message ?? "Regisztrációs hiba");
         } finally {
             setIsLoading(false);

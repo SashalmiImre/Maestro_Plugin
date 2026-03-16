@@ -3,6 +3,7 @@ import React, { useState, useEffect } from "react";
 import { useUser } from "../../../../core/contexts/UserContext.jsx";
 // Konstansok
 import { UI_TIMING } from "../../../../core/utils/constants.js";
+import { logError } from "../../../../core/utils/logger.js";
 
 export const Login = ({ onSwitchToRegister }) => {
     const { login, logout } = useUser();
@@ -37,7 +38,7 @@ export const Login = ({ onSwitchToRegister }) => {
                 return;
             }
         } catch (err) {
-            console.error("Login error:", err);
+            logError("Login error:", err);
             setMessage(err?.message ?? "Bejelentkezési hiba");
         } finally {
             setIsLoading(false);

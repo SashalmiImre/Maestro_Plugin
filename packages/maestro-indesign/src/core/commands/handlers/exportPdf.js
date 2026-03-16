@@ -6,6 +6,7 @@ import * as pathUtils from "../../utils/pathUtils.js";
 import { formatPagedFileName } from "../../utils/namingUtils.js";
 import { validate } from "../../utils/validationRunner.js";
 import { VALIDATOR_TYPES } from "../../utils/validationConstants.js";
+import { log, logError } from "../../utils/logger.js";
 
 /**
  * Handles the 'export_pdf' and 'export_final_pdf' commands.
@@ -16,7 +17,7 @@ import { VALIDATOR_TYPES } from "../../utils/validationConstants.js";
 export const handleExportPdf = async (context) => {
     const { item, publication, user, commandId } = context;
 
-    console.log(`[Command] Exporting PDF (${commandId}) for:`, item?.name);
+    log(`[Command] Exporting PDF (${commandId}) for:`, item?.name);
 
     if (!item || !item.filePath) {
         return { success: false, error: "Nincs érvényes cikk kiválasztva." };
@@ -46,7 +47,7 @@ export const handleExportPdf = async (context) => {
     // But here we construct the path string.
     const outputPath = pathUtils.joinPath(pdfFolder, pdfFileName);
 
-    console.log("[Command] Output path:", outputPath);
+    log("[Command] Output path:", outputPath);
 
     // 2. Preflight ellenőrzés végleges PDF exportálás előtt
     if (commandId === "export_final_pdf") {
@@ -70,7 +71,7 @@ export const handleExportPdf = async (context) => {
         const isAlreadyOpen = isOpenResult === "true";
 
         if (!isAlreadyOpen) {
-            console.log("[Command] Document is closed. Locking for background processing...");
+            log("[Command] Document is closed. Locking for background processing...");
             // Lock document in DB
             const lockResult = await WorkflowEngine.lockDocument(item, LOCK_TYPE.SYSTEM, user);
             if (!lockResult.success) {
@@ -79,7 +80,7 @@ export const handleExportPdf = async (context) => {
             lockedBySystem = true;
             lockedItem = lockResult.document;
         } else {
-            console.log("[Command] Document is already open.");
+            log("[Command] Document is already open.");
         }
 
         // 3. Execute Export Script
@@ -95,17 +96,17 @@ export const handleExportPdf = async (context) => {
         return { success: true, message: "PDF sikeresen exportálva: " + pdfFileName };
 
     } catch (error) {
-        console.error("[Command] Export PDF error:", error);
+        logError("[Command] Export PDF error:", error);
         return { success: false, error: error.message };
     } finally {
         // 4. Cleanup: Unlock if we locked it
         if (lockedBySystem) {
-             console.log("[Command] Unlocking document...");
+             log("[Command] Unlocking document...");
              try {
                  // Use lockedItem which has the correct lockOwnerId field
                  await WorkflowEngine.unlockDocument(lockedItem || item, user);
              } catch (unlockError) {
-                 console.error(`[Command] Failed to unlock document after export. Item: ${(lockedItem || item).$id}, SystemLock: ${lockedBySystem}`, unlockError);
+                 logError(`[Command] Failed to unlock document after export. Item: ${(lockedItem || item).$id}, SystemLock: ${lockedBySystem}`, unlockError);
              }
         }
     }

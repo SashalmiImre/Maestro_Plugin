@@ -1,5 +1,5 @@
 import { Client, Account, Databases, TablesDB, Storage, ID, Query, Realtime, Teams, Functions } from "appwrite";
-import { log } from "../utils/logger.js";
+import { log, logWarn } from "../utils/logger.js";
 import { MaestroEvent, dispatchMaestroEvent } from "./maestroEvents.js";
 
 export const APPWRITE_PROJECT_ID = "68808427001c20418996";
@@ -141,7 +141,7 @@ window.fetch = async (...args) => {
                     client.headers['X-Fallback-Cookies'] = JSON.stringify(cookieFallback);
                 }
             } catch (e) {
-                console.warn('[Maestro] Cookie mentés sikertelen:', e);
+                logWarn('[Maestro] Cookie mentés sikertelen:', e);
             }
         }
     }
@@ -217,5 +217,44 @@ export const TEAMS = {
 };
 
 export const GET_TEAM_MEMBERS_FUNCTION_ID = "69599cf9000a865db98a";
+
+// =============================================================================
+// cookieFallback Diagnosztika — Session token eltűnés nyomkövetés
+// =============================================================================
+
+/**
+ * localStorage.setItem monkey-patch a cookieFallback kulcsra.
+ *
+ * Ha egy írás elveszítené a session tokent (korábbi tokennel rendelkező állapotból
+ * üresre vagy token nélkülire váltana), a stack trace-t logoljuk. Így a következő
+ * előfordulásnál pontosan látjuk, melyik kódútvonal törli a tokent.
+ *
+ * Nem blokkolja az írást — csak diagnosztikai célú.
+ */
+try {
+    const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
+    window.localStorage.setItem = function(key, value) {
+        if (key === 'cookieFallback') {
+            const sessionKey = `a_session_${APPWRITE_PROJECT_ID}`;
+            const previous = window.localStorage.getItem('cookieFallback');
+            let hadSession = false;
+            let hasSession = false;
+            try {
+                hadSession = previous && JSON.parse(previous)[sessionKey];
+                hasSession = value && JSON.parse(value)[sessionKey];
+            } catch (e) { /* ignore parse errors */ }
+
+            if (hadSession && !hasSession) {
+                logWarn('[Maestro] [GUARD] cookieFallback session token elveszne!',
+                    new Error().stack);
+            }
+        }
+        return originalSetItem(key, value);
+    };
+} catch (e) {
+    // Ha a monkey-patch regisztráció sikertelen (pl. Object.freeze, strict mode),
+    // az alkalmazás indulása nem törhet meg — a diagnosztika opcionális.
+    logWarn('[Maestro] cookieFallback diagnosztika regisztráció sikertelen:', e);
+}
 
 export { client, ID, Query };

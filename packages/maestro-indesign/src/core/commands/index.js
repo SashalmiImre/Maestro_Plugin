@@ -3,6 +3,7 @@ import { handleCollectImages } from "./handlers/collectImages.js";
 import { handleArchiving } from "./handlers/archiving.js";
 import { handlePrinting } from "./handlers/printing.js";
 import { handlePreflightCheck } from "./handlers/preflightCheck.js";
+import { log, logWarn, logError } from "../utils/logger.js";
 
 /**
  * Registry mapping command IDs to their handler functions.
@@ -28,15 +29,15 @@ export const executeCommand = async (commandId, context = {}) => {
     const handler = COMMAND_REGISTRY[commandId];
     
     if (!handler) {
-        console.warn(`[CommandExecutor] No handler found for command: ${commandId}`);
+        logWarn(`[CommandExecutor] No handler found for command: ${commandId}`);
         return { success: false, error: `Unknown command: ${commandId}` };
     }
 
     try {
-        console.log(`[CommandExecutor] Executing ${commandId}...`);
+        log(`[CommandExecutor] Executing ${commandId}...`);
         return await handler(context);
     } catch (error) {
-        console.error(`[CommandExecutor] Error executing ${commandId}:`, error);
+        logError(`[CommandExecutor] Error executing ${commandId}:`, error);
         return { success: false, error: error.message };
     }
 };

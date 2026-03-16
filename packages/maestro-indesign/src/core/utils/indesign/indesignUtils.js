@@ -5,6 +5,8 @@
  * @module utils/indesignUtils
  */
 
+import { logWarn, logError } from "../logger.js";
+
 // InDesign API Accessor - Lazy Loading
 let _indesign = null;
 
@@ -13,7 +15,7 @@ const getIndesign = () => {
         try {
             _indesign = require("indesign");
         } catch (e) {
-            console.error("[indesignUtils] Failed to require 'indesign' module:", e);
+            logError("[indesignUtils] Failed to require 'indesign' module:", e);
             return { app: null, ScriptLanguage: null };
         }
     }
@@ -205,7 +207,7 @@ export const getOpenDocumentPaths = async (appInstance) => {
         const parsed = JSON.parse(result);
         return parsed.paths || [];
     } catch (e) {
-        console.error("[indesignUtils] getOpenDocumentPaths hiba:", e);
+        logError("[indesignUtils] getOpenDocumentPaths hiba:", e);
         return null;
     }
 };
@@ -298,17 +300,17 @@ export const getFileTimestamp = async (path) => {
         const data = JSON.parse(jsonResult);
 
         if (data.error) {
-             console.warn(`[indesignUtils] getFileTimestamp Script Hiba: ${data.error}`);
+             logWarn(`[indesignUtils] getFileTimestamp Script Hiba: ${data.error}`);
              return null;
         }
         if (!data.exists) {
-             console.warn(`[indesignUtils] getFileTimestamp: Fájl nem található. Nyers útvonal: ${path}, Script útvonal: ${data.path}, Debug: ${data.debug}`);
+             logWarn(`[indesignUtils] getFileTimestamp: Fájl nem található. Nyers útvonal: ${path}, Script útvonal: ${data.path}, Debug: ${data.debug}`);
              return null;
         }
         
         return data.modified;
     } catch (e) {
-        console.error("[indesignUtils] getFileTimestamp hiba:", e);
+        logError("[indesignUtils] getFileTimestamp hiba:", e);
         return null;
     }
 };
@@ -326,7 +328,7 @@ export const executeScript = async (script) => {
     try {
         return await app.doScript(script, ScriptLanguage.JAVASCRIPT);
     } catch (e) {
-        console.error("[indesignUtils] executeScript hiba:", e);
+        logError("[indesignUtils] executeScript hiba:", e);
         throw e;
     }
 };

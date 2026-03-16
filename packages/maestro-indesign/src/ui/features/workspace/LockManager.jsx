@@ -15,6 +15,7 @@ import { isIndexNotFoundError } from "../../../core/utils/errorUtils.js";
 import { getOpenDocumentPaths, getIndesignApp, generateGetActiveDocumentPathScript } from "../../../core/utils/indesign/index.js";
 import { WorkflowEngine } from "../../../core/utils/workflow/workflowEngine.js";
 import { MaestroEvent } from "../../../core/config/maestroEvents.js";
+import { log, logWarn, logError } from "../../../core/utils/logger.js";
 
 // InDesign Application objektum importálása (Lustán töltve)
 // const app = require("indesign").app; <-- Törölve, helyette getIndesignApp() a komponensen belül
@@ -104,7 +105,7 @@ export const LockManager = () => {
         const timeoutId = setTimeout(() => {
             if (isMountedRef.current) {
                 Promise.resolve(callback()).catch(error =>
-                    console.error('[LockManager] safeSetTimeout error:', error)
+                    logError('[LockManager] safeSetTimeout error:', error)
                 );
             }
             // Törlés a listából futás után
@@ -124,7 +125,7 @@ export const LockManager = () => {
         if (!user || !isMountedRef.current) return;
 
         try {
-            console.log('[LockManager] Orphaned lockok takarítása induláskor...');
+            log('[LockManager] Orphaned lockok takarítása induláskor...');
 
             // Egyszerű query: minden lock ahol én vagyok az owner
             const orphanedQueries = [
@@ -167,17 +168,17 @@ export const LockManager = () => {
                         ),
                         { operationName: "LockManager: cleanupOrphanedLocks updateRow" }
                     );
-                    console.log(`[LockManager] Orphaned lock törölve: ${article.name}`);
+                    log(`[LockManager] Orphaned lock törölve: ${article.name}`);
                 } catch (error) {
-                    console.error(`[LockManager] Orphaned lock törlése sikertelen (${article.name}):`, error);
+                    logError(`[LockManager] Orphaned lock törlése sikertelen (${article.name}):`, error);
                 }
             }
 
             if (response.rows.length > 0) {
-                console.log(`[LockManager] ${response.rows.length} orphaned lock törölve.`);
+                log(`[LockManager] ${response.rows.length} orphaned lock törölve.`);
             }
         } catch (error) {
-            console.error('[LockManager] Orphaned lock cleanup hiba:', error);
+            logError('[LockManager] Orphaned lock cleanup hiba:', error);
             if (isIndexNotFoundError(error)) {
                 showToast('Adatbázis konfigurációs hiba', TOAST_TYPES.ERROR, 'Hiányzó index (lockOwnerId). Kérjük, értesítsd a rendszergazdát.');
             }
@@ -286,22 +287,22 @@ export const LockManager = () => {
             if (article && isMountedRef.current) {
                 // Ha MÁS valaki már zárolta, nem vesszük el tőle!
                 if (article.lockOwnerId && article.lockOwnerId !== user.$id) {
-                    console.warn('[LockManager] A fájlt már zárolta más felhasználó. Zárolás sikertelen.');
+                    logWarn('[LockManager] A fájlt már zárolta más felhasználó. Zárolás sikertelen.');
                     return;
                 }
 
                 // Ha nincs zárolva, vagy mi zároltuk (megerősítés), akkor írjuk be
                 const lockResult = await WorkflowEngine.lockDocument(article, LOCK_TYPE.USER, user);
                 if (lockResult.success) {
-                    console.log('[LockManager] Fájl zárolva:', article.name, '-', user.name);
+                    log('[LockManager] Fájl zárolva:', article.name, '-', user.name);
                 } else {
-                    console.warn('[LockManager] Zárolás sikertelen:', lockResult.error);
+                    logWarn('[LockManager] Zárolás sikertelen:', lockResult.error);
                     showToast('A dokumentum zárolása sikertelen', TOAST_TYPES.ERROR, lockResult.error || 'Nem sikerült zárolni a fájlt. Próbáld meg újra.');
                 }
             }
         } catch (error) {
             if (isMountedRef.current) {
-                console.error("Hiba a fájl zárolásakor:", error);
+                logError("Hiba a fájl zárolásakor:", error);
             }
         }
     };
@@ -337,12 +338,12 @@ export const LockManager = () => {
             if (article && article.lockOwnerId === user.$id && isMountedRef.current) {
                 const unlockResult = await WorkflowEngine.unlockDocument(article, user);
                 if (unlockResult.success) {
-                    console.log('[LockManager] Fájl feloldva:', article.name);
+                    log('[LockManager] Fájl feloldva:', article.name);
                 }
             }
         } catch (error) {
             if (isMountedRef.current) {
-                console.error("Hiba a fájl feloldásakor:", error);
+                logError("Hiba a fájl feloldásakor:", error);
             }
         }
     };
@@ -369,7 +370,7 @@ export const LockManager = () => {
             // ExtendScript: Nyitott dokumentumok listázása a segédfüggvény használatával
             const rawOpenDocPaths = await getOpenDocumentPaths(app);
             if (!rawOpenDocPaths || !Array.isArray(rawOpenDocPaths)) {
-                console.warn('[LockManager] Nincs érvényes dokumentum lista');
+                logWarn('[LockManager] Nincs érvényes dokumentum lista');
                 return;
             }
             // Kanonikus útvonalak az összehasonlításhoz (platform-független)
@@ -394,7 +395,7 @@ export const LockManager = () => {
 
                     // Ha a Maestro rendszer zárolta (validálás folyamatban), ne nyúljunk hozzá!
                     if (article.lockType === LOCK_TYPE.SYSTEM) {
-                        console.log(`[LockManager] Kihagyva: ${article.name} (Maestro validál)`);
+                        log(`[LockManager] Kihagyva: ${article.name} (Maestro validál)`);
                         continue;
                     }
 
@@ -402,26 +403,26 @@ export const LockManager = () => {
                         // NYITVA van + Nincs Lock (vagy saját) => LOCKOLÁS
                         const result = await WorkflowEngine.lockDocument(article, LOCK_TYPE.USER, user);
                         if (result.success) {
-                            console.log('[LockManager] Fájl zárolva:', article.name, '-', user.name);
+                            log('[LockManager] Fájl zárolva:', article.name, '-', user.name);
                         } else {
-                            console.warn(`[LockManager] Zárolás sikertelen (${article.name}, ${article.$id}):`, result.error);
+                            logWarn(`[LockManager] Zárolás sikertelen (${article.name}, ${article.$id}):`, result.error);
                         }
                     } else if (!isLocallyOpen && article.lockOwnerId === user.$id) {
                         // NINCS nyitva + Saját Lock => UNLOCKOLÁS (Takarítás)
                         const result = await WorkflowEngine.unlockDocument(article, user);
                         if (result.success) {
-                            console.log('[LockManager] Fájl feloldva:', article.name);
+                            log('[LockManager] Fájl feloldva:', article.name);
                         } else {
-                            console.warn(`[LockManager] Feloldás sikertelen (${article.name}, ${article.$id}):`, result.error);
+                            logWarn(`[LockManager] Feloldás sikertelen (${article.name}, ${article.$id}):`, result.error);
                         }
                     }
                 } catch (innerError) {
-                    console.error(`Hiba a szinkronizációnál (${article.name}):`, innerError);
+                    logError(`Hiba a szinkronizációnál (${article.name}):`, innerError);
                 }
             }
         } catch (error) {
             if (isMountedRef.current) {
-                console.error("Startup lock sync failed:", error);
+                logError("Startup lock sync failed:", error);
                 if (isIndexNotFoundError(error)) {
                     showToast('Adatbázis konfigurációs hiba', TOAST_TYPES.ERROR, 'Hiányzó index (lockOwnerId). Kérjük, értesítsd a rendszergazdát.');
                 } else {
@@ -446,7 +447,7 @@ export const LockManager = () => {
             syncLocksTimeoutRef.current = null;
             syncLocks().catch(error => {
                 if (isMountedRef.current) {
-                    console.error("[LockManager] Debounced sync failed:", error);
+                    logError("[LockManager] Debounced sync failed:", error);
                 }
             });
         }, delay);
@@ -461,7 +462,7 @@ export const LockManager = () => {
 
         const app = getIndesignApp();
         if (!app) {
-            console.warn("[LockManager] InDesign app object not available.");
+            logWarn("[LockManager] InDesign app object not available.");
             return;
         }
 
@@ -483,7 +484,7 @@ export const LockManager = () => {
             try {
                 // HA a DocumentMonitor épp validál (háttérben nyitotta meg), akkor NE zároljuk!
                 if (isVerifyingRef.current) {
-                    console.log("[LockManager] handleAfterOpen kihagyása (Validáció folyamatban)");
+                    log("[LockManager] handleAfterOpen kihagyása (Validáció folyamatban)");
                     return;
                 }
 
@@ -511,14 +512,14 @@ export const LockManager = () => {
                         const filePath = await app.doScript(generateGetActiveDocumentPathScript(), SCRIPT_LANGUAGE_JAVASCRIPT, []);
 
                         if (filePath) {
-                            lockFile(filePath).catch(error => console.error("Lock error:", error));
+                            lockFile(filePath).catch(error => logError("Lock error:", error));
                         }
                     } catch (error) {
                         syncLocks();
                     }
                 }, 200);
             } catch (error) {
-                console.error("Error in afterOpen listener:", error);
+                logError("Error in afterOpen listener:", error);
             }
         };
 
@@ -533,7 +534,7 @@ export const LockManager = () => {
                 debouncedSyncLocks(500);
             } catch (error) {
                 if (isMountedRef.current) {
-                    console.error("Error in afterClose listener:", error);
+                    logError("Error in afterClose listener:", error);
                 }
             }
         };
@@ -549,7 +550,7 @@ export const LockManager = () => {
                 debouncedSyncLocks(200);
             } catch (error) {
                 if (isMountedRef.current) {
-                    console.error("Error in afterSaveAs listener:", error);
+                    logError("Error in afterSaveAs listener:", error);
                 }
             }
         };
@@ -561,8 +562,8 @@ export const LockManager = () => {
          */
         const handleManualCheck = () => {
             if (isMountedRef.current) {
-                console.log('[LockManager] Manuális ellenőrzés kényszerítve');
-                syncLocks().catch(error => console.error("Manual sync failed:", error));
+                log('[LockManager] Manuális ellenőrzés kényszerítve');
+                syncLocks().catch(error => logError("Manual sync failed:", error));
             }
         };
 

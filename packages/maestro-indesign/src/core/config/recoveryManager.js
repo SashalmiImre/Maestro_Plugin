@@ -59,19 +59,19 @@ class RecoveryManager {
 
         // Ha épp fut egy recovery, nem kell újat indítani
         if (this.isRecovering) {
-            log(`[Recovery] ⏳ Recovery épp fut, "${trigger}" trigger kihagyva`);
+            log(`[Recovery] [WAIT] Recovery épp fut, "${trigger}" trigger kihagyva`);
             return;
         }
 
         // Debounce: ha nemrég volt recovery, ütemezzük a hátralévő időre
         if (elapsed < debounceMs) {
             if (this._pendingTimeout) {
-                log(`[Recovery] ⏳ Már van ütemezett recovery, "${trigger}" trigger kihagyva`);
+                log(`[Recovery] [WAIT] Már van ütemezett recovery, "${trigger}" trigger kihagyva`);
                 return;
             }
 
             const remaining = debounceMs - elapsed;
-            log(`[Recovery] ⏰ "${trigger}" trigger ütemezve ${Math.ceil(remaining / 1000)}s múlva (debounce)`);
+            log(`[Recovery] [TIMER] "${trigger}" trigger ütemezve ${Math.ceil(remaining / 1000)}s múlva (debounce)`);
             this._pendingTimeout = setTimeout(() => {
                 this._pendingTimeout = null;
                 this._executeRecovery(trigger);
@@ -103,7 +103,7 @@ class RecoveryManager {
         this._isCancelled = false;
         this.isRecovering = true;
         this.lastRecoveryAt = Date.now();
-        log(`[Recovery] 🔄 Recovery indítása (trigger: "${trigger}")`);
+        log(`[Recovery] [SYNC] Recovery indítása (trigger: "${trigger}")`);
 
         try {
             // 1. Health check — van-e hálózat?
@@ -111,33 +111,33 @@ class RecoveryManager {
 
             // Plugin leállítás közben megszakított recovery
             if (this._isCancelled) {
-                log('[Recovery] 🛑 Recovery megszakítva (plugin leállítás)');
+                log('[Recovery] [STOP] Recovery megszakítva (plugin leállítás)');
                 return;
             }
 
             if (!serverReachable) {
-                logWarn('[Recovery] ❌ Szerver nem elérhető a retry-ok után sem');
+                logWarn('[Recovery] [FAIL] Szerver nem elérhető a retry-ok után sem');
                 return;
             }
 
-            log('[Recovery] ✅ Szerver elérhető');
+            log('[Recovery] [OK] Szerver elérhető');
 
             // 2. Realtime reconnect
             // A realtime.reconnect() teljes destroy+rebuild-et csinál,
             // és a végén dispatch-eli a dataRefreshRequested event-et is.
             const isConnected = realtime.getConnectionStatus();
             if (!isConnected && !realtime.isReconnecting) {
-                log('[Recovery] 🔌 Realtime újraépítés...');
+                log('[Recovery] [PLUG] Realtime újraépítés...');
                 realtime.reconnect();
             } else {
                 // Ha a WebSocket él, csak adat frissítést kérünk
-                log('[Recovery] 📡 Realtime él, csak adat frissítés');
+                log('[Recovery] [SUB] Realtime él, csak adat frissítés');
                 dispatchMaestroEvent(MaestroEvent.dataRefreshRequested);
             }
 
-            log('[Recovery] ✅ Recovery befejezve');
+            log('[Recovery] [OK] Recovery befejezve');
         } catch (error) {
-            logError('[Recovery] ❌ Recovery hiba:', error);
+            logError('[Recovery] [FAIL] Recovery hiba:', error);
         } finally {
             // Debounce frissítése a recovery VÉGÉN is (nem csak az elején).
             // Ha a recovery sokáig tartott (health check retry-ok), az elejei

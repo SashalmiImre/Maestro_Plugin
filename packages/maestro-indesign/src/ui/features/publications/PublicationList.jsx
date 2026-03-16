@@ -15,6 +15,7 @@ import { useData } from "../../../core/contexts/DataContext.jsx";
 
 // Utils
 import { STORAGE_KEYS } from "../../../core/utils/constants.js";
+import { logDebug, logWarn, logError } from "../../../core/utils/logger.js";
 import { DocumentMonitor } from "../workspace/DocumentMonitor.jsx";
 
 
@@ -42,22 +43,22 @@ export const PublicationList = ({ onShowProperties, style }) => {
     const [expandedId, setExpandedId] = useState(() => {
         try {
             const saved = localStorage.getItem(STORAGE_KEYS.EXPANDED_PUBLICATION_ID);
-            console.log('[PublicationList] Initializing expandedId from localStorage:', { saved, type: typeof saved });
+            logDebug('[PublicationList] Initializing expandedId from localStorage:', { saved, type: typeof saved });
             return saved || null;
         } catch (e) {
-            console.warn('[PublicationList] Failed to read expandedId from localStorage:', e);
+            logWarn('[PublicationList] Failed to read expandedId from localStorage:', e);
             return null;
         }
     });
 
     // Debug: Log expandedId whenever it changes
     useEffect(() => {
-        console.log('[PublicationList] expandedId changed to:', expandedId);
+        logDebug('[PublicationList] expandedId changed to:', expandedId);
     }, [expandedId]);
 
     // Debug: Log publications and expandedId relationship
     useEffect(() => {
-        console.log('[PublicationList] Publications loaded:', {
+        logDebug('[PublicationList] Publications loaded:', {
             count: publications.length,
             ids: publications.map(p => p.$id),
             expandedId,
@@ -69,14 +70,14 @@ export const PublicationList = ({ onShowProperties, style }) => {
     useEffect(() => {
         if (expandedId && publications.length > 0) {
             const exists = publications.some(pub => pub.$id === expandedId);
-            console.log('[PublicationList] Checking if saved publication exists:', { expandedId, exists });
+            logDebug('[PublicationList] Checking if saved publication exists:', { expandedId, exists });
             if (!exists) {
-                console.log('[PublicationList] Saved publication no longer exists, clearing expandedId');
+                logDebug('[PublicationList] Saved publication no longer exists, clearing expandedId');
                 setExpandedId(null);
                 try {
                     localStorage.removeItem(STORAGE_KEYS.EXPANDED_PUBLICATION_ID);
                 } catch (e) {
-                    console.warn('[PublicationList] Failed to remove expandedId from localStorage:', e);
+                    logWarn('[PublicationList] Failed to remove expandedId from localStorage:', e);
                 }
             }
         }
@@ -86,14 +87,14 @@ export const PublicationList = ({ onShowProperties, style }) => {
     useEffect(() => {
         try {
             if (expandedId) {
-                console.log('[PublicationList] Saving expandedId to localStorage:', expandedId);
+                logDebug('[PublicationList] Saving expandedId to localStorage:', expandedId);
                 localStorage.setItem(STORAGE_KEYS.EXPANDED_PUBLICATION_ID, expandedId);
             } else {
-                console.log('[PublicationList] Removing expandedId from localStorage');
+                logDebug('[PublicationList] Removing expandedId from localStorage');
                 localStorage.removeItem(STORAGE_KEYS.EXPANDED_PUBLICATION_ID);
             }
         } catch (e) {
-            console.warn('[PublicationList] Failed to save expandedId to localStorage:', e);
+            logWarn('[PublicationList] Failed to save expandedId to localStorage:', e);
         }
     }, [expandedId]);
 
@@ -106,7 +107,7 @@ export const PublicationList = ({ onShowProperties, style }) => {
             if (newId) {
                 // Set as active to trigger data fetch
                 setActivePublicationId(newId);
-                console.log('[PublicationList] Expanded & Set Active:', newId);
+                logDebug('[PublicationList] Expanded & Set Active:', newId);
             }
             // Optional: clear active if collapsed? 
             // If we clear it, the list empties immediately. 
@@ -121,7 +122,7 @@ export const PublicationList = ({ onShowProperties, style }) => {
     useEffect(() => {
         if (expandedId) {
             setActivePublicationId(expandedId);
-            console.log('[PublicationList] Restored Active form LocalStorage:', expandedId);
+            logDebug('[PublicationList] Restored Active form LocalStorage:', expandedId);
         }
     }, []); // Run once on mount
 
@@ -141,7 +142,7 @@ export const PublicationList = ({ onShowProperties, style }) => {
         try {
             await deletePublication(id);
         } catch (e) {
-            console.error("Error deleting:", e);
+            logError("Error deleting:", e);
         }
     };
 

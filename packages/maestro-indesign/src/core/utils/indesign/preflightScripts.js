@@ -7,6 +7,8 @@
 import { escapePathForExtendScript } from "../pathUtils.js";
 import { getBackgroundOpenLogic, getSafeCloseLogic } from "./scriptHelpers.js";
 
+import { logWarn } from "../logger.js";
+
 /**
  * Generál egy scriptet a megadott preflight profillal történő ellenőrzéshez.
  * A script megpróbálja betölteni a profilt név alapján ("Levil"), ha nem találja,
@@ -293,7 +295,7 @@ export function parsePreflightResult(resultStr) {
                 items = JSON.parse(itemsStr);
             } catch (e) {
                 parseError = e.message;
-                console.warn("[parsePreflightResult] JSON.parse hiba:", e.message, "itemsStr:", itemsStr.substring(0, 200));
+                logWarn("[parsePreflightResult] JSON.parse hiba:", e.message, "itemsStr:", itemsStr.substring(0, 200));
             }
 
             return {

@@ -1,4 +1,5 @@
 import React, { useCallback } from "react";
+import { logError } from "../../../core/utils/logger.js";
 
 export const PublicationListToolbar = ({ createPublication }) => {
 
@@ -9,7 +10,7 @@ export const PublicationListToolbar = ({ createPublication }) => {
 
             await createPublication(folder);
         } catch (e) {
-            console.error("Error creating publication:", e);
+            logError("Error creating publication:", e);
         }
     }, [createPublication]);
 

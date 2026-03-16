@@ -28,7 +28,10 @@ import "../polyfill.js";
         try {
             const val = localStorage.getItem(key);
             if (val) {
-                console.warn(`[Startup] ⚠️ Előző munkamenet hibája (${key}):`, JSON.parse(val));
+                // Szándékos console.warn: ez az IIFE a React init előtt fut,
+                // és bár a Webpack az importokat feltolja, a logger nem garantáltan
+                // inicializálódott hibamentes állapotban a startup error capture-nél.
+                console.warn(`[Startup] [WARN] Előző munkamenet hibája (${key}):`, JSON.parse(val));
                 localStorage.removeItem(key);
             }
         } catch (_) {}
@@ -107,6 +110,7 @@ import { ConnectionProvider } from "./contexts/ConnectionContext.jsx";
 import { account, handleSignOut, RECOVERY_URL } from "./config/appwriteConfig.js";
 import { realtime } from "./config/realtimeClient.js";
 import { recoveryManager } from "./config/recoveryManager.js";
+import { log, logWarn, logError } from "./utils/logger.js";
 
 // --- Components & Assets ---
 import { PanelController } from "./controllers/panelController.jsx";
@@ -163,7 +167,7 @@ const hasActiveSession = async () => {
             return false;
         }
         // Más hibák (hálózat, 5xx, etc.) — rethrow
-        console.warn("hasActiveSession: nem auth hiba(", error.code || error.type, "):", error.message);
+        logWarn("[hasActiveSession] Nem auth hiba(", error.code || error.type, "):", error.message);
         throw error;
     }
 };
@@ -194,7 +198,7 @@ const confirmSignOut = async () => {
         try {
             await handleSignOut();
         } catch (error) {
-            console.warn("Kijelentkezés sikertelen (session hiányozhat), újratöltés:", error);
+            logWarn("[Plugin] Kijelentkezés sikertelen (session hiányozhat), újratöltés:", error);
         }
         // Panel újratöltése az állapot visszaállításához (React kontextuson kívül vagyunk)
         location.reload();
@@ -271,7 +275,7 @@ const changePassword = async () => {
             await account.updatePassword({ password: newPassword, oldPassword: currentPassword });
             showMessage("Siker", "Jelszó sikeresen módosítva!");
         } catch (error) {
-            console.error("[ChangePassword] Hiba:", error);
+            logError("[ChangePassword] Hiba:", error);
             showMessage("Hiba", `Jelszó módosítása sikertelen: ${error?.message ?? "Ismeretlen hiba"}`);
         }
     } else {
@@ -308,7 +312,7 @@ const resetPassword = async () => {
             await account.createRecovery({ email, url: RECOVERY_URL });
             showMessage("Email elküldve", "Jelszó-visszaállító link elküldve az email címedre!");
         } catch (error) {
-            console.error("[ResetPassword] Hiba:", error);
+            logError("[ResetPassword] Hiba:", error);
             showMessage("Hiba", `${error?.message ?? "Ismeretlen hiba"}`);
         }
     } else {
@@ -324,7 +328,7 @@ let _isCleanedUp = false;
 function _gracefulShutdown(source) {
     if (_isCleanedUp) return;
     _isCleanedUp = true;
-    console.log(`[Plugin] 🛑 Graceful shutdown (${source})`);
+    log(`[Plugin] [STOP] Graceful shutdown (${source})`);
     try { recoveryManager.cancel(); } catch (_) {}
     try { realtime.disconnect(); } catch (_) {}
 }
@@ -357,7 +361,7 @@ entrypoints.setup({
                         await resetPassword();
                         break;
                     default:
-                        console.warn(`Ismeretlen menüpont: ${id}`);
+                        logWarn(`[Plugin] Ismeretlen menüpont: ${id}`);
                 }
             },
         },

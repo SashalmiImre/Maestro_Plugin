@@ -34,7 +34,7 @@ import { useWorkflowValidation } from "../../../data/hooks/useWorkflowValidation
 // Utils
 import { toAbsoluteArticlePath, toNativePath } from "../../../core/utils/pathUtils.js";
 import { generateOpenDocumentScript } from "../../../core/utils/indesign/index.js";
-import { log, logError } from "../../../core/utils/logger.js";
+import { log, logWarn, logError } from "../../../core/utils/logger.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../core/config/maestroEvents.js";
 import { SCRIPT_LANGUAGE_JAVASCRIPT, TOAST_TYPES } from "../../../core/utils/constants.js";
 
@@ -186,7 +186,7 @@ export const Workspace = () => {
             const app = require("indesign").app;
 
             if (!article.filePath) {
-                console.error("No file path for article:", article.name);
+                logError("No file path for article:", article.name);
                 showToast(NO_FILE_PATH_ERROR.title, TOAST_TYPES.ERROR, NO_FILE_PATH_ERROR.description);
                 return;
             }
@@ -200,7 +200,7 @@ export const Workspace = () => {
                     await app.open(mappedPath);
                     showToast(`${article.name} megnyitva`, TOAST_TYPES.SUCCESS);
                 } catch (openError) {
-                    console.warn("Standard app.open failed, trying ExtendScript fallback...", openError);
+                    logWarn("Standard app.open failed, trying ExtendScript fallback...", openError);
 
                     const script = generateOpenDocumentScript(mappedPath);
                     const result = app.doScript(script, SCRIPT_LANGUAGE_JAVASCRIPT, []);
@@ -210,11 +210,11 @@ export const Workspace = () => {
                     showToast(`${article.name} megnyitva`, TOAST_TYPES.SUCCESS);
                 }
             } else {
-                console.error("No file path for article");
+                logError("No file path for article");
                 showToast(NO_FILE_PATH_ERROR.title, TOAST_TYPES.ERROR, NO_FILE_PATH_ERROR.description);
             }
         } catch (e) {
-            console.error("Failed to open article:", e);
+            logError("Failed to open article:", e);
             showToast('A dokumentum megnyitása sikertelen', TOAST_TYPES.ERROR, e.message || 'Ismeretlen hiba történt.');
         }
     }, [user, showToast]);

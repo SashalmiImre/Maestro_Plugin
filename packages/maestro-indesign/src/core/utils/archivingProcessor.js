@@ -17,6 +17,8 @@
  * @module utils/archivingProcessor
  */
 
+import { logDebug } from "./logger.js";
+
 // --- Konstansok ---
 
 /** Térbeli közelség küszöbértéke pontban */
@@ -392,10 +394,10 @@ export function processArticleData(rawData) {
     if (clusters.length === 0) throw new Error('Nem találhatók szövegkeretek az oldalakon');
 
     // Diagnosztikai log — UXP DevTools console-ban látható
-    console.log(`[Archive] Keretek: ${n}, Grafikai elem: ${graphicElements.length}, Klaszter: ${clusters.length}`);
+    logDebug(`[Archive] Keretek: ${n}, Grafikai elem: ${graphicElements.length}, Klaszter: ${clusters.length}`);
     clusters.forEach((cl, ci) => {
         const preview = cl.stories[0]?.text?.replace(/[\r\n]+/g, ' ').substring(0, 60) || '';
-        console.log(`  [K${ci + 1}] ${cl.totalN} kar, ${cl.stories.length} story — "${preview}"`);
+        logDebug(`  [K${ci + 1}] ${cl.totalN} kar, ${cl.stories.length} story — "${preview}"`);
     });
 
     // Klaszterek olvasási sorrendbe rendezése

@@ -11,7 +11,7 @@ import { useConnection } from "../contexts/ConnectionContext.jsx";
 import { account, teams, executeLogin, handleSignOut, clearLocalSession, ID, VERIFICATION_URL } from "../config/appwriteConfig.js";
 import { realtime } from "../config/realtimeClient.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../config/maestroEvents.js";
-import { log } from "../utils/logger.js";
+import { log, logWarn, logError } from "../utils/logger.js";
 
 /**
  * Context objektum a felhasználói adatok megosztásához.
@@ -100,7 +100,7 @@ export function AuthorizationProvider({ children }) {
                 return { ...prev, teamIds };
             });
         } catch (error) {
-            log(`[UserContext] Csapattagság frissítése sikertelen (${logLabel})`, 'warn');
+            logWarn(`[UserContext] Csapattagság frissítése sikertelen (${logLabel})`);
         }
     };
 
@@ -117,7 +117,7 @@ export function AuthorizationProvider({ children }) {
             const result = await teams.list();
             return { ...userData, teamIds: result.teams.map(t => t.$id) };
         } catch (error) {
-            log('[UserContext] Csapattagság lekérése sikertelen', 'warn');
+            logWarn('[UserContext] Csapattagság lekérése sikertelen');
             return { ...userData, teamIds: userData.teamIds || [] };
         }
     };
@@ -140,24 +140,35 @@ export function AuthorizationProvider({ children }) {
             try {
                 await executeLogin(email, password);
             } catch (error) {
-                // Ha a munkamenet (session) már létezik, folytathatjuk a felhasználó lekérését
-                if (error.message && error.message.includes("session is active")) {
+                // "session is active" detektálás: type alapú (stabil) + message alapú (fallback)
+                const isSessionActive = error.type === 'user_session_already_exists'
+                    || (error.message && error.message.includes("session is active"));
+
+                if (isSessionActive) {
                     // Ellenőrizzük, hogy az érvényes munkamenet a kérő felhasználóhoz tartozik-e
                     try {
                         const activeUser = await account.get();
                         if (activeUser.email !== email) {
-                            console.warn(`[UserContext] Aktív munkamenet (ID: ${activeUser.$id}) nem egyezik a kért felhasználóval (${maskEmail(email)}). Kijelentkezés...`);
+                            logWarn(`[UserContext] Aktív munkamenet (ID: ${activeUser.$id}) nem egyezik a kért felhasználóval (${maskEmail(email)}). Kijelentkezés...`);
                             await handleSignOut();
                             retried = true;
                             await executeLogin(email, password);
                         } else {
-                            console.log(`[UserContext] Aktív munkamenet újrafelhasználása: ${maskEmail(email)}`);
+                            log(`[UserContext] Aktív munkamenet újrafelhasználása: ${maskEmail(email)}`);
                         }
                     } catch (sessionCheckError) {
-                        // A session cookie létezik, de a szerveren érvénytelen (pl. admin törölte)
+                        // Szerver szerint van aktív session, de a helyi token hiányzik/érvénytelen.
+                        // Deadlock feloldás: szerver session törlési kísérlet (handleSignOut).
+                        // Ha a törlés 401-et kap (nincs helyi token), a finally block akkor is
+                        // meghívja clearLocalSession()-t. Utána a retry token nélkül megy →
+                        // ha a szerver session időközben lejárt, sikeres lesz.
                         if (retried) throw sessionCheckError;
-                        console.warn('[UserContext] Érvénytelen munkamenet, helyi session törlése és újrapróbálkozás...');
-                        clearLocalSession();
+                        logWarn(`[UserContext] Érvénytelen munkamenet (code: ${sessionCheckError.code}, type: ${sessionCheckError.type}), szerver session törlése...`);
+                        try {
+                            await handleSignOut();
+                        } catch (signOutError) {
+                            logWarn('[UserContext] Szerver session törlés sikertelen (várható ha nincs helyi token)');
+                        }
                         retried = true;
                         await executeLogin(email, password);
                     }
@@ -166,7 +177,7 @@ export function AuthorizationProvider({ children }) {
                     // (pl. "missing scopes" ha az SDK az érvénytelen tokent küldi).
                     // Töröljük a helyi session-t és újrapróbáljuk egyszer.
                     if (retried) throw error;
-                    console.warn('[UserContext] Bejelentkezés sikertelen, helyi session törlése és újrapróbálkozás...', error.message);
+                    logWarn(`[UserContext] Bejelentkezés sikertelen (code: ${error.code}, type: ${error.type}): ${error.message} — helyi session törlése és újrapróbálkozás...`);
                     clearLocalSession();
                     retried = true;
                     await executeLogin(email, password);
@@ -177,7 +188,7 @@ export function AuthorizationProvider({ children }) {
             setUser(enrichedUser);
             return enrichedUser;
         } catch (error) {
-            console.error("Bejelentkezés sikertelen:", error);
+            logError(`[UserContext] Bejelentkezés sikertelen (code: ${error.code}, type: ${error.type}): ${error.message}`);
             throw error;
         }
     };
@@ -190,7 +201,7 @@ export function AuthorizationProvider({ children }) {
         try {
             await handleSignOut();
         } catch (error) {
-            console.error("Kijelentkezés sikertelen:", error);
+            logError("[UserContext] Kijelentkezés sikertelen:", error);
         } finally {
             setUser(null);
         }
@@ -314,7 +325,7 @@ export function AuthorizationProvider({ children }) {
                 });
             } catch (error) {
                 // 401 → sessionExpired event kezeli, egyéb hiba nem kritikus
-                log('[UserContext] Felhasználói adatok frissítése sikertelen', 'warn');
+                logWarn('[UserContext] Felhasználói adatok frissítése sikertelen');
             }
         };
 

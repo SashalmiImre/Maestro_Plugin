@@ -5,6 +5,7 @@ import { LOCK_TYPE } from "../../utils/constants.js";
 import * as pathUtils from "../../utils/pathUtils.js";
 import { validate } from "../../utils/validationRunner.js";
 import { VALIDATOR_TYPES } from "../../utils/validationConstants.js";
+import { log, logError } from "../../utils/logger.js";
 
 /**
  * Handles the 'print_output' (Levilágítás) command.
@@ -17,7 +18,7 @@ import { VALIDATOR_TYPES } from "../../utils/validationConstants.js";
 export const handlePrinting = async (context) => {
     const { item, publication, user, layouts } = context;
 
-    console.log("[Command] Print output (Levilágítás) for:", item?.name);
+    log("[Command] Print output (Levilágítás) for:", item?.name);
 
     if (!item || !item.filePath) {
         return { success: false, error: "Nincs érvényes cikk kiválasztva." };
@@ -62,7 +63,7 @@ export const handlePrinting = async (context) => {
         let sourcePath = null;
 
         if (!isAlreadyOpen) {
-            console.log("[Command] Document is closed. Locking for background processing...");
+            log("[Command] Document is closed. Locking for background processing...");
             const lockResult = await WorkflowEngine.lockDocument(item, LOCK_TYPE.SYSTEM, user);
             if (!lockResult.success) {
                 return { success: false, error: `Nem sikerült zárolni a dokumentumot: ${lockResult.error}` };
@@ -71,7 +72,7 @@ export const handlePrinting = async (context) => {
             lockedItem = lockResult.document;
             sourcePath = nativeFilePath;
         } else {
-            console.log("[Command] Document is already open.");
+            log("[Command] Document is already open.");
         }
 
         // 5. Script futtatás
@@ -91,15 +92,15 @@ export const handlePrinting = async (context) => {
         return { success: false, error: result || "Ismeretlen hiba a levilágítás során." };
 
     } catch (error) {
-        console.error("[Command] Print output error:", error);
+        logError("[Command] Print output error:", error);
         return { success: false, error: error.message };
     } finally {
         if (lockedBySystem) {
-            console.log("[Command] Unlocking document...");
+            log("[Command] Unlocking document...");
             try {
                 await WorkflowEngine.unlockDocument(lockedItem || item, user);
             } catch (unlockError) {
-                console.error(`[Command] Failed to unlock document after print output. Item: ${(lockedItem || item).$id}`, unlockError);
+                logError(`[Command] Failed to unlock document after print output. Item: ${(lockedItem || item).$id}`, unlockError);
             }
         }
     }

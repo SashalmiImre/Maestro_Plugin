@@ -7,7 +7,7 @@ import { useToast } from "../../common/Toast/ToastContext.jsx";
 import { useData } from "../../../core/contexts/DataContext.jsx";
 
 // Segédprogramok (Utils)
-import { toCanonicalPath, getArticleCanonicalPath } from "../../../core/utils/pathUtils.js";
+import { toCanonicalPath, getArticleCanonicalPath, toAbsoluteArticlePath } from "../../../core/utils/pathUtils.js";
 import {
     findActiveDocument,
     getDocPath,
@@ -19,6 +19,7 @@ import {
 import { WorkflowEngine } from "../../../core/utils/workflow/workflowEngine.js";
 import { LOCK_TYPE, LOCK_WAIT_CONFIG, TOAST_TYPES } from "../../../core/utils/constants.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../core/config/maestroEvents.js";
+import { log, logWarn, logError } from "../../../core/utils/logger.js";
 
 
 
@@ -80,7 +81,7 @@ export const DocumentMonitor = () => {
                 return getArticleCanonicalPath(a, pubs).toLowerCase() === searchCanonical;
             }) || null;
         } catch (error) {
-            console.error("[DocumentMonitor] fetchArticle hiba:", error);
+            logError("[DocumentMonitor] fetchArticle hiba:", error);
             return null;
         }
     };
@@ -95,7 +96,7 @@ export const DocumentMonitor = () => {
     const verifyDocumentInBackground = async (filePath, article) => {
         // MEGJEGYZÉS: isVerifyingRef-et a hívó kezeli a versenyhelyzet elkerülése érdekében
         if (!article?.$id) {
-            console.warn("[DocumentMonitor] verifyDocumentInBackground: Nincs article!");
+            logWarn("[DocumentMonitor] verifyDocumentInBackground: Nincs article!");
             return;
         }
 
@@ -105,7 +106,7 @@ export const DocumentMonitor = () => {
             const lastTimestamp = lastValidatedTimestampsRef.current[article.$id];
 
             if (currentTimestamp && lastTimestamp && currentTimestamp === lastTimestamp) {
-                console.log(`[DocumentMonitor] Kihagyva (változatlan): ${article.name}`);
+                log(`[DocumentMonitor] Kihagyva (változatlan): ${article.name}`);
                 return; // Fájl nem változott, nincs validálás
             }
             // NE mentsük el itt a timestampot - csak sikeres validálás után!
@@ -123,7 +124,7 @@ export const DocumentMonitor = () => {
             // Maestro zárolás
             const lockResult = await WorkflowEngine.lockDocument(article, LOCK_TYPE.SYSTEM, user);
             if (!lockResult.success) {
-                console.warn("[DocumentMonitor] Nem sikerült zárolni a dokumentumot:", lockResult.error);
+                logWarn("[DocumentMonitor] Nem sikerült zárolni a dokumentumot:", lockResult.error);
                 if (toastId) removeToast(toastId);
                 return; // finally block küldi a verificationEnded-et
             }
@@ -150,7 +151,7 @@ export const DocumentMonitor = () => {
             }
 
             if (!fileLockReleased) {
-                console.warn(`[DocumentMonitor] Lock wait timeout (${LOCK_WAIT_CONFIG.TIMEOUT_MS}ms) for: ${article.name}`);
+                logWarn(`[DocumentMonitor] Lock wait timeout (${LOCK_WAIT_CONFIG.TIMEOUT_MS}ms) for: ${article.name}`);
                 // Folytatjuk a validálást timeout esetén is, hátha sikerül
             }
 
@@ -170,7 +171,7 @@ export const DocumentMonitor = () => {
 
             // Megvárjuk az összes regisztrált feladatot
             if (tasks.length > 0) {
-                console.log(`[DocumentMonitor] ${tasks.length} validációs feladat fut: ${article.name}`);
+                log(`[DocumentMonitor] ${tasks.length} validációs feladat fut: ${article.name}`);
                 await Promise.all(tasks);
             }
 
@@ -185,7 +186,7 @@ export const DocumentMonitor = () => {
             }
 
         } catch (err) {
-            console.error("[DocumentMonitor] Háttér ellenőrzés hiba:", err);
+            logError("[DocumentMonitor] Háttér ellenőrzés hiba:", err);
         } finally {
             // Maestro zárolás feloldása
             try {
@@ -196,7 +197,7 @@ export const DocumentMonitor = () => {
                     applyArticleUpdate(unlockResult.document);
                 }
             } catch (unlockErr) {
-                console.error("[DocumentMonitor] Maestro unlock hiba:", unlockErr);
+                logError("[DocumentMonitor] Maestro unlock hiba:", unlockErr);
             }
 
             if (toastId) removeToast(toastId);
@@ -269,7 +270,7 @@ export const DocumentMonitor = () => {
                         });
 
                         if (isOpen) {
-                            console.log(`[DocumentMonitor] Unlock detektálva, de a fájl NYITVA van (LockManager újrazárolja): ${unlockTarget.name}`);
+                            log(`[DocumentMonitor] Unlock detektálva, de a fájl NYITVA van (LockManager újrazárolja): ${unlockTarget.name}`);
                             return; // SKIP VERIFICATION
                         }
                     }
@@ -277,10 +278,22 @@ export const DocumentMonitor = () => {
 
                 // Friss article a latestArticlesRef-ből (a verifikáció a legfrissebb adattal induljon)
                 const freshArticle = latestArticlesRef.current.find(a => a.$id === unlockTarget.$id) || unlockTarget;
-                console.log(`[DocumentMonitor] Realtime unlock: ${freshArticle.name}`);
-                await verifyDocumentInBackground(freshArticle.filePath, freshArticle);
+                log(`[DocumentMonitor] Realtime unlock: ${freshArticle.name}`);
+
+                // Relatív filePath → abszolút natív útvonal (ExtendScript File() nem tud relatívat feloldani)
+                const pub = publicationsRef.current?.find(p => p.$id === freshArticle.publicationId);
+                let absolutePath;
+                if (pub?.rootPath) {
+                    absolutePath = toAbsoluteArticlePath(freshArticle.filePath, pub.rootPath);
+                } else {
+                    logWarn(
+                        `[DocumentMonitor] Publication rootPath missing for verification: publicationId=${freshArticle.publicationId}, relativeFilePath=${freshArticle.filePath}. Falling back to filePath directly, but ExtendScript File() may fail to resolve it.`
+                    );
+                    absolutePath = freshArticle.filePath;
+                }
+                await verifyDocumentInBackground(absolutePath, freshArticle);
             } catch (e) {
-                console.error("[DocumentMonitor] Unlock check hiba:", e);
+                logError("[DocumentMonitor] Unlock check hiba:", e);
             } finally {
                 isVerifyingRef.current = false;
 
@@ -300,7 +313,7 @@ export const DocumentMonitor = () => {
      */
     useEffect(() => {
         isDocumentMonitorMountedRef.current = true;
-        console.log("[DocumentMonitor] Indítás (v8 - Event-driven)");
+        log("[DocumentMonitor] Indítás (v8 - Event-driven)");
 
         const app = getIndesignApp();
 
@@ -335,7 +348,7 @@ export const DocumentMonitor = () => {
         if (app) {
             afterSaveListener = app.addEventListener("afterSave", handleSave);
         } else {
-            console.warn("[DocumentMonitor] InDesign app not available, monitoring disabled.");
+            logWarn("[DocumentMonitor] InDesign app not available, monitoring disabled.");
         }
 
         return () => {
@@ -346,7 +359,7 @@ export const DocumentMonitor = () => {
                 try {
                     afterSaveListener.remove();
                 } catch (e) {
-                    console.error(
+                    logError(
                         "[DocumentMonitor] afterSaveListener.remove() failed during cleanup " +
                         "(handleSave listener, isDocumentMonitorMountedRef.current = false):",
                         e

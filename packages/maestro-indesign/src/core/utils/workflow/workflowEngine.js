@@ -14,6 +14,8 @@ import { validate } from "../validationRunner.js";
 import { VALIDATOR_TYPES } from "../validationConstants.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../config/maestroEvents.js";
 
+import { log, logError } from "../logger.js";
+
 /**
  * WorkflowEngine osztály a cikkek munkafolyamat-állapotainak és átmeneteinek kezelésére.
  * 
@@ -92,7 +94,7 @@ export class WorkflowEngine {
                 return { success: false, error: validation.errors.join(", ") };
             }
 
-            console.log(`[WorkflowEngine] Cikk (${article.$id}) állapotváltása erre: ${targetState}, felhasználó: ${user?.name || user?.$id || 'ismeretlen'}`);
+            log(`[WorkflowEngine] Cikk (${article.$id}) állapotváltása erre: ${targetState}, felhasználó: ${user?.name || user?.$id || 'ismeretlen'}`);
 
             // 1. Cikk frissítése az adatbázisban
             const result = await withTimeout(
@@ -116,12 +118,12 @@ export class WorkflowEngine {
                     newState: targetState
                 });
             } catch (listenerError) {
-                console.error("[WorkflowEngine] state-changed esemény listener hiba:", listenerError);
+                logError("[WorkflowEngine] state-changed esemény listener hiba:", listenerError);
             }
 
             return { success: true, document: result };
         } catch (error) {
-            console.error("Állapotváltás sikertelen:", error);
+            logError("Állapotváltás sikertelen:", error);
             return { success: false, error: error.message };
         }
     }
@@ -163,7 +165,7 @@ export class WorkflowEngine {
             );
             return { success: true, document: result };
         } catch (error) {
-            console.error("Marker kapcsolása sikertelen:", error);
+            logError("Marker kapcsolása sikertelen:", error);
             return { success: false, error: error.message };
         }
     }
@@ -212,7 +214,7 @@ export class WorkflowEngine {
             return { success: true, document: result };
 
         } catch (error) {
-            console.error("Dokumentum zárolása sikertelen:", error);
+            logError("Dokumentum zárolása sikertelen:", error);
             return { success: false, error: error.message };
         }
     }
@@ -256,7 +258,7 @@ export class WorkflowEngine {
             return { success: true, document: result };
 
         } catch (error) {
-            console.error("Dokumentum feloldása sikertelen:", error);
+            logError("Dokumentum feloldása sikertelen:", error);
             return { success: false, error: error.message };
         }
     }

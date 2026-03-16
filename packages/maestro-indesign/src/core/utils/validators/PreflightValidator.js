@@ -8,6 +8,8 @@ import { ValidatorBase } from "./ValidatorBase.js";
 import { executeScript } from "../indesign/indesignUtils.js";
 import { generatePreflightScript, parsePreflightResult } from "../indesign/index.js";
 
+import { logWarn } from "../logger.js";
+
 /** Plugin assets mappa natív elérési útja (cachelve az első sikeres lekérés után). */
 let cachedAssetsPath = null;
 
@@ -24,7 +26,7 @@ async function getAssetsPath() {
         cachedAssetsPath = assetsFolder.nativePath;
         return cachedAssetsPath;
     } catch (e) {
-        console.warn("[PreflightValidator] Plugin assets mappa nem elérhető:", e.message);
+        logWarn("[PreflightValidator] Plugin assets mappa nem elérhető:", e.message);
         return null;
     }
 }
@@ -41,11 +43,14 @@ export class PreflightValidator extends ValidatorBase {
      * @returns {Promise<Object>} Validációs eredmény { isValid, errors[], warnings[], timestamp }
      */
     async validate(context) {
-        const { article, options } = context;
+        const { article, options, absoluteFilePath } = context;
 
         if (!article || !article.filePath) {
             return this.failure("Cikk vagy fájl útvonal hiányzik a preflight ellenőrzéshez.");
         }
+
+        // Abszolút útvonal használata (ExtendScript File() nem tud relatívat feloldani)
+        const filePath = absoluteFilePath || article.filePath;
 
         try {
             // 1. Preflight profil .idpp útvonal feloldása
@@ -53,11 +58,11 @@ export class PreflightValidator extends ValidatorBase {
             // Default to "Levil" if not specified
             const profileName = options?.profile || "Levil";
             const profileFile = options?.profileFile || "Levil.idpp";
-            
+
             const profilePath = assetsPath ? `${assetsPath}/${profileFile}` : null;
 
             // 2. Preflight script generálása és futtatása
-            const script = generatePreflightScript(article.filePath, profilePath, profileName);
+            const script = generatePreflightScript(filePath, profilePath, profileName);
             const result = await executeScript(script);
 
             // 2. Eredmény feldolgozása

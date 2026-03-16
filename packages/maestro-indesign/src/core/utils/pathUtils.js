@@ -8,6 +8,8 @@
 import { MOUNT_PREFIX } from "./constants.js";
 import os from "os";
 
+import { logWarn, logError, logDebug } from "./logger.js";
+
 /**
  * Normalizál egy fájl elérési utat:
  * - Backslash-eket (\) forward slash-re (/) cseréli.
@@ -91,7 +93,7 @@ const normalize = (path) => {
     } catch (e) {
         // Ha hibás az URI kódolás, megtartjuk az eredetit
         if (!(e instanceof URIError)) {
-             console.error('[PathUtils] Nem várt hiba a decodeURIComponent hívásakor:', e);
+             logError('[PathUtils] Nem várt hiba a decodeURIComponent hívásakor:', e);
         }
     }
     return decodedPath.replace(/\\/g, "/").normalize('NFC');
@@ -109,7 +111,7 @@ const getMountPrefix = () => {
             platform = os.platform();
         }
     } catch(e) {
-        console.warn("[PathUtils] OS modul nem elérhető, alapértelmezett 'darwin' használata.");
+        logWarn("[PathUtils] OS modul nem elérhető, alapértelmezett 'darwin' használata.");
     }
     return MOUNT_PREFIX[platform] || MOUNT_PREFIX.darwin;
 };
@@ -452,7 +454,7 @@ export const checkPathAccessible = async (nativePath) => {
         );
         return result === true || result === 'true';
     } catch (err) {
-        console.debug('[PathUtils] ExtendScript call failed:', err);
+        logDebug('[PathUtils] ExtendScript call failed:', err);
         return false;
     }
 };

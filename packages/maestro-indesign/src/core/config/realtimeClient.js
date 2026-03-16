@@ -1,16 +1,75 @@
+/**
+ * @file realtimeClient.js
+ * @description Appwrite Realtime WebSocket kliens az Adobe UXP környezethez.
+ *
+ * Fő felelősségek:
+ * - Egyedi WebSocket implementáció a UXP platform korlátozásainak megkerülésére
+ *   (cookie/header injekció query paramétereken + proxy-n keresztül)
+ * - Csatorna-alapú feliratkozás kezelés (subscribe/unsubscribe)
+ * - Kapcsolat-állapot figyelés és értesítés (connectionListeners)
+ * - Szerverhiba ellenállóképesség: exponenciális backoff és cooldown mechanizmus
+ * - Ghost socket védelem generáció-számlálóval
+ * - Kényszerített újracsatlakozás (reconnect) alvás/hálózatkimaradás után
+ * - Graceful shutdown (disconnect) a plugin leállásakor
+ * - Singleton minta hot-reload támogatással (window.__maestroRealtimeInstance)
+ *
+ * UXP sajátosságok:
+ * A UXP WebSocket API nem támogatja a cookie-k és custom headerek küldését
+ * a handshake során. Ezért az auth adatokat URL query paraméterként küldjük,
+ * és a proxy szerver (Railway / emago.hu) injektálja őket szabványos HTTP
+ * headerekként az Appwrite felé.
+ *
+ * @see docs/REALTIME_ARCHITECTURE.md — Részletes architektúra és auth bridge leírás
+ * @see src/core/config/recoveryManager.js — Központi recovery orchestrator
+ * @see docs/PROXY_SERVER.md — Proxy szerver implementáció
+ */
 import { Client, Realtime } from "appwrite";
-import { log, logError, logWarn } from "../utils/logger.js";
+import { log, logError, logWarn, logDebug } from "../utils/logger.js";
 import { MaestroEvent, dispatchMaestroEvent } from "./maestroEvents.js";
+// MEGJEGYZÉS: A `client as mainClient` import cirkuláris függőséget hoz létre
+// (appwriteConfig.js → realtimeClient.js ← appwriteConfig.js), de ez biztonságos,
+// mert a `mainClient`-et csak az `_initClient()` metódusban használjuk, amely
+// a konstruktor végén hívódik — addigra az appwriteConfig.js modul-szintű
+// inicializálása már lefutott, és a `client` objektum elérhető.
 import {
     APPWRITE_PROJECT_ID,
     APPWRITE_LOCALE,
-    endpointManager
+    endpointManager,
+    client as mainClient
 } from "./appwriteConfig.js";
 
 import { ID } from "appwrite";
 import { REALTIME_CONFIG } from "../utils/constants.js";
 
+/**
+ * Appwrite Realtime WebSocket kliens, amely kezeli a valós idejű adatszinkronizációt
+ * az Adobe UXP környezetben.
+ *
+ * Singleton mintát alkalmaz: egyetlen globális példány él a `window.__maestroRealtimeInstance`-ban.
+ * Hot-reload esetén az előző példány automatikusan lekapcsolódik a duplikált kapcsolatok
+ * megelőzésére.
+ *
+ * A szabványos Appwrite SDK `createSocket` metódusát felülírja egy egyedi implementációval,
+ * amely query paramétereken keresztül küldi az auth adatokat a proxy szervernek.
+ *
+ * @class RealtimeClient
+ */
 class RealtimeClient {
+    /**
+     * Inicializálja a RealtimeClient példányt.
+     *
+     * Létrehozza a belső állapotkezelő struktúrákat:
+     * - `subscriptions` (Map): Csatorna → leiratkozó függvény (vagy null, ha a feliratkozás folyamatban van)
+     * - `callbacks` (Map): Csatorna → callback Set (a feliratkozók által regisztrált függvények)
+     * - `connectionListeners` (Set): Kapcsolat-állapot változás figyelők
+     * - `errorListeners` (Set): Hiba figyelők
+     *
+     * Kliens ID: Perzisztens egyedi azonosító (`localStorage`), amely az egyidejűség-kezeléshez
+     * (concurrency control) szükséges. Újratöltések között megmarad.
+     *
+     * Azonnal meghívja az `_initClient()` metódust az Appwrite kliens és a WebSocket
+     * kapcsolat inicializálásához.
+     */
     constructor() {
         this.subscriptions = new Map();
         this.callbacks = new Map();
@@ -41,9 +100,7 @@ class RealtimeClient {
             this.clientId = ID.unique(); // Fallback for non-browser env
         }
         
-        if (process.env.NODE_ENV !== 'production') {
-            log(`[Realtime] 🆔 Client ID: ${this.clientId}`);
-        }
+        logDebug(`[Realtime] [ID] Client ID: ${this.clientId}`);
 
         // Isolated Appwrite instance
         this.client = null;
@@ -56,14 +113,21 @@ class RealtimeClient {
     }
 
     /**
-     * Initializes a fresh Appwrite Client and Realtime instance.
-     * This creates a new WebSocket connection pool.
+     * Friss Appwrite Client és Realtime példányt inicializál.
+     *
+     * Lépései:
+     * 1. Új `Client` példány létrehozása az aktuális endpoint-tal (`endpointManager.getEndpoint()`)
+     * 2. UXP-specifikus platform header beállítása (`X-Appwrite-Package-Name`)
+     * 3. Session cookie injektálása a `localStorage` `cookieFallback` kulcsából
+     *    (a UXP nem kezeli automatikusan a cookie-kat)
+     * 4. `Realtime` példány létrehozása a kliensből
+     * 5. A `createSocket` metódus felülírása egyedi WebSocket implementációval,
+     *    amely query paramétereken keresztül küldi az auth adatokat a proxy-nak
+     *
      * @private
      */
     _initClient() {
-        if (process.env.NODE_ENV !== 'production') {
-            log('[Realtime] 🆕 Initializing isolated Client instance...');
-        }
+        logDebug('[Realtime] [INIT] Initializing isolated Client instance...');
         
         this.client = new Client()
             .setEndpoint(endpointManager.getEndpoint())
@@ -80,10 +144,8 @@ class RealtimeClient {
         if (typeof window !== 'undefined') {
             try {
                 const cookieFallback = window.localStorage.getItem('cookieFallback');
-                if (process.env.NODE_ENV !== 'production') {
-                    log(`[Realtime] Project ID: ${APPWRITE_PROJECT_ID}`);
-                    log(`[Realtime] Raw cookieFallback: ${cookieFallback ? 'FOUND' : 'MISSING'}`);
-                }
+                logDebug(`[Realtime] Project ID: ${APPWRITE_PROJECT_ID}`);
+                logDebug(`[Realtime] Raw cookieFallback: ${cookieFallback ? 'FOUND' : 'MISSING'}`);
 
                 if (cookieFallback) {
                     this.client.headers['X-Fallback-Cookies'] = cookieFallback;
@@ -92,16 +154,32 @@ class RealtimeClient {
                     const cookies = JSON.parse(cookieFallback);
                     const expectedKey = `a_session_${APPWRITE_PROJECT_ID}`;
                     if (cookies[expectedKey]) {
-                        log(`[Realtime] ✅ Found valid session key: ${expectedKey}`);
+                        log(`[Realtime] [OK] Found valid session key: ${expectedKey}`);
                     } else {
-                        logWarn(`[Realtime] ⚠️ Session key missing! Expected: ${expectedKey}, Keys found: ${Object.keys(cookies).join(', ')}`);
+                        logWarn(`[Realtime] [WARN] Session key missing! Expected: ${expectedKey}, Keys found: ${Object.keys(cookies).join(', ')}`);
+
+                        // Fallback: a fő kliens headeréből próbáljuk visszaállítani a session-t.
+                        // A fő kliens (appwriteConfig.js) a monkey-patched fetch-en keresztül
+                        // a set-cookie headerekből frissíti a saját X-Fallback-Cookies fejlécét,
+                        // ami tartalmazhatja az érvényes tokent akkor is, ha a localStorage elveszett.
+                        try {
+                            const mainCookies = JSON.parse(mainClient.headers['X-Fallback-Cookies'] || '{}');
+                            if (mainCookies[expectedKey]) {
+                                log('[Realtime] [RECOVERY] Session key visszaállítva a fő kliensből');
+                                cookies[expectedKey] = mainCookies[expectedKey];
+                                const restored = JSON.stringify(cookies);
+                                window.localStorage.setItem('cookieFallback', restored);
+                                // A friss cookieFallback-et alkalmazzuk erre a kliensre is
+                                this.client.headers['X-Fallback-Cookies'] = restored;
+                            }
+                        } catch (e) {
+                            logDebug('[Realtime] [RECOVERY] Fő kliens session fallback sikertelen:', e);
+                        }
                     }
 
-                    if (process.env.NODE_ENV !== 'production') {
-                        log('[Realtime] 🍪 Session cookies injected');
-                    }
+                    logDebug('[Realtime] [COOKIE] Session cookies injected');
                 } else {
-                    logWarn('[Realtime] ⚠️ No session cookies found in localStorage');
+                    logWarn('[Realtime] [WARN] No session cookies found in localStorage');
                 }
             } catch (e) {
                 logError('[Realtime] Failed to inject cookies:', e);
@@ -110,9 +188,34 @@ class RealtimeClient {
             
         this.realtime = new Realtime(this.client);
 
-        // --- CUSTOM WEBSOCKET IMPLEMENTATION FOR UXP ---
-        // UXP környezetben a WebSocket nem küldi a cookie-kat és a custom header-öket.
-        // Ezért kézzel kell létrehoznunk a socketet és injektálnunk az autentikációt.
+        /**
+         * Egyedi WebSocket implementáció a UXP platform számára.
+         *
+         * A UXP környezetben a WebSocket nem küldi a cookie-kat és a custom headereket
+         * a handshake során. Ez a metódus felülírja az Appwrite SDK `createSocket`-jét,
+         * és az alábbi feladatokat végzi:
+         *
+         * 1. **Auth injekció**: A session cookie-t és a csomagnevet query paraméterként
+         *    fűzi a WebSocket URL-hez — a proxy szerver ezeket HTTP headerekké alakítja.
+         * 2. **Csatorna-deduplikáció**: Ha az aktív socket már tartalmazza az összes
+         *    kért csatornát, nem épít új socket-et. Ha új csatornák érkeznek
+         *    (pl. eltérő React render ciklusból), a régit lezárja és újat hoz létre.
+         * 3. **Ghost socket védelem**: Generáció-számláló (`_socketGeneration`) biztosítja,
+         *    hogy a régi socket-ek close event-jei ne indítsanak reconnect ciklust.
+         * 4. **Auth frame küldés**: Socket megnyitása után azonnali `authentication`
+         *    üzenetet küld (Appwrite natív funkció, biztonsági háló a proxy injection mellé).
+         *    UXP timing guard: `readyState` ellenőrzés + 200ms retry.
+         * 5. **Szerverhiba kezelés**: A `message` event handler nyomon követi az egymás
+         *    utáni szerverhibákat és cooldown-t aktivál a küszöbérték elérésekor.
+         * 6. **Close event stratégia**: A close kód alapján dönt a teendőről:
+         *    - 1000 (Normal): `reconnect` flag beállítása, nincs azonnali reconnect
+         *    - 1001 (Going Away): alkalmazás bezárul, reconnect mellőzve
+         *    - 1005/1006 (No Status / Abnormal): halott TCP, RecoveryManager-re bízva
+         *    - 1008 (Policy Violation): auth hiba, backoff-fal kezelt reconnect
+         *    - Egyéb: exponenciális backoff vagy SDK alapértelmezett timeout
+         *
+         * @returns {Promise<void>} A socket megnyitásának Promise-a
+         */
         this.realtime.createSocket = () => {
             const channelArray = Array.from(this.realtime.activeChannels);
             const query = new URLSearchParams();
@@ -134,7 +237,7 @@ class RealtimeClient {
                     }
                 }
             } catch (e) {
-                console.error('[Realtime] Cookie read error:', e);
+                logError('[Realtime] Cookie read error:', e);
             }
 
             const url = this.client.config.endpointRealtime + '/realtime?' + query.toString();
@@ -150,7 +253,7 @@ class RealtimeClient {
                         return;
                     }
                     // Új csatornák vannak — zárjuk le a régit és építsünk újat
-                    log(`[Realtime] 🔄 Új csatornák észlelve, socket újraépítése (${channelArray.length} csatorna)...`);
+                    log(`[Realtime] [SYNC] Új csatornák észlelve, socket újraépítése (${channelArray.length} csatorna)...`);
                     try {
                         this.realtime.stopHeartbeat();
                         this.realtime.socket.close(1000, 'channel-update');
@@ -169,9 +272,7 @@ class RealtimeClient {
                 
                 this.realtime.socket.addEventListener('open', () => {
                     const socket = this.realtime.socket; // Capture local reference
-                    if (process.env.NODE_ENV !== 'production') {
-                        console.log('[Realtime] 🟢 Socket Open');
-                    }
+                    logDebug('[Realtime] [OPEN] Socket Open');
                     
                     // Azonnali autentikációs üzenet (Appwrite natív támogatás)
                     if (session) {
@@ -180,29 +281,27 @@ class RealtimeClient {
                             data: { session }
                         });
 
-                        if (process.env.NODE_ENV !== 'production') {
-                            console.log('[Realtime] 🔑 Sending auth frame...');
-                        }
+                        logDebug('[Realtime] [AUTH] Sending auth frame...');
 
                         // UXP WebSocket timing guard: readyState may not be OPEN yet
                         if (socket.readyState === WebSocket.OPEN) {
                             try {
                                 socket.send(authData);
                             } catch (err) {
-                                console.error('[Realtime] ❌ Auth frame send failed (immediate):', err);
+                                logError('[Realtime] [FAIL] Auth frame send failed (immediate):', err);
                             }
                         } else {
-                            console.warn(`[Realtime] ⏳ Socket not ready (state=${socket.readyState}), retrying in 200ms...`);
+                            logWarn(`[Realtime] [WAIT] Socket not ready (state=${socket.readyState}), retrying in 200ms...`);
                             setTimeout(() => {
                                 if (socket.readyState === WebSocket.OPEN) {
                                     try {
                                         socket.send(authData);
-                                        console.log('[Realtime] 🔑 Auth frame sent after retry');
+                                        logDebug('[Realtime] [AUTH] Auth frame sent after retry');
                                     } catch (err) {
-                                        console.error('[Realtime] ❌ Auth frame send failed (retry):', err);
+                                        logError('[Realtime] [FAIL] Auth frame send failed (retry):', err);
                                     }
                                 } else {
-                                    console.error('[Realtime] ❌ Socket still not ready after retry, skipping auth frame');
+                                    logError('[Realtime] [FAIL] Socket still not ready after retry, skipping auth frame');
                                 }
                             }, REALTIME_CONFIG.AUTH_RETRY_DELAY_MS);
                         }
@@ -221,8 +320,8 @@ class RealtimeClient {
                         if (message.type === 'error') {
                             const errorCode = message.data?.code;
                             this.consecutiveServerErrors++;
-                            console.error(
-                                `[Realtime] ❌ Server Error (${this.consecutiveServerErrors}/${this.MAX_CONSECUTIVE_SERVER_ERRORS}):`,
+                            logError(
+                                `[Realtime] [FAIL] Server Error (${this.consecutiveServerErrors}/${this.MAX_CONSECUTIVE_SERVER_ERRORS}):`,
                                 message.data
                             );
 
@@ -231,7 +330,7 @@ class RealtimeClient {
                                 const cooldownMs = REALTIME_CONFIG.COOLDOWN_MS;
                                 this.serverErrorCooldownUntil = Date.now() + cooldownMs;
                                 logWarn(
-                                    `[Realtime] ⏸️ Szerver hiba cooldown aktiválva (${cooldownMs / 1000}s). ` +
+                                    `[Realtime] [PAUSE] Szerver hiba cooldown aktiválva (${cooldownMs / 1000}s). ` +
                                     `${this.consecutiveServerErrors} egymás utáni hiba.`
                                 );
                                 this._notifyError({
@@ -243,7 +342,7 @@ class RealtimeClient {
                         } else if (message.type === 'event') {
                             // Sikeres adat esemény → server error számláló nullázása
                             if (this.consecutiveServerErrors > 0) {
-                                log(`[Realtime] ✅ Szerver hiba számláló nullázva (volt: ${this.consecutiveServerErrors})`);
+                                log(`[Realtime] [OK] Szerver hiba számláló nullázva (volt: ${this.consecutiveServerErrors})`);
                                 this.consecutiveServerErrors = 0;
                                 this.serverErrorCooldownUntil = 0;
                             }
@@ -259,11 +358,11 @@ class RealtimeClient {
                     // Ghost socket védelem: ha ez a close event egy régi socket-ről jön
                     // (mert közben reconnect() újat hozott létre), ignoráljuk.
                     if (myGeneration !== this._socketGeneration) {
-                        console.log(`[Realtime] 👻 Régi socket close (gen ${myGeneration} vs ${this._socketGeneration}), ignorálva`);
+                        logDebug(`[Realtime] [GHOST] Régi socket close (gen ${myGeneration} vs ${this._socketGeneration}), ignorálva`);
                         return;
                     }
 
-                    console.log(`[Realtime] 🔒 Closed: Code=${event.code} Reason=${event.reason}`);
+                    log(`[Realtime] [CLOSED] Code=${event.code} Reason=${event.reason}`);
                     this.realtime?.stopHeartbeat();
                     this.realtime?.onCloseCallbacks?.forEach(callback => callback());
 
@@ -271,17 +370,15 @@ class RealtimeClient {
                     const now = Date.now();
                     if (this.lastDisconnectTime) {
                         const diffSec = ((now - this.lastDisconnectTime) / 1000).toFixed(1);
-                        console.log(`[Realtime] ⏱️ Idő az előző szakadás óta: ${diffSec} másodperc`);
+                        logDebug(`[Realtime] [TIMER] Idő az előző szakadás óta: ${diffSec} másodperc`);
                     } else {
-                        console.log(`[Realtime] ⏱️ Első szakadás mérése indítva`);
+                        logDebug(`[Realtime] [TIMER] Első szakadás mérése indítva`);
                     }
                     this.lastDisconnectTime = now;
 
                     // Szándékos lecsatlakozás → ne reconnectelj
                     if (!this.shouldReconnect) {
-                        if (process.env.NODE_ENV !== 'production') {
-                            console.log('[Realtime] 🛑 Szándékos lecsatlakozás. Reconnect loop leállítva.');
-                        }
+                        logDebug('[Realtime] [STOP] Szándékos lecsatlakozás. Reconnect loop leállítva.');
                         return;
                     }
 
@@ -293,7 +390,7 @@ class RealtimeClient {
 
                     // 1001 (Going Away) → alkalmazás / böngésző bezárul, ne reconnectelj
                     if (event.code === 1001) {
-                        log('[Realtime] 🚪 Going Away (1001) — alkalmazás bezárása, reconnect mellőzve');
+                        log('[Realtime] [EXIT] Going Away (1001) — alkalmazás bezárása, reconnect mellőzve');
                         return;
                     }
 
@@ -304,7 +401,7 @@ class RealtimeClient {
                     // A RecoveryManager központilag kezeli, NEM indítunk
                     // saját reconnect loop-ot, mert az végtelen ciklust okozna.
                     if (event.code === 1005 || event.code === 1006) {
-                        log(`[Realtime] 💤 Halott kapcsolat (${event.code}) — RecoveryManager-re bízva`);
+                        log(`[Realtime] [SLEEP] Halott kapcsolat (${event.code}) — RecoveryManager-re bízva`);
                         // Importálás elkerülése a cirkuláris dependency ellen:
                         // A RecoveryManager figyeli a connectionChange-et,
                         // vagy a Main.jsx IdleTask / afterActivate trigger kezeli.
@@ -315,7 +412,7 @@ class RealtimeClient {
                     if (event.code === 1008) {
                         this.consecutiveServerErrors++;
                         logWarn(
-                            `[Realtime] ⚠️ Policy Violation (1008) - lehetséges auth hiba ` +
+                            `[Realtime] [WARN] Policy Violation (1008) - lehetséges auth hiba ` +
                             `(${this.consecutiveServerErrors}/${this.MAX_CONSECUTIVE_SERVER_ERRORS})`
                         );
                         this.realtime.reconnect = true;
@@ -330,7 +427,7 @@ class RealtimeClient {
                     // Cooldown ellenőrzése szerver hibák után
                     if (this.serverErrorCooldownUntil > Date.now()) {
                         const remainingMs = this.serverErrorCooldownUntil - Date.now();
-                        console.log(`[Realtime] ⏸️ Cooldown aktív, várakozás ${Math.ceil(remainingMs / 1000)}s...`);
+                        log(`[Realtime] [PAUSE] Cooldown aktív, várakozás ${Math.ceil(remainingMs / 1000)}s...`);
                         await this.realtime.sleep(remainingMs);
                         // Sleep után ellenőrzés: disconnect() hívhatott közben
                         if (!this.realtime || !this.shouldReconnect) return;
@@ -343,15 +440,15 @@ class RealtimeClient {
                     let timeout;
                     if (this.consecutiveServerErrors > 0) {
                         timeout = this._getServerErrorBackoff();
-                        console.log(
-                            `[Realtime] ⏳ Server error backoff: ${timeout / 1000}s ` +
+                        log(
+                            `[Realtime] [WAIT] Server error backoff: ${timeout / 1000}s ` +
                             `(${this.consecutiveServerErrors} egymás utáni hiba)`
                         );
                     } else {
                         timeout = this.realtime.getTimeout();
                     }
 
-                    console.log(`[Realtime] Reconnecting in ${timeout / 1000}s...`);
+                    log(`[Realtime] Reconnecting in ${timeout / 1000}s...`);
                     await this.realtime.sleep(timeout);
                     // Sleep után ellenőrzés: disconnect() hívhatott közben (null-dereferencia védelem)
                     if (!this.realtime || !this.shouldReconnect) return;
@@ -359,7 +456,7 @@ class RealtimeClient {
                     try {
                         await this.realtime.createSocket();
                     } catch (error) {
-                        console.error('[Realtime] Reconnect failed:', error);
+                        logError('[Realtime] Reconnect failed:', error);
                     }
                 });
 
@@ -371,22 +468,48 @@ class RealtimeClient {
         };
     }
 
+    /**
+     * Kapcsolat-állapot változás figyelő regisztrálása.
+     *
+     * A callback azonnal meghívódik az aktuális állapottal (`isConnected`),
+     * majd minden későbbi állapotváltozáskor is.
+     *
+     * @param {function(boolean): void} callback - Figyelő függvény, `true` ha kapcsolódva, `false` ha nem
+     * @returns {function(): void} Leiratkozó függvény — meghívásával a figyelő eltávolítható
+     */
     onConnectionChange(callback) {
         this.connectionListeners.add(callback);
         callback(this.isConnected);
         return () => this.connectionListeners.delete(callback);
     }
 
+    /**
+     * Hiba figyelő regisztrálása.
+     *
+     * A callback minden Realtime hibánál meghívódik (szerverhiba, feliratkozási hiba stb.).
+     *
+     * @param {function(Object): void} callback - Figyelő függvény, a hiba objektummal hívva
+     * @returns {function(): void} Leiratkozó függvény
+     */
     onError(callback) {
         this.errorListeners.add(callback);
         return () => this.errorListeners.delete(callback);
     }
 
+    /**
+     * Értesíti a kapcsolat-állapot figyelőket, ha az állapot ténylegesen megváltozott.
+     *
+     * Deduplikáció: csak akkor hív callback-eket, ha a `connected` paraméter
+     * eltér az aktuális `isConnected` állapottól.
+     *
+     * @param {boolean} connected - Az új kapcsolat-állapot
+     * @private
+     */
     _notifyConnectionChange(connected) {
         if (this.isConnected !== connected) {
             this.isConnected = connected;
             if (process.env.NODE_ENV !== 'production') {
-                log(`[Realtime] ${connected ? '✅ Connected' : '❌ Disconnected'}`);
+                log(`[Realtime] ${connected ? '[OK] Connected' : '[FAIL] Disconnected'}`);
             }
             this.connectionListeners.forEach(cb => {
                 try { cb(connected); } catch (e) { logError(e); }
@@ -394,6 +517,15 @@ class RealtimeClient {
         }
     }
 
+    /**
+     * Értesíti a hiba figyelőket egy Realtime hibáról.
+     *
+     * Tárolja az utolsó hibát (`lastError`), logolja, majd meghívja az összes
+     * regisztrált error listener-t.
+     *
+     * @param {Object} error - A hiba objektum (message, code, és opcionálisan cooldownUntil)
+     * @private
+     */
     _notifyError(error) {
         this.lastError = error;
         logError("[Realtime] Error:", error);
@@ -402,6 +534,21 @@ class RealtimeClient {
         });
     }
 
+    /**
+     * SDK-szintű feliratkozást indít a megadott csatornára.
+     *
+     * Ha a csatornára már van aktív feliratkozás, nem csinál semmit (idempotens).
+     * A dupla feliratkozás megelőzésére `null` placeholder-t helyez a `subscriptions` Map-be
+     * az async setup idejére.
+     *
+     * Sikeres feliratkozás után a `subscriptions` Map-ben a csatornához a `close()` wrapper
+     * függvény kerül. Ha közben `disconnect()` törölte a csatornát, az újonnan létrehozott
+     * feliratkozás azonnal lezárul.
+     *
+     * @param {string} channel - Az Appwrite Realtime csatorna neve
+     * @returns {Promise<void>}
+     * @private
+     */
     async _attemptSdkSubscription(channel) {
         if (this.subscriptions.has(channel)) return;
 
@@ -409,7 +556,7 @@ class RealtimeClient {
         if (!this.realtime) this._initClient();
 
         if (process.env.NODE_ENV !== 'production') {
-            log(`[Realtime] 🔄 Subscribing: ${channel}`);
+            log(`[Realtime] [SUB] Subscribing: ${channel}`);
         }
 
         // Null placeholder: megakadályozza a dupla feliratkozást az async setup közben
@@ -449,6 +596,18 @@ class RealtimeClient {
         }
     }
 
+    /**
+     * Feliratkozás egy Appwrite Realtime csatornára.
+     *
+     * Ha a csatornára még nincs aktív SDK feliratkozás, automatikusan elindítja
+     * (`_attemptSdkSubscription`). Több callback is regisztrálható ugyanarra a csatornára —
+     * mindegyik megkapja a bejövő Realtime eseményeket.
+     *
+     * @param {string} channel - Appwrite Realtime csatorna (pl. `databases.{dbId}.collections.{collId}.documents`)
+     * @param {function(Object): void} callback - Eseménykezelő függvény, az Appwrite Realtime válasszal hívva
+     * @returns {function(): void} Leiratkozó függvény — meghívásával a callback eltávolítható
+     *   (ha ez volt az utolsó callback a csatornán, az SDK feliratkozás is lezárul)
+     */
     subscribe(channel, callback) {
         if (!this.callbacks.has(channel)) {
             this.callbacks.set(channel, new Set());
@@ -462,6 +621,16 @@ class RealtimeClient {
         return () => this.unsubscribe(channel, callback);
     }
 
+    /**
+     * Leiratkozás egy Appwrite Realtime csatornáról.
+     *
+     * Eltávolítja a megadott callback-et a csatorna figyelőiből. Ha ez volt az utolsó
+     * callback a csatornán, az SDK feliratkozás is lezárul (a `close()` wrapper meghívásával),
+     * és a csatorna törlődik a belső nyilvántartásból.
+     *
+     * @param {string} channel - Az Appwrite Realtime csatorna neve
+     * @param {function(Object): void} callback - Az eltávolítandó eseménykezelő függvény
+     */
     unsubscribe(channel, callback) {
         if (this.callbacks.has(channel)) {
             this.callbacks.get(channel).delete(callback);
@@ -481,30 +650,41 @@ class RealtimeClient {
     }
 
     /**
-     * Teljesen megsemmisíti a kapcsolatot és újat épít.
-     * Ez kritikus az alvás utáni helyreállításhoz, ahol az OS
-     * "nyitva" tartja a halott socketet.
-     * 
-     * Védelem: ha már fut egy reconnect, a második hívást kihagyjuk.
+     * Kényszerített újracsatlakozás: teljesen megsemmisíti a kapcsolatot és újat épít.
+     *
+     * Ez kritikus az alvás utáni helyreállításhoz, ahol az OS "nyitva" tartja a halott
+     * socketet (TCP half-open állapot). A `RecoveryManager` hívja a health check után.
+     *
+     * Lépései:
+     * 1. Disconnected jelzés a connection listener-eknek
+     * 2. Régi WebSocket explicit lezárása (ghost socket bug megelőzése)
+     * 3. Feliratkozások leiratkozása (no-op `createSocket`-tel a kaszkád-újraépítés ellen)
+     * 4. Appwrite Client és Realtime példány megsemmisítése
+     * 5. Szerverhiba számláló nullázása
+     * 6. Új kliens inicializálása (`_initClient()`)
+     * 7. Korábbi feliratkozások szinkron újraépítése
+     * 8. `dataRefreshRequested` MaestroEvent dispatch a REST adat frissítéséhez
+     *
+     * Védelmek:
+     * - `shouldReconnect` flag: `disconnect()` után nem reconnectel
+     * - `isReconnecting` flag: párhuzamos hívások kiszűrése
      */
     reconnect() {
         // Shutdown védelem: disconnect() után ne reconnecteljünk
         if (!this.shouldReconnect) {
-            log('[Realtime] 🛑 reconnect() kihagyva — disconnect() már meghívva');
+            log('[Realtime] [STOP] reconnect() kihagyva — disconnect() már meghívva');
             return;
         }
 
         // Párhuzamos reconnect védelem
         if (this.isReconnecting) {
-            log('[Realtime] ⏳ Reconnect már folyamatban, kihagyva');
+            log('[Realtime] [WAIT] Reconnect már folyamatban, kihagyva');
             return;
         }
 
         this.isReconnecting = true;
 
-        if (process.env.NODE_ENV !== 'production') {
-            log('[Realtime] 🔄 FORCE RECONNECT (Destroy & Rebuild)');
-        }
+        logDebug('[Realtime] [SYNC] FORCE RECONNECT (Destroy & Rebuild)');
 
         try {
             // 1. Disconnected jelzés
@@ -550,16 +730,12 @@ class RealtimeClient {
             //    recovery-t indított, végtelen ciklusba kerülve.)
             const channels = [...this.callbacks.keys()];
             if (channels.length > 0) {
-                if (process.env.NODE_ENV !== 'production') {
-                    log(`[Realtime] 📡 Rebuilding ${channels.length} subscriptions...`);
-                }
+                logDebug(`[Realtime] [SUB] Rebuilding ${channels.length} subscriptions...`);
                 channels.forEach(ch => this._attemptSdkSubscription(ch));
 
                 // Adat frissítés jelzése az újrafeliratkozás UTÁN
                 if (typeof window !== 'undefined') {
-                    if (process.env.NODE_ENV !== 'production') {
-                        log('[Realtime] 🔄 Dispatching data refresh after reconnect');
-                    }
+                    logDebug('[Realtime] [SYNC] Dispatching data refresh after reconnect');
                     dispatchMaestroEvent(MaestroEvent.dataRefreshRequested);
                 }
             }
@@ -571,6 +747,20 @@ class RealtimeClient {
         }
     }
 
+    /**
+     * Graceful shutdown: véglegesen lekapcsolja a Realtime klienst.
+     *
+     * A plugin leállásakor (`window.unload`) hívódik. Lépései:
+     * 1. `shouldReconnect = false` — megakadályozza a jövőbeli reconnect kísérleteket
+     * 2. No-op `createSocket` beállítása (az SDK close/unsubscribe callback-jei ne
+     *    indítsanak socket-újraépítést a debounce lejárta után)
+     * 3. Aktív WebSocket explicit lezárása (1000 kóddal)
+     * 4. Összes feliratkozás cleanup (close wrapper funkciók meghívása)
+     * 5. Belső állapot nullázása (`isConnected`, `lastActivity`, `realtime`, `client`)
+     *
+     * Fontos: A `_notifyConnectionChange()` szándékosan NEM hívódik, mert kilépéskor
+     * nem akarunk recovery-t triggerelni a connection listener-eken keresztül.
+     */
     disconnect() {
         this.shouldReconnect = false;
 
@@ -617,8 +807,13 @@ class RealtimeClient {
         return Math.min(backoff, REALTIME_CONFIG.MAX_BACKOFF_MS);
     }
 
+    /** @returns {boolean} Az aktuális kapcsolat állapota (true = kapcsolódva) */
     getConnectionStatus() { return this.isConnected; }
+
+    /** @returns {Object|null} Az utolsó Realtime hiba objektum, vagy null ha nem volt hiba */
     getLastError() { return this.lastError; }
+
+    /** @returns {number|null} Az utolsó Realtime aktivitás időbélyege (Date.now()), vagy null ha lekapcsolódott */
     getLastActivity() { return this.lastActivity; }
 
     // Az auto-reconnect loop és a window 'online' listener eltávolítva.
@@ -626,24 +821,29 @@ class RealtimeClient {
     // recovery trigger-t (online, sleep, focus, realtime disconnect).
 }
 
-// Global Singleton Pattern for UXP/Hot-Reload Environment
-// Ha a modul újraértékelődik (pl. reload), a régi instance-t meg kell ölni.
+/**
+ * Globális Singleton Minta UXP / Hot-Reload környezethez.
+ *
+ * A UXP plugin hot-reload-kor a modul újraértékelődik, ami új `RealtimeClient`
+ * példányt hozna létre — duplikált WebSocket kapcsolatokat okozva.
+ * Ezért az aktív példányt a `window.__maestroRealtimeInstance`-ban tároljuk,
+ * és újratöltéskor az előzőt lekapcsoljuk (`disconnect()`), mielőtt az újat
+ * létrehoznánk.
+ */
 if (typeof window !== 'undefined') {
     if (window.__maestroRealtimeInstance) {
-        if (process.env.NODE_ENV !== 'production') {
-            console.warn('[Realtime] ♻️ Cleaning up previous RealtimeClient instance before reload...');
-        }
+        logDebug('[Realtime] [RELOAD] Cleaning up previous RealtimeClient instance before reload...');
         try {
             window.__maestroRealtimeInstance.disconnect();
         } catch (e) {
-            console.error('[Realtime] Failed to disconnect previous instance:', e);
+            logError('[Realtime] Failed to disconnect previous instance:', e);
         }
     }
 }
 
 export const realtime = new RealtimeClient();
 
-// Store reference for next reload
+// Referencia tárolása a következő újratöltéshez
 if (typeof window !== 'undefined') {
     window.__maestroRealtimeInstance = realtime;
 }

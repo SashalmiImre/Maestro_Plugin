@@ -12,6 +12,8 @@ const { generateExtractPageNumbersInBackground, generateCloseDocumentScript, par
 import { ValidatorBase } from "./ValidatorBase.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../config/maestroEvents.js";
 
+import { log } from "../logger.js";
+
 export class DatabaseIntegrityValidator extends ValidatorBase {
     constructor() {
         super(ValidatorBase.SCOPES.ARTICLE);
@@ -24,21 +26,24 @@ export class DatabaseIntegrityValidator extends ValidatorBase {
      * @param {Object} context - { article: Object, autoCorrect: boolean }
      */
     async validate(context) {
-        const { article, autoCorrect = false } = context;
+        const { article, autoCorrect = false, absoluteFilePath } = context;
         if (!article || !article.filePath) {
             return this.failure("Article or file path missing.");
         }
+
+        // Abszolút útvonal használata (ExtendScript File() nem tud relatívat feloldani)
+        const filePath = absoluteFilePath || article.filePath;
 
         try {
             // 1. Tényleges oldalszámok lekérése az InDesign-ból (Háttér szkript)
             // Megjegyzés: A generateExtractPageNumbersInBackground már nem zárja be a fájlt,
             // nekünk kell gondoskodnunk róla!
-            
-            const extractScript = generateExtractPageNumbersInBackground(article.filePath);
+
+            const extractScript = generateExtractPageNumbersInBackground(filePath);
             const result = await app.doScript(extractScript, ScriptLanguage.JAVASCRIPT);
 
             // Dokumentum azonnali bezárása
-            const closeScript = generateCloseDocumentScript(article.filePath, false);
+            const closeScript = generateCloseDocumentScript(filePath, false);
             await app.doScript(closeScript, ScriptLanguage.JAVASCRIPT);
 
             if (!result || result.startsWith("ERROR")) {
@@ -103,7 +108,7 @@ export class DatabaseIntegrityValidator extends ValidatorBase {
                 
                 if (autoCorrect) {
                      // 3. Adatbázis frissítése, ha kérték
-                     console.log(`[DatabaseIntegrityValidator] Auto-correcting ${article.name}...`);
+                     log(`[DatabaseIntegrityValidator] Auto-correcting ${article.name}...`);
                      const correctedDoc = await withTimeout(
                         tables.updateRow({
                             databaseId: DATABASE_ID,

@@ -1,6 +1,7 @@
 import { createRoot } from "react-dom/client";
 import React from "react";
 import { MaestroEvent, dispatchMaestroEvent } from "../config/maestroEvents.js";
+import { log } from "../utils/logger.js";
 
 const _id = Symbol("_id");
 const _root = Symbol("_root");
@@ -46,7 +47,7 @@ export class PanelController {
         this[_attachment].appendChild(this[_root]);
 
         // Panel megjelent — hálózati helyreállítás triggerelése
-        console.log(`[PanelController] Panel shown, dispatching ${MaestroEvent.panelShown}`);
+        log(`[PanelController] Panel shown, dispatching ${MaestroEvent.panelShown}`);
         dispatchMaestroEvent(MaestroEvent.panelShown);
     }
 

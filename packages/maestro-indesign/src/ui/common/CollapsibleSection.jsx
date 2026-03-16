@@ -1,5 +1,6 @@
 // React
 import React, { useState, useEffect } from "react";
+import { logWarn } from "../../core/utils/logger.js";
 
 /**
  * CollapsibleSection Component
@@ -34,7 +35,7 @@ export const CollapsibleSection = ({
                     return saved === 'true';
                 }
             } catch (e) {
-                console.warn('[CollapsibleSection] Failed to read state from localStorage:', e);
+                logWarn('[CollapsibleSection] Failed to read state from localStorage:', e);
             }
         }
         return defaultCollapsed;
@@ -46,7 +47,7 @@ export const CollapsibleSection = ({
             try {
                 localStorage.setItem(storageKey, String(isCollapsed));
             } catch (e) {
-                console.warn('[CollapsibleSection] Failed to save state to localStorage:', e);
+                logWarn('[CollapsibleSection] Failed to save state to localStorage:', e);
             }
         }
     }, [isCollapsed, storageKey]);

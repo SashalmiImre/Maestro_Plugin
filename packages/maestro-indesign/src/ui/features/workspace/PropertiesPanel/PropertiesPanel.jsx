@@ -11,7 +11,7 @@ import { TOAST_TYPES } from "../../../../core/utils/constants.js";
 import { executeCommand } from "../../../../core/commands/index.js";
 import { useElementPermissions } from "../../../../data/hooks/useElementPermission.js";
 import { canUserAccessInState, checkElementPermission } from "../../../../core/utils/workflow/elementPermissions.js";
-import { logError } from "../../../../core/utils/logger.js";
+import { log, logError } from "../../../../core/utils/logger.js";
 
 export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onPublicationUpdate, onBack, onOpen, runAndPersistPreflight }) => {
     // Hooks
@@ -52,7 +52,7 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
     };
 
     const handleCommand = async (commandId) => {
-        console.log(`[PropertiesPanel] Command triggered: ${commandId} for ${item.name}`);
+        log(`[PropertiesPanel] Command triggered: ${commandId} for ${item.name}`);
 
         setIsSyncing(true);
         try {

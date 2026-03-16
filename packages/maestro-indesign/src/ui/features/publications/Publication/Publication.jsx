@@ -225,7 +225,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                         addedCount++;
                     }
                 } catch (addError) {
-                    console.error("Error adding file:", file.name, addError);
+                    logError("Error adding file:", file.name, addError);
                     errorFiles.push(`${file.name}: ${addError.message}`);
                 }
             }
@@ -255,7 +255,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
 
             if (!isExpanded) onToggle?.();
         } catch (e) {
-            console.error("Error selecting files:", e);
+            logError("Error selecting files:", e);
             setDialogConfig({
                 title: "Hiba",
                 message: "Nem sikerült megnyitni a fájlválasztót: " + e.message,

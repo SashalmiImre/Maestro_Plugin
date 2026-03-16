@@ -7,6 +7,8 @@
  * amit a PropertiesPanel ad át a useWorkflowValidation hook-ból.
  */
 
+import { log, logError } from "../../utils/logger.js";
+
 /**
  * @param {Object} context - { item, publication, user, runAndPersistPreflight }
  * @returns {Promise<{ success: boolean, message?: string, error?: string }>}
@@ -14,7 +16,7 @@
 export const handlePreflightCheck = async (context) => {
     const { item, runAndPersistPreflight } = context;
 
-    console.log(`[Command] Preflight check for:`, item?.name);
+    log(`[Command] Preflight check for:`, item?.name);
 
     if (!item || !item.filePath) {
         return { success: false, error: "Nincs érvényes cikk kiválasztva." };
@@ -28,7 +30,7 @@ export const handlePreflightCheck = async (context) => {
     try {
         result = await runAndPersistPreflight(item);
     } catch (err) {
-        console.error(`[Command] Preflight check failed:`, err);
+        logError(`[Command] Preflight check failed:`, err);
         return { success: false, error: `Preflight failed: ${err.message || "Ismeretlen hiba."}` };
     }
 

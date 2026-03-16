@@ -7,6 +7,7 @@ import { executeScript } from "../../utils/indesign/indesignUtils.js";
 import { WorkflowEngine } from "../../utils/workflow/workflowEngine.js";
 import { LOCK_TYPE } from "../../utils/constants.js";
 import * as pathUtils from "../../utils/pathUtils.js";
+import { log, logWarn, logError } from "../../utils/logger.js";
 
 // Session tracking: maps filePath -> { docId, folderName }
 // Ez biztosítja, hogy amíg ugyanaz a doksi van nyitva, ugyanazt a mappát használjuk.
@@ -22,7 +23,7 @@ export const handleCollectImages = async (context) => {
     const { item, publication, user, commandId } = context;
     const onlySelected = commandId === 'collect_selected_images';
 
-    console.log(`[Command] Collecting images (${onlySelected ? 'selected' : 'all'}) for:`, item?.name);
+    log(`[Command] Collecting images (${onlySelected ? 'selected' : 'all'}) for:`, item?.name);
 
     if (!item || !item.filePath) {
         return { success: false, error: "Nincs érvényes cikk kiválasztva." };
@@ -54,7 +55,7 @@ export const handleCollectImages = async (context) => {
             }
         }
     } catch (e) {
-        console.warn("[Command] Status check failed:", e);
+        logWarn("[Command] Status check failed:", e);
     }
 
     // Ha kijelölést akarunk másolni, de nincs nyitva a doksi, az hiba (vagy fallback?)
@@ -75,7 +76,7 @@ export const handleCollectImages = async (context) => {
     if (isOpen && docId && currentSession && currentSession.docId === docId) {
         // Ugyanaz a session (nyitva van és az ID egyezik) -> Ugyanaz a mappa
         targetFolderName = currentSession.folderName;
-        console.log(`[Command] Reusing session folder: ${targetFolderName}`);
+        log(`[Command] Reusing session folder: ${targetFolderName}`);
     } else {
         // Új session vagy zárt doksi -> Új mappa generálása
         // Mappa név: CikkNeve vagy CikkNeve_1, _2...
@@ -123,7 +124,7 @@ export const handleCollectImages = async (context) => {
     }
 
     const targetFolderPath = pathUtils.joinPath(amiFolder, targetFolderName);
-    console.log("[Command] Target folder:", targetFolderPath);
+    log("[Command] Target folder:", targetFolderPath);
 
     // 3. Zárolás (csak ha háttérben nyitjuk meg)
     let lockedBySystem = false;
@@ -169,7 +170,7 @@ export const handleCollectImages = async (context) => {
         };
 
     } catch (error) {
-        console.error("[Command] Collect Images error:", error);
+        logError("[Command] Collect Images error:", error);
         return { success: false, error: error.message };
     } finally {
         // Unlock if locked
@@ -177,7 +178,7 @@ export const handleCollectImages = async (context) => {
              try {
                  await WorkflowEngine.unlockDocument(lockedItem || item, user);
              } catch (unlockError) {
-                 console.error("[Command] Failed to unlock:", unlockError);
+                 logError("[Command] Failed to unlock:", unlockError);
              }
         }
     }

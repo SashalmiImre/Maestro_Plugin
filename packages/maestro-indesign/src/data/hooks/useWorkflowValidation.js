@@ -69,15 +69,15 @@ async function fetchAllPreflightRows(baseQueries) {
  * @returns {{ runAndPersistPreflight: (article: Object) => Promise<Object> }}
  */
 export const useWorkflowValidation = () => {
-    const { articles } = useData();
+    const { articles, publications } = useData();
     const { updateArticleValidation, clearArticleValidation } = useValidation();
     const { showToast } = useToast();
 
     const articlesRef = useRef(articles);
+    const publicationsRef = useRef(publications);
 
-    useEffect(() => {
-        articlesRef.current = articles;
-    }, [articles]);
+    useEffect(() => { articlesRef.current = articles; }, [articles]);
+    useEffect(() => { publicationsRef.current = publications; }, [publications]);
 
     /**
      * Betölti az összes meglévő validációt az Appwrite-ból
@@ -185,8 +185,10 @@ export const useWorkflowValidation = () => {
         // A validationRunner.js-ből importált `validate` függvényt használjuk.
         // Mivel ez 'use hook', a fájl elején importáljuk a `validate` fv-t.
         const { validate } = await import("../../core/utils/validationRunner.js");
-        
-        const resultWrapper = await validate(article, validatorType, { options });
+
+        // Kiadvány rootPath átadása az útvonal feloldáshoz (ExtendScript-nek abszolút kell)
+        const pub = publicationsRef.current?.find(p => p.$id === article.publicationId);
+        const resultWrapper = await validate(article, validatorType, { options, publicationRootPath: pub?.rootPath });
         const result = resultWrapper.details[validatorType] || resultWrapper; // Fallback ha structure changes
 
         // Csatolatlan meghajtók → csak toast, nem mentjük

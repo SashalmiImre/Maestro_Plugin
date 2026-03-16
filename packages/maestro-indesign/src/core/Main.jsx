@@ -86,7 +86,7 @@ export const Main = () => {
          * Online esemény kezelője.
          */
         const onOnline = () => {
-            log('[Main] 🟢 Online');
+            log('[Main] [ONLINE] Online');
             setOnlineStatus(true);
             // Központi recovery — health check + reconnect + adat frissítés
             recoveryManager.requestRecovery(RECOVERY_TRIGGERS.ONLINE);
@@ -96,7 +96,7 @@ export const Main = () => {
          * Offline esemény kezelője.
          */
         const onOffline = () => {
-            log('[Main] 🔴 Offline');
+            log('[Main] [OFFLINE] Offline');
             setOnlineStatus(false);
         };
 
@@ -116,7 +116,8 @@ export const Main = () => {
     /**
      * @effect Feliratkozás a Realtime kapcsolat állapotváltozásaira.
      * Ha a WebSocket szétkapcsolódik (pl. 1005 halott TCP), a RecoveryManager
-     // Realtime kapcsolat figyelése (auto-reconnect logika)
+     * kezeli a helyreállítást (auto-reconnect logika).
+     */
     useEffect(() => {
         const unsubscribe = realtime.onConnectionChange((isConnected) => {
             log('[Main] Realtime:', isConnected ? 'connected' : 'disconnected');
@@ -190,7 +191,7 @@ export const Main = () => {
 
             // Alvás észlelése, ha a gap > konfigurált küszöbérték
             if (timeSinceLastIdle > CONNECTION_CONFIG.SLEEP_THRESHOLD_MS) {
-                log(`[Main] 😴 Alvás észlelve (${Math.round(timeSinceLastIdle / 1000)}s gap)`);
+                log(`[Main] [SLEEP] Alvás észlelve (${Math.round(timeSinceLastIdle / 1000)}s gap)`);
 
                 // Vizuális visszajelzés
                 setConnectionStatus(prev => ({
@@ -211,7 +212,7 @@ export const Main = () => {
                 sleep: CONNECTION_CONFIG.IDLE_CHECK_INTERVAL_MS
             });
             idleTask.addEventListener(IdleEvent.ON_IDLE, onIdleTick);
-            log('[Main] ⏰ Sleep detector started');
+            log('[Main] [TIMER] Sleep detector started');
         } catch (error) {
             logError('[Main] IdleTask error:', error);
         }
@@ -256,7 +257,7 @@ export const Main = () => {
             const now = Date.now();
             const timeSinceLastIdle = now - lastIdleTimeRef.current;
 
-            log(`[Main] ⚡ InDesign Activated (Gap: ${Math.round(timeSinceLastIdle / 1000)}s)`);
+            log(`[Main] [FOCUS] InDesign Activated (Gap: ${Math.round(timeSinceLastIdle / 1000)}s)`);
 
             // Háromszintű ellenőrzés: disconnect / elavult WS / friss kapcsolat
             const isConnected = realtime.getConnectionStatus();
@@ -265,13 +266,13 @@ export const Main = () => {
             const isStale = activityAge > CONNECTION_CONFIG.REALTIME_STALENESS_MS;
 
             if (!isConnected || timeSinceLastIdle >= CONNECTION_CONFIG.SLEEP_THRESHOLD_MS) {
-                log('[Main] 🔄 Hosszú gap vagy disconnected — Recovery indítása...');
+                log('[Main] [SYNC] Hosszú gap vagy disconnected — Recovery indítása...');
                 recoveryManager.requestRecovery(RECOVERY_TRIGGERS.FOCUS);
             } else if (isStale) {
-                log(`[Main] 🔄 Kapcsolat elavult (${Math.round(activityAge / 1000)}s óta nincs WS üzenet) — Recovery indítása...`);
+                log(`[Main] [SYNC] Kapcsolat elavult (${Math.round(activityAge / 1000)}s óta nincs WS üzenet) — Recovery indítása...`);
                 recoveryManager.requestRecovery(RECOVERY_TRIGGERS.FOCUS);
             } else {
-                log(`[Main] ⏩ Kapcsolat él & friss (${Math.round(activityAge / 1000)}s) — Kihagyva.`);
+                log(`[Main] [SKIP] Kapcsolat él & friss (${Math.round(activityAge / 1000)}s) — Kihagyva.`);
             }
 
             // Ha offline állapotban vagyunk, azonnali vizuális visszajelzés
@@ -287,7 +288,7 @@ export const Main = () => {
 
         try {
             app.addEventListener("afterActivate", onAppActivate);
-            log('[Main] 👁️ Focus detector registered');
+            log('[Main] [WATCH] Focus detector registered');
         } catch (error) {
             logError('[Main] Failed to register focus detector:', error);
         }
@@ -348,12 +349,7 @@ export const Main = () => {
                         )
                     )}
                 </div>
-                {/* ToastContainer should be visible even if loading, usually. 
-                    But in the previous code it was inside ToastProvider which was next to the overlay.
-                    Wait, ToastContainer uses portal or absolute? 
-                    The previous code had ToastContainer INSIDE ToastProvider. 
-                    Let's keep structure but change visibility. 
-                */}
+                {/* Toast konténer — overlay alatt rejtve, hogy ne zavarjon */}
                 <div style={{ display: showConnectionOverlay ? "none" : "block" }}>
                     <ToastContainer />
                 </div>

@@ -54,12 +54,17 @@ export const validate = async (target, checkTypes, context = {}) => {
                 });
                 break;
 
-            case VALIDATOR_TYPES.DATABASE_INTEGRITY:
+            case VALIDATOR_TYPES.DATABASE_INTEGRITY: {
+                const dbAbsPath = context.publicationRootPath
+                    ? toAbsoluteArticlePath(target.filePath, context.publicationRootPath)
+                    : target.filePath;
                 result = await validators.databaseIntegrity.validate({
                     article: target,
-                    autoCorrect: context.autoCorrect
+                    autoCorrect: context.autoCorrect,
+                    absoluteFilePath: dbAbsPath
                 });
                 break;
+            }
 
             case VALIDATOR_TYPES.PUBLICATION_STRUCTURE:
                 result = await validators.publicationStructure.validate({
@@ -68,12 +73,17 @@ export const validate = async (target, checkTypes, context = {}) => {
                 });
                 break;
 
-            case VALIDATOR_TYPES.PREFLIGHT_CHECK:
+            case VALIDATOR_TYPES.PREFLIGHT_CHECK: {
+                const pfAbsPath = context.publicationRootPath
+                    ? toAbsoluteArticlePath(target.filePath, context.publicationRootPath)
+                    : target.filePath;
                 result = await validators.preflight.validate({
                     article: target,
-                    options: context.options
+                    options: context.options,
+                    absoluteFilePath: pfAbsPath
                 });
                 break;
+            }
         }
 
         if (result) {
