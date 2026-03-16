@@ -331,7 +331,7 @@ function resultHTML(title, message, isSuccess) {
  *
  * Env vars: APPWRITE_PROJECT_ID, APPWRITE_API_KEY
  */
-app.get('/verify', async (req, res) => {
+app.get(['/verify', '/maestro-proxy/verify'], async (req, res) => {
     const { userId, secret } = req.query;
 
     if (!userId || !secret) {
@@ -375,7 +375,7 @@ app.get('/verify', async (req, res) => {
  * Az Appwrite `account.createRecovery()` által küldött emailben lévő link
  * ide irányít. HTML formot jelenítünk meg az új jelszó megadásához.
  */
-app.get('/reset-password', (req, res) => {
+app.get(['/reset-password', '/maestro-proxy/reset-password'], (req, res) => {
     const { userId, secret } = req.query;
 
     if (!userId || !secret) {
@@ -395,7 +395,7 @@ app.get('/reset-password', (req, res) => {
  * A form POST-olja ide az új jelszót. Az Appwrite REST API-n keresztül
  * frissítjük a jelszót (a userId + secret kombináció az autentikáció).
  */
-app.post('/reset-password', async (req, res) => {
+app.post(['/reset-password', '/maestro-proxy/reset-password'], async (req, res) => {
     const { userId, secret, password, passwordConfirm } = req.body;
 
     if (!userId || !secret || !password || !passwordConfirm) {
@@ -541,7 +541,7 @@ function resetPasswordFormHTML(userId, secret) {
         <h1>Új jelszó beállítása</h1>
         <p style="margin-bottom: 24px;">Add meg az új jelszavadat.</p>
 
-        <form method="POST" action="/reset-password" id="resetForm">
+        <form method="POST" action="reset-password" id="resetForm">
             <input type="hidden" name="userId" value="${escapeAttr(userId)}">
             <input type="hidden" name="secret" value="${escapeAttr(secret)}">
 
