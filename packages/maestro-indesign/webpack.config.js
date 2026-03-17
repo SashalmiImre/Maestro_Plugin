@@ -89,6 +89,8 @@ const shared = {
         // A styles package régi subpath-jei nem szerepelnek az exports map-ben,
         // ezért fájlrendszer-alapú feloldás kell
         "@spectrum-web-components/styles": resolve(__dirname, "node_modules/@spectrum-web-components/styles"),
+        // Közös csomag (maestro-shared) — a plugin és a dashboard által megosztott konstansok és logika
+        "maestro-shared": resolve(__dirname, "../maestro-shared"),
     },
   },
   externals: {

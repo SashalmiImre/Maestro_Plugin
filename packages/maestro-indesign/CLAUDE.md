@@ -183,6 +183,12 @@ Maestro/
 ├── package.json                  ← Függőségek & scriptek (Yarn)
 ├── webpack.config.js             ← Webpack 5 konfig (entry: src/core/index.jsx → dist/bundle.js)
 │
+├── ../maestro-shared/            ← Közös csomag (plugin + dashboard által megosztott konstansok és logika)
+│   ├── appwriteIds.js            ← Appwrite projekt/DB/gyűjtemény/csapat ID-k
+│   ├── constants.js              ← Platform-független enumerációk (LOCK_TYPE, VALIDATION_TYPES)
+│   ├── workflowConfig.js         ← Workflow állapotok, markerek, időtartamok, STATUS_LABELS, TEAM_ARTICLE_FIELD
+│   └── urgency.js                ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színskála)
+│
 ├── docs/                         ← Architektúra dokumentáció (ld. §Dokumentáció Katalógus)
 │   ├── NAMING_CONVENTIONS.md
 │   ├── EVENT_ARCHITECTURE.md

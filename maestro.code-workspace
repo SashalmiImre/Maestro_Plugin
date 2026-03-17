@@ -7,6 +7,14 @@
     {
       "path": "packages/maestro-proxy",
       "name": "Maestro Proxy Server"
+    },
+    {
+      "path": "packages/maestro-dashboard",
+      "name": "Maestro Web Dashboard"
+    },
+    {
+      "path": "packages/maestro-shared",
+      "name": "Maestro Shared"
     }
   ],
   "settings": {}

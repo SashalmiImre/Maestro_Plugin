@@ -1,0 +1,6 @@
+{
+  "name": "maestro-shared",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Közös konstansok és logika a Maestro plugin és dashboard között"
+}

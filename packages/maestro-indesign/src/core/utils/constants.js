@@ -1,9 +1,14 @@
 /**
  * @fileoverview Alkalmazás szintű konstansok.
  * Tartalmazza a konfigurációs értékeket, tároló kulcsokat és hálózati beállításokat.
- * 
+ *
  * @module utils/constants
  */
+
+import { LOCK_TYPE } from "maestro-shared/constants.js";
+
+// Re-export a shared-ből — a fogyasztó fájlok változatlanul importálhatnak innen
+export { LOCK_TYPE };
 
 // InDesign Scripting API Konstans
 // Ez a konstans jelöli a JavaScript nyelvet az InDesign `doScript` metódusában.
@@ -37,22 +42,6 @@ export const MOUNT_PREFIX = {
     darwin: "/Volumes",      // macOS — rendszer mount point
     win32: "C:/Volumes"      // Windows — IT által beállított symlink mappa
 };
-
-// =============================================================================
-// Dokumentum Zárolás (Lock) Típusok
-// =============================================================================
-
-/**
- * Zárolás típusok enum.
- * USER: Felhasználó által szerkesztett dokumentum
- * SYSTEM: Maestro háttérművelet (validálás, export)
- */
-export const LOCK_TYPE = {
-    USER: "user",
-    SYSTEM: "system"
-};
-
-
 
 // =============================================================================
 // Kapcsolat és Hálózat Konfiguráció

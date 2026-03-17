@@ -1,5 +1,16 @@
 
 import { VALIDATOR_TYPES } from "../validationConstants.js";
+import {
+    WORKFLOW_STATES,
+    MARKERS,
+    STATE_DURATIONS,
+    TEAM_ARTICLE_FIELD,
+    STATUS_LABELS,
+    labelMatchesSlug
+} from "maestro-shared/workflowConfig.js";
+
+// Re-export a shared-ből — a fogyasztó fájlok változatlanul importálhatnak innen
+export { WORKFLOW_STATES, MARKERS, STATE_DURATIONS, TEAM_ARTICLE_FIELD, labelMatchesSlug };
 
 /**
  * Parancs-regiszter: az összes elérhető parancs definíciója.
@@ -16,39 +27,6 @@ export const COMMANDS = {
     'preflight_check':         { label: 'Preflight',                teams: ['designers', 'art_directors'] },
     'archive':                 { label: 'Archiválás',               teams: ['designers', 'art_directors'] },
     'print_output':            { label: 'Levilágítás',              teams: ['designers', 'art_directors'] }
-};
-
-/**
- * Munkafolyamat állapotok enumerációja.
- * Ezek az értékek kerülnek mentésre az adatbázisban a cikkek `state` mezőjében.
- * 
- * @enum {number}
- */
-export const WORKFLOW_STATES = {
-    DESIGNING: 0,           // Tervezés alatt
-    DESIGN_APPROVAL: 1,     // Elrendezés jóváhagyása
-    WAITING_FOR_START: 2,   // Elindításra vár
-    EDITORIAL_APPROVAL: 3,  // Szerkesztői jóváhagyás
-    CONTENT_REVISION: 4,    // Tartalmi javítás (Korrektúra & Képcsere)
-    FINAL_APPROVAL: 5,      // Végleges jóváhagyás
-    PRINTABLE: 6,           // Nyomdakész
-    ARCHIVABLE: 7           // Archiválható
-};
-
-/**
- * Jelölő (Marker) bitmaszkok a cikkek státuszának további finomítására.
- * Bitmaszk alapú, így egy cikkhez több jelölő is tartozhat egyszerre.
- * 
- * Használat:
- * - Beállítás: `markers |= MARKERS.IGNORE`
- * - Törlés: `markers &= ~MARKERS.IGNORE`
- * - Ellenőrzés: `(markers & MARKERS.IGNORE) !== 0`
- * 
- * @enum {number}
- */
-export const MARKERS = {
-    NONE: 0,
-    IGNORE: 1          // Kimarad — a cikk ideiglenesen ki van hagyva a kiadványból
 };
 
 /**
@@ -83,7 +61,7 @@ export const TRANSITION_TYPES = {
  */
 export const WORKFLOW_CONFIG = {
     [WORKFLOW_STATES.DESIGNING]: {
-        config: { label: "Tervezés", color: "var(--status-designing)", icon: "" },
+        config: { label: STATUS_LABELS[WORKFLOW_STATES.DESIGNING], color: "var(--status-designing)", icon: "" },
         transitions: [
             { target: WORKFLOW_STATES.DESIGN_APPROVAL, label: "Tördelve", type: TRANSITION_TYPES.FORWARD }
         ],
@@ -95,7 +73,7 @@ export const WORKFLOW_CONFIG = {
         commands: []
     },
     [WORKFLOW_STATES.DESIGN_APPROVAL]: {
-        config: { label: "Terv ellenőrzés", color: "var(--status-design-approval)", icon: "" },
+        config: { label: STATUS_LABELS[WORKFLOW_STATES.DESIGN_APPROVAL], color: "var(--status-design-approval)", icon: "" },
         transitions: [
             { target: WORKFLOW_STATES.WAITING_FOR_START, label: "Jóváhagyás", type: TRANSITION_TYPES.FORWARD },
             { target: WORKFLOW_STATES.DESIGNING, label: "Tervezéshez", type: TRANSITION_TYPES.BACKWARD }
@@ -108,7 +86,7 @@ export const WORKFLOW_CONFIG = {
         commands: ['export_pdf']
     },
     [WORKFLOW_STATES.WAITING_FOR_START]: {
-        config: { label: "Elindításra vár", color: "var(--status-waiting-for-start)", icon: "" },
+        config: { label: STATUS_LABELS[WORKFLOW_STATES.WAITING_FOR_START], color: "var(--status-waiting-for-start)", icon: "" },
         transitions: [
             { target: WORKFLOW_STATES.EDITORIAL_APPROVAL, label: "Indítás", type: TRANSITION_TYPES.FORWARD },
             { target: WORKFLOW_STATES.DESIGN_APPROVAL, label: "Jóváhagyáshoz", type: TRANSITION_TYPES.BACKWARD }
@@ -121,7 +99,7 @@ export const WORKFLOW_CONFIG = {
         commands: ['export_pdf', 'collect_images']
     },
     [WORKFLOW_STATES.EDITORIAL_APPROVAL]: {
-        config: { label: "Szerkesztői ellenőrzés", color: "var(--status-editorial-approval)", icon: "" },
+        config: { label: STATUS_LABELS[WORKFLOW_STATES.EDITORIAL_APPROVAL], color: "var(--status-editorial-approval)", icon: "" },
         transitions: [
             { target: WORKFLOW_STATES.CONTENT_REVISION, label: "Jóváhagyás", type: TRANSITION_TYPES.FORWARD },
             { target: WORKFLOW_STATES.DESIGNING, label: "Tervezéshez", type: TRANSITION_TYPES.BACKWARD }
@@ -134,7 +112,7 @@ export const WORKFLOW_CONFIG = {
         commands: ['export_pdf', 'collect_images']
     },
     [WORKFLOW_STATES.CONTENT_REVISION]: {
-        config: { label: "Korrektúrázás", color: "var(--status-content-revision)", icon: "" },
+        config: { label: STATUS_LABELS[WORKFLOW_STATES.CONTENT_REVISION], color: "var(--status-content-revision)", icon: "" },
         transitions: [
             { target: WORKFLOW_STATES.FINAL_APPROVAL, label: "Korrektúrázva", type: TRANSITION_TYPES.FORWARD },
             { target: WORKFLOW_STATES.EDITORIAL_APPROVAL, label: "Szerkesztőhöz", type: TRANSITION_TYPES.BACKWARD }
@@ -147,7 +125,7 @@ export const WORKFLOW_CONFIG = {
         commands: ['export_pdf', 'collect_images']
     },
     [WORKFLOW_STATES.FINAL_APPROVAL]: {
-        config: { label: "Végső ellenőrzés", color: "var(--status-final-approval)", icon: "" },
+        config: { label: STATUS_LABELS[WORKFLOW_STATES.FINAL_APPROVAL], color: "var(--status-final-approval)", icon: "" },
         transitions: [
             { target: WORKFLOW_STATES.PRINTABLE, label: "Jóváhagyás", type: TRANSITION_TYPES.FORWARD },
             { target: WORKFLOW_STATES.DESIGN_APPROVAL, label: "Terv ellenőrzés", type: TRANSITION_TYPES.BACKWARD }
@@ -162,7 +140,7 @@ export const WORKFLOW_CONFIG = {
         commands: ['export_final_pdf', 'preflight_check']
     },
     [WORKFLOW_STATES.PRINTABLE]: {
-        config: { label: "Nyomdakész", color: "var(--status-printable)", icon: "" },
+        config: { label: STATUS_LABELS[WORKFLOW_STATES.PRINTABLE], color: "var(--status-printable)", icon: "" },
         transitions: [
             { target: WORKFLOW_STATES.ARCHIVABLE, label: "Levilágítás", type: TRANSITION_TYPES.FORWARD },
             { target: WORKFLOW_STATES.FINAL_APPROVAL, label: "Végső ellenőrzés", type: TRANSITION_TYPES.BACKWARD }
@@ -182,7 +160,7 @@ export const WORKFLOW_CONFIG = {
         commands: ['preflight_check']
     },
     [WORKFLOW_STATES.ARCHIVABLE]: {
-        config: { label: "Archiválható", color: "var(--status-archivable)", icon: "" },
+        config: { label: STATUS_LABELS[WORKFLOW_STATES.ARCHIVABLE], color: "var(--status-archivable)", icon: "" },
         transitions: [],
         validations: {
             onEntry: [],
@@ -191,31 +169,6 @@ export const WORKFLOW_CONFIG = {
         },
         commands: ['archive', 'print_output']
     }
-};
-
-/**
- * Az egyes munkafolyamat állapotok becsült időtartama.
- * A sürgősség-számítás ezeket használja annak meghatározásához,
- * hogy a hátralévő munka belefér-e a lapzártáig.
- *
- * Minden állapothoz két összetevő tartozik:
- * - `perPage`: egy emberre, egy oldalra vetített átlagos idő percben
- * - `fixed`: oldalszámtól független fix ráfordítás percben
- *
- * Formula: állapot idő = perPage × oldalszám + fixed
- *
- * Az ARCHIVABLE állapot nem szerepel, mert az a leadás utáni munka.
- *
- * @type {Object.<number, { perPage: number, fixed: number }>}
- */
-export const STATE_DURATIONS = {
-    [WORKFLOW_STATES.DESIGNING]:           { perPage: 60, fixed: 0 },
-    [WORKFLOW_STATES.DESIGN_APPROVAL]:     { perPage: 30,  fixed: 15 },
-    [WORKFLOW_STATES.WAITING_FOR_START]:   { perPage: 10,  fixed: 15 },
-    [WORKFLOW_STATES.EDITORIAL_APPROVAL]:  { perPage: 30, fixed: 15 },
-    [WORKFLOW_STATES.CONTENT_REVISION]:    { perPage: 30, fixed: 10 },
-    [WORKFLOW_STATES.FINAL_APPROVAL]:      { perPage: 10,  fixed: 15 },
-    [WORKFLOW_STATES.PRINTABLE]:           { perPage: 10,  fixed: 5 }
 };
 
 /**
@@ -238,43 +191,3 @@ export const STATE_PERMISSIONS = {
     [WORKFLOW_STATES.PRINTABLE]:           ["designers", "art_directors"]
 };
 
-/**
- * Csapat → cikkmező leképezés.
- * Meghatározza, melyik csapat slug melyik cikk-mezőhöz van kötve
- * a jogosultsági ellenőrzésben (a hozzárendelt felhasználó userId-ja).
- *
- * @type {Object.<string, string>}
- */
-export const TEAM_ARTICLE_FIELD = {
-    "designers":         "designerId",
-    "art_directors":     "artDirectorId",
-    "editors":           "editorId",
-    "managing_editors":  "managingEditorId",
-    "proofwriters":      "proofwriterId",
-    "writers":           "writerId",
-    "image_editors":     "imageEditorId"
-};
-
-/**
- * Normalizál egy slug-ot a label összehasonlításhoz: eltávolítja az underscore-okat.
- * Az Appwrite labels nem engedélyez underscore-t, ezért a team slug-okat (pl. "art_directors")
- * és a felhasználói label-eket (pl. "artdirectors") normalizálva hasonlítjuk össze.
- *
- * @param {string} value
- * @returns {string}
- */
-const normalizeSlug = (value) => value.replace(/_/g, "").toLowerCase();
-
-/**
- * Ellenőrzi, hogy a felhasználói label-ek között megtalálható-e a megadott team slug.
- * Normalizált összehasonlítást végez (underscore-mentes), mert az Appwrite labels
- * nem támogatja az underscore karaktert.
- *
- * @param {string[]} userLabels - A felhasználó Appwrite label-jei (pl. ["artdirectors"]).
- * @param {string} slug - A team slug (pl. "art_directors").
- * @returns {boolean}
- */
-export function labelMatchesSlug(userLabels, slug) {
-    const normalizedSlug = normalizeSlug(slug);
-    return userLabels.some(label => normalizeSlug(label) === normalizedSlug);
-}

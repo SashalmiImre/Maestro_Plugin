@@ -1,0 +1,616 @@
+/**
+ * Maestro Dashboard — Stílusok
+ * Dark theme, responsive, a plugin esztétikáját követi.
+ */
+
+/* ─── Reset & Alapok ───────────────────────────────────────────────────── */
+
+*, *::before, *::after {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}
+
+html, body {
+    height: 100%;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    font-size: 13px;
+    line-height: 1.4;
+    color: #e0e0e0;
+    background: #1a1a1a;
+    -webkit-font-smoothing: antialiased;
+}
+
+/* ─── Login nézet ──────────────────────────────────────────────────────── */
+
+.login-container {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 20px;
+}
+
+.login-card {
+    background: #2a2a2a;
+    border-radius: 12px;
+    padding: 40px;
+    width: 100%;
+    max-width: 380px;
+    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+}
+
+.login-card h1 {
+    font-size: 20px;
+    font-weight: 600;
+    text-align: center;
+    margin-bottom: 8px;
+    color: #fff;
+}
+
+.login-card .subtitle {
+    text-align: center;
+    color: #999;
+    font-size: 12px;
+    margin-bottom: 28px;
+}
+
+.form-group {
+    margin-bottom: 16px;
+}
+
+.form-group label {
+    display: block;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #999;
+    margin-bottom: 6px;
+}
+
+.form-group input {
+    width: 100%;
+    padding: 10px 12px;
+    background: #333;
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #e0e0e0;
+    font-size: 13px;
+    outline: none;
+    transition: border-color 0.2s;
+}
+
+.form-group input:focus {
+    border-color: #3b82f6;
+}
+
+.login-btn {
+    width: 100%;
+    padding: 10px;
+    background: #3b82f6;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+    margin-top: 8px;
+}
+
+.login-btn:hover {
+    background: #2563eb;
+}
+
+.login-btn:disabled {
+    background: #555;
+    cursor: not-allowed;
+}
+
+.login-error {
+    color: #ef4444;
+    font-size: 12px;
+    text-align: center;
+    margin-top: 12px;
+    min-height: 18px;
+}
+
+/* ─── Dashboard layout ─────────────────────────────────────────────────── */
+
+.dashboard {
+    display: none;
+    flex-direction: column;
+    height: 100vh;
+}
+
+.dashboard.active {
+    display: flex;
+}
+
+/* Fejléc */
+.dashboard-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 20px;
+    background: #222;
+    border-bottom: 1px solid #333;
+    flex-shrink: 0;
+}
+
+.dashboard-header h1 {
+    font-size: 15px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.dashboard-header .user-info {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: 12px;
+    color: #999;
+}
+
+.logout-btn {
+    padding: 5px 12px;
+    background: transparent;
+    border: 1px solid #555;
+    border-radius: 4px;
+    color: #999;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.logout-btn:hover {
+    border-color: #ef4444;
+    color: #ef4444;
+}
+
+/* Fő tartalom (oldalsáv + tábla) */
+.dashboard-body {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+}
+
+/* ─── Oldalsáv (kiadvány lista) ────────────────────────────────────────── */
+
+.sidebar {
+    width: 220px;
+    min-width: 220px;
+    background: #222;
+    border-right: 1px solid #333;
+    overflow-y: auto;
+    flex-shrink: 0;
+}
+
+.sidebar-header {
+    padding: 12px 16px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #666;
+    border-bottom: 1px solid #333;
+}
+
+.publication-item {
+    padding: 10px 16px;
+    cursor: pointer;
+    font-size: 12px;
+    color: #bbb;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    transition: all 0.15s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.publication-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: #e0e0e0;
+}
+
+.publication-item.active {
+    background: rgba(59, 130, 246, 0.12);
+    color: #3b82f6;
+    font-weight: 600;
+}
+
+/* ─── Fő tartalom (tábla terület) ──────────────────────────────────────── */
+
+.main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.content-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    border-bottom: 1px solid #333;
+    flex-shrink: 0;
+}
+
+.content-header h2 {
+    font-size: 14px;
+    font-weight: 600;
+    color: #fff;
+}
+
+.article-count {
+    font-size: 11px;
+    color: #666;
+}
+
+/* ─── Szűrő sáv ───────────────────────────────────────────────────────── */
+
+.filter-bar {
+    padding: 10px 16px;
+    border-bottom: 1px solid #333;
+    flex-shrink: 0;
+    display: none;
+}
+
+.filter-bar.active {
+    display: block;
+}
+
+.filter-toggle-btn {
+    padding: 4px 10px;
+    background: transparent;
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: #999;
+    font-size: 11px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+
+.filter-toggle-btn:hover {
+    border-color: #666;
+    color: #ccc;
+}
+
+.filter-toggle-btn.active {
+    border-color: #3b82f6;
+    color: #3b82f6;
+}
+
+.filter-status-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px 16px;
+    margin-bottom: 8px;
+}
+
+.filter-checkbox {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    color: #bbb;
+    cursor: pointer;
+    padding: 3px 0;
+    user-select: none;
+}
+
+.filter-checkbox input[type="checkbox"] {
+    appearance: none;
+    width: 14px;
+    height: 14px;
+    border: 1px solid #555;
+    border-radius: 3px;
+    background: #333;
+    cursor: pointer;
+    position: relative;
+    flex-shrink: 0;
+}
+
+.filter-checkbox input[type="checkbox"]:checked {
+    background: #3b82f6;
+    border-color: #3b82f6;
+}
+
+.filter-checkbox input[type="checkbox"]:checked::after {
+    content: '';
+    position: absolute;
+    top: 1px;
+    left: 4px;
+    width: 4px;
+    height: 8px;
+    border: solid #fff;
+    border-width: 0 2px 2px 0;
+    transform: rotate(45deg);
+}
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.filter-extra {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    padding-top: 8px;
+    border-top: 1px solid #333;
+}
+
+.filter-reset-btn {
+    padding: 3px 10px;
+    background: transparent;
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: #999;
+    font-size: 10px;
+    cursor: pointer;
+    margin-left: auto;
+}
+
+.filter-reset-btn:hover {
+    border-color: #ef4444;
+    color: #ef4444;
+}
+
+/* ─── Cikk tábla ──────────────────────────────────────────────────────── */
+
+.table-container {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: auto;
+}
+
+.article-table {
+    width: 100%;
+    min-width: 600px;
+    border-collapse: collapse;
+}
+
+.article-table thead {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: #222;
+}
+
+.article-table th {
+    padding: 8px 10px;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #666;
+    text-align: left;
+    border-bottom: 1px solid #444;
+    cursor: pointer;
+    user-select: none;
+    white-space: nowrap;
+    transition: color 0.15s;
+}
+
+.article-table th:hover {
+    color: #999;
+}
+
+.article-table th.sorted {
+    color: #3b82f6;
+}
+
+.article-table th .sort-arrow {
+    margin-left: 4px;
+    font-size: 9px;
+}
+
+.article-table th:last-child {
+    text-align: center;
+}
+
+.article-table tbody tr {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    transition: background 0.1s;
+}
+
+.article-table tbody tr:hover {
+    background: rgba(255, 255, 255, 0.05) !important;
+}
+
+.article-table td {
+    padding: 6px 10px;
+    font-size: 12px;
+    vertical-align: middle;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    max-width: 0;
+}
+
+/* Oszlop szélességek */
+.col-range    { width: 12%; }
+.col-name     { width: 40%; }
+.col-lock     { width: 20%; }
+.col-state    { width: 15%; }
+.col-validate { width: 13%; text-align: center; }
+
+/* Terjedelm (monospace) */
+.page-range {
+    font-family: Consolas, 'Andale Mono', 'Lucida Console', 'Courier New', monospace;
+    font-size: 11px;
+    font-weight: bold;
+}
+
+/* Névtelen cikk */
+.article-unnamed {
+    font-style: italic;
+    color: #ef4444;
+}
+
+/* Lock label */
+.lock-label {
+    font-size: 10px;
+    font-weight: bold;
+    text-transform: uppercase;
+    color: #999;
+}
+
+/* Státusz pont (tábla cella) */
+.state-dot {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+/* Validáció ikonok */
+.validation-icons {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+}
+
+/* ─── Üres állapot ─────────────────────────────────────────────────────── */
+
+.empty-state {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    color: #555;
+    font-size: 13px;
+}
+
+/* ─── Loading spinner ──────────────────────────────────────────────────── */
+
+.loading-overlay {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 10px;
+    color: #666;
+    font-size: 12px;
+}
+
+.spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid #444;
+    border-top-color: #3b82f6;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
+
+/* ─── Toast ────────────────────────────────────────────────────────────── */
+
+.toast-container {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    z-index: 1000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.toast {
+    padding: 10px 16px;
+    background: #333;
+    border-radius: 6px;
+    font-size: 12px;
+    color: #e0e0e0;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    animation: slideUp 0.3s ease-out;
+    max-width: 360px;
+}
+
+.toast.error {
+    border-left: 3px solid #ef4444;
+}
+
+.toast.success {
+    border-left: 3px solid #22c55e;
+}
+
+.toast.warning {
+    border-left: 3px solid #f59e0b;
+}
+
+@keyframes slideUp {
+    from { opacity: 0; transform: translateY(20px); }
+    to   { opacity: 1; transform: translateY(0); }
+}
+
+/* ─── Responsive ───────────────────────────────────────────────────────── */
+
+/* Mobil sáv */
+.mobile-pub-select {
+    display: none;
+    padding: 10px 16px;
+    border-bottom: 1px solid #333;
+    flex-shrink: 0;
+}
+
+.mobile-pub-select select {
+    width: 100%;
+    padding: 8px 10px;
+    background: #333;
+    border: 1px solid #444;
+    border-radius: 6px;
+    color: #e0e0e0;
+    font-size: 12px;
+    outline: none;
+}
+
+@media (max-width: 768px) {
+    .sidebar {
+        display: none;
+    }
+
+    .mobile-pub-select {
+        display: block;
+    }
+
+    .dashboard.active {
+        flex-direction: column;
+    }
+
+    .dashboard-body {
+        flex-direction: column;
+    }
+
+    .filter-status-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    .content-header h2 {
+        font-size: 13px;
+    }
+}
+
+@media (max-width: 480px) {
+    .dashboard-header {
+        padding: 8px 12px;
+    }
+
+    .dashboard-header h1 {
+        font-size: 13px;
+    }
+
+    .filter-status-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+}

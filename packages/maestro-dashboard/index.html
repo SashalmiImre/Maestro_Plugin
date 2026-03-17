@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Maestro Dashboard</title>
+    <link rel="stylesheet" href="css/styles.css?v=2">
+    <script type="importmap">
+    {
+        "imports": {
+            "appwrite": "https://cdn.jsdelivr.net/npm/appwrite@16.0.2/dist/esm/sdk.min.js"
+        }
+    }
+    </script>
+</head>
+<body>
+
+    <!-- Login nézet -->
+    <div id="login-view" class="login-container">
+        <div class="login-card">
+            <h1>Maestro</h1>
+            <p class="subtitle">Bejelentkezés a műhely-nyomkövetőbe</p>
+            <form id="login-form">
+                <div class="form-group">
+                    <label for="email">Email</label>
+                    <input type="email" id="email" autocomplete="email" required>
+                </div>
+                <div class="form-group">
+                    <label for="password">Jelszó</label>
+                    <input type="password" id="password" autocomplete="current-password" required>
+                </div>
+                <button type="submit" class="login-btn" id="login-btn">Bejelentkezés</button>
+                <div id="login-error" class="login-error"></div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Dashboard nézet -->
+    <div id="dashboard-view" class="dashboard">
+        <!-- Fejléc -->
+        <div class="dashboard-header">
+            <h1>Maestro</h1>
+            <div class="user-info">
+                <span id="user-name"></span>
+                <button class="logout-btn" id="logout-btn">Kijelentkezés</button>
+            </div>
+        </div>
+
+        <!-- Fő tartalom -->
+        <div class="dashboard-body">
+            <!-- Oldalsáv -->
+            <div class="sidebar" id="sidebar">
+                <div class="sidebar-header">Kiadványok</div>
+                <div id="publication-list"></div>
+            </div>
+
+            <!-- Fő terület -->
+            <div class="main-content">
+                <!-- Mobil kiadvány választó -->
+                <div class="mobile-pub-select">
+                    <select id="mobile-pub-select"></select>
+                </div>
+
+                <!-- Tartalom fejléc -->
+                <div class="content-header">
+                    <h2 id="content-title">Válassz egy kiadványt</h2>
+                    <div style="display: flex; align-items: center; gap: 8px;">
+                        <span id="article-count" class="article-count"></span>
+                        <button class="filter-toggle-btn" id="filter-toggle-btn" title="Szűrők">&#9776;</button>
+                    </div>
+                </div>
+
+                <!-- Szűrő sáv -->
+                <div class="filter-bar" id="filter-bar"></div>
+
+                <!-- Tábla konténer -->
+                <div class="table-container" id="table-container">
+                    <div class="empty-state" id="empty-state">Válassz egy kiadványt a bal oldali listából</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast konténer -->
+    <div class="toast-container" id="toast-container"></div>
+
+    <!-- App betöltés -->
+    <script type="module" src="js/app.js"></script>
+
+</body>
+</html>

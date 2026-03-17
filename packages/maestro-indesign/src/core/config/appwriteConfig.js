@@ -1,8 +1,16 @@
 import { Client, Account, Databases, TablesDB, Storage, ID, Query, Realtime, Teams, Functions } from "appwrite";
 import { log, logWarn } from "../utils/logger.js";
 import { MaestroEvent, dispatchMaestroEvent } from "./maestroEvents.js";
+import {
+    APPWRITE_PROJECT_ID,
+    DATABASE_ID,
+    COLLECTIONS,
+    TEAMS,
+    GET_TEAM_MEMBERS_FUNCTION_ID
+} from "maestro-shared/appwriteIds.js";
 
-export const APPWRITE_PROJECT_ID = "68808427001c20418996";
+export { APPWRITE_PROJECT_ID, DATABASE_ID, TEAMS, GET_TEAM_MEMBERS_FUNCTION_ID };
+
 export const APPWRITE_LOCALE = "hu-HU";
 
 const RAILWAY_BASE = 'https://gallant-balance-production-b513.up.railway.app';
@@ -197,26 +205,13 @@ export function clearLocalSession() {
     }
 }
 
-// Konstansok az adatbázis és gyűjtemények azonosítóihoz
-export const DATABASE_ID = "6880850e000da87a3d55";
-export const PUBLICATIONS_COLLECTION_ID = "publications";
-export const ARTICLES_COLLECTION_ID = "articles";
-export const USER_VALIDATIONS_COLLECTION_ID = "uservalidations";
-export const VALIDATIONS_COLLECTION_ID = "validations";
-export const LAYOUTS_COLLECTION_ID = "layouts";
-export const DEADLINES_COLLECTION_ID = "deadlines";
-
-export const TEAMS = {
-    EDITORS: "editors",
-    DESIGNERS: "designers",
-    WRITERS: "writers",
-    IMAGE_EDITORS: "image_editors",
-    ART_DIRECTORS: "art_directors",
-    MANAGING_EDITORS: "managing_editors",
-    PROOFWRITERS: "proofwriters"
-};
-
-export const GET_TEAM_MEMBERS_FUNCTION_ID = "69599cf9000a865db98a";
+// Gyűjtemény ID-k — shared-ből, visszafelé kompatibilis egyedi exportokkal
+export const PUBLICATIONS_COLLECTION_ID = COLLECTIONS.PUBLICATIONS;
+export const ARTICLES_COLLECTION_ID = COLLECTIONS.ARTICLES;
+export const USER_VALIDATIONS_COLLECTION_ID = COLLECTIONS.USER_VALIDATIONS;
+export const VALIDATIONS_COLLECTION_ID = "validations"; // Plugin-only gyűjtemény (rendszer validációk)
+export const LAYOUTS_COLLECTION_ID = COLLECTIONS.LAYOUTS;
+export const DEADLINES_COLLECTION_ID = COLLECTIONS.DEADLINES;
 
 // =============================================================================
 // cookieFallback Diagnosztika — Session token eltűnés nyomkövetés
