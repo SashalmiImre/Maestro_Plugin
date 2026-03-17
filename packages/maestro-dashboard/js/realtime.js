@@ -65,6 +65,12 @@ export function subscribeRealtime() {
     }
 
     const client = getClient();
+    
+    // Guard: bail out if client is not available
+    if (!client) {
+        console.warn('Realtime client not available, cannot subscribe');
+        return;
+    }
 
     unsubscribe = client.subscribe([
         channel(COLLECTIONS.ARTICLES),
@@ -80,19 +86,28 @@ export function subscribeRealtime() {
 
         const payload = response.payload;
 
-        switch (collection) {
-            case 'articles':
-                applyArticleEvent(eventType, payload);
-                break;
-            case 'publications':
-                applyPublicationEvent(eventType, payload);
-                break;
-            case 'deadlines':
-                applyDeadlineEvent(eventType, payload);
-                break;
-            case 'validations':
-                applyValidationEvent(eventType, payload);
-                break;
+        try {
+            switch (collection) {
+                case 'articles':
+                    applyArticleEvent(eventType, payload);
+                    break;
+                case 'publications':
+                    applyPublicationEvent(eventType, payload);
+                    break;
+                case 'deadlines':
+                    applyDeadlineEvent(eventType, payload);
+                    break;
+                case 'validations':
+                    applyValidationEvent(eventType, payload);
+                    break;
+            }
+        } catch (error) {
+            console.error('Realtime event handler error', {
+                eventType,
+                collection,
+                payload,
+                error: error?.message || error
+            });
         }
     });
 }

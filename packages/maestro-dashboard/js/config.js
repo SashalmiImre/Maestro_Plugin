@@ -41,10 +41,11 @@ export const APPWRITE_ENDPOINT = 'https://cloud.appwrite.io/v1';
  */
 import { STATUS_LABELS, STATUS_COLORS } from '../shared/workflowConfig.js';
 
-export const WORKFLOW_CONFIG = {};
-for (const [state, label] of Object.entries(STATUS_LABELS)) {
-    WORKFLOW_CONFIG[state] = { label, color: STATUS_COLORS[state] || '#999' };
-}
+export const WORKFLOW_CONFIG = Object.fromEntries(
+    Object.entries(STATUS_LABELS).map(([state, label]) => [
+        state, { label, color: STATUS_COLORS[state] || '#999' }
+    ])
+);
 
 /** Dashboard localStorage kulcsok. */
 export const STORAGE_KEYS = {

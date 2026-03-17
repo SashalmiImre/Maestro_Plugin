@@ -47,7 +47,10 @@ export async function fetchHolidays(year) {
             const holidays = new Set(data.map(h => h.date));
             holidayCache.set(year, holidays);
             return holidays;
-        } catch {
+        } catch (error) {
+            console.error(`fetchHolidays(${year}) failed: ${HOLIDAYS_API_BASE}/${year}/HU`, {
+                error: error?.message || error
+            });
             return null;
         } finally {
             pendingFetches.delete(year);

@@ -38,6 +38,15 @@ export async function renderArticleTable(filteredArticles) {
     const deadlines = getDeadlines();
     urgencyMap = await calculateUrgencyMap(filteredArticles, deadlines);
 
+    // Teljes tábla renderelés (fejléc + törzs + eseménykezelők)
+    renderFullTable(container, filteredArticles);
+}
+
+/**
+ * Teljes tábla renderelés: fejléc, törzs és fejléc kattintás kezelők.
+ * A fejléc kattintás csak ezt hívja (sürgősség újraszámítás nélkül).
+ */
+function renderFullTable(container, filteredArticles) {
     // Validációk előindexelése
     const userValidationsByArticle = indexValidations();
 
@@ -66,7 +75,7 @@ export async function renderArticleTable(filteredArticles) {
         </table>
     `;
 
-    // Fejléc kattintás kezelők
+    // Fejléc kattintás kezelők — csak újrarendez, sürgősséget nem számolja újra
     container.querySelectorAll('th[data-sort]').forEach(th => {
         th.addEventListener('click', () => {
             const col = th.dataset.sort;
@@ -76,7 +85,7 @@ export async function renderArticleTable(filteredArticles) {
                 sortColumn = col;
                 sortDirection = 'asc';
             }
-            renderArticleTable(filteredArticles);
+            renderFullTable(container, filteredArticles);
         });
     });
 }
@@ -144,7 +153,8 @@ function renderLock(article) {
 function renderState(article) {
     const state = article.state ?? 0;
     const config = WORKFLOW_CONFIG[state];
-    const isIgnored = (article.markers & MARKERS.IGNORE) !== 0;
+    const markers = typeof article.markers === 'number' ? article.markers : 0;
+    const isIgnored = (markers & MARKERS.IGNORE) !== 0;
     const color = isIgnored ? '#9E9E9E' : (config?.color || '#999');
     const label = config?.label || 'Ismeretlen';
     const suffix = isIgnored ? ' (Kimarad)' : '';

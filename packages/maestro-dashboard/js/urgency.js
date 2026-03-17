@@ -27,7 +27,11 @@ import { fetchHolidays, calculateUrgencyRatio } from '../shared/urgency.js';
  */
 export async function calculateUrgencyMap(articles, deadlines) {
     const map = new Map();
-    if (!articles.length || !deadlines.length) return map;
+    
+    // Defensive guard: ensure both inputs are arrays
+    if (!Array.isArray(articles) || !Array.isArray(deadlines) || !articles.length || !deadlines.length) {
+        return map;
+    }
 
     // Ünnepnapok lekérése (aktuális + következő év)
     const now = new Date();

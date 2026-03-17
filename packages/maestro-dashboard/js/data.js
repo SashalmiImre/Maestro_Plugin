@@ -24,6 +24,9 @@ export function initServices() {
     functions = new Functions(client);
 }
 
+/** Lapozás méret az Appwrite lekérdezésekhez. */
+const PAGE_SIZE = 100;
+
 // ─── Adat állapot ───────────────────────────────────────────────────────────
 
 let publications = [];
@@ -61,15 +64,27 @@ function notifyListeners(type) {
 // ─── Kiadványok lekérése ────────────────────────────────────────────────────
 
 /**
- * Lekéri az összes kiadványt.
+ * Lekéri az összes kiadványt lapozással.
  * @returns {Promise<Array>}
  */
 export async function fetchPublications() {
-    const result = await databases.listDocuments(DATABASE_ID, COLLECTIONS.PUBLICATIONS, [
-        Query.limit(100),
-        Query.orderAsc('name')
-    ]);
-    publications = result.documents;
+    const allDocuments = [];
+    let offset = 0;
+
+    while (true) {
+        const result = await databases.listDocuments(DATABASE_ID, COLLECTIONS.PUBLICATIONS, [
+            Query.limit(PAGE_SIZE),
+            Query.offset(offset),
+            Query.orderAsc('name')
+        ]);
+
+        allDocuments.push(...result.documents);
+
+        if (result.documents.length < PAGE_SIZE) break;
+        offset += PAGE_SIZE;
+    }
+
+    publications = allDocuments;
     notifyListeners('publications');
     return publications;
 }
@@ -89,7 +104,7 @@ export async function switchPublication(publicationId) {
             Query.equal('publicationId', publicationId),
             Query.limit(1000),
             Query.orderAsc('startPage')
-        ]),
+        ]).catch(() => ({ documents: [] })),
         databases.listDocuments(DATABASE_ID, COLLECTIONS.DEADLINES, [
             Query.equal('publicationId', publicationId),
             Query.limit(100)

@@ -244,6 +244,12 @@ html, body {
     color: #fff;
 }
 
+.content-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
 .article-count {
     font-size: 11px;
     color: #666;

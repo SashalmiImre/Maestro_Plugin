@@ -132,7 +132,8 @@ export function applyFilters() {
         if (!statusFilter.has(state)) return false;
 
         // Kimarad szűrő
-        const isIgnored = (article.markers & MARKERS.IGNORE) !== 0;
+        const markers = typeof article.markers === 'number' ? article.markers : 0;
+        const isIgnored = (markers & MARKERS.IGNORE) !== 0;
         if (!showIgnored && isIgnored) return false;
 
         // Csak saját cikkek
@@ -178,7 +179,9 @@ function getUserContributorFields(user) {
         const field = TEAM_ARTICLE_FIELD[teamId];
         if (field) fields.push(field);
     }
-    // Label override: label-ből is leképezzük
+    // Label override: label-ből is leképezzük.
+    // Normalizálás: aláhúzás eltávolítás + kisbetűsítés, mert a TEAM_ARTICLE_FIELD
+    // kulcsok (pl. "art_directors") és a user.labels formátuma eltérhet (pl. "artdirectors").
     if (user.labels) {
         for (const [slug, field] of Object.entries(TEAM_ARTICLE_FIELD)) {
             const normalizedSlug = slug.replace(/_/g, '').toLowerCase();
@@ -196,8 +199,9 @@ function notifyChange() {
     // Szűrő gomb vizuális jelzés
     const toggleBtn = document.getElementById('filter-toggle-btn');
     if (toggleBtn) {
-        toggleBtn.style.color = isFilterActive() ? '#3b82f6' : '';
-        toggleBtn.style.borderColor = isFilterActive() ? '#3b82f6' : '';
+        const active = isFilterActive();
+        toggleBtn.style.color = active ? '#3b82f6' : '';
+        toggleBtn.style.borderColor = active ? '#3b82f6' : '';
     }
 }
 
