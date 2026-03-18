@@ -118,6 +118,40 @@ export function getSafeCloseLogic(docVarName, openedVarName, saveOption = "SaveO
 }
 
 /**
+ * BELSŐ SEGÉD: JPEG thumbnail export logikája (prefs beállítás + oldalankénti export).
+ * Az eredményt az `exportedPaths` tömbbe gyűjti.
+ *
+ * @param {string} docVarName - A dokumentum változó neve (pl. "doc").
+ * @param {string} outputFolderVar - Az ExtendScript változó neve, ami a kimeneti mappát tartalmazza.
+ * @returns {string} ExtendScript kódrészlet.
+ */
+export function getJpegPageExportLogic(docVarName, outputFolderVar) {
+    return `
+                // -- START: JPEG Page Export Logic --
+                var prefs = app.jpegExportPreferences;
+                prefs.exportResolution = 120;
+                prefs.jpegQuality = JPEGOptionsQuality.MEDIUM;
+                prefs.exportingSpread = false;
+                prefs.antiAlias = true;
+                prefs.jpegColorSpace = JpegColorSpaceEnum.RGB;
+                prefs.jpegExportRange = ExportRangeOrAllPages.EXPORT_RANGE;
+
+                var exportedPaths = [];
+                for (var i = 0; i < ${docVarName}.pages.length; i++) {
+                    try {
+                        prefs.pageString = ${docVarName}.pages[i].name;
+                        var outFile = new File(${outputFolderVar}.fsName + "/thumb_" + ${docVarName}.pages[i].name + ".jpg");
+                        ${docVarName}.exportFile(ExportFormat.JPG, outFile, false);
+                        exportedPaths.push(outFile.fsName);
+                    } catch(pageErr) {
+                        // Egyedi oldalhibánál folytatjuk a többivel
+                    }
+                }
+                // -- END: JPEG Page Export Logic --
+    `;
+}
+
+/**
  * BELSŐ SEGÉD: Logika az oldaltartományok kinyeréséhez.
  * Kinyeri az oldalszámokat, rendezi őket, és tartományokat (range) képez a folytonos oldalakból.
  * A kimeneti formátum: "minPage:maxPage:[[start,end],[start,end],...]"

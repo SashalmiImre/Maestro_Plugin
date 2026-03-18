@@ -30,6 +30,10 @@ export {
     VALIDATION_TYPES
 } from '../shared/constants.js';
 
+export {
+    BUCKETS
+} from '../shared/appwriteIds.js';
+
 // ─── Dashboard-specifikus ───────────────────────────────────────────────────
 
 /** Közvetlen Appwrite endpoint (nem proxy-n keresztül). */
@@ -52,7 +56,8 @@ export const STORAGE_KEYS = {
     SELECTED_PUBLICATION: 'maestro.dashboard.selectedPublication',
     FILTER_STATUS: 'maestro.dashboard.filterStatus',
     FILTER_SHOW_IGNORED: 'maestro.dashboard.filterShowIgnored',
-    FILTER_SHOW_ONLY_MINE: 'maestro.dashboard.filterShowOnlyMine'
+    FILTER_SHOW_ONLY_MINE: 'maestro.dashboard.filterShowOnlyMine',
+    LAYOUT_ZOOM: 'maestro.dashboard.layoutZoom'
 };
 
 /** Sürgősség újraszámítás gyakorisága (5 perc). */

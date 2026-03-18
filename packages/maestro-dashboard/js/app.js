@@ -5,10 +5,11 @@
  */
 
 import { checkSession, login, logout, getCurrentUser } from './auth.js';
-import { initServices, fetchPublications, switchPublication, fetchAllTeamMembers, onDataChange, getPublications } from './data.js';
+import { initServices, fetchPublications, switchPublication, fetchAllTeamMembers, onDataChange, getPublications, getActivePublicationId } from './data.js';
 import { subscribeRealtime, unsubscribeRealtime } from './realtime.js';
 import { initPublicationList, renderPublicationList, getStoredPublicationId, storePublicationId } from './ui/publicationList.js';
 import { renderArticleTable } from './ui/articleTable.js';
+import { renderLayoutView } from './ui/layoutView.js';
 import { initFilterBar, applyFilters, isFilterActive } from './ui/filterBar.js';
 import { showToast, showLoading } from './ui/components.js';
 import { URGENCY_REFRESH_INTERVAL_MS } from './config.js';
@@ -25,10 +26,17 @@ const userNameSpan = document.getElementById('user-name');
 const contentTitle = document.getElementById('content-title');
 const articleCount = document.getElementById('article-count');
 const tableContainer = document.getElementById('table-container');
+const layoutContainer = document.getElementById('layout-container');
+const viewTableBtn = document.getElementById('view-table');
+const viewLayoutBtn = document.getElementById('view-layout');
 
 // ─── Sürgősség frissítés timer ──────────────────────────────────────────────
 
 let urgencyInterval = null;
+
+// ─── Aktív nézet ('table' vagy 'layout') ────────────────────────────────────
+
+let activeView = 'table';
 
 // ─── Nézet váltás ───────────────────────────────────────────────────────────
 
@@ -176,9 +184,32 @@ function handleDataChange({ type }) {
     }
 }
 
-// ─── Tábla frissítés ────────────────────────────────────────────────────────
+// ─── Nézet váltás ──────────────────────────────────────────────────────────
 
-function refreshTable() {
+function switchView(view) {
+    activeView = view;
+
+    if (view === 'table') {
+        tableContainer.style.display = '';
+        layoutContainer.style.display = 'none';
+        viewTableBtn.classList.add('active');
+        viewLayoutBtn.classList.remove('active');
+    } else {
+        tableContainer.style.display = 'none';
+        layoutContainer.style.display = '';
+        viewTableBtn.classList.remove('active');
+        viewLayoutBtn.classList.add('active');
+    }
+
+    refreshContent();
+}
+
+viewTableBtn.addEventListener('click', () => switchView('table'));
+viewLayoutBtn.addEventListener('click', () => switchView('layout'));
+
+// ─── Tartalom frissítés (mindkét nézet) ─────────────────────────────────────
+
+function refreshContent() {
     const filtered = applyFilters();
     articleCount.textContent = `${filtered.length} cikk`;
 
@@ -190,7 +221,16 @@ function refreshTable() {
         toggleBtn.style.borderColor = active ? '#3b82f6' : '';
     }
 
-    renderArticleTable(filtered);
+    if (activeView === 'table') {
+        renderArticleTable(filtered);
+    } else {
+        renderLayoutView(filtered, getPublications(), getActivePublicationId());
+    }
+}
+
+/** Visszafelé kompatibilis alias — a régi refreshTable hívások működjenek. */
+function refreshTable() {
+    refreshContent();
 }
 
 // ─── App indítás ────────────────────────────────────────────────────────────

@@ -18,6 +18,7 @@ import { logError } from "../../core/utils/logger.js";
 import { isNetworkError, isAuthError, getAPIErrorMessage } from "../../core/utils/errorUtils.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../core/config/maestroEvents.js";
 import { toCanonicalPath } from "../../core/utils/pathUtils.js";
+import { deleteOldThumbnails } from "../../core/utils/thumbnailUploader.js";
 
 /**
  * React Hook a kiadványok kezelésére
@@ -112,7 +113,16 @@ export const usePublications = () => {
             // 2. Kiadvány törlése ELŐSZÖR — ha ez sikertelen, semmi nem változott
             await dataDeletePublication(id);
 
-            // 3. Kapcsolódó cikkek takarítása (best-effort)
+            // 3. Thumbnail takarítás (best-effort)
+            // A kiadvány már törölve van, ezek az árva thumbnailek feleslegesen foglalnák a tárhelyet.
+            const articlesWithThumbnails = articlesResponse.rows.filter(a => a.thumbnails);
+            if (articlesWithThumbnails.length > 0) {
+                await Promise.allSettled(
+                    articlesWithThumbnails.map(a => deleteOldThumbnails(a.thumbnails))
+                );
+            }
+
+            // 4. Kapcsolódó cikkek takarítása (best-effort)
             // A kiadvány már törölve van, ezek az árva cikkek láthatatlanok a UI-ban.
             if (articlesResponse.rows.length > 0) {
                 const deleteResults = await Promise.allSettled(

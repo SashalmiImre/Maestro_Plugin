@@ -16,8 +16,11 @@ import {
     parsePageRangesResult,
     generateRenameFileScript,
     generateRenameOpenDocumentScript,
-    generateRollbackRenameScript
+    generateRollbackRenameScript,
+    generateThumbnailExportForOpenDocScript,
+    parseThumbnailExportResult
 } from "../../core/utils/indesign/index.js";
+import { uploadThumbnails, cleanupTempFiles, getTempFolderPath } from "../../core/utils/thumbnailUploader.js";
 import { isFileInFolder, toNativePath, toCanonicalPath, toRelativeArticlePath, toAbsoluteArticlePath, convertNativePathToUrl, parsePath, joinPath } from "../../core/utils/pathUtils.js";
 import { log, logError, logWarn } from "../../core/utils/logger.js";
 import { SCRIPT_LANGUAGE_JAVASCRIPT, TOAST_TYPES } from "../../core/utils/constants.js";
@@ -137,19 +140,21 @@ export const useArticles = (publicationId, publicationRoot) => {
             throw new Error(`Nem sikerült másolni a fájlt (${file.name}): ` + e.message);
         }
 
-        // --- 5. Oldalszámok kinyerése InDesign segítségével ---
+        // --- 5. Oldalszámok kinyerése és thumbnail generálás InDesign segítségével ---
         let startPage = null;
         let endPage = null;
         let pageRanges = null;
+        let thumbnailExportPaths = [];
+        let thumbnailTempFolder = null;
 
         try {
             const app = require("indesign").app;
             const filePath = copiedFile.nativePath;
-            
+
             // Ellenőrizzük, hogy nyitva van-e már a dokumentum
             const isOpenResult = app.doScript(generateIsDocumentOpenScript(filePath), SCRIPT_LANGUAGE_JAVASCRIPT, []);
             const wasAlreadyOpen = String(isOpenResult).trim() === "true";
-            
+
             // Ha nincs nyitva, megnyitjuk háttérben (láthatatlanul)
             if (!wasAlreadyOpen) {
                 const openScript = generateOpenDocumentScript(filePath, true, false);
@@ -159,11 +164,11 @@ export const useArticles = (publicationId, publicationRoot) => {
                 }
             }
 
-            // Oldalszámok lekérdezése szkripttel
+            // 5a. Oldalszámok lekérdezése szkripttel
             const script = generateExtractPageRangesScript(filePath);
             const resultStr = app.doScript(script, SCRIPT_LANGUAGE_JAVASCRIPT, []);
             const result = parsePageRangesResult(resultStr);
-            
+
             if (result.success) {
                 startPage = result.startPage;
                 endPage = result.endPage;
@@ -171,7 +176,30 @@ export const useArticles = (publicationId, publicationRoot) => {
             } else {
                 logWarn("Nem sikerült kinyerni az oldalszámokat:", result.error);
             }
-            
+
+            // 5b. Thumbnail generálás (a dokumentum még nyitva van)
+            try {
+                thumbnailTempFolder = getTempFolderPath();
+
+                const thumbScript = generateThumbnailExportForOpenDocScript(filePath, thumbnailTempFolder);
+                const thumbResult = app.doScript(thumbScript, SCRIPT_LANGUAGE_JAVASCRIPT, []);
+                const parsed = parseThumbnailExportResult(String(thumbResult));
+
+                if (parsed.success) {
+                    thumbnailExportPaths = parsed.filePaths;
+                } else if (parsed.linkProblems) {
+                    showToast(
+                        'Thumbnail kihagyva: képproblémák',
+                        TOAST_TYPES.WARNING,
+                        parsed.error
+                    );
+                } else {
+                    logWarn("[useArticles] Thumbnail generálás sikertelen:", parsed.error);
+                }
+            } catch (thumbErr) {
+                logWarn("[useArticles] Thumbnail generálás hiba:", thumbErr);
+            }
+
             // Ha mi nyitottuk meg, be is zárjuk
             if (!wasAlreadyOpen) {
                 const closeScript = generateCloseDocumentScript(filePath);
@@ -180,6 +208,22 @@ export const useArticles = (publicationId, publicationRoot) => {
         } catch (e) {
             logWarn("Hiba történt az InDesign oldalszám-kinyerés közben:", e);
             // Nem állunk meg hibával, a cikk létrejöhet oldalszámok nélkül is
+        }
+
+        // --- 5c. Thumbnail feltöltés (bezárás után, hálózati művelet) ---
+        let thumbnailsJson = null;
+        if (thumbnailExportPaths.length > 0) {
+            try {
+                const thumbData = await uploadThumbnails(thumbnailExportPaths, file.name);
+                if (thumbData.length > 0) {
+                    thumbnailsJson = JSON.stringify(thumbData);
+                }
+                if (thumbnailTempFolder) {
+                    await cleanupTempFiles(thumbnailTempFolder);
+                }
+            } catch (e) {
+                logWarn("[useArticles] Thumbnail feltöltés sikertelen:", e);
+            }
         }
 
         // --- 6. Adatbázis ellenőrzés ---
@@ -204,6 +248,7 @@ export const useArticles = (publicationId, publicationRoot) => {
                 startPage: startPage,
                 endPage: endPage,
                 pageRanges: pageRanges,
+                thumbnails: thumbnailsJson,
                 writerId: pub?.defaultWriterId ?? null,
                 editorId: pub?.defaultEditorId ?? null,
                 imageEditorId: pub?.defaultImageEditorId ?? null,

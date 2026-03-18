@@ -37,6 +37,13 @@ export {
     generateCollectImagesScript
 } from "./exportScripts.js";
 
+// Thumbnail (oldalkép) generálás
+export {
+    generateThumbnailExportScript,
+    generateThumbnailExportForOpenDocScript,
+    parseThumbnailExportResult
+} from "./thumbnailScripts.js";
+
 // Archiválás
 export {
     generateListInddFilesScript,

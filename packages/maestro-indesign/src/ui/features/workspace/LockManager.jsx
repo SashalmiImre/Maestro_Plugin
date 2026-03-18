@@ -37,7 +37,7 @@ import { log, logWarn, logError } from "../../../core/utils/logger.js";
 export const LockManager = () => {
     // 1. Felhasználói környezet
     const { user } = useUser();
-    const { publications } = useData();
+    const { publications, applyArticleUpdate } = useData();
     const { showToast } = useToast();
 
     // Ref-ek a closure-ök számára — mindig a friss értékeket lássák,
@@ -152,7 +152,7 @@ export const LockManager = () => {
             for (const article of response.rows) {
                 if (!isMountedRef.current) break;
                 try {
-                    await withRetry(
+                    const updatedDoc = await withRetry(
                         () => withTimeout(
                             tables.updateRow({
                                 databaseId: DATABASE_ID,
@@ -169,6 +169,8 @@ export const LockManager = () => {
                         { operationName: "LockManager: cleanupOrphanedLocks updateRow" }
                     );
                     log(`[LockManager] Orphaned lock törölve: ${article.name}`);
+                    // Optimista UI frissítés — az orphaned lock törlése azonnal megjelenjen
+                    if (updatedDoc?.$id) applyArticleUpdate(updatedDoc);
                 } catch (error) {
                     logError(`[LockManager] Orphaned lock törlése sikertelen (${article.name}):`, error);
                 }
@@ -295,6 +297,8 @@ export const LockManager = () => {
                 const lockResult = await WorkflowEngine.lockDocument(article, LOCK_TYPE.USER, user);
                 if (lockResult.success) {
                     log('[LockManager] Fájl zárolva:', article.name, '-', user.name);
+                    // Optimista UI frissítés — azonnal tükrözi a zárolást a helyi state-ben
+                    if (lockResult.document) applyArticleUpdate(lockResult.document);
                 } else {
                     logWarn('[LockManager] Zárolás sikertelen:', lockResult.error);
                     showToast('A dokumentum zárolása sikertelen', TOAST_TYPES.ERROR, lockResult.error || 'Nem sikerült zárolni a fájlt. Próbáld meg újra.');
@@ -339,6 +343,8 @@ export const LockManager = () => {
                 const unlockResult = await WorkflowEngine.unlockDocument(article, user);
                 if (unlockResult.success) {
                     log('[LockManager] Fájl feloldva:', article.name);
+                    // Optimista UI frissítés — azonnal tükrözi a feloldást a helyi state-ben
+                    if (unlockResult.document) applyArticleUpdate(unlockResult.document);
                 }
             }
         } catch (error) {
@@ -404,6 +410,8 @@ export const LockManager = () => {
                         const result = await WorkflowEngine.lockDocument(article, LOCK_TYPE.USER, user);
                         if (result.success) {
                             log('[LockManager] Fájl zárolva:', article.name, '-', user.name);
+                            // Optimista UI frissítés — azonnali visszajelzés a szinkronizált zárolásról
+                            if (result.document) applyArticleUpdate(result.document);
                         } else {
                             logWarn(`[LockManager] Zárolás sikertelen (${article.name}, ${article.$id}):`, result.error);
                         }
@@ -412,6 +420,8 @@ export const LockManager = () => {
                         const result = await WorkflowEngine.unlockDocument(article, user);
                         if (result.success) {
                             log('[LockManager] Fájl feloldva:', article.name);
+                            // Optimista UI frissítés — azonnali visszajelzés a szinkronizált feloldásról
+                            if (result.document) applyArticleUpdate(result.document);
                         } else {
                             logWarn(`[LockManager] Feloldás sikertelen (${article.name}, ${article.$id}):`, result.error);
                         }

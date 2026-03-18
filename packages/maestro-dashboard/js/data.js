@@ -5,7 +5,7 @@
  * Csapattag feloldás Cloud Function-nel.
  */
 
-import { Databases, Functions, Query } from 'appwrite';
+import { Databases, Functions, Storage, Query } from 'appwrite';
 import { getClient } from './auth.js';
 import {
     DATABASE_ID, COLLECTIONS, GET_TEAM_MEMBERS_FUNCTION_ID,
@@ -16,13 +16,18 @@ import {
 
 let databases = null;
 let functions = null;
+let storage = null;
 
 /** A login után hívandó, hogy a databases/functions kliensek éljenek. */
 export function initServices() {
     const client = getClient();
     databases = new Databases(client);
     functions = new Functions(client);
+    storage = new Storage(client);
 }
+
+/** Storage szolgáltatás elérése (thumbnail preview URL-ekhez). */
+export function getStorage() { return storage; }
 
 /** Lapozás méret az Appwrite lekérdezésekhez. */
 const PAGE_SIZE = 100;

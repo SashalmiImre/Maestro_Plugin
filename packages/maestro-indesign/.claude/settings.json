@@ -1,8 +1,14 @@
 {
-  "effortLevel": "high",
   "permissions": {
     "allow": [
-      "WebFetch(domain:github.com)"
+      "WebFetch(domain:github.com)",
+      "mcp__appwrite__storage_delete_bucket",
+      "Bash(bash /Users/imre.sashalmi/Documents/Maestro/Plugin/packages/maestro-dashboard/deploy.sh)",
+      "WebFetch(domain:status.appwrite.online)",
+      "mcp__appwrite__storage_list_files",
+      "Bash(grep -E \"\\\\.\\(js|ts\\)$\")",
+      "mcp__appwrite__storage_get_bucket"
     ]
-  }
+  },
+  "effortLevel": "high"
 }

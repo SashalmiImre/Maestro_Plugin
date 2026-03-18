@@ -34,5 +34,13 @@ export const TEAMS = {
     PROOFWRITERS: 'proofwriters'
 };
 
+/**
+ * Storage bucket azonosítók.
+ * @enum {string}
+ */
+export const BUCKETS = {
+    THUMBNAILS: 'thumbnails'
+};
+
 /** Cloud Function ID — csapattagok lekérése. */
 export const GET_TEAM_MEMBERS_FUNCTION_ID = '69599cf9000a865db98a';

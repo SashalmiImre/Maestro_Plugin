@@ -30,6 +30,7 @@ import { useUser } from "../../../core/contexts/UserContext.jsx";
 import { usePublications } from "../../../data/hooks/usePublications.js";
 import { useData } from "../../../core/contexts/DataContext.jsx";
 import { useWorkflowValidation } from "../../../data/hooks/useWorkflowValidation.js";
+import { useThumbnails } from "../../../data/hooks/useThumbnails.js";
 
 // Utils
 import { toAbsoluteArticlePath, toNativePath } from "../../../core/utils/pathUtils.js";
@@ -58,6 +59,7 @@ export const Workspace = () => {
     const { showToast } = useToast();
     const { updatePublication, publications } = usePublications();
     const { runAndPersistPreflight } = useWorkflowValidation();
+    useThumbnails();
 
     // Központi adatok elérése a DataContext-ből
     // Az articles lista automatikusan frissül a Realtime események alapján

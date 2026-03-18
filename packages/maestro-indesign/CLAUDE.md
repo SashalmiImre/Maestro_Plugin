@@ -170,6 +170,17 @@
     - **LockManager / DocumentMonitor**: Kanonikus útvonal-összehasonlítást használnak (`getArticleCanonicalPath()`) a cross-platform egyeztetéshez. A `nativePathToQueryVariants()` generálja a DB lekérdezéshez szükséges útvonal-variánsokat (relatív + legacy kanonikus).
     - **Edge case-ek**: Helyi (nem hálózati) fájlok nem kanonizálhatók — cross-platform nem működik velük. Ha a Windows symlink hiányzik, `checkPathAccessible()` false → piros fejléc.
 
+8. **Thumbnail Rendszer (Oldalkép generálás)**
+    - **Cél**: JPEG oldalkép thumbnailek generálása InDesign fájlokból → Appwrite Storage feltöltés → Dashboard Layout (flatplan) nézet.
+    - **Triggerek**: (1) `addArticle` — cikk hozzáadásakor a dokumentum még nyitva van. (2) `MaestroEvent.documentClosed` — a DocumentMonitor `registerTask` mintájával.
+    - **ExtendScript JPEG Export**: `doc.exportFile(ExportFormat.JPG, ...)` oldalanként, 120 DPI, `JPEGOptionsQuality.MEDIUM`, `exportingSpread = false`.
+    - **Link check**: Missing VAGY out-of-date linkek esetén thumbnail generálás kihagyása, warning toast megjelenítése.
+    - **Storage**: Appwrite `thumbnails` bucket, max 2MB/fájl, `.jpg` kiterjesztés. Az article `thumbnails` mező JSON tömb: `[{ fileId, page }]`.
+    - **Fájlok**: `thumbnailScripts.js` (ExtendScript generátorok), `thumbnailUploader.js` (upload/delete/cleanup), `useThumbnails.js` (React hook, documentClosed event).
+    - **Takarítás**: Kiadvány törléskor a `deleteOldThumbnails()` törli a kapcsolódó fájlokat a Storage-ból.
+    - **Dashboard Layout nézet**: Magazin konvenció szerinti spread elrendezés (1. oldal = címlap jobb, 2-3, 4-5, ...). Thumbnail preview URL: `storage.getFilePreview(BUCKETS.THUMBNAILS, fileId)`.
+    - **Alapelv**: Thumbnail generálás **soha nem blokkolja** a fő munkafolyamatot.
+
 ---
 
 ## Projektstruktúra
@@ -184,7 +195,7 @@ Maestro/
 ├── webpack.config.js             ← Webpack 5 konfig (entry: src/core/index.jsx → dist/bundle.js)
 │
 ├── ../maestro-shared/            ← Közös csomag (plugin + dashboard által megosztott konstansok és logika)
-│   ├── appwriteIds.js            ← Appwrite projekt/DB/gyűjtemény/csapat ID-k
+│   ├── appwriteIds.js            ← Appwrite projekt/DB/gyűjtemény/csapat/bucket ID-k
 │   ├── constants.js              ← Platform-független enumerációk (LOCK_TYPE, VALIDATION_TYPES)
 │   ├── workflowConfig.js         ← Workflow állapotok, markerek, időtartamok, STATUS_LABELS, TEAM_ARTICLE_FIELD
 │   └── urgency.js                ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színskála)
@@ -239,6 +250,7 @@ Maestro/
 │   │       ├── namingUtils.js          ← Név formázó helperek
 │   │       ├── promiseUtils.js         ← Promise segédfüggvények (withTimeout, withRetry)
 │   │       ├── archivingProcessor.js    ← Hibrid AI + szabály-alapú clustering (Union-Find, polygon clipping, TXT/XML output)
+│   │       ├── thumbnailUploader.js    ← Thumbnail JPEG feltöltés/törlés/takarítás (Appwrite Storage)
 │   │       ├── urgencyUtils.js         ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színek)
 │   │       ├── validationRunner.js     ← Validátor futtatás orchestrálása + standalone fájl létezés ellenőrzés
 │   │       ├── validators/             ← Tiszta validációs logika osztályok
@@ -256,6 +268,7 @@ Maestro/
 │   │       │   ├── exportScripts.js    ← PDF/nyomtatás export scriptek
 │   │       │   ├── preflightScripts.js ← Preflight ellenőrzés scriptek
 │   │       │   ├── archivingScripts.js ← Archiválási ExtendScript generátorok (adatkinyerés, fájlmentés, másolás)
+│   │       │   ├── thumbnailScripts.js ← Thumbnail JPEG export ExtendScript generátorok
 │   │       │   ├── scriptHelpers.js    ← Közös script építőelemek
 │   │       │   └── index.js
 │   │       └── workflow/                  ← Cikk állapotgép
@@ -275,6 +288,7 @@ Maestro/
 │   │       ├── useWorkflowValidation.js         ← Preflight + workflow validáció (esemény-vezérelt)
 │   │       ├── useDatabaseIntegrityValidation.js ← DB integritás esemény-feliratkozó hook
 │   │       ├── useOverlapValidation.js          ← Átfedés detektálás esemény-feliratkozó hook
+│   │       ├── useThumbnails.js                ← Thumbnail generálás hook (documentClosed event)
 │   │       ├── useDeadlines.js                  ← Határidők CRUD
 │   │       ├── useLayouts.js                    ← Layoutok CRUD + layoutChanged esemény
 │   │       ├── useUrgency.js                    ← Sürgősség-számítás hook (percenkénti frissítés)
