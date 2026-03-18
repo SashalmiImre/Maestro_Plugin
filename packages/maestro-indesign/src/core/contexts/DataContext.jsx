@@ -873,6 +873,9 @@ export const DataProvider = ({ children }) => {
             const { events, payload } = response;
             const event = events[0];
 
+            // Diagnosztika: Realtime esemény beérkezett a DataContext handler-be
+            log(`[DataContext] Realtime event: ${event} | payload.$id=${payload?.$id} | payload.$updatedAt=${payload?.$updatedAt}`);
+
             // --- Publikációk ---
             if (event.includes(PUBLICATIONS_COLLECTION_ID)) {
                 setPublications(prev => {
@@ -898,6 +901,9 @@ export const DataProvider = ({ children }) => {
             // --- Cikkek ---
             else if (event.includes(ARTICLES_COLLECTION_ID)) {
                 const currentActivePublicationId = activePublicationIdRef.current;
+
+                // Diagnosztika: cikk esemény szűrő-feltételek
+                log(`[DataContext] Cikk event: articleId=${payload.$id}, activePublicationId=${currentActivePublicationId}, payload.publicationId=${payload.publicationId}, match=${payload.publicationId === currentActivePublicationId}`);
 
                 if (currentActivePublicationId) {
                     const currentArticles = latestArticlesRef.current;

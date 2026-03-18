@@ -172,19 +172,18 @@ const useColumnResize = () => {
 /**
  * Egyedi comparator a TableRow-hoz.
  * A columns/columnWidths/callback referenciák minden renderben újak,
- * ezért az item $updatedAt mezőjét + a rowStyle.background-ot hasonlítjuk.
- * Ha az item adata nem változott és a háttérszín sem, kihagyjuk a renderelést.
+ * ezért az item referenciáját + a rowStyle.background-ot hasonlítjuk.
+ *
+ * Az item referencia-egyezés biztonságos, mert a DataContext `.map()` megőrzi
+ * a változatlan elemek referenciáját — csak a tényleges változás kap új objektumot.
  *
  * renderVersion: a szülő által kezelt escape-hatch — ha a renderCell closure-ok
  * megváltoztak (pl. új context adat), a szülő ezt a számot lépteti, ami kikényszeríti
- * az újrarenderelést még akkor is, ha az item $updatedAt-ja nem változott.
+ * az újrarenderelést még akkor is, ha az item nem változott.
  */
 const areRowPropsEqual = (prev, next) => {
-    if (prev.item !== next.item) {
-        // Referencia változott — ellenőrizzük az $updatedAt-ot
-        if (prev.item.$updatedAt !== next.item.$updatedAt) return false;
-        if (prev.item.$id !== next.item.$id) return false;
-    }
+    // Referencia változott → az adat módosult, újrarenderelés szükséges
+    if (prev.item !== next.item) return false;
     // Háttérszín változott? (sürgősség frissítés)
     if (prev.rowStyle?.background !== next.rowStyle?.background) return false;
     // Oszlopszélesség változott? (resize)

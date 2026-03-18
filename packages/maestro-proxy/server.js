@@ -9,10 +9,26 @@ const Groq = require('groq-sdk');
  *
  * Provides a secure middle layer for UXP plugins to communicate with Appwrite Cloud,
  * handling authentication injection and CORS headers.
+ *
+ * Fő felelősségek:
+ * - HTTP reverse proxy (API kérések → Appwrite Cloud)
+ * - WebSocket proxy (Realtime események, auth injection a query param-okból)
+ * - TCP Keep-Alive + WebSocket ping frame-ek az idle timeout ellen
+ * - EPIPE/ECONNRESET zajszűrés
+ * - Graceful shutdown (SIGTERM)
  */
 
 const app = express();
 const port = process.env.PORT || 3000;
+
+// --- WebSocket Socket Tracking ---
+const activeWsSockets = new Set();
+const WS_PING_INTERVAL_MS = 15000; // 15 másodpercenként
+const WS_PING_FRAME = Buffer.from([0x89, 0x00]); // WebSocket ping frame (FIN + opcode 9, no payload)
+
+/** Zajszűrő: EPIPE/ECONNRESET nem valódi hibák, hanem normális socket lifecycle események */
+const isSocketNoise = (error) =>
+    error && (error.code === 'EPIPE' || error.code === 'ECONNRESET' || error.code === 'ECONNABORTED');
 
 // Security: Hide Express signature
 app.disable('x-powered-by');
@@ -648,6 +664,9 @@ const baseProxyOptions = {
     pathRewrite: (path) => path.replace('/maestro-proxy', ''), // Strip prefix if present
 
     onError: (error, req, res) => {
+        // Zajszűrés: EPIPE/ECONNRESET normális socket lifecycle események
+        if (isSocketNoise(error)) return;
+
         console.error('[Proxy Error]', error.message);
 
         // WebSocket error-nél a "res" valójában egy Socket objektum, aminek nincs status() metódusa
@@ -697,21 +716,46 @@ const wsProxy = createProxyMiddleware({
      */
     onProxyReqWs: (proxyReq, req, socket) => {
         prepareProxyRequest(proxyReq, req);
-        console.log(`[Proxy] 🔌 WebSocket Upgrade`);
+        console.log(`[Proxy] [WS] WebSocket Upgrade — aktív kapcsolatok: ${activeWsSockets.size + 1}`);
+
+        // TCP Keep-Alive a client socket-en (megakadályozza az OS idle timeout-ot)
+        socket.setKeepAlive(true, 30000);
+
+        // Socket tracking (ping frame-ekhez és diagnosztikához)
+        activeWsSockets.add(socket);
+
+        // Diagnosztika: upstream adat (Appwrite → kliens) figyelése
+        let messageCount = 0;
+        const originalWrite = socket.write;
+        socket.write = function(data, ...args) {
+            // Proxy saját ping frame-jeit ne számolja
+            if (data === WS_PING_FRAME) return originalWrite.call(this, data, ...args);
+            messageCount++;
+            // Első 5 üzenet logolása, utána minden 50. — a teljesítmény érdekében
+            if (messageCount <= 5 || messageCount % 50 === 0) {
+                console.log(`[Proxy] [WS_DATA] -> Kliens #${messageCount} (${data.length} bytes)`);
+            }
+            return originalWrite.call(this, data, ...args);
+        };
 
         socket.on('close', () => {
+            activeWsSockets.delete(socket);
             const now = Date.now();
-            console.log(`[Proxy] 🔓 WebSocket Closed`);
+            console.log(`[Proxy] [WS] WebSocket Closed — aktív: ${activeWsSockets.size}, üzenetek: ${messageCount}`);
 
             if (lastDisconnectTime) {
                 const diffMs = now - lastDisconnectTime;
                 const diffSec = (diffMs / 1000).toFixed(1);
-                console.log(`[Proxy] ⏱️ Idő az előző szakadás óta: ${diffSec} másodperc`);
-            } else {
-                console.log(`[Proxy] ⏱️ Első szakadás rögzítve`);
+                console.log(`[Proxy] [WS] Idő az előző szakadás óta: ${diffSec}s`);
             }
-
             lastDisconnectTime = now;
+        });
+
+        socket.on('error', (err) => {
+            if (!isSocketNoise(err)) {
+                console.error('[Proxy] [WS] Socket error:', err.message);
+            }
+            activeWsSockets.delete(socket);
         });
     }
 });
@@ -729,6 +773,55 @@ app.use((req, res) => {
 
 // Start the server
 const server = app.listen(port, () => {
-    console.log(`✅ Maestro CORS Proxy running on port ${port}`);
-    console.log(`   Health check: http://localhost:${port}/v1/health`);
+    console.log(`[Proxy] Maestro CORS Proxy running on port ${port}`);
+    console.log(`[Proxy] Health check: http://localhost:${port}/v1/health`);
 });
+
+// --- TCP Keep-Alive ---
+// A Railway/Apache idle timeout ellen (alapértelmezett Node.js 5s → 65s)
+server.keepAliveTimeout = 65000;
+server.headersTimeout = 66000; // keepAliveTimeout-nál kicsit nagyobb (Node.js ajánlás)
+
+// --- WebSocket Ping Frames ---
+// 15 másodpercenként ping frame küldése az aktív WebSocket socket-ekre,
+// megakadályozva az Apache/Passenger/Railway idle timeout-ot.
+const pingInterval = setInterval(() => {
+    for (const socket of activeWsSockets) {
+        if (socket.destroyed || socket.writableEnded) {
+            activeWsSockets.delete(socket);
+            continue;
+        }
+        try {
+            socket.write(WS_PING_FRAME);
+        } catch (e) {
+            // Socket már lezárt, a close handler kitakarítja
+            activeWsSockets.delete(socket);
+        }
+    }
+}, WS_PING_INTERVAL_MS);
+
+// --- Graceful Shutdown ---
+function shutdown(signal) {
+    console.log(`[Proxy] ${signal} received, shutting down...`);
+    clearInterval(pingInterval);
+
+    // Aktív WebSocket-ek lezárása
+    for (const socket of activeWsSockets) {
+        try { socket.destroy(); } catch (e) { /* ignore */ }
+    }
+    activeWsSockets.clear();
+
+    server.close(() => {
+        console.log('[Proxy] Server closed');
+        process.exit(0);
+    });
+
+    // Ha 10s alatt nem záródik le, kilépés
+    setTimeout(() => {
+        console.error('[Proxy] Forced shutdown after timeout');
+        process.exit(1);
+    }, 10000).unref();
+}
+
+process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => shutdown('SIGINT'));
