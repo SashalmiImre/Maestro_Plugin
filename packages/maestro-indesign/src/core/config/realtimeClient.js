@@ -317,9 +317,6 @@ class RealtimeClient {
                     try {
                         const message = JSON.parse(event.data);
 
-                        // Diagnosztika: nyers WS üzenet érkezett
-                        log(`[Realtime] [WS_MSG] type=${message.type}, hasData=${!!message.data}, user=${message.data?.user ? 'YES' : 'NO'}`);
-
                         if (message.type === 'error') {
                             const errorCode = message.data?.code;
                             this.consecutiveServerErrors++;
@@ -353,7 +350,7 @@ class RealtimeClient {
 
                         this.realtime.handleMessage(message);
                     } catch (error) {
-                        logError('[Realtime] [WS_MSG_ERR] Üzenet feldolgozási hiba:', error);
+                        // ignore parse errors
                     }
                 });
 
@@ -570,9 +567,6 @@ class RealtimeClient {
             const sub = await this.realtime.subscribe(channel, (response) => {
                 this._notifyConnectionChange(true);
                 this.lastActivity = Date.now();
-
-                // Diagnosztika: WebSocket esemény érkezett
-                log(`[Realtime] [EVENT] Esemény beérkezett — event: ${response.events?.[0]}, channels: ${response.channels?.length}`);
 
                 // Callback-ek meghívása
                 // Megjegyzés: A végtelen ciklusokat az adatok összehasonlítása akadályozza meg

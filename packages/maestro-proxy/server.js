@@ -721,27 +721,13 @@ const wsProxy = createProxyMiddleware({
         // TCP Keep-Alive a client socket-en (megakadályozza az OS idle timeout-ot)
         socket.setKeepAlive(true, 30000);
 
-        // Socket tracking (ping frame-ekhez és diagnosztikához)
+        // Socket tracking (ping frame-ekhez)
         activeWsSockets.add(socket);
-
-        // Diagnosztika: upstream adat (Appwrite → kliens) figyelése
-        let messageCount = 0;
-        const originalWrite = socket.write;
-        socket.write = function(data, ...args) {
-            // Proxy saját ping frame-jeit ne számolja
-            if (data === WS_PING_FRAME) return originalWrite.call(this, data, ...args);
-            messageCount++;
-            // Első 5 üzenet logolása, utána minden 50. — a teljesítmény érdekében
-            if (messageCount <= 5 || messageCount % 50 === 0) {
-                console.log(`[Proxy] [WS_DATA] -> Kliens #${messageCount} (${data.length} bytes)`);
-            }
-            return originalWrite.call(this, data, ...args);
-        };
 
         socket.on('close', () => {
             activeWsSockets.delete(socket);
             const now = Date.now();
-            console.log(`[Proxy] [WS] WebSocket Closed — aktív: ${activeWsSockets.size}, üzenetek: ${messageCount}`);
+            console.log(`[Proxy] [WS] WebSocket Closed — aktív: ${activeWsSockets.size}`);
 
             if (lastDisconnectTime) {
                 const diffMs = now - lastDisconnectTime;
