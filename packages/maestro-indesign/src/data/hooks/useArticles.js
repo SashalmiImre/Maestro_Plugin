@@ -218,11 +218,16 @@ export const useArticles = (publicationId, publicationRoot) => {
                 if (thumbData.length > 0) {
                     thumbnailsJson = JSON.stringify(thumbData);
                 }
-                if (thumbnailTempFolder) {
-                    await cleanupTempFiles(thumbnailTempFolder);
-                }
             } catch (e) {
                 logWarn("[useArticles] Thumbnail feltöltés sikertelen:", e);
+            } finally {
+                if (thumbnailTempFolder) {
+                    try {
+                        await cleanupTempFiles(thumbnailTempFolder);
+                    } catch (cleanupErr) {
+                        logWarn("[useArticles] Temp fájlok törlése sikertelen:", cleanupErr);
+                    }
+                }
             }
         }
 

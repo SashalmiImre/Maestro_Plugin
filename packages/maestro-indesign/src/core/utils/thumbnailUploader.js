@@ -8,12 +8,11 @@
 
 import { storage, ID } from "../config/appwriteConfig.js";
 import { BUCKETS } from "maestro-shared/appwriteIds.js";
-import { convertNativePathToUrl } from "./pathUtils.js";
+import { convertNativePathToUrl, escapePathForExtendScript } from "./pathUtils.js";
 import { withRetry } from "./promiseUtils.js";
 import { log, logError, logWarn } from "./logger.js";
 import { SCRIPT_LANGUAGE_JAVASCRIPT } from "./constants.js";
 import { getIndesignApp } from "./indesign/indesignUtils.js";
-import { escapePathForExtendScript } from "./pathUtils.js";
 
 const storage_module = require("uxp").storage;
 
@@ -48,7 +47,7 @@ export async function uploadThumbnails(filePaths, articleId) {
     for (const nativePath of filePaths) {
         try {
             // Oldalszám kinyerése a fájlnévből: thumb_23.jpg → "23"
-            const fileName = nativePath.split('/').pop() || nativePath.split('\\').pop();
+            const fileName = nativePath.replace(/.*[/\\]/, '');
             const pageMatch = fileName.match(/^thumb_(.+)\.jpg$/);
             const page = pageMatch ? pageMatch[1] : 'unknown';
 
