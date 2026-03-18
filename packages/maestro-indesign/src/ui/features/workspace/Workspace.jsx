@@ -219,7 +219,7 @@ export const Workspace = () => {
             logError("Failed to open article:", e);
             showToast('A dokumentum megnyitása sikertelen', TOAST_TYPES.ERROR, e.message || 'Ismeretlen hiba történt.');
         }
-    }, [user, showToast]);
+    }, [user, publications, showToast]);
 
     // A Realtime frissítéseket mostantól a DataContext kezeli központilag.
     // A selectedArticle automatikusan frissül az articles tömb változásakor (useMemo).

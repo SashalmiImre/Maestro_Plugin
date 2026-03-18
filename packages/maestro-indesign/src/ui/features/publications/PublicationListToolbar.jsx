@@ -16,17 +16,15 @@ export const PublicationListToolbar = ({ createPublication }) => {
 
     return (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}>
-            <sp-heading size="s">KIADVÁNYOK</sp-heading>
-            <div style={{ display: "flex", alignItems: "center" }}>
-                <sp-action-button
-                    quiet
+            <sp-heading size="s" style={{ margin: 0 }}>KIADVÁNYOK</sp-heading>
+            <sp-body style={{ margin: 0 }}>
+                <div
                     onClick={handleCreatePublicationClick}
                     title="Új Kiadvány"
-                    className="icon-btn"
-                    size="s">
-                    <sp-icon-add slot="icon" size="s" style={{ width: "14px", height: "14px", display: "inline-block" }}></sp-icon-add>
-                </sp-action-button>
-            </div>
+                    style={{ cursor: "pointer", display: "flex", alignItems: "center" }}>
+                    <sp-icon-add-circle size="m" style={{ width: "14px", height: "14px", display: "inline-block" }}></sp-icon-add-circle>
+                </div>
+            </sp-body>
         </div>
     );
 };

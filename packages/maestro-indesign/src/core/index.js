@@ -88,6 +88,7 @@ import "@swc-uxp-wrappers/picker-button/sp-picker-button.js";
 import "@spectrum-web-components/icons-workflow/icons/sp-icon-chevron-right.js";
 import "@spectrum-web-components/icons-workflow/icons/sp-icon-chevron-down.js";
 import "@spectrum-web-components/icons-workflow/icons/sp-icon-add.js";
+import "@spectrum-web-components/icons-workflow/icons/sp-icon-add-circle.js";
 import "@spectrum-web-components/icons-workflow/icons/sp-icon-delete.js";
 import "@spectrum-web-components/icons-workflow/icons/sp-icon-filter.js";
 import "@spectrum-web-components/icons-workflow/icons/sp-icon-arrow-left.js";
