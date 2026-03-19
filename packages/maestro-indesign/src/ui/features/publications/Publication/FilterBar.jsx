@@ -24,6 +24,8 @@ const statusOptions = Object.values(WORKFLOW_STATES).map(state => {
  * @param {Function} props.onShowIgnoredChange - (show: boolean) => void
  * @param {boolean} props.showOnlyMine - Csak saját cikkek mutatása
  * @param {Function} props.onShowOnlyMineChange - (show: boolean) => void
+ * @param {boolean} props.showPlaceholders - Helykitöltő (üres) sorok mutatása
+ * @param {Function} props.onShowPlaceholdersChange - (show: boolean) => void
  * @param {boolean} props.isFilterActive - Van-e aktív (nem alapértelmezett) szűrő
  * @param {Function} props.onReset - Szűrők alaphelyzetbe állítása
  */
@@ -34,6 +36,8 @@ const FilterBar = React.memo(({
     onShowIgnoredChange,
     showOnlyMine,
     onShowOnlyMineChange,
+    showPlaceholders,
+    onShowPlaceholdersChange,
     isFilterActive,
     onReset
 }) => {
@@ -150,7 +154,7 @@ const FilterBar = React.memo(({
                 ))}
             </div>
 
-            {/* Tulajdonos szűrő */}
+            {/* Extra szűrők: Csak a saját cikkeim + Helykitöltők */}
             <div style={{
                 borderTop: "1px solid var(--spectrum-global-color-gray-300)",
                 marginTop: "4px",
@@ -162,6 +166,13 @@ const FilterBar = React.memo(({
                     size="s"
                 >
                     <span style={{ verticalAlign: "middle" }}>Csak a saját cikkeim</span>
+                </CustomCheckbox>
+                <CustomCheckbox
+                    checked={showPlaceholders}
+                    onChange={() => onShowPlaceholdersChange(!showPlaceholders)}
+                    size="s"
+                >
+                    <span style={{ verticalAlign: "middle" }}>Helykitöltők mutatása</span>
                 </CustomCheckbox>
             </div>
         </div>

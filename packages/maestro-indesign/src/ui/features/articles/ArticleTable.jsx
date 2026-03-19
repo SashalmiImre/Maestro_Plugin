@@ -10,6 +10,9 @@ import { CustomTable } from "../../common/Table/CustomTable.jsx";
 import { useValidation } from "../../../core/contexts/ValidationContext.jsx";
 import { useData } from "../../../core/contexts/DataContext.jsx";
 
+/** Helykitöltő sorok háttérszíne (UXP nem támogatja a repeating-linear-gradient-et) */
+const PLACEHOLDER_BG = 'rgba(128, 128, 128, 0.06)';
+
 export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }) => {
     const { user: currentUser } = useUser();
     const { validationResults } = useValidation();
@@ -126,7 +129,16 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
             label: "Cikknév",
             width: "40%",
             sortable: true,
-            renderCell: (article) => (article.name || <span style={{ fontStyle: "italic", color: "red" }}>Névtelen</span>)
+            renderCell: (article) => {
+                if (article.isPlaceholder) {
+                    return (
+                        <span style={{ fontStyle: "italic", color: "var(--spectrum-global-color-gray-500)" }}>
+                            Nincs hozzárendelt cikk
+                        </span>
+                    );
+                }
+                return article.name || <span style={{ fontStyle: "italic", color: "red" }}>Névtelen</span>;
+            }
         },
         {
             id: "lock",
@@ -134,6 +146,7 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
             width: "20%",
             sortable: true,
             renderCell: (article) => {
+                if (article.isPlaceholder) return null;
                 const lockLabel = getLockLabel(article);
                 return lockLabel && (
                     <span style={{ fontSize: "10px", fontWeight: "bold", textTransform: "uppercase", display: "block" }}>
@@ -147,7 +160,7 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
             label: "Státusz",
             width: "15%",
             sortable: true,
-            renderCell: (article) => <WorkflowStatus article={article} />
+            renderCell: (article) => article.isPlaceholder ? null : <WorkflowStatus article={article} />
         },
         {
             id: "validator",
@@ -156,6 +169,7 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
             sortable: true,
             align: "center",
             renderCell: (article) => {
+                if (article.isPlaceholder) return null;
                 const activeItems = getAllActiveItems(article.$id);
                 if (activeItems.length === 0) return null;
 
@@ -250,6 +264,7 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
     };
 
     const handleRowClick = (article) => {
+        if (article.isPlaceholder) return;
         if (clickTimerRef.current) {
             clearTimeout(clickTimerRef.current);
         }
@@ -259,14 +274,23 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
         }, UI_TIMING.CLICK_DEBOUNCE_MS);
     };
 
-    /** Sürgősség alapú sor háttér (progresszív gradient) */
+    /** Sürgősség alapú sor háttér (progresszív gradient) + helykitöltő csíkos minta */
     const getRowStyle = useCallback((article) => {
-        const urgency = urgencyMap.get(article.$id);
-        if (!urgency?.background) return undefined;
-        return { background: urgency.background };
+        const urgencyBg = urgencyMap.get(article.$id)?.background;
+
+        if (article.isPlaceholder) {
+            return {
+                background: urgencyBg || undefined,
+                backgroundColor: PLACEHOLDER_BG
+            };
+        }
+
+        if (!urgencyBg) return undefined;
+        return { background: urgencyBg };
     }, [urgencyMap]);
 
     const handleRowDoubleClick = (article) => {
+        if (article.isPlaceholder) return;
         if (clickTimerRef.current) {
             clearTimeout(clickTimerRef.current);
             clickTimerRef.current = null;

@@ -18,6 +18,7 @@ import { log, logError } from "../../../../core/utils/logger.js";
 import { checkPathAccessible, toNativePath } from "../../../../core/utils/pathUtils.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../../core/config/maestroEvents.js";
 import { checkElementPermission, PUBLICATION_ELEMENT_PERMISSIONS } from "../../../../core/utils/workflow/elementPermissions.js";
+import { buildPlaceholderRows } from "../../../../core/utils/pageGapUtils.js";
 
 export const Publication = React.memo(({ publication, onDelete, onRename, onShowProperties, isExpanded, onToggle }) => {
     const { user } = useUser();
@@ -101,9 +102,12 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
     const [showOnlyMine, setShowOnlyMine] = useState(
         () => localStorage.getItem(STORAGE_KEYS.FILTER_SHOW_ONLY_MINE) === 'true'
     );
+    const [showPlaceholders, setShowPlaceholders] = useState(
+        () => localStorage.getItem(STORAGE_KEYS.FILTER_SHOW_PLACEHOLDERS) !== 'false'
+    );
 
     const allStatuses = Object.values(WORKFLOW_STATES);
-    const isFilterActive = statusFilters.length !== allStatuses.length || !showIgnored || showOnlyMine;
+    const isFilterActive = statusFilters.length !== allStatuses.length || !showIgnored || showOnlyMine || !showPlaceholders;
 
     const handleFilterClick = (e) => {
         e.stopPropagation();
@@ -125,13 +129,20 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
         localStorage.setItem(STORAGE_KEYS.FILTER_SHOW_ONLY_MINE, String(value));
     }, []);
 
+    const handleShowPlaceholdersChange = useCallback((value) => {
+        setShowPlaceholders(value);
+        localStorage.setItem(STORAGE_KEYS.FILTER_SHOW_PLACEHOLDERS, String(value));
+    }, []);
+
     const resetFilters = () => {
         setStatusFilters(Object.values(WORKFLOW_STATES));
         setShowIgnored(true);
         setShowOnlyMine(false);
+        setShowPlaceholders(true);
         localStorage.removeItem(STORAGE_KEYS.FILTER_STATUS);
         localStorage.removeItem(STORAGE_KEYS.FILTER_SHOW_IGNORED);
         localStorage.removeItem(STORAGE_KEYS.FILTER_SHOW_ONLY_MINE);
+        localStorage.removeItem(STORAGE_KEYS.FILTER_SHOW_PLACEHOLDERS);
     };
 
     /** A felhasználó csapattagságaihoz tartozó contributor mezőnevek */
@@ -167,6 +178,17 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
         log(`[Publication] Articles stats: Total fetched: ${articles.length}, Shown: ${filtered.length}. Filtered out: ${articles.length - filtered.length}`);
         return filtered;
     }, [articles, statusFilters, showIgnored, showOnlyMine, userContributorFields, user?.$id]);
+
+    /** Helykitöltő sorok: a kiadvány terjedelmén belüli lefedetlen oldalcsoportok */
+    const placeholderRows = useMemo(() => {
+        return buildPlaceholderRows(articles, publication);
+    }, [articles, publication]);
+
+    /** Táblázat adatai: szűrt cikkek + opcionálisan helykitöltők */
+    const tableData = useMemo(() => {
+        if (showOnlyMine || !showPlaceholders) return filteredArticles;
+        return [...filteredArticles, ...placeholderRows];
+    }, [filteredArticles, placeholderRows, showPlaceholders, showOnlyMine]);
 
     const canOpenPublicationProperties = useMemo(() => {
         return checkElementPermission(PUBLICATION_ELEMENT_PERMISSIONS.publicationProperties, user).allowed;
@@ -409,6 +431,8 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                         onShowIgnoredChange={handleShowIgnoredChange}
                         showOnlyMine={showOnlyMine}
                         onShowOnlyMineChange={handleShowOnlyMineChange}
+                        showPlaceholders={showPlaceholders}
+                        onShowPlaceholdersChange={handleShowPlaceholdersChange}
                         isFilterActive={isFilterActive}
                         onReset={resetFilters}
                     />
@@ -418,7 +442,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
             {
                 isExpanded && (
                     <ArticleTable
-                        articles={filteredArticles}
+                        articles={tableData}
                         publication={publication}
                         onOpen={handleOpenArticle}
                         onShowProperties={(article, type) => onShowProperties?.(article, type, publication)}

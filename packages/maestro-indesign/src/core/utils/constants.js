@@ -30,6 +30,7 @@ export const STORAGE_KEYS = {
     FILTER_STATUS: "maestro.filter.status",                   // Kiválasztott workflow állapotok (JSON tömb)
     FILTER_SHOW_IGNORED: "maestro.filter.showIgnored",        // Kimarad cikkek mutatása (boolean string)
     FILTER_SHOW_ONLY_MINE: "maestro.filter.showOnlyMine",     // Csak saját cikkek (boolean string)
+    FILTER_SHOW_PLACEHOLDERS: "maestro.filter.showPlaceholders", // Helykitöltő sorok mutatása (boolean string)
 };
 
 // Útvonal Konfiguráció
