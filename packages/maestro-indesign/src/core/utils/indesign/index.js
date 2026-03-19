@@ -20,6 +20,7 @@ export {
     generateRenameFileScript,
     generateRenameOpenDocumentScript,
     generateRollbackRenameScript,
+    generateDeleteOldPdfsScript,
     parsePageRangesResult,
     parseExecutionStatus
 } from "./documentScripts.js";

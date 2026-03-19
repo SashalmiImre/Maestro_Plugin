@@ -527,3 +527,50 @@ export function parseExecutionStatus(resultStr) {
     }
     return { success: false, error: resultStr };
 }
+
+// ============================================================================
+// PDF Takarítás
+// ============================================================================
+
+/**
+ * Generál egy scriptet a régi PDF fájl(ok) törléséhez a megadott almappákból.
+ *
+ * Átpaginázáskor a korábbi oldalszámmal generált PDF-ek elavulttá válnak.
+ * Ez a script a kiadvány mappáján belüli almappákban (pl. __PDF__, __FINAL_PDF__)
+ * keresi és törli a megadott nevű fájlt.
+ *
+ * @param {string} publicationPath - A kiadvány natív mappa útvonala.
+ * @param {string} pdfFileName - A törlendő PDF fájl neve (pl. "005 012 CikkNeve.pdf").
+ * @param {string[]} folderNames - A célmappák nevei (pl. ["__PDF__", "__FINAL_PDF__"]).
+ * @returns {string} ExtendScript kód — "deleted:N" eredményt ad (N = törölt fájlok száma).
+ */
+export function generateDeleteOldPdfsScript(publicationPath, pdfFileName, folderNames) {
+    const escapedPubPath = escapePathForExtendScript(publicationPath);
+    const escapedFileName = escapePathForExtendScript(pdfFileName);
+    const foldersJs = folderNames.map(f => `"${escapePathForExtendScript(f)}"`).join(',');
+
+    return `
+        (function() {
+            try {
+                var pubPath = "${escapedPubPath}";
+                var fileName = "${escapedFileName}";
+                var folders = [${foldersJs}];
+                var deleted = 0;
+
+                for (var i = 0; i < folders.length; i++) {
+                    var filePath = pubPath + "/" + folders[i] + "/" + fileName;
+                    var f = new File(filePath);
+                    if (f.exists) {
+                        if (f.remove()) {
+                            deleted++;
+                        }
+                    }
+                }
+
+                return "deleted:" + deleted;
+            } catch(e) {
+                return "ERROR:" + e.message;
+            }
+        })();
+    `;
+}

@@ -196,13 +196,24 @@ function buildPageMap(articles, coverageStart, coverageEnd) {
             const pageNum = parseInt(thumb.page, 10);
             if (isNaN(pageNum) || pageNum < coverageStart || pageNum > coverageEnd) continue;
 
-            pageMap[pageNum] = {
-                fileId: thumb.fileId,
-                thumbnailUrl: getThumbnailPreviewUrl(thumb.fileId),
-                articleName: article.name,
-                state: article.state,
-                ignored: article.ignored
-            };
+            const existing = pageMap[pageNum];
+
+            if (existing && existing.articleName) {
+                // Ütközés — megtartjuk az első cikk thumbnailjet, jelöljük a konfliktust
+                if (!existing.conflict) {
+                    existing.conflict = true;
+                    existing.conflictArticles = [existing.articleName];
+                }
+                existing.conflictArticles.push(article.name);
+            } else {
+                pageMap[pageNum] = {
+                    fileId: thumb.fileId,
+                    thumbnailUrl: getThumbnailPreviewUrl(thumb.fileId),
+                    articleName: article.name,
+                    state: article.state,
+                    ignored: article.ignored
+                };
+            }
         }
     }
 
@@ -311,11 +322,23 @@ function renderPageSlot(pageData, pageNum) {
     const safeName = escapeHtml(pageData.articleName);
     const safeUrl = escapeHtml(pageData.thumbnailUrl);
 
+    // Ütközés badge (ha több cikk is ugyanezen az oldalon van)
+    const conflictBadge = pageData.conflict
+        ? `<div class="page-conflict-badge" title="${escapeHtml('Oldalütközés: ' + pageData.conflictArticles.join(', '))}">
+               <svg width="16" height="16" viewBox="0 0 14 14">
+                   <path d="M7 1L13 13H1L7 1Z" fill="#ea580c"/>
+                   <path d="M7 5.5v3" stroke="white" stroke-width="1.5" stroke-linecap="round"/>
+                   <circle cx="7" cy="10.5" r="0.8" fill="white"/>
+               </svg>
+           </div>`
+        : '';
+
     return `
         <div class="page-slot${ignoredClass}">
             <div class="page-image">
                 <img src="${safeUrl}" alt="${pageData.pageNum}. oldal" loading="lazy" />
                 <div class="page-state-bar" style="background-color: ${stateColor}"></div>
+                ${conflictBadge}
             </div>
             <div class="page-info">
                 <span class="page-number">${pageData.pageNum}</span>

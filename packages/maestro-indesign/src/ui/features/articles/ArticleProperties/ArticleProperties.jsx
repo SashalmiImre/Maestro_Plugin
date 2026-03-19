@@ -17,7 +17,8 @@ import { ContributorsSection } from "./ContributorsSection.jsx";
 import { ValidationSection } from "./ValidationSection.jsx";
 
 // Utils
-import { isValidFileName } from "../../../../core/utils/pathUtils.js";
+import { isValidFileName, toNativePath, toAbsoluteArticlePath } from "../../../../core/utils/pathUtils.js";
+import { formatPagedFileName } from "../../../../core/utils/namingUtils.js";
 import { WorkflowEngine } from "../../../../core/utils/workflow/workflowEngine.js";
 import { canUserMoveArticle } from "../../../../core/utils/workflow/workflowPermissions.js";
 import { useElementPermissions, useContributorPermissions } from "../../../../data/hooks/useElementPermission.js";
@@ -31,9 +32,13 @@ import {
     generateOpenDocumentScript,
     generateSaveDocumentScript,
     generateCloseDocumentScript,
+    generateDeleteOldPdfsScript,
+    generateThumbnailExportForOpenDocScript,
+    parseThumbnailExportResult,
     parsePageRangesResult,
     parseExecutionStatus
 } from "../../../../core/utils/indesign/index.js";
+import { uploadThumbnails, deleteOldThumbnails, cleanupTempFiles, getTempFolderPath } from "../../../../core/utils/thumbnailUploader.js";
 
 // ── Komponens ────────────────────────────────────────────────────────────────
 
@@ -180,7 +185,8 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
         }
 
         setIsSyncing(true);
-        const filePath = article.filePath;
+        // Relatív filePath → abszolút natív útvonal (ExtendScript File() nem tud relatívat feloldani)
+        const filePath = toAbsoluteArticlePath(article.filePath, publication.rootPath);
         let wasAlreadyOpen = false;
 
         try {
@@ -217,6 +223,47 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
                 throw new Error(`Failed to save document: ${parsedSave.error || 'Unknown error'}`);
             }
 
+            // 5.5 Régi PDF fájlok törlése (az eredeti oldalszámok alapján)
+            try {
+                const pubPath = toNativePath(publication.rootPath);
+                const maxPage = publication.coverageEnd || 999;
+                const oldPdfName = formatPagedFileName(article.name, article.startPage, article.endPage, maxPage, ".pdf");
+                executeInDesignScript(
+                    generateDeleteOldPdfsScript(pubPath, oldPdfName, ["__PDF__", "__FINAL_PDF__"]),
+                    "Deleting old PDFs"
+                );
+            } catch (pdfErr) {
+                logWarn('[ArticleProperties] Régi PDF törlés sikertelen (nem blokkoló):', pdfErr);
+            }
+
+            // 5.6 Thumbnail frissítés — csak ha mi nyitottuk meg a dokumentumot
+            // Ha a felhasználó nyitotta meg, a documentClosed event kezeli a thumbnaileket bezáráskor.
+            // Programozott megnyitásnál nincs user lock → documentClosed NEM tüzel.
+            let newThumbnailsJson = null;
+            if (!wasAlreadyOpen) {
+                let thumbTempFolder = null;
+                try {
+                    thumbTempFolder = getTempFolderPath();
+                    if (thumbTempFolder) {
+                        const thumbScript = generateThumbnailExportForOpenDocScript(filePath, thumbTempFolder);
+                        const thumbResultStr = String(executeInDesignScript(thumbScript, "Exporting thumbnails"));
+                        const thumbParsed = parseThumbnailExportResult(thumbResultStr);
+
+                        if (thumbParsed.success) {
+                            if (article.thumbnails) await deleteOldThumbnails(article.thumbnails);
+                            const uploaded = await uploadThumbnails(thumbParsed.filePaths, article.$id);
+                            if (uploaded.length > 0) newThumbnailsJson = JSON.stringify(uploaded);
+                        } else if (thumbParsed.linkProblems) {
+                            logWarn('[ArticleProperties] Thumbnail kihagyva: képproblémák');
+                        }
+                    }
+                } catch (thumbErr) {
+                    logWarn('[ArticleProperties] Thumbnail frissítés sikertelen (nem blokkoló):', thumbErr);
+                } finally {
+                    if (thumbTempFolder) cleanupTempFiles(thumbTempFolder).catch(() => {});
+                }
+            }
+
             // 6. Bezárás (csak ha mi nyitottuk)
             if (!wasAlreadyOpen) {
                 executeInDesignScript(generateCloseDocumentScript(filePath), "Closing document (restoring state)");
@@ -226,7 +273,8 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
             const updateData = {
                 startPage: extractResult.success ? extractResult.startPage : newStartPage,
                 endPage: extractResult.success ? extractResult.endPage : (article.endPage ? article.endPage + offset : null),
-                pageRanges: extractResult.success ? extractResult.pageRanges : article.pageRanges
+                pageRanges: extractResult.success ? extractResult.pageRanges : article.pageRanges,
+                ...(newThumbnailsJson !== null && { thumbnails: newThumbnailsJson })
             };
 
             log('[ArticleProperties] Updating database with:', updateData);

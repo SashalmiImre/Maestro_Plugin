@@ -755,6 +755,26 @@ html, body {
     height: 3px;
 }
 
+/* Oldalütközés figyelmeztető badge — thumbnail jobb felső sarka */
+.page-conflict-badge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    background: rgba(0, 0, 0, 0.6);
+    border-radius: 3px;
+    cursor: default;
+}
+
+.page-conflict-badge svg {
+    display: block;
+}
+
 /* Cikk információk a kép alatt */
 .page-info {
     padding: 4px 6px;
