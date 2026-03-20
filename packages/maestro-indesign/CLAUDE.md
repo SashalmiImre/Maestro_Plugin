@@ -172,14 +172,24 @@
 
 8. **Thumbnail Rendszer (Oldalkép generálás)**
     - **Cél**: JPEG oldalkép thumbnailek generálása InDesign fájlokból → Appwrite Storage feltöltés → Dashboard Layout (flatplan) nézet.
-    - **Triggerek**: (1) `addArticle` — cikk hozzáadásakor a dokumentum még nyitva van. (2) `MaestroEvent.documentClosed` — a DocumentMonitor `registerTask` mintájával.
+    - **Triggerek**:
+      - (1) `addArticle` — az **eredeti** (nyitott) dokumentumból generálódik, **párhuzamosan** az oldalszám-kinyeréssel, még a `saveACopy` előtt. Ha a plugin nyitotta meg a fájlt, a thumbnail export és feltöltés inline történik; ha a felhasználó nyitotta, a `documentClosed` event kezeli.
+      - (2) `MaestroEvent.documentClosed` — a DocumentMonitor `registerTask` mintájával (`useThumbnails.js` hook).
+      - (3) `handlePageNumberChange` (átpaginázás) — ha a plugin nyitotta meg a dokumentumot (`!wasAlreadyOpen`), thumbnail újragenerálás inline; ha a felhasználó nyitotta meg, a `documentClosed` event kezeli.
     - **ExtendScript JPEG Export**: `doc.exportFile(ExportFormat.JPG, ...)` oldalanként, 120 DPI, `JPEGOptionsQuality.MEDIUM`, `exportingSpread = false`.
-    - **Link check**: Missing VAGY out-of-date linkek esetén thumbnail generálás kihagyása, warning toast megjelenítése.
+    - **Link check**: Missing VAGY out-of-date linkek esetén thumbnail generálás kihagyása, warning toast megjelenítése. A `getLinkCheckLogic()` (scriptHelpers) `"ERROR:..."` stringet ad vissza → a `parseThumbnailExportResult()` felismeri és kihagyja az exportot.
     - **Storage**: Appwrite `thumbnails` bucket, max 2MB/fájl, `.jpg` kiterjesztés. Az article `thumbnails` mező JSON tömb: `[{ fileId, page }]`.
     - **Fájlok**: `thumbnailScripts.js` (ExtendScript generátorok), `thumbnailUploader.js` (upload/delete/cleanup), `useThumbnails.js` (React hook, documentClosed event).
-    - **Takarítás**: Kiadvány törléskor a `deleteOldThumbnails()` törli a kapcsolódó fájlokat a Storage-ból.
-    - **Dashboard Layout nézet**: Magazin konvenció szerinti spread elrendezés (1. oldal = címlap jobb, 2-3, 4-5, ...). Thumbnail preview URL: `storage.getFilePreview(BUCKETS.THUMBNAILS, fileId)`.
+    - **Takarítás**: Kiadvány törléskor a `deleteOldThumbnails()` törli a kapcsolódó fájlokat a Storage-ból. Átpaginázáskor a régi thumbnailek cserélődnek (upload új → delete régi → DB frissítés).
+    - **Dashboard Layout nézet**: Magazin konvenció szerinti spread elrendezés (1. oldal = címlap jobb, 2-3, 4-5, ...). Thumbnail preview URL: `storage.getFilePreview(BUCKETS.THUMBNAILS, fileId)`. Oldalütközés detektálás: narancssárga badge + tooltip, ha több cikk ugyanazt az oldalt foglalja.
     - **Alapelv**: Thumbnail generálás **soha nem blokkolja** a fő munkafolyamatot.
+
+9. **Placeholder Sorok (Lefedetlen Oldalak)**
+    - **Cél**: A kiadvány terjedelmén belüli (`coverageStart`–`coverageEnd`) hozzárendeletlen oldalak vizuális jelzése helykitöltő sorokkal az ArticleTable-ben.
+    - **Logika**: `buildPlaceholderRows()` (`pageGapUtils.js`) — az összes cikk `pageRanges`/`pageStart`–`pageEnd` alapján összegyűjti a lefedett oldalakat, majd a hiányzó oldalszámokból összefüggő csoportokat épít.
+    - **UI**: Szürke, nem szerkeszthető sorok az ArticleTable-ben. „Helykitöltők mutatása" toggle a FilterBar-ban (localStorage perzisztált, alapértelmezett: be).
+    - **Sürgősség**: Placeholder állapota `DESIGNING` → teljes hátralévő munkaidő jelenik meg.
+    - **Szűrés**: A placeholder generálás az **összes** (szűrés nélküli) cikket figyelembe veszi, hogy a lefedettség pontos legyen.
 
 ---
 
@@ -251,7 +261,9 @@ Maestro/
 │   │       ├── promiseUtils.js         ← Promise segédfüggvények (withTimeout, withRetry)
 │   │       ├── archivingProcessor.js    ← Hibrid AI + szabály-alapú clustering (Union-Find, polygon clipping, TXT/XML output)
 │   │       ├── thumbnailUploader.js    ← Thumbnail JPEG feltöltés/törlés/takarítás (Appwrite Storage)
+│   │       ├── pageGapUtils.js         ← Placeholder sorok generálása lefedetlen oldalakhoz
 │   │       ├── urgencyUtils.js         ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színek)
+│   │       ├── validationConstants.js  ← VALIDATOR_TYPES és VALIDATION_SOURCES enumerációk
 │   │       ├── validationRunner.js     ← Validátor futtatás orchestrálása + standalone fájl létezés ellenőrzés
 │   │       ├── validators/             ← Tiszta validációs logika osztályok
 │   │       │   ├── ValidatorBase.js
@@ -291,6 +303,7 @@ Maestro/
 │   │       ├── useThumbnails.js                ← Thumbnail generálás hook (documentClosed event)
 │   │       ├── useDeadlines.js                  ← Határidők CRUD
 │   │       ├── useLayouts.js                    ← Layoutok CRUD + layoutChanged esemény
+│   │       ├── useAllTeamMembers.js              ← Összes csapat tagjainak lekérése (deduplikálva)
 │   │       ├── useUrgency.js                    ← Sürgősség-számítás hook (percenkénti frissítés)
 │   │       └── useElementPermission.js          ← UI elem jogosultság hookok (useElementPermission, useElementPermissions)
 │   │
@@ -317,11 +330,12 @@ Maestro/
 │   │       │   ├── PublicationListToolbar.jsx
 │   │       │   ├── Publication/         ← Egyetlen kiadvány nézet
 │   │       │   │   ├── Publication.jsx
-│   │       │   │   ├── FilterBar.jsx    ← Cikkszűrés (állapot, layout, marker)
+│   │       │   │   ├── FilterBar.jsx    ← Cikkszűrés (állapot, layout, marker, saját cikkek) + localStorage perzisztálás
 │   │       │   │   └── WorkflowStatus.jsx
 │   │       │   └── PublicationProperties/
 │   │       │       ├── PublicationProperties.jsx
 │   │       │       ├── GeneralSection.jsx
+│   │       │       ├── ContributorsSection.jsx
 │   │       │       ├── LayoutsSection.jsx
 │   │       │       └── DeadlinesSection.jsx
 │   │       ├── workspace/
@@ -336,7 +350,7 @@ Maestro/
 │   └── assets/                   ← Statikus erőforrások (ikonok, stb.)
 │
 └── appwrite_functions/           ← Szerver-oldali Appwrite Cloud Funkciók
-    ├── delete-article-messages/  ← Cikk üzenetek takarító funkció
+    ├── cascade-delete-article/   ← Cikk törlés kaszkád takarítás (üzenetek, validációk)
     └── team/                     ← Csapat kezelő funkciók
 ```
 
@@ -353,6 +367,18 @@ Maestro/
 InDesign `afterSave` → `DocumentMonitor` → `dispatch(documentSaved)` → Validátorok futnak (Preflight, DB Integritás) → automatikus javítás ha szükséges → `dispatch(pageRangesChanged)` → Átfedés ellenőrzés.
 
 > Részletes diagram: `docs/EVENT_ARCHITECTURE.md` (Validációs Hurok)
+
+### Cikkfelvétel (addArticle)
+Fájl kiválasztása → `useArticles.addArticle` → útvonal validáció (kiadvány gyökérben van-e) → `.maestro/` mappa előkészítés → duplikátum ellenőrzés → eredeti fájl megnyitása InDesign-ban (ha még nincs nyitva) → `doc.saveACopy()` a `.maestro/` mappába (másolat mindig aktuális InDesign verzióban; újabb verzió → `app.open()` fail → cikk nem kerül felvételre) → **párhuzamosan**: oldalszám-kinyerés + thumbnail generálás az **eredeti** dokumentumból → dokumentum bezárás (ha mi nyitottuk) → thumbnail feltöltés (Appwrite Storage) → DB rekord létrehozás (alapértelmezett contributor-ökkel a kiadványból).
+
+- **saveACopy stratégia**: A korábbi `file.copyTo()` bináris másolást váltja ki — megoldja a verziókonverziós problémákat és a „Save As" dialógus kérdést.
+- **Rollback**: Ha a DB létrehozás sikertelen, a `.maestro/` mappába másolt fájl árván marad (nem blokkoló).
+
+### Átpaginázás (oldalszám-módosítás)
+`ArticleProperties.handlePageNumberChange` → validáció (filePath, startPage, coverage bounds) → dokumentum megnyitása (ha szükséges) → oldalak átszámozása (offset) → új oldalszámok kinyerése → mentés `maestroSkipMonitor` flag-gel (DocumentMonitor ne reagáljon) → régi PDF-ek törlése (`__PDF__`, `__FINAL_PDF__` mappák, `generateDeleteOldPdfsScript`) → thumbnail újragenerálás (ha plugin nyitotta meg, `!wasAlreadyOpen`) → dokumentum bezárás (ha mi nyitottuk) → DB frissítés (startPage, endPage, pageRanges, thumbnails).
+
+- **`maestroSkipMonitor` minta**: Megakadályozza, hogy a programozott mentés visszacsatolási hurkot indítson a DocumentMonitor-ban. A Cikk Átnevezés is használja.
+- **PDF takarítás**: A `generateDeleteOldPdfsScript()` az eredeti (átszámozás előtti) oldalszámok alapján keresi a régi PDF fájlokat.
 
 ### Cikk Átnevezés
 - **Validáció**: `isValidFileName()` ellenőrzi a tiltott karaktereket (`\ / : * ? " < > |`), Windows fenntartott neveket (CON, PRN stb.), pontra/szóközre végződő neveket, lock ellenőrzés (más felhasználó szerkeszti-e).
