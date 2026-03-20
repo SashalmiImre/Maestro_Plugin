@@ -30,11 +30,27 @@ export function getBackgroundOpenLogic(filePath, docVarName, openedVarName) {
                 // Megnézzük, nyitva van-e már
                 var isOpen = false;
                 if (app.documents.length > 0) {
+                    // 1. Útvonal alapú keresés (pontos egyezés)
                     for (var i = 0; i < app.documents.length; i++) {
-                        if (app.documents[i].fullName.fsName === f.fsName) {
-                            ${docVarName} = app.documents[i];
-                            isOpen = true;
-                            break;
+                        try {
+                            if (app.documents[i].fullName.fsName === f.fsName) {
+                                ${docVarName} = app.documents[i];
+                                isOpen = true;
+                                break;
+                            }
+                        } catch(ignore) {}
+                    }
+                    // 2. Fallback: név alapú keresés (verzió-konvertált / mentetlen dokumentumokhoz)
+                    if (!isOpen) {
+                        var targetName = decodeURI(f.name);
+                        for (var i = 0; i < app.documents.length; i++) {
+                            try {
+                                if (app.documents[i].name === targetName) {
+                                    ${docVarName} = app.documents[i];
+                                    isOpen = true;
+                                    break;
+                                }
+                            } catch(ignore) {}
                         }
                     }
                 }
@@ -230,10 +246,25 @@ export function getDocumentTargetLogic(varName, filePath) {
                 var f = File(path);
                 if (!f.exists) f = File(encodeURI(path));
                 var ${varName} = null;
+                // 1. Útvonal alapú keresés (pontos egyezés)
                 for (var i = 0; i < app.documents.length; i++) {
-                    if (app.documents[i].fullName.fsName === f.fsName) {
-                        ${varName} = app.documents[i];
-                        break;
+                    try {
+                        if (app.documents[i].fullName.fsName === f.fsName) {
+                            ${varName} = app.documents[i];
+                            break;
+                        }
+                    } catch(ignore) {}
+                }
+                // 2. Fallback: név alapú keresés (verzió-konvertált / mentetlen dokumentumokhoz)
+                if (!${varName}) {
+                    var targetName = decodeURI(f.name);
+                    for (var i = 0; i < app.documents.length; i++) {
+                        try {
+                            if (app.documents[i].name === targetName) {
+                                ${varName} = app.documents[i];
+                                break;
+                            }
+                        } catch(ignore) {}
                     }
                 }
                 if (!${varName} || !${varName}.isValid) return "ERROR:A dokumentum nem található (nincs nyitva): " + decodeURI(f.name);

@@ -20,7 +20,12 @@ import React, { useRef, useEffect } from "react";
  * @param {string} [props.id] - ID is strongly recommended for fallback lookup
  * @param {any} [props.forwardedRef] - Ref to forward to the underlying element
  */
-export const ValidatedTextField = ({ onValidate, forwardedRef, onKeyDown, invalid, ...props }) => {
+export const ValidatedTextField = ({ onValidate, forwardedRef, onKeyDown, invalid, type, value, ...restProps }) => {
+    // UXP sp-textfield type="number" „nan"-t jelenít meg üres string értékre (Number("") → NaN).
+    // Normalizáljuk: üres/null/NaN → undefined, hogy a mező valóban üres legyen.
+    const normalizedValue = (type === "number" && (value === "" || value == null || (typeof value === "number" && !Number.isFinite(value))))
+        ? undefined
+        : value;
     const internalRef = useRef(null);
     const ref = internalRef;
 
@@ -47,8 +52,8 @@ export const ValidatedTextField = ({ onValidate, forwardedRef, onKeyDown, invali
         let inputElement = ref.current;
 
         // Fallback to ID lookup if ref is not an HTMLElement (e.g. module export in UXP)
-        if (inputElement && !(inputElement instanceof HTMLElement) && props.id) {
-            inputElement = document.getElementById(props.id);
+        if (inputElement && !(inputElement instanceof HTMLElement) && restProps.id) {
+            inputElement = document.getElementById(restProps.id);
         }
 
         // Event handler wrapper
@@ -83,12 +88,14 @@ export const ValidatedTextField = ({ onValidate, forwardedRef, onKeyDown, invali
                 inputElement.removeEventListener('focusout', handleCommit);
             }
         };
-    }, [onValidate, props.id, onKeyDown]); // Re-attach if handlers or ID change
+    }, [onValidate, restProps.id, onKeyDown]); // Re-attach if handlers or ID change
 
     return (
         <sp-textfield
             ref={ref}
-            {...props}
+            type={type}
+            value={normalizedValue}
+            {...restProps}
             {...(invalid ? { invalid: true } : {})}
         />
     );

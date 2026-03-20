@@ -90,15 +90,13 @@ export function generateIsDocumentOpenScript(filePath) {
                 var f = File(path);
                 if (!f.exists) f = File(encodeURI(path));
 
-                var targetName = decodeURI(f.name);
-
-                try {
-                    var existingDoc = app.documents.item(targetName);
-                    if (existingDoc && existingDoc.isValid) {
-                        return "true";
-                    }
-                } catch(e) {}
-
+                for (var i = 0; i < app.documents.length; i++) {
+                    try {
+                        if (app.documents[i].fullName.fsName === f.fsName) {
+                            return "true";
+                        }
+                    } catch(ignore) {}
+                }
                 return "false";
             } catch(e) {
                 return "ERROR:" + e.message;

@@ -94,7 +94,7 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
     }, [getAllActiveItems]);
 
     const formatPageRange = useCallback((start, end) => {
-        if (!start) return "";
+        if (!Number.isFinite(start)) return "";
         const maxPage = publication?.coverageEnd || 999;
         const padding = String(maxPage).length;
         const pad = (n) => String(n).padStart(padding, '0');

@@ -50,7 +50,8 @@ export const validate = async (target, checkTypes, context = {}) => {
             case VALIDATOR_TYPES.STATE_COMPLIANCE:
                 result = await validators.stateCompliance.validate({
                     article: target,
-                    targetState: context.targetState
+                    targetState: context.targetState,
+                    publicationRootPath: context.publicationRootPath
                 });
                 break;
 
