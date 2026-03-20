@@ -12,6 +12,7 @@ export {
     generateIsDocumentOpenScript,
     generateRenumberDocumentScript,
     generateSaveDocumentScript,
+    generateSaveACopyScript,
     generateCloseDocumentScript,
     generateOpenDocumentScript,
     generateExtractPageRangesScript,

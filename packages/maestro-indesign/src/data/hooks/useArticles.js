@@ -12,6 +12,7 @@ import {
     generateIsDocumentOpenScript,
     generateOpenDocumentScript,
     generateCloseDocumentScript,
+    generateSaveACopyScript,
     generateExtractPageRangesScript,
     parsePageRangesResult,
     generateRenameFileScript,
@@ -132,15 +133,12 @@ export const useArticles = (publicationId, publicationRoot) => {
             // A fájl nem létezik, folytathatjuk.
         }
 
-        // --- 4. Fájl másolása ---
-        let copiedFile;
-        try {
-            copiedFile = await file.copyTo(maestroFolder, { name: file.name, overwrite: false });
-        } catch (e) {
-            throw new Error(`Nem sikerült másolni a fájlt (${file.name}): ` + e.message);
-        }
-
-        // --- 5. Oldalszámok kinyerése és thumbnail generálás InDesign segítségével ---
+        // --- 4–5. Megnyitás, saveACopy, oldalszámok, thumbnail ---
+        // A korábbi file.copyTo() helyett InDesign saveACopy-t használunk,
+        // ami a fájlt az aktuális InDesign verzióval menti → nem lesz "Save As" dialógus
+        // a .maestro másolat későbbi bezárásakor. Ha a fájl újabb InDesign verzióval készült,
+        // az app.open() nem nyitja meg → a cikk nem kerül felvételre.
+        let copiedFilePath;
         let startPage = null;
         let endPage = null;
         let pageRanges = null;
@@ -149,23 +147,38 @@ export const useArticles = (publicationId, publicationRoot) => {
 
         try {
             const app = require("indesign").app;
-            const filePath = copiedFile.nativePath;
+            const originalPath = file.nativePath;
 
-            // Ellenőrizzük, hogy nyitva van-e már a dokumentum
-            const isOpenResult = app.doScript(generateIsDocumentOpenScript(filePath), SCRIPT_LANGUAGE_JAVASCRIPT, []);
+            // Ellenőrizzük, hogy az eredeti fájl nyitva van-e már InDesign-ban
+            const isOpenResult = app.doScript(generateIsDocumentOpenScript(originalPath), SCRIPT_LANGUAGE_JAVASCRIPT, []);
             const wasAlreadyOpen = String(isOpenResult).trim() === "true";
 
-            // Ha nincs nyitva, megnyitjuk háttérben (láthatatlanul)
+            // Ha nincs nyitva, megnyitjuk háttérben (láthatatlanul, figyelmeztetések nélkül)
             if (!wasAlreadyOpen) {
-                const openScript = generateOpenDocumentScript(filePath, true, false);
+                const openScript = generateOpenDocumentScript(originalPath, true, false);
                 const openResult = app.doScript(openScript, SCRIPT_LANGUAGE_JAVASCRIPT, []);
                 if (String(openResult) !== "success") {
-                    logWarn("Nem sikerült megnyitni a dokumentumot az elemzéshez:", openResult);
+                    throw new Error(`A fájl nem nyitható meg az InDesign-ban: ${String(openResult).replace('ERROR:', '')}`);
                 }
             }
 
-            // 5a. Oldalszámok lekérdezése szkripttel
-            const script = generateExtractPageRangesScript(filePath);
+            // 4. saveACopy: verzió-kompatibilis másolat létrehozása a .maestro mappában
+            const targetPath = maestroFolder.nativePath + "/" + file.name;
+            copiedFilePath = targetPath;
+
+            const saveACopyScript = generateSaveACopyScript(originalPath, targetPath);
+            const saveResult = app.doScript(saveACopyScript, SCRIPT_LANGUAGE_JAVASCRIPT, []);
+            if (String(saveResult) !== "success") {
+                if (!wasAlreadyOpen) {
+                    try {
+                        app.doScript(generateCloseDocumentScript(originalPath), SCRIPT_LANGUAGE_JAVASCRIPT, []);
+                    } catch (closeErr) { /* ignoráljuk */ }
+                }
+                throw new Error(`Nem sikerült másolni a fájlt (${file.name}): ${String(saveResult).replace('ERROR:', '')}`);
+            }
+
+            // 5a. Oldalszámok lekérdezése az eredeti (nyitott) dokumentumból
+            const script = generateExtractPageRangesScript(originalPath);
             const resultStr = app.doScript(script, SCRIPT_LANGUAGE_JAVASCRIPT, []);
             const result = parsePageRangesResult(resultStr);
 
@@ -177,11 +190,11 @@ export const useArticles = (publicationId, publicationRoot) => {
                 logWarn("Nem sikerült kinyerni az oldalszámokat:", result.error);
             }
 
-            // 5b. Thumbnail generálás (a dokumentum még nyitva van)
+            // 5b. Thumbnail generálás az eredeti (nyitott) dokumentumból
             try {
                 thumbnailTempFolder = getTempFolderPath();
 
-                const thumbScript = generateThumbnailExportForOpenDocScript(filePath, thumbnailTempFolder);
+                const thumbScript = generateThumbnailExportForOpenDocScript(originalPath, thumbnailTempFolder);
                 const thumbResult = app.doScript(thumbScript, SCRIPT_LANGUAGE_JAVASCRIPT, []);
                 const parsed = parseThumbnailExportResult(String(thumbResult));
 
@@ -200,14 +213,18 @@ export const useArticles = (publicationId, publicationRoot) => {
                 logWarn("[useArticles] Thumbnail generálás hiba:", thumbErr);
             }
 
-            // Ha mi nyitottuk meg, be is zárjuk
+            // Ha mi nyitottuk meg, be is zárjuk (mentés nélkül — a saveACopy már létrehozta a másolatot)
             if (!wasAlreadyOpen) {
-                const closeScript = generateCloseDocumentScript(filePath);
+                const closeScript = generateCloseDocumentScript(originalPath);
                 app.doScript(closeScript, SCRIPT_LANGUAGE_JAVASCRIPT, []);
             }
         } catch (e) {
-            logWarn("Hiba történt az InDesign oldalszám-kinyerés közben:", e);
-            // Nem állunk meg hibával, a cikk létrejöhet oldalszámok nélkül is
+            // Ha copiedFilePath nincs beállítva, a saveACopy nem sikerült → nem folytathatjuk
+            if (!copiedFilePath) {
+                throw new Error(`Nem sikerült másolni a fájlt (${file.name}): ` + e.message);
+            }
+            // Ha copiedFilePath megvan de oldalszám/thumbnail sikertelen → folytatjuk nélkülük
+            logWarn("Hiba történt az InDesign művelet közben:", e);
         }
 
         // --- 5c. Thumbnail feltöltés (bezárás után, hálózati művelet) ---
@@ -233,7 +250,7 @@ export const useArticles = (publicationId, publicationRoot) => {
 
         // --- 6. Adatbázis ellenőrzés ---
         // A filePath-t relatívan tároljuk a kiadvány kanonikus root-jához képest
-        const relativeFilePath = toRelativeArticlePath(copiedFile.nativePath, publicationRoot);
+        const relativeFilePath = toRelativeArticlePath(copiedFilePath, publicationRoot);
         const isDuplicateDB = articles.some(a => a.filePath === relativeFilePath);
         if (isDuplicateDB) {
              return { status: "skipped", reason: "db_duplicate", fileName: file.name };

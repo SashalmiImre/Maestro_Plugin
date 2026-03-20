@@ -163,6 +163,35 @@ export function generateSaveDocumentScript(filePath = null) {
 }
 
 /**
+ * Generál egy scriptet, ami egy nyitott dokumentumról saveACopy-t készít a megadott útvonalra.
+ *
+ * A saveACopy NEM változtatja meg a dokumentum belső hivatkozását (szemben a doc.save(File)-lal),
+ * így ha a felhasználó éppen szerkeszti az eredeti fájlt, a munkája az eredeti fájlra mutat tovább.
+ *
+ * @param {string} sourceFilePath - A nyitott dokumentum útvonala (azonosításhoz).
+ * @param {string} targetPath - A másolat cél útvonala (pl. .maestro/file.indd).
+ * @returns {string} ExtendScript kód — "success" vagy "ERROR:..." eredményt ad.
+ */
+export function generateSaveACopyScript(sourceFilePath, targetPath) {
+    const docLogic = getDocumentTargetLogic("doc", sourceFilePath);
+    const escapedTargetPath = escapePathForExtendScript(targetPath);
+
+    return `
+        (function() {
+            try {
+                ${docLogic}
+
+                var targetFile = new File('${escapedTargetPath}');
+                doc.saveACopy(targetFile);
+                return "success";
+            } catch(e) {
+                return "ERROR:" + e.message;
+            }
+        })();
+    `;
+}
+
+/**
  * Generál egy scriptet, ami bezárja a dokumentumot.
  *
  * @param {string|null} [filePath=null] - Opcionális fájl útvonal.
