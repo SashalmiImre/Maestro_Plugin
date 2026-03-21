@@ -1,0 +1,27 @@
+{
+    "projectId": "68808427001c20418996",
+    "projectName": "Maestro",
+    "functions": [
+        {
+            "$id": "cascade-delete-article",
+            "name": "Cascade Delete Article",
+            "runtime": "node-18.0",
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "path": "appwrite_functions/cascade-delete-article",
+            "scopes": [
+                "databases.read",
+                "databases.write",
+                "files.read",
+                "files.write"
+            ],
+            "events": [
+                "databases.6880850e000da87a3d55.collections.articles.documents.*.delete"
+            ],
+            "specification": "s-0.5vcpu-512mb"
+        }
+    ]
+}

@@ -4,17 +4,19 @@ const sdk = require("node-appwrite");
  * Appwrite Function: Cascade Delete Article
  *
  * Egy article törlésekor automatikusan kitörli az összes kapcsolódó adatot
- * a többi collection-ből: ArticleMessages, UserValidations, Validations.
+ * a többi collection-ből (ArticleMessages, UserValidations, Validations)
+ * és a Storage-ból (thumbnail fájlok).
  *
  * Trigger: databases.*.collections.*.documents.*.delete
  * Runtime: Node.js 18.0+
  *
  * Szükséges környezeti változók:
- * - APPWRITE_API_KEY: API kulcs 'databases.read' és 'databases.write' jogosultsággal.
+ * - APPWRITE_API_KEY: API kulcs 'databases.read', 'databases.write' és 'storage.read', 'storage.write' jogosultsággal.
  * - DATABASE_ID: Az adatbázis azonosítója.
  * - ARTICLE_MESSAGES_COLLECTION_ID: Az ArticleMessages collection azonosítója.
  * - USER_VALIDATIONS_COLLECTION_ID: A UserValidations collection azonosítója.
  * - VALIDATIONS_COLLECTION_ID: A Validations (rendszer) collection azonosítója.
+ * - THUMBNAILS_BUCKET_ID: A thumbnails Storage bucket azonosítója.
  */
 
 const BATCH_LIMIT = 100;
@@ -67,6 +69,53 @@ async function deleteRelatedDocuments(databases, collectionId, articleId, log, e
     return { found: totalFound, deleted: totalDeleted };
 }
 
+/**
+ * A törölt article thumbnail fájljait törli a Storage-ból.
+ * A payload `thumbnails` mezőjéből olvassa ki a fileId-kat (JSON tömb: [{ fileId, page }]).
+ *
+ * @param {sdk.Storage} storage - Appwrite Storage példány
+ * @param {string} thumbnailsJson - A thumbnails mező értéke (JSON string)
+ * @param {Function} log - Logolás
+ * @param {Function} error - Hibalogolás
+ * @returns {{ found: number, deleted: number }} Statisztika
+ */
+async function deleteThumbnails(storage, thumbnailsJson, log, error) {
+    let thumbnails;
+    try {
+        thumbnails = JSON.parse(thumbnailsJson);
+    } catch (e) {
+        error(`[Thumbnails] Érvénytelen JSON: ${e.message}`);
+        return { found: 0, deleted: 0 };
+    }
+
+    if (!Array.isArray(thumbnails) || thumbnails.length === 0) {
+        return { found: 0, deleted: 0 };
+    }
+
+    const bucketId = process.env.THUMBNAILS_BUCKET_ID;
+    if (!bucketId) {
+        log('[Thumbnails] Kihagyva — nincs THUMBNAILS_BUCKET_ID konfigurálva');
+        return { found: thumbnails.length, deleted: 0, skipped: true };
+    }
+
+    let deleted = 0;
+    const deleteResults = await Promise.allSettled(
+        thumbnails.map(({ fileId }) =>
+            storage.deleteFile(bucketId, fileId)
+        )
+    );
+
+    for (const result of deleteResults) {
+        if (result.status === 'fulfilled') {
+            deleted++;
+        } else {
+            error(`[Thumbnails] Törlés sikertelen: ${result.reason?.message}`);
+        }
+    }
+
+    return { found: thumbnails.length, deleted };
+}
+
 module.exports = async function ({ req, res, log, error }) {
     const client = new sdk.Client();
 
@@ -76,6 +125,7 @@ module.exports = async function ({ req, res, log, error }) {
         .setKey(process.env.APPWRITE_API_KEY);
 
     const databases = new sdk.Databases(client);
+    const storage = new sdk.Storage(client);
 
     try {
         // Event payload feldolgozása
@@ -97,25 +147,37 @@ module.exports = async function ({ req, res, log, error }) {
 
         log(`Article törölve: ${deletedArticleId} — kapcsolódó adatok takarítása...`);
 
-        // Mindhárom collection takarítása párhuzamosan
+        // Collection takarítás + thumbnail törlés párhuzamosan
         const collections = [
             { id: process.env.ARTICLE_MESSAGES_COLLECTION_ID, name: 'ArticleMessages' },
             { id: process.env.USER_VALIDATIONS_COLLECTION_ID, name: 'UserValidations' },
             { id: process.env.VALIDATIONS_COLLECTION_ID, name: 'Validations' }
         ];
 
-        const results = await Promise.allSettled(
-            collections.map(async (col) => {
-                if (!col.id) {
-                    log(`[${col.name}] Kihagyva — nincs collection ID konfigurálva`);
-                    return { collection: col.name, found: 0, deleted: 0, skipped: true };
-                }
+        const collectionPromises = collections.map(async (col) => {
+            if (!col.id) {
+                log(`[${col.name}] Kihagyva — nincs collection ID konfigurálva`);
+                return { collection: col.name, found: 0, deleted: 0, skipped: true };
+            }
 
-                const stats = await deleteRelatedDocuments(databases, col.id, deletedArticleId, log, error);
-                log(`[${col.name}] ${stats.deleted}/${stats.found} dokumentum törölve`);
-                return { collection: col.name, ...stats };
-            })
-        );
+            const stats = await deleteRelatedDocuments(databases, col.id, deletedArticleId, log, error);
+            log(`[${col.name}] ${stats.deleted}/${stats.found} dokumentum törölve`);
+            return { collection: col.name, ...stats };
+        });
+
+        // Thumbnail törlés — a payload thumbnails mezőjéből
+        const thumbnailPromise = (async () => {
+            if (!payload.thumbnails) {
+                log('[Thumbnails] Nincs thumbnail adat — kihagyva');
+                return { collection: 'Thumbnails', found: 0, deleted: 0, skipped: true };
+            }
+
+            const stats = await deleteThumbnails(storage, payload.thumbnails, log, error);
+            log(`[Thumbnails] ${stats.deleted}/${stats.found} fájl törölve`);
+            return { collection: 'Thumbnails', ...stats };
+        })();
+
+        const results = await Promise.allSettled([...collectionPromises, thumbnailPromise]);
 
         // Összesítés
         const summary = results.map(r => {
