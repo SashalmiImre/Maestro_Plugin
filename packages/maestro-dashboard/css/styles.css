@@ -755,7 +755,7 @@ html, body {
 /* Spreadek — CSS Grid, fix oszlopszám */
 .layout-view {
     display: grid;
-    grid-template-columns: repeat(var(--spread-columns, 5), 1fr);
+    grid-template-columns: repeat(var(--spread-columns, 5), minmax(0, 1fr));
     gap: 32px 40px;
     padding: 24px 20px;
 }
@@ -777,14 +777,16 @@ html, body {
 
 .page-slot img {
     width: 100%;
-    height: auto;
+    height: 100%;
     display: block;
+    object-fit: contain;
 }
 
-/* Kép wrapper — állapot sáv pozícionáláshoz */
+/* Kép wrapper — állapot sáv pozícionáláshoz, egységes arány */
 .page-image {
     position: relative;
     overflow: hidden;
+    aspect-ratio: var(--page-aspect-ratio, 210 / 297);
 }
 
 /* Állapot szín sáv — kép alja */
