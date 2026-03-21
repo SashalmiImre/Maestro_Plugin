@@ -3,7 +3,8 @@
  *
  * Oldalpár (spread) alapú áttekintés thumbnail képekkel.
  * Magazin konvenció: 1. oldal jobb, 2-3, 4-5, ... spreadek.
- * Zoom slider CSS custom property-vel (re-render nélkül).
+ * Fix oszlopszám CSS Grid-del, kiadványonként localStorage-ban tárolva.
+ * Ctrl+Wheel / trackpad pinch / mobil touch pinch az oszlopszámot lépteti.
  */
 
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
@@ -11,43 +12,194 @@ import { useData } from '../contexts/DataContext.jsx';
 import { BUCKETS, STORAGE_KEYS } from '../config.js';
 import PageSlot from './PageSlot.jsx';
 
-// ─── Zoom állandók ──────────────────────────────────────────────────────────
+// ─── Oszlopszám állandók ─────────────────────────────────────────────────────
 
-const ZOOM_DEFAULT = 180;
-const ZOOM_MIN = 80;
-const ZOOM_MAX = 800;
-const ZOOM_STEP = 10;
+const COLUMNS_DEFAULT = 5;
+const COLUMNS_MIN = 1;
+const COLUMNS_MAX = 12;
 
-function loadZoomLevel() {
-    const stored = localStorage.getItem(STORAGE_KEYS.LAYOUT_ZOOM);
-    if (stored) {
-        const val = parseInt(stored, 10);
-        if (!isNaN(val) && val >= ZOOM_MIN && val <= ZOOM_MAX) return val;
-    }
-    return ZOOM_DEFAULT;
+/** Kiadványonkénti oszlopszám betöltése localStorage-ból. */
+function loadColumns(publicationId) {
+    if (!publicationId) return COLUMNS_DEFAULT;
+    try {
+        const map = JSON.parse(localStorage.getItem(STORAGE_KEYS.LAYOUT_COLUMNS)) || {};
+        const val = parseInt(map[publicationId], 10);
+        if (!isNaN(val) && val >= COLUMNS_MIN && val <= COLUMNS_MAX) return val;
+    } catch { /* sérült JSON → alapértelmezett */ }
+    return COLUMNS_DEFAULT;
+}
+
+/** Oszlopszám mentése localStorage-ba (lazy takarítással). */
+function saveColumns(publicationId, columns, publicationIds) {
+    if (!publicationId) return;
+    try {
+        const map = JSON.parse(localStorage.getItem(STORAGE_KEYS.LAYOUT_COLUMNS)) || {};
+        map[publicationId] = columns;
+
+        // Lazy takarítás: nem létező kiadványok törlése
+        if (publicationIds) {
+            const idSet = new Set(publicationIds);
+            for (const key of Object.keys(map)) {
+                if (!idSet.has(key)) delete map[key];
+            }
+        }
+
+        localStorage.setItem(STORAGE_KEYS.LAYOUT_COLUMNS, JSON.stringify(map));
+    } catch { /* localStorage nem elérhető */ }
 }
 
 // ─── Komponens ──────────────────────────────────────────────────────────────
 
 export default function LayoutView({ filteredArticles }) {
     const { publications, activePublicationId, storage } = useData();
-    const [zoom, setZoom] = useState(loadZoomLevel);
+    const [columns, setColumns] = useState(() => loadColumns(activePublicationId));
     const layoutViewRef = useRef(null);
+
+    // Ref-ek a stabil event handler closure-ökhoz
+    const columnsRef = useRef(columns);
+    const columnsToRef = useRef(null);
 
     const publication = useMemo(
         () => publications.find(p => p.$id === activePublicationId),
         [publications, activePublicationId]
     );
 
-    // Zoom alkalmazása CSS custom property-vel (re-render nélkül)
-    useEffect(() => {
-        if (layoutViewRef.current) {
-            layoutViewRef.current.style.setProperty('--page-width', zoom + 'px');
-        }
-        localStorage.setItem(STORAGE_KEYS.LAYOUT_ZOOM, String(zoom));
-    }, [zoom]);
+    const publicationIds = useMemo(
+        () => publications.map(p => p.$id),
+        [publications]
+    );
 
-    // Thumbnail URL generálás
+    // Kiadvány váltáskor oszlopszám betöltése
+    useEffect(() => {
+        setColumns(loadColumns(activePublicationId));
+    }, [activePublicationId]);
+
+    /**
+     * Oszlopszám alkalmazása a nézet középpontjának megőrzésével.
+     * Minden zoom forrás (input, gombok, wheel, pinch) ezt hívja.
+     */
+    const columnsTo = useCallback((newColumns) => {
+        const view = layoutViewRef.current;
+        if (!view) return;
+        const container = view.parentElement;
+        if (!container) return;
+
+        const clamped = Math.max(COLUMNS_MIN, Math.min(COLUMNS_MAX, Math.round(newColumns)));
+        if (clamped === columnsRef.current) return;
+
+        // Középpont ráta mentése
+        const { scrollTop, scrollHeight, clientHeight } = container;
+        const ratioY = scrollHeight > clientHeight
+            ? (scrollTop + clientHeight / 2) / scrollHeight
+            : 0.5;
+
+        // CSS Grid oszlopszám alkalmazása
+        view.style.setProperty('--spread-columns', String(clamped));
+
+        // Szinkron reflow kényszerítés
+        void container.scrollHeight;
+
+        // Scroll visszaállítás
+        container.scrollTop = ratioY * container.scrollHeight - container.clientHeight / 2;
+
+        // React state + localStorage szinkron
+        setColumns(clamped);
+    }, []);
+
+    // Ref szinkronizálás
+    useEffect(() => { columnsRef.current = columns; }, [columns]);
+    useEffect(() => { columnsToRef.current = columnsTo; }, [columnsTo]);
+
+    // localStorage mentés oszlopszám változáskor
+    useEffect(() => {
+        saveColumns(activePublicationId, columns, publicationIds);
+    }, [columns, activePublicationId, publicationIds]);
+
+    // ─── Ctrl+Wheel / trackpad pinch handler ─────────────────────────────────
+
+    useEffect(() => {
+        const view = layoutViewRef.current;
+        if (!view) return;
+        const container = view.parentElement;
+        if (!container) return;
+
+        let wheelAccumulator = 0;
+
+        const handleWheel = (e) => {
+            if (!e.ctrlKey) return;
+            e.preventDefault();
+
+            // Trackpad pinch kis delta-kat ad, egérgörgő nagyokat — normalizálás
+            wheelAccumulator += e.deltaY;
+            const threshold = Math.abs(e.deltaY) > 50 ? 1 : 20;
+
+            if (Math.abs(wheelAccumulator) >= threshold) {
+                const direction = wheelAccumulator > 0 ? 1 : -1;
+                columnsToRef.current(columnsRef.current + direction);
+                wheelAccumulator = 0;
+            }
+        };
+
+        container.addEventListener('wheel', handleWheel, { passive: false });
+        return () => container.removeEventListener('wheel', handleWheel);
+    }, []);
+
+    // ─── Mobil touch pinch handler ───────────────────────────────────────────
+
+    useEffect(() => {
+        const view = layoutViewRef.current;
+        if (!view) return;
+        const container = view.parentElement;
+        if (!container) return;
+
+        let initialDistance = 0;
+
+        const getDistance = (touches) => {
+            const dx = touches[0].clientX - touches[1].clientX;
+            const dy = touches[0].clientY - touches[1].clientY;
+            return Math.sqrt(dx * dx + dy * dy);
+        };
+
+        const handleTouchStart = (e) => {
+            if (e.touches.length === 2) {
+                initialDistance = getDistance(e.touches);
+            }
+        };
+
+        const handleTouchMove = (e) => {
+            if (e.touches.length !== 2 || !initialDistance) return;
+            e.preventDefault();
+
+            const currentDistance = getDistance(e.touches);
+            const ratio = currentDistance / initialDistance;
+
+            // Küszöb: 30%-os változás kell egy lépéshez
+            if (ratio < 0.7) {
+                columnsToRef.current(columnsRef.current + 1);
+                initialDistance = currentDistance;
+            } else if (ratio > 1.3) {
+                columnsToRef.current(columnsRef.current - 1);
+                initialDistance = currentDistance;
+            }
+        };
+
+        const handleTouchEnd = () => {
+            initialDistance = 0;
+        };
+
+        container.addEventListener('touchstart', handleTouchStart, { passive: true });
+        container.addEventListener('touchmove', handleTouchMove, { passive: false });
+        container.addEventListener('touchend', handleTouchEnd, { passive: true });
+
+        return () => {
+            container.removeEventListener('touchstart', handleTouchStart);
+            container.removeEventListener('touchmove', handleTouchMove);
+            container.removeEventListener('touchend', handleTouchEnd);
+        };
+    }, []);
+
+    // ─── Thumbnail URL ───────────────────────────────────────────────────────
+
     const getThumbnailUrl = useCallback((fileId) => {
         if (!storage) return '';
         try {
@@ -57,7 +209,8 @@ export default function LayoutView({ filteredArticles }) {
         }
     }, [storage]);
 
-    // Oldaltérkép + spreadek
+    // ─── Oldaltérkép + spreadek ──────────────────────────────────────────────
+
     const spreads = useMemo(() => {
         if (!publication) return [];
 
@@ -79,39 +232,44 @@ export default function LayoutView({ filteredArticles }) {
 
     return (
         <>
-            {/* Zoom toolbar */}
+            {/* Oszlopszám toolbar */}
             <div className="layout-toolbar">
                 <div className="zoom-control">
                     <button
                         className="zoom-btn"
-                        title="Kicsinyítés"
-                        onClick={() => setZoom(z => Math.max(ZOOM_MIN, z - ZOOM_STEP))}
+                        title="Több oszlop (kicsinyítés)"
+                        disabled={columns >= COLUMNS_MAX}
+                        onClick={() => columnsTo(columns + 1)}
                     >
                         −
                     </button>
                     <input
-                        type="range"
-                        min={ZOOM_MIN}
-                        max={ZOOM_MAX}
-                        step={ZOOM_STEP}
-                        value={zoom}
-                        onChange={e => setZoom(parseInt(e.target.value, 10))}
+                        type="number"
+                        className="columns-input"
+                        min={COLUMNS_MIN}
+                        max={COLUMNS_MAX}
+                        value={columns}
+                        onChange={e => {
+                            const val = parseInt(e.target.value, 10);
+                            if (!isNaN(val)) columnsTo(val);
+                        }}
                     />
                     <button
                         className="zoom-btn"
-                        title="Nagyítás"
-                        onClick={() => setZoom(z => Math.min(ZOOM_MAX, z + ZOOM_STEP))}
+                        title="Kevesebb oszlop (nagyítás)"
+                        disabled={columns <= COLUMNS_MIN}
+                        onClick={() => columnsTo(columns - 1)}
                     >
                         +
                     </button>
                 </div>
             </div>
 
-            {/* Layout nézet */}
+            {/* Layout nézet — CSS Grid */}
             <div
                 className="layout-view"
                 ref={layoutViewRef}
-                style={{ '--page-width': zoom + 'px' }}
+                style={{ '--spread-columns': columns }}
             >
                 {spreads.map(spread => (
                     <div className="spread" key={spread.leftNum ?? spread.rightNum}>

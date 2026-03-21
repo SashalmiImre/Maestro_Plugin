@@ -53,7 +53,7 @@ export const STORAGE_KEYS = {
     FILTER_STATUS: 'maestro.dashboard.filterStatus',
     FILTER_SHOW_IGNORED: 'maestro.dashboard.filterShowIgnored',
     FILTER_SHOW_ONLY_MINE: 'maestro.dashboard.filterShowOnlyMine',
-    LAYOUT_ZOOM: 'maestro.dashboard.layoutZoom'
+    LAYOUT_COLUMNS: 'maestro.dashboard.layoutColumns'
 };
 
 /** Sürgősség újraszámítás gyakorisága (5 perc). */

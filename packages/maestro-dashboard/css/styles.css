@@ -703,21 +703,37 @@ html, body {
     color: #fff;
 }
 
-#zoom-slider {
-    width: 120px;
-    accent-color: #3b82f6;
-    cursor: pointer;
+/* Oszlopszám beviteli mező */
+.columns-input {
+    width: 48px;
+    height: 24px;
+    text-align: center;
+    background: #333;
+    border: 1px solid #444;
+    border-radius: 4px;
+    color: #ccc;
+    font-size: 13px;
+    -moz-appearance: textfield;
 }
 
-/* Spreadek — flex-wrap, több spread egy sorban, balra igazítva */
+.columns-input::-webkit-inner-spin-button,
+.columns-input::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+}
+
+.columns-input:focus {
+    outline: none;
+    border-color: #3b82f6;
+    color: #fff;
+}
+
+/* Spreadek — CSS Grid, fix oszlopszám */
 .layout-view {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: flex-start;
-    align-items: flex-start;
+    display: grid;
+    grid-template-columns: repeat(var(--spread-columns, 5), 1fr);
     gap: 32px 40px;
     padding: 24px 20px;
-    min-width: min-content;
 }
 
 .spread {
@@ -726,10 +742,10 @@ html, body {
     align-items: flex-start;
 }
 
-/* Oldal slot — szélesség CSS custom property-vel vezérelve */
+/* Oldal slot — a grid cella szélességét veszi fel */
 .page-slot {
     position: relative;
-    width: var(--page-width, 180px);
+    width: 100%;
     background: #2a2a2a;
     overflow: hidden;
 }
@@ -800,7 +816,7 @@ html, body {
 
 /* Üres slot (címlap bal oldala) */
 .page-slot.empty-slot {
-    width: var(--page-width, 180px);
+    width: 100%;
     aspect-ratio: 210 / 297;
     background: transparent;
 }
