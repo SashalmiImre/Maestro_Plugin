@@ -777,16 +777,14 @@ html, body {
 
 .page-slot img {
     width: 100%;
-    height: 100%;
+    height: auto;
     display: block;
-    object-fit: contain;
 }
 
-/* Kép wrapper — állapot sáv pozícionáláshoz, egységes arány */
+/* Kép wrapper — állapot sáv pozícionáláshoz */
 .page-image {
     position: relative;
     overflow: hidden;
-    aspect-ratio: var(--page-aspect-ratio, 210 / 297);
 }
 
 /* Állapot szín sáv — kép alja */
