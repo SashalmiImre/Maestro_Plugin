@@ -2,42 +2,38 @@
 #
 # Maestro Dashboard — Deploy script
 #
-# Feltölti a dashboard fájlokat és a shared csomagot a szerverre.
+# Build + feltöltés a szerverre.
 # Használat: ./deploy.sh
 #
 
 set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SHARED_DIR="$SCRIPT_DIR/../maestro-shared"
 REMOTE_USER="emagohu"
 REMOTE_HOST="emago.hu"
 REMOTE_DIR="~/maestro.emago.hu"
 
 echo "=== Maestro Dashboard Deploy ==="
 
-# 0. Helyi fájlok ellenőrzése
+# 1. Build
+echo "[1/3] Build..."
+cd "$SCRIPT_DIR" && npm run build
+
+# 2. Ellenőrzés
+DIST_DIR="$SCRIPT_DIR/dist"
 errors=0
-[[ -f "$SCRIPT_DIR/index.html" ]] || { echo "HIBA: $SCRIPT_DIR/index.html nem található"; errors=1; }
-[[ -d "$SCRIPT_DIR/css" ]]        || { echo "HIBA: $SCRIPT_DIR/css könyvtár nem található"; errors=1; }
-[[ -d "$SCRIPT_DIR/js" ]]         || { echo "HIBA: $SCRIPT_DIR/js könyvtár nem található"; errors=1; }
-[[ -d "$SHARED_DIR" ]]            || { echo "HIBA: $SHARED_DIR könyvtár nem található"; errors=1; }
-if [[ $errors -eq 0 ]]; then
-    compgen -G "$SHARED_DIR/*.js" > /dev/null || { echo "HIBA: nincs .js fájl a $SHARED_DIR könyvtárban"; errors=1; }
-fi
+[[ -f "$DIST_DIR/index.html" ]] || { echo "HIBA: $DIST_DIR/index.html nem található"; errors=1; }
+[[ -d "$DIST_DIR/assets" ]]     || { echo "HIBA: $DIST_DIR/assets könyvtár nem található"; errors=1; }
 [[ $errors -eq 0 ]] || exit 1
 
-# 1. Shared könyvtár létrehozása a szerveren
-echo "[1/3] Távoli könyvtárstruktúra előkészítése..."
-ssh "$REMOTE_USER@$REMOTE_HOST" "mkdir -p $REMOTE_DIR/shared"
-
-# 2. Feltöltés
+# 3. Feltöltés
 echo "[2/3] Fájlok feltöltése..."
-scp "$SCRIPT_DIR/index.html" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
-scp -r "$SCRIPT_DIR/css/" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
-scp -r "$SCRIPT_DIR/js/" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
-scp "$SHARED_DIR"/*.js "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/shared/"
+# Régi fájlok törlése a szerveren (js/, css/, shared/ már nem kellenek)
+ssh "$REMOTE_USER@$REMOTE_HOST" "rm -rf $REMOTE_DIR/js $REMOTE_DIR/css $REMOTE_DIR/shared $REMOTE_DIR/assets"
+# Build output feltöltése
+scp "$DIST_DIR/index.html" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
+scp -r "$DIST_DIR/assets/" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
 
-# 3. Kész
+# 4. Kész
 echo "[3/3] Deploy kész!"
 echo "     https://maestro.emago.hu/"

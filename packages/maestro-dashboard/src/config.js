@@ -2,19 +2,19 @@
  * Maestro Dashboard — Konfiguráció
  *
  * A közös konstansok a maestro-shared csomagból jönnek.
- * Itt csak a dashboard-specifikus értékek és a kompatibilitási
- * re-exportok vannak.
+ * Itt csak a dashboard-specifikus értékek és a re-exportok vannak.
  */
 
-// ─── Shared importok (re-export, hogy a fogyasztók ne változzanak) ───────────
+// ─── Shared importok ────────────────────────────────────────────────────────
 
 export {
     APPWRITE_PROJECT_ID,
     DATABASE_ID,
     COLLECTIONS,
     TEAMS,
+    BUCKETS,
     GET_TEAM_MEMBERS_FUNCTION_ID
-} from '../shared/appwriteIds.js';
+} from '@shared/appwriteIds.js';
 
 export {
     WORKFLOW_STATES,
@@ -23,16 +23,12 @@ export {
     TEAM_ARTICLE_FIELD,
     STATUS_LABELS,
     STATUS_COLORS
-} from '../shared/workflowConfig.js';
+} from '@shared/workflowConfig.js';
 
 export {
     LOCK_TYPE,
     VALIDATION_TYPES
-} from '../shared/constants.js';
-
-export {
-    BUCKETS
-} from '../shared/appwriteIds.js';
+} from '@shared/constants.js';
 
 // ─── Dashboard-specifikus ───────────────────────────────────────────────────
 
@@ -41,13 +37,13 @@ export const APPWRITE_ENDPOINT = 'https://cloud.appwrite.io/v1';
 
 /**
  * Workflow konfiguráció — label és szín állapotonként.
- * A fogyasztók WORKFLOW_CONFIG[state].label / .color-t használják.
+ * A komponensek WORKFLOW_CONFIG[state].label / .color-t használják.
  */
-import { STATUS_LABELS, STATUS_COLORS } from '../shared/workflowConfig.js';
+import { STATUS_LABELS as _SL, STATUS_COLORS as _SC } from '@shared/workflowConfig.js';
 
 export const WORKFLOW_CONFIG = Object.fromEntries(
-    Object.entries(STATUS_LABELS).map(([state, label]) => [
-        state, { label, color: STATUS_COLORS[state] || '#999' }
+    Object.entries(_SL).map(([state, label]) => [
+        state, { label, color: _SC[state] || '#999' }
     ])
 );
 
@@ -65,3 +61,6 @@ export const URGENCY_REFRESH_INTERVAL_MS = 300_000;
 
 /** Csapattag cache élettartama (5 perc). */
 export const TEAM_CACHE_DURATION_MS = 300_000;
+
+/** Lapozás méret az Appwrite lekérdezésekhez. */
+export const PAGE_SIZE = 100;
