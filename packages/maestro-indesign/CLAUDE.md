@@ -177,7 +177,7 @@
       - (2) `MaestroEvent.documentClosed` — a DocumentMonitor `registerTask` mintájával (`useThumbnails.js` hook).
       - (3) `handlePageNumberChange` (átpaginázás) — ha a plugin nyitotta meg a dokumentumot (`!wasAlreadyOpen`), thumbnail újragenerálás inline; ha a felhasználó nyitotta meg, a `documentClosed` event kezeli.
     - **ExtendScript JPEG Export**: `doc.exportFile(ExportFormat.JPG, ...)` oldalanként, 120 DPI, `JPEGOptionsQuality.MEDIUM`, `exportingSpread = false`.
-    - **Link check**: Missing VAGY out-of-date linkek esetén thumbnail generálás kihagyása, warning toast megjelenítése. A `getLinkCheckLogic()` (scriptHelpers) `"ERROR:..."` stringet ad vissza → a `parseThumbnailExportResult()` felismeri és kihagyja az exportot.
+    - **Link check**: Missing VAGY out-of-date linkek esetén export kihagyása, warning toast megjelenítése. A `getLinkCheckLogic()` (scriptHelpers) a pasteboard-on (nem oldalon) elhelyezett hibás linkeket kihagyja (`link.parent.parent.parentPage.name` try/catch — InDesign `NothingEnum.NOTHING`-ot ad vissza pasteboard elemekre, nem JS `null`-t) — csak az oldalon lévő elemek blokkolják az exportot. `"ERROR:..."` stringet ad vissza → a `parseThumbnailExportResult()` felismeri és kihagyja az exportot.
     - **Storage**: Appwrite `thumbnails` bucket, max 2MB/fájl, `.jpg` kiterjesztés. Az article `thumbnails` mező JSON tömb: `[{ fileId, page }]`.
     - **Fájlok**: `thumbnailScripts.js` (ExtendScript generátorok), `thumbnailUploader.js` (upload/delete/cleanup), `useThumbnails.js` (React hook, documentClosed event).
     - **Takarítás**: Kiadvány törléskor a `deleteOldThumbnails()` törli a kapcsolódó fájlokat a Storage-ból. Átpaginázáskor a régi thumbnailek cserélődnek (upload új → delete régi → DB frissítés).

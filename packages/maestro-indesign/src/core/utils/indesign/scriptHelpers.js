@@ -82,6 +82,8 @@ export function getBackgroundOpenLogic(filePath, docVarName, openedVarName) {
 
 /**
  * Generálja a linkek ellenőrzésének logikáját.
+ * A pasteboard-on (nem oldalon) elhelyezett hibás linkeket kihagyja —
+ * csak az oldalon lévő elemek blokkolják az exportot.
  *
  * @param {string} docVarName - A dokumentum változó neve.
  * @param {string} openedVarName - A változó neve, ami jelzi ha mi nyitottuk meg (a korai bezáráshoz hiba esetén).
@@ -93,10 +95,26 @@ export function getLinkCheckLogic(docVarName, openedVarName) {
                 var linkErrors = [];
                 for (var i = 0; i < ${docVarName}.links.length; i++) {
                     var link = ${docVarName}.links[i];
-                    if (link.status === LinkStatus.LINK_MISSING) {
-                        linkErrors.push("Hiányzó kép: " + link.name);
-                    } else if (link.status === LinkStatus.LINK_OUT_OF_DATE) {
-                        linkErrors.push("Nem frissült kép: " + link.name);
+                    if (link.status === LinkStatus.LINK_MISSING || link.status === LinkStatus.LINK_OUT_OF_DATE) {
+                        // Pasteboard-on lévő elemek kihagyása (nem oldalon elhelyezett)
+                        // InDesign pasteboard elemekre NothingEnum.NOTHING-ot ad vissza, nem JS null-t,
+                        // ezért a parentPage.name elérhetőségét próbáljuk — ha dob, pasteboard-on van
+                        var isOnPage = true;
+                        try {
+                            var container = link.parent.parent;
+                            try {
+                                container.parentPage.name;
+                            } catch(ppErr) {
+                                isOnPage = false;
+                            }
+                        } catch(pe) {}
+                        if (!isOnPage) continue;
+
+                        if (link.status === LinkStatus.LINK_MISSING) {
+                            linkErrors.push("Hiányzó kép: " + link.name);
+                        } else {
+                            linkErrors.push("Nem frissült kép: " + link.name);
+                        }
                     }
                 }
 
