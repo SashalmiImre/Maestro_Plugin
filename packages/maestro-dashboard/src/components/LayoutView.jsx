@@ -71,6 +71,9 @@ export default function LayoutView({ filteredArticles }) {
     const rafRef = useRef(null);
     const zoomTimerRef = useRef(null);
 
+    // Dinamikus oldalarány — az első betöltött thumbnail-ből detektálva
+    const pageAspectRef = useRef(null);
+
     const publication = useMemo(
         () => publications.find(p => p.$id === activePublicationId),
         [publications, activePublicationId]
@@ -81,15 +84,39 @@ export default function LayoutView({ filteredArticles }) {
         [publications]
     );
 
-    // Kiadvány váltáskor oszlopszám betöltése + zoom reset
+    // Kiadvány váltáskor oszlopszám betöltése + zoom reset + arány reset
     useEffect(() => {
         setColumns(loadColumns(activePublicationId));
         setZoom(ZOOM_DEFAULT);
         zoomRef.current = ZOOM_DEFAULT;
+        pageAspectRef.current = null;
         if (layoutViewRef.current) {
             layoutViewRef.current.style.zoom = ZOOM_DEFAULT;
+            layoutViewRef.current.style.removeProperty('--page-aspect-ratio');
         }
     }, [activePublicationId]);
+
+    // ─── Oldalarány detektálás az első betöltött thumbnail-ből ───────────────
+    // A load event nem buborékol → capture phase szükséges.
+    // A detektált arány CSS variable-ként kerül a layout-view-re,
+    // amit a placeholder-ek és empty-slot-ok használnak.
+
+    useEffect(() => {
+        const view = layoutViewRef.current;
+        if (!view) return;
+
+        const handleLoad = (e) => {
+            if (e.target.tagName !== 'IMG' || pageAspectRef.current) return;
+            const { naturalWidth, naturalHeight } = e.target;
+            if (naturalWidth > 0 && naturalHeight > 0) {
+                pageAspectRef.current = `${naturalWidth} / ${naturalHeight}`;
+                view.style.setProperty('--page-aspect-ratio', pageAspectRef.current);
+            }
+        };
+
+        view.addEventListener('load', handleLoad, true);
+        return () => view.removeEventListener('load', handleLoad, true);
+    }, []);
 
     /**
      * Oszlopszám alkalmazása a nézet középpontjának megőrzésével.
@@ -198,7 +225,7 @@ export default function LayoutView({ filteredArticles }) {
             e.preventDefault();
 
             // Exponenciális zoom: kicsi delta (trackpad) → finom, nagy delta (egérgörgő) → erőteljes
-            const factor = Math.pow(0.998, e.deltaY);
+            const factor = Math.pow(0.995, e.deltaY);
             zoomToRef.current(zoomRef.current * factor);
         };
 

@@ -839,11 +839,11 @@ html, body {
     line-height: 1.3;
 }
 
-/* Üres slot (címlap bal oldala) */
+/* Üres slot (címlap bal oldala) — arány az első betöltött thumbnail-ből */
 .page-slot.empty-slot {
     flex: 1;
     min-width: 0;
-    aspect-ratio: 210 / 297;
+    aspect-ratio: var(--page-aspect-ratio, 210 / 297);
     background: transparent;
 }
 
@@ -857,7 +857,7 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
-    aspect-ratio: 210 / 297;
+    aspect-ratio: var(--page-aspect-ratio, 210 / 297);
     background: #252525;
     border: 1px dashed #444;
 }
