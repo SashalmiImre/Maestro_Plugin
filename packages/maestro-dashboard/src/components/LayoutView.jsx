@@ -66,6 +66,11 @@ export default function LayoutView({ filteredArticles }) {
     const zoomRef = useRef(zoom);
     const zoomToRef = useRef(null);
 
+    // rAF + debounce ref-ek a smooth zoom-hoz
+    const pendingZoomRef = useRef(null);
+    const rafRef = useRef(null);
+    const zoomTimerRef = useRef(null);
+
     const publication = useMemo(
         () => publications.find(p => p.$id === activePublicationId),
         [publications, activePublicationId]
@@ -81,6 +86,9 @@ export default function LayoutView({ filteredArticles }) {
         setColumns(loadColumns(activePublicationId));
         setZoom(ZOOM_DEFAULT);
         zoomRef.current = ZOOM_DEFAULT;
+        if (layoutViewRef.current) {
+            layoutViewRef.current.style.zoom = ZOOM_DEFAULT;
+        }
     }, [activePublicationId]);
 
     /**
@@ -118,40 +126,59 @@ export default function LayoutView({ filteredArticles }) {
     /**
      * Vizuális zoom alkalmazása a nézet középpontjának megőrzésével.
      * Ctrl+wheel / trackpad pinch / mobil touch pinch ezt hívja.
+     *
+     * rAF batching: gyors egymás utáni hívások egyetlen frame-be kerülnek.
+     * React state debounce: a toolbar %-kijelző csak a gesztus végén frissül.
      */
     const zoomTo = useCallback((newZoom) => {
-        const view = layoutViewRef.current;
-        const container = view?.parentElement;
-        if (!container) return;
-
         const clamped = Math.max(ZOOM_MIN, Math.min(ZOOM_MAX, newZoom));
-        const oldZoom = zoomRef.current;
-        if (Math.abs(clamped - oldZoom) < 0.001) return;
+        if (Math.abs(clamped - zoomRef.current) < 0.001) return;
 
-        // Középpont mentése
-        const centerY = container.scrollTop + container.clientHeight / 2;
-        const centerX = container.scrollLeft + container.clientWidth / 2;
-        const ratio = clamped / oldZoom;
+        pendingZoomRef.current = clamped;
 
-        // CSS zoom alkalmazás
-        view.style.zoom = clamped;
+        if (!rafRef.current) {
+            rafRef.current = requestAnimationFrame(() => {
+                rafRef.current = null;
+                const target = pendingZoomRef.current;
+                const oldZoom = zoomRef.current;
 
-        // Szinkron reflow kényszerítés
-        void container.scrollHeight;
+                const view = layoutViewRef.current;
+                const container = view?.parentElement;
+                if (!container) return;
 
-        // Scroll visszaállítás (arányos a zoom változáshoz)
-        container.scrollTop = centerY * ratio - container.clientHeight / 2;
-        container.scrollLeft = centerX * ratio - container.clientWidth / 2;
+                // Középpont mentése
+                const centerY = container.scrollTop + container.clientHeight / 2;
+                const centerX = container.scrollLeft + container.clientWidth / 2;
+                const ratio = target / oldZoom;
 
-        zoomRef.current = clamped;
-        setZoom(clamped);
+                // CSS zoom alkalmazás (imperatív — nem React inline style)
+                view.style.zoom = target;
+
+                // Scroll visszaállítás (matematikai arány, nincs kényszerített reflow)
+                container.scrollTop = centerY * ratio - container.clientHeight / 2;
+                container.scrollLeft = centerX * ratio - container.clientWidth / 2;
+
+                zoomRef.current = target;
+            });
+        }
+
+        // Toolbar %-kijelző frissítés debounce-olva (React re-render elkerülése gesztus közben)
+        clearTimeout(zoomTimerRef.current);
+        zoomTimerRef.current = setTimeout(() => setZoom(zoomRef.current), 150);
     }, []);
 
     // Ref szinkronizálás
     useEffect(() => { columnsRef.current = columns; }, [columns]);
     useEffect(() => { columnsToRef.current = columnsTo; }, [columnsTo]);
-    useEffect(() => { zoomRef.current = zoom; }, [zoom]);
     useEffect(() => { zoomToRef.current = zoomTo; }, [zoomTo]);
+
+    // rAF + timeout cleanup unmount-kor
+    useEffect(() => {
+        return () => {
+            if (rafRef.current) cancelAnimationFrame(rafRef.current);
+            if (zoomTimerRef.current) clearTimeout(zoomTimerRef.current);
+        };
+    }, []);
 
     // localStorage mentés oszlopszám változáskor
     useEffect(() => {
@@ -303,11 +330,11 @@ export default function LayoutView({ filteredArticles }) {
                 </div>
             </div>
 
-            {/* Layout nézet — CSS Grid + CSS zoom */}
+            {/* Layout nézet — CSS Grid + CSS zoom (imperatív) */}
             <div
                 className="layout-view"
                 ref={layoutViewRef}
-                style={{ '--spread-columns': columns, zoom }}
+                style={{ '--spread-columns': columns }}
             >
                 {spreads.map(spread => (
                     <div className="spread" key={spread.leftNum ?? spread.rightNum}>
