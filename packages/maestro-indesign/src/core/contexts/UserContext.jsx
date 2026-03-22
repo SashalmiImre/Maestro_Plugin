@@ -290,12 +290,32 @@ export function AuthorizationProvider({ children }) {
             // Egyéb account változás (labels, name, prefs)
             if (!payload || !payload.$id) return;
 
+            // Session/verification/MFA események szűrése: az `account` csatorna session
+            // eseményeket is küld (pl. createJWT → session.create), ahol a payload a
+            // SESSION dokumentum (eltérő $id, nincs name/email). Ha nem szűrjük, a user
+            // objektum felülíródik a session adataival → hibás $id, eltűnő név, ghost lockek.
+            const isSessionEvent = events?.some(e => e.includes('.sessions.'));
+            if (isSessionEvent) return;
+
+            // Biztonsági ellenőrzés: a payload $id-ja egyezzen a jelenlegi felhasználóéval.
+            // Ez véd minden nem user-document típusú Realtime payload ellen.
+            const currentUserId = userRef.current?.$id;
+            if (currentUserId && payload.$id !== currentUserId) {
+                logWarn(`[UserContext] Figyelmen kívül hagyott Realtime payload — eltérő $id (payload: ${payload.$id}, user: ${currentUserId})`);
+                return;
+            }
+
             // Csak akkor frissítünk, ha az adat tényleg változott.
             // A payload-ban nincs teamIds (az Appwrite nem küldi), ezért megőrizzük a meglévőt.
             setUser(prev => {
                 if (prev && prev.$updatedAt === payload.$updatedAt) return prev;
                 log('[UserContext] Felhasználói adat frissítve (Realtime)');
-                return { ...payload, teamIds: prev?.teamIds || [] };
+                return {
+                    ...payload,
+                    name: payload.name || prev?.name,
+                    email: payload.email || prev?.email,
+                    teamIds: prev?.teamIds || []
+                };
             });
         });
 

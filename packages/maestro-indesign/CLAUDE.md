@@ -444,8 +444,8 @@ index.jsx
 - **Write-Through — Kiadványok**: `createPublication(data)`, `updatePublication(id, data)`, `deletePublication(id)`
 - **Write-Through — Cikkek**: `createArticle(data)`, `updateArticle(id, data)`, `deleteArticle(id)`
 - **Write-Through — Validációk**: `createValidation(data)`, `updateValidation(id, data)`, `deleteValidation(id)`
-- **Apply-Optimistic**: `applyArticleUpdate(serverDocument)` — külső írók (WorkflowEngine hívók) számára
-- A Realtime handler automatikusan frissíti az állapotot WebSocket eseményekből `$updatedAt` elavulás-védelemmel
+- **Apply-Optimistic**: `applyArticleUpdate(serverDocument)` — külső írók (WorkflowEngine hívók) számára. Tartalmaz `$updatedAt` elavulás-védelmet: frissebb helyi adat nem felülíródik régebbi szerveradattal. Ez kritikus az `syncLocks()` és `fetchData()` párhuzamos futásánál — megakadályozza, hogy egy korábbi lock műveleti válasz felülírja a frissebb (lock-mentes) DB állapotot.
+- **Realtime handler**: Automatikusan frissíti az állapotot WebSocket eseményekből `$updatedAt` elavulás-védelemmel. Ugyanez a minta mint az `applyArticleUpdate()`-ben — garantálja, hogy egy hosszabb hálózati késleltetésű update soha nem írja felül az optimista UI frissítéseket vagy közelmúltbeli szerver válaszokat.
 
 ### UserContext API
 - `user` — aktuális felhasználó objektum (vagy `null`)
@@ -455,7 +455,7 @@ index.jsx
 - **Jelszókezelés** (hamburgermenü, `index.jsx`-ben, React kontextuson kívül):
   - **Jelszó módosítás**: InDesign natív dialog → `account.updatePassword()` — bejelentkezést igényel.
   - **Elfelejtett jelszó**: InDesign natív dialog (email) → `account.createRecovery(email, RECOVERY_URL)` → proxy `/reset-password` oldal a böngészőben.
-- **Realtime szinkron (labels/prefs)**: Az Appwrite Realtime `account` csatornára feliratkozva a `user` objektum (beleértve `labels`, `name`, `prefs`) automatikusan frissül, ha a szerveren módosítják (Console/Server SDK)
+- **Realtime szinkron (labels/prefs)**: Az Appwrite Realtime `account` csatornára feliratkozva a `user` objektum (beleértve `labels`, `name`, `prefs`) automatikusan frissül, ha a szerveren módosítják (Console/Server SDK). A handler a `response.events[]` alapján szűri a session eseményeket (`.sessions.` stringet ignórálja) és validálja a payload `$id`-ját (csak `currentUserId` egyezésekor alkalmaz frissítéseket), megakadályozva, hogy session ID-k felülírják a user objektumot. A `name` és `email` mezők megőrződnek, ha a Realtime payload nem tartalmaz értéket (field preservation).
 - **Realtime szinkron (teamIds)**: Az `account` csatorna `response.events[]` tömbjét is figyeli — ha tartalmaz `.memberships.` stringet (szerver-oldali tagságváltozás), `teams.list()` hívással frissíti a `user.teamIds`-t. Fallback a `teams` csatorna → `teamMembershipChanged` MaestroEvent útvonal mellé. A `sameTeamIds()` helper Set-alapú duplikátum-mentes összehasonlítást végez, hogy a szinkron ne okozzon felesleges re-rendereket.
 - **Recovery szinkron**: A `dataRefreshRequested` MaestroEvent-re is feliratkozik — minden recovery-nél (sleep/wake, reconnect, focus) `account.get()`-tel frissíti a user adatokat. Ez biztosítja a labels/prefs szinkront akkor is, ha az Appwrite Realtime `account` csatorna nem tüzel proxy-n keresztül (pl. szerver-oldali label módosításnál).
 

@@ -20,7 +20,7 @@ import { tables, ID, DATABASE_ID, PUBLICATIONS_COLLECTION_ID, ARTICLES_COLLECTIO
 import { realtime } from "../config/realtimeClient.js";
 import { useConnection } from "./ConnectionContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
-import { log, logError } from "../utils/logger.js";
+import { log, logWarn, logError } from "../utils/logger.js";
 import { withTimeout, withRetry } from "../utils/promiseUtils.js";
 import { isNetworkError, isAuthError } from "../utils/errorUtils.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../config/maestroEvents.js";
@@ -663,7 +663,15 @@ export const DataProvider = ({ children }) => {
      */
     const applyArticleUpdate = useCallback((serverDocument) => {
         if (!serverDocument?.$id) return;
-        setArticles(prev => prev.map(article => article.$id === serverDocument.$id ? serverDocument : article).sort(compareByName));
+        setArticles(prev => prev.map(article => {
+            if (article.$id !== serverDocument.$id) return article;
+            // $updatedAt elavulás-védelem: ne írjunk felül frissebb adatot régebbivel
+            if (article.$updatedAt && serverDocument.$updatedAt && article.$updatedAt > serverDocument.$updatedAt) {
+                logWarn(`[DataContext] applyArticleUpdate elavult dokumentum kihagyva (${article.$id})`);
+                return article;
+            }
+            return serverDocument;
+        }).sort(compareByName));
     }, []);
 
     // ═══════════════════════════════════════════════════════════════════════════

@@ -5,9 +5,11 @@ import { useCallback, useMemo, useRef } from "react";
 import { useConnection } from "../../core/contexts/ConnectionContext.jsx";
 import { useData } from "../../core/contexts/DataContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
+import { useAllTeamMembers } from "./useAllTeamMembers.js";
 
 // Segédprogramok (Utils)
 import { isNetworkError, isAuthError, getAPIErrorMessage } from "../../core/utils/errorUtils.js";
+import { tables, DATABASE_ID, ARTICLES_COLLECTION_ID, Query } from "../../core/config/appwriteConfig.js";
 import {
     generateIsDocumentOpenScript,
     generateOpenDocumentScript,
@@ -24,6 +26,7 @@ import {
 import { uploadThumbnails, cleanupTempFiles, getTempFolderPath } from "../../core/utils/thumbnailUploader.js";
 import { isFileInFolder, toNativePath, toCanonicalPath, toRelativeArticlePath, toAbsoluteArticlePath, convertNativePathToUrl, parsePath, joinPath } from "../../core/utils/pathUtils.js";
 import { log, logError, logWarn } from "../../core/utils/logger.js";
+import { withTimeout } from "../../core/utils/promiseUtils.js";
 import { SCRIPT_LANGUAGE_JAVASCRIPT, TOAST_TYPES } from "../../core/utils/constants.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../core/config/maestroEvents.js";
 
@@ -46,7 +49,7 @@ export const useArticles = (publicationId, publicationRoot) => {
     const { setOffline, incrementAttempts } = useConnection();
     
     // Globális adatok és write-through API a DataContext-ből
-    const { articles: allArticles, layouts, publications, createArticle, updateArticle } = useData();
+    const { articles: allArticles, layouts, publications, createArticle, updateArticle, applyArticleUpdate } = useData();
 
     // A kiadvány objektum az alapértelmezett munkatársak kiolvasásához
     const publication = useMemo(() => publications.find(p => p.$id === publicationId), [publications, publicationId]);
@@ -56,6 +59,11 @@ export const useArticles = (publicationId, publicationRoot) => {
     // Ref a publications tömbhöz — a callback-ek ne függjenek a publications referenciától
     const publicationsRef = useRef(publications);
     publicationsRef.current = publications;
+
+    // Csapattagok listája — ghost lock detektáláshoz (törölt felhasználók lockjai)
+    const { members: allMembers } = useAllTeamMembers();
+    const allMembersRef = useRef(allMembers);
+    allMembersRef.current = allMembers;
     
     // Értesítések kezelése (Toast üzenetek)
     const { showToast } = useToast();
@@ -307,7 +315,51 @@ export const useArticles = (publicationId, publicationRoot) => {
         try {
             // Zárolás ellenőrzése: Ha valaki más szerkeszti, nem engedjük megnyitni
             if (article.lockOwnerId && article.lockOwnerId !== user.$id) {
-                throw new Error("Ezt a fájlt jelenleg más felhasználó szerkeszti. Kérlek, várj amíg befejezi a munkát.");
+                // A helyi state elavult lehet (elveszett Realtime event) — megerősítés DB-ből
+                try {
+                    const response = await withTimeout(
+                        tables.listRows({
+                            databaseId: DATABASE_ID,
+                            tableId: ARTICLES_COLLECTION_ID,
+                            queries: [Query.equal("$id", article.$id)],
+                            limit: 1
+                        }),
+                        10000, "useArticles: verifyLock"
+                    );
+                    const freshArticle = response?.rows?.[0];
+                    if (freshArticle) {
+                        applyArticleUpdate(freshArticle);
+                        if (freshArticle.lockOwnerId && freshArticle.lockOwnerId !== user.$id) {
+                            // Ghost lock detektálás: ha a lock owner nem található a csapattagok között,
+                            // valószínűleg törölt felhasználóról van szó — automatikus takarítás
+                            const members = allMembersRef.current;
+                            const isKnownMember = members.length > 0 && members.some(m => m.userId === freshArticle.lockOwnerId);
+                            if (!isKnownMember && members.length > 0) {
+                                log(`[useArticles] Ghost lock detektálva (${freshArticle.lockOwnerId}) — automatikus törlés`);
+                                const cleaned = await withTimeout(
+                                    tables.updateRow({
+                                        databaseId: DATABASE_ID,
+                                        tableId: ARTICLES_COLLECTION_ID,
+                                        rowId: freshArticle.$id,
+                                        data: { lockType: null, lockOwnerId: null }
+                                    }),
+                                    10000, "useArticles: cleanGhostLock"
+                                );
+                                if (cleaned) applyArticleUpdate(cleaned);
+                            } else {
+                                throw new Error("Ezt a fájlt jelenleg más felhasználó szerkeszti. Kérlek, várj amíg befejezi a munkát.");
+                            }
+                        } else {
+                            log('[useArticles] Elavult zárolás feloldva a DB-ből — megnyitás folytatódik');
+                        }
+                    }
+                } catch (verifyError) {
+                    // Ha a verifyError a mi saját "más felhasználó szerkeszti" hibaüzenetünk, továbbdobjuk
+                    if (verifyError.message.includes("szerkeszti")) throw verifyError;
+                    // Egyéb hiba (hálózat) → biztonsági okokból blokkoljuk a megnyitást
+                    logWarn('[useArticles] Zárolás DB megerősítés sikertelen:', verifyError);
+                    throw new Error("Ezt a fájlt jelenleg más felhasználó szerkeszti. Kérlek, várj amíg befejezi a munkát.");
+                }
             }
 
             const app = require("indesign").app;
