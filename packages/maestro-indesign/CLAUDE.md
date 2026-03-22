@@ -181,7 +181,7 @@
     - **Storage**: Appwrite `thumbnails` bucket, max 2MB/fájl, `.jpg` kiterjesztés. Az article `thumbnails` mező JSON tömb: `[{ fileId, page }]`.
     - **Fájlok**: `thumbnailScripts.js` (ExtendScript generátorok), `thumbnailUploader.js` (upload/delete/cleanup), `useThumbnails.js` (React hook, documentClosed event).
     - **Takarítás**: Kiadvány törléskor a `deleteOldThumbnails()` törli a kapcsolódó fájlokat a Storage-ból. Átpaginázáskor a régi thumbnailek cserélődnek (upload új → delete régi → DB frissítés).
-    - **Dashboard Layout nézet**: Magazin konvenció szerinti spread elrendezés (1. oldal = címlap jobb, 2-3, 4-5, ...). Thumbnail preview URL: `storage.getFilePreview(BUCKETS.THUMBNAILS, fileId)`. Oldalütközés detektálás: narancssárga badge + tooltip, ha több cikk ugyanazt az oldalt foglalja.
+    - **Dashboard Layout nézet**: Magazin konvenció szerinti spread elrendezés (1. oldal = címlap jobb, 2-3, 4-5, ...). Thumbnail preview URL: `storage.getFileView(BUCKETS.THUMBNAILS, fileId)`. Oldalütközés detektálás: narancssárga badge + tooltip, ha több cikk ugyanazt az oldalt foglalja. Zoom: `transform: scale()` + wrapper div (a transform nem befolyásolja a layout-ot, a wrapper explicit méretezéssel hozza létre a scrollozható területet). PDF export: `window.print()` + `@media print` CSS (elrejti a sidebar/header/toolbar-t, felszabadítja a scroll konténereket).
     - **Alapelv**: Thumbnail generálás **soha nem blokkolja** a fő munkafolyamatot.
 
 9. **Placeholder Sorok (Lefedetlen Oldalak)**

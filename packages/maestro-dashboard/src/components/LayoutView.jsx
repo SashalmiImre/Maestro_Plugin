@@ -4,7 +4,7 @@
  * Oldalpár (spread) alapú áttekintés thumbnail képekkel.
  * Magazin konvenció: 1. oldal jobb, 2-3, 4-5, ... spreadek.
  * Fix oszlopszám CSS Grid-del, kiadványonként localStorage-ban tárolva.
- * Ctrl+Wheel / trackpad pinch / mobil touch pinch → CSS zoom (vizuális nagyítás).
+ * Ctrl+Wheel / trackpad pinch / mobil touch pinch → transform: scale() (vizuális nagyítás).
  */
 
 import React, { useState, useMemo, useCallback, useRef, useEffect } from 'react';
@@ -20,7 +20,7 @@ const COLUMNS_MAX = 12;
 
 const ZOOM_DEFAULT = 1;
 const ZOOM_MIN = 0.25;
-const ZOOM_MAX = 4;
+const ZOOM_MAX = 10;
 
 /** Kiadványonkénti oszlopszám betöltése localStorage-ból. */
 function loadColumns(publicationId) {
@@ -74,6 +74,11 @@ export default function LayoutView({ filteredArticles }) {
     // Dinamikus oldalarány — az első betöltött thumbnail-ből detektálva
     const pageAspectRef = useRef(null);
 
+    // Zoom természetes méretek — transform: scale() wrapper méretezéséhez
+    const baseWidthRef = useRef(null);
+    const baseHeightRef = useRef(null);
+    const wrapperRef = useRef(null);
+
     const publication = useMemo(
         () => publications.find(p => p.$id === activePublicationId),
         [publications, activePublicationId]
@@ -90,9 +95,16 @@ export default function LayoutView({ filteredArticles }) {
         setZoom(ZOOM_DEFAULT);
         zoomRef.current = ZOOM_DEFAULT;
         pageAspectRef.current = null;
+        baseWidthRef.current = null;
+        baseHeightRef.current = null;
         if (layoutViewRef.current) {
-            layoutViewRef.current.style.zoom = ZOOM_DEFAULT;
+            layoutViewRef.current.style.transform = '';
+            layoutViewRef.current.style.removeProperty('width');
             layoutViewRef.current.style.removeProperty('--page-aspect-ratio');
+        }
+        if (wrapperRef.current) {
+            wrapperRef.current.style.width = '';
+            wrapperRef.current.style.height = '';
         }
     }, [activePublicationId]);
 
@@ -124,8 +136,9 @@ export default function LayoutView({ filteredArticles }) {
      */
     const columnsTo = useCallback((newColumns) => {
         const view = layoutViewRef.current;
-        if (!view) return;
-        const container = view.parentElement;
+        const wrapper = wrapperRef.current;
+        if (!view || !wrapper) return;
+        const container = wrapper.parentElement;
         if (!container) return;
 
         const clamped = Math.max(COLUMNS_MIN, Math.min(COLUMNS_MAX, Math.round(newColumns)));
@@ -139,6 +152,15 @@ export default function LayoutView({ filteredArticles }) {
 
         // CSS Grid oszlopszám alkalmazása
         view.style.setProperty('--spread-columns', String(clamped));
+
+        // Ha zoomed, magasság újraszámítás (grid átrendezés)
+        if (baseWidthRef.current !== null) {
+            const savedTransform = view.style.transform;
+            view.style.transform = 'none';
+            baseHeightRef.current = view.scrollHeight;
+            view.style.transform = savedTransform;
+            wrapper.style.height = (baseHeightRef.current * zoomRef.current) + 'px';
+        }
 
         // Szinkron reflow kényszerítés
         void container.scrollHeight;
@@ -170,18 +192,40 @@ export default function LayoutView({ filteredArticles }) {
                 const oldZoom = zoomRef.current;
 
                 const view = layoutViewRef.current;
-                const container = view?.parentElement;
-                if (!container) return;
+                const wrapper = wrapperRef.current;
+                const container = wrapper?.parentElement;
+                if (!view || !wrapper || !container) return;
 
-                // Középpont mentése
+                // Scroll középpont mentése (container koordináta-rendszerben)
                 const centerY = container.scrollTop + container.clientHeight / 2;
                 const centerX = container.scrollLeft + container.clientWidth / 2;
                 const ratio = target / oldZoom;
 
-                // CSS zoom alkalmazás (imperatív — nem React inline style)
-                view.style.zoom = target;
+                if (Math.abs(target - 1) < 0.01) {
+                    // Reset → reszponzív layout visszaállítása
+                    view.style.transform = '';
+                    view.style.width = '';
+                    wrapper.style.width = '';
+                    wrapper.style.height = '';
+                    baseWidthRef.current = null;
+                    baseHeightRef.current = null;
+                } else {
+                    // Első zoom: természetes méretek rögzítése (transform nélküli állapot)
+                    if (baseWidthRef.current === null) {
+                        baseWidthRef.current = view.offsetWidth;
+                        view.style.width = baseWidthRef.current + 'px';
+                        baseHeightRef.current = view.scrollHeight;
+                    }
 
-                // Scroll visszaállítás (matematikai arány, nincs kényszerített reflow)
+                    // Transform alkalmazás (tisztán vizuális — layout nem változik)
+                    view.style.transform = `scale(${target})`;
+
+                    // Wrapper méretezés → scroll terület a konténerben
+                    wrapper.style.width = (baseWidthRef.current * target) + 'px';
+                    wrapper.style.height = (baseHeightRef.current * target) + 'px';
+                }
+
+                // Scroll visszaállítás (matematikai arány)
                 container.scrollTop = centerY * ratio - container.clientHeight / 2;
                 container.scrollLeft = centerX * ratio - container.clientWidth / 2;
 
@@ -215,9 +259,9 @@ export default function LayoutView({ filteredArticles }) {
     // ─── Ctrl+Wheel / trackpad pinch handler → vizuális zoom ──────────────────
 
     useEffect(() => {
-        const view = layoutViewRef.current;
-        if (!view) return;
-        const container = view.parentElement;
+        const wrapper = wrapperRef.current;
+        if (!wrapper) return;
+        const container = wrapper.parentElement;
         if (!container) return;
 
         const handleWheel = (e) => {
@@ -225,7 +269,7 @@ export default function LayoutView({ filteredArticles }) {
             e.preventDefault();
 
             // Exponenciális zoom: kicsi delta (trackpad) → finom, nagy delta (egérgörgő) → erőteljes
-            const factor = Math.pow(0.995, e.deltaY);
+            const factor = Math.pow(0.99, e.deltaY);
             zoomToRef.current(zoomRef.current * factor);
         };
 
@@ -236,9 +280,9 @@ export default function LayoutView({ filteredArticles }) {
     // ─── Mobil touch pinch handler → vizuális zoom ────────────────────────────
 
     useEffect(() => {
-        const view = layoutViewRef.current;
-        if (!view) return;
-        const container = view.parentElement;
+        const wrapper = wrapperRef.current;
+        if (!wrapper) return;
+        const container = wrapper.parentElement;
         if (!container) return;
 
         let startDistance = 0;
@@ -306,6 +350,12 @@ export default function LayoutView({ filteredArticles }) {
         return buildSpreads(pageMap, coverageStart, coverageEnd);
     }, [filteredArticles, publication, getThumbnailUrl]);
 
+    // ─── Layout mentése PDF-ként (böngésző print → Save as PDF) ─────────────
+
+    const exportAsPdf = useCallback(() => {
+        window.print();
+    }, []);
+
     if (!publication) {
         return <div className="empty-state">Válassz egy kiadványt</div>;
     }
@@ -321,9 +371,9 @@ export default function LayoutView({ filteredArticles }) {
                 <div className="zoom-control">
                     <button
                         className="zoom-btn"
-                        title="Több oszlop (kicsinyítés)"
-                        disabled={columns >= COLUMNS_MAX}
-                        onClick={() => columnsTo(columns + 1)}
+                        title="Kevesebb oszlop"
+                        disabled={columns <= COLUMNS_MIN}
+                        onClick={() => columnsTo(columns - 1)}
                     >
                         −
                     </button>
@@ -340,13 +390,21 @@ export default function LayoutView({ filteredArticles }) {
                     />
                     <button
                         className="zoom-btn"
-                        title="Kevesebb oszlop (nagyítás)"
-                        disabled={columns <= COLUMNS_MIN}
-                        onClick={() => columnsTo(columns - 1)}
+                        title="Több oszlop"
+                        disabled={columns >= COLUMNS_MAX}
+                        onClick={() => columnsTo(columns + 1)}
                     >
                         +
                     </button>
                     <span className="zoom-separator" />
+                    <input
+                        type="range"
+                        className="zoom-slider"
+                        min={ZOOM_MIN * 100}
+                        max={ZOOM_MAX * 100}
+                        value={Math.round(zoom * 100)}
+                        onChange={e => zoomTo(parseInt(e.target.value, 10) / 100)}
+                    />
                     <button
                         className="zoom-reset"
                         title="Zoom visszaállítása (100%)"
@@ -354,27 +412,38 @@ export default function LayoutView({ filteredArticles }) {
                     >
                         {Math.round(zoom * 100)}%
                     </button>
+                    <span className="zoom-separator" />
+                    <button
+                        className="zoom-btn export-btn"
+                        title="Layout mentése PDF-ként"
+                        onClick={exportAsPdf}
+                    >
+                        📄
+                    </button>
                 </div>
             </div>
 
-            {/* Layout nézet — CSS Grid + CSS zoom (imperatív) */}
-            <div
-                className="layout-view"
-                ref={layoutViewRef}
-                style={{ '--spread-columns': columns }}
-            >
-                {spreads.map(spread => (
-                    <div className="spread" key={spread.leftNum ?? spread.rightNum}>
-                        <PageSlot
-                            pageData={spread.left}
-                            pageNum={spread.leftNum}
-                        />
-                        <PageSlot
-                            pageData={spread.right}
-                            pageNum={spread.rightNum}
-                        />
-                    </div>
-                ))}
+            {/* Zoom wrapper — méretezés a scrollozható terület biztosításához */}
+            <div className="layout-zoom-wrapper" ref={wrapperRef}>
+                {/* Layout nézet — CSS Grid + transform: scale() (imperatív) */}
+                <div
+                    className="layout-view"
+                    ref={layoutViewRef}
+                    style={{ '--spread-columns': columns }}
+                >
+                    {spreads.map(spread => (
+                        <div className="spread" key={spread.leftNum ?? spread.rightNum}>
+                            <PageSlot
+                                pageData={spread.left}
+                                pageNum={spread.leftNum}
+                            />
+                            <PageSlot
+                                pageData={spread.right}
+                                pageNum={spread.rightNum}
+                            />
+                        </div>
+                    ))}
+                </div>
             </div>
         </>
     );

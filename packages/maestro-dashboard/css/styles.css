@@ -674,6 +674,7 @@ html, body {
     background: #1a1a1a;
     position: sticky;
     top: 0;
+    left: 0;
     z-index: 2;
 }
 
@@ -735,6 +736,49 @@ html, body {
     background: #444;
 }
 
+/* Zoom csúszka */
+.zoom-slider {
+    width: 100px;
+    height: 4px;
+    -webkit-appearance: none;
+    appearance: none;
+    background: #444;
+    border-radius: 2px;
+    outline: none;
+    cursor: pointer;
+}
+
+.zoom-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 12px;
+    height: 12px;
+    background: #ccc;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.zoom-slider::-webkit-slider-thumb:hover {
+    background: #fff;
+}
+
+.zoom-slider::-moz-range-thumb {
+    width: 12px;
+    height: 12px;
+    background: #ccc;
+    border: none;
+    border-radius: 50%;
+    cursor: pointer;
+}
+
+.zoom-slider::-moz-range-thumb:hover {
+    background: #fff;
+}
+
+/* Export gomb */
+.export-btn {
+    font-size: 13px;
+}
+
 .zoom-reset {
     height: 24px;
     padding: 0 8px;
@@ -752,12 +796,20 @@ html, body {
     color: #fff;
 }
 
+/* Zoom wrapper — méretezés a scrollozható terület biztosításához */
+.layout-zoom-wrapper {
+    position: relative;
+    min-width: 100%;
+    min-height: 100%;
+}
+
 /* Spreadek — CSS Grid, fix oszlopszám */
 .layout-view {
     display: grid;
     grid-template-columns: repeat(var(--spread-columns, 5), minmax(0, 1fr));
-    gap: 32px 40px;
+    gap: 16px 20px;
     padding: 24px 20px;
+    transform-origin: 0 0;
 }
 
 .spread {
@@ -787,12 +839,8 @@ html, body {
     overflow: hidden;
 }
 
-/* Állapot szín sáv — kép alja */
+/* Állapot szín sáv — kép alatt, info felett */
 .page-state-bar {
-    position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
     height: 3px;
 }
 
@@ -818,19 +866,19 @@ html, body {
 
 /* Cikk információk a kép alatt */
 .page-info {
-    padding: 4px 6px;
+    padding: 2px 4px;
     background: #252525;
 }
 
 .page-info .page-number {
-    font-size: 9px;
+    font-size: 7px;
     color: #777;
     display: block;
     line-height: 1.2;
 }
 
 .page-info .article-name {
-    font-size: 10px;
+    font-size: 8px;
     color: #ccc;
     display: block;
     overflow: hidden;
@@ -875,11 +923,77 @@ html, body {
 /* Responsive — kis képernyő padding csökkentés */
 @media (max-width: 600px) {
     .layout-view {
-        gap: 16px 20px;
+        gap: 8px 10px;
         padding: 16px 12px;
     }
 
     .layout-toolbar {
         padding: 8px 12px;
+    }
+}
+
+/* ─── Nyomtatás (PDF export) ─────────────────────────────────────────── */
+
+@media print {
+    /* Minden elrejtése a layout nézeten kívül */
+    .dashboard-header,
+    .sidebar,
+    .content-header,
+    .filter-bar,
+    .table-container,
+    .layout-toolbar,
+    .toast-container {
+        display: none !important;
+    }
+
+    /* Konténerek felszabadítása — nincs scroll, nincs fix magasság */
+    html, body {
+        height: auto;
+        overflow: visible;
+        background: white;
+    }
+
+    .dashboard,
+    .dashboard-body,
+    .main-content,
+    .layout-container {
+        overflow: visible !important;
+        height: auto !important;
+        max-height: none !important;
+        position: static !important;
+        display: block !important;
+    }
+
+    .dashboard-body {
+        flex: none !important;
+    }
+
+    /* Zoom wrapper reset */
+    .layout-zoom-wrapper {
+        width: auto !important;
+        height: auto !important;
+    }
+
+    /* Layout nézet — nincs zoom, természetes méret */
+    .layout-view {
+        transform: none !important;
+        width: auto !important;
+        gap: 8px 10px;
+        padding: 10px;
+    }
+
+    /* Színek megőrzése nyomtatásban */
+    .page-state-bar,
+    .page-conflict-badge {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    .page-info {
+        color: #333;
+    }
+
+    .spread {
+        break-inside: avoid;
     }
 }

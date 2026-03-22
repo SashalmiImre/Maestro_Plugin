@@ -42,7 +42,6 @@ const PageSlot = React.memo(function PageSlot({ pageData, pageNum }) {
                     alt={`${pageData.pageNum}. oldal`}
                     loading="lazy"
                 />
-                <div className="page-state-bar" style={{ backgroundColor: stateColor }} />
                 {pageData.conflict && (
                     <div
                         className="page-conflict-badge"
@@ -56,6 +55,7 @@ const PageSlot = React.memo(function PageSlot({ pageData, pageNum }) {
                     </div>
                 )}
             </div>
+            <div className="page-state-bar" style={{ backgroundColor: stateColor }} />
             <div className="page-info">
                 <span className="page-number">{pageData.pageNum}</span>
                 <span className="article-name" title={pageData.articleName}>
