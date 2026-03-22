@@ -160,6 +160,7 @@ export const DataProvider = ({ children }) => {
 
             for (const article of arts) {
                 if (article.filePath && isAbsoluteFilePath(article.filePath)) {
+                    // Abszolút (legacy) filePath → relatív konverzió
                     const pub = normalizedPubs.find(p => p.$id === article.publicationId);
                     const pubRoot = pub?.rootPath;
                     if (!pubRoot) continue;
@@ -178,6 +179,26 @@ export const DataProvider = ({ children }) => {
                         })
                             .then(() => {
                                 articleUpdates.set(article.$id, relative);
+                            })
+                            .catch(e => {
+                                logError(`[DataContext] Migráció sikertelen (article ${article.$id}):`, e);
+                            })
+                    );
+                } else if (article.filePath && !isAbsoluteFilePath(article.filePath) && article.filePath.includes('\\')) {
+                    // Relatív filePath backslash normalizáció → forward slash
+                    const normalized = article.filePath.replace(/\\/g, '/');
+
+                    log(`[DataContext] Migráció: article filePath backslash "${article.filePath}" → "${normalized}"`);
+
+                    articlePromises.push(
+                        tables.updateRow({
+                            databaseId: DATABASE_ID,
+                            tableId: ARTICLES_COLLECTION_ID,
+                            rowId: article.$id,
+                            data: { filePath: normalized }
+                        })
+                            .then(() => {
+                                articleUpdates.set(article.$id, normalized);
                             })
                             .catch(e => {
                                 logError(`[DataContext] Migráció sikertelen (article ${article.$id}):`, e);

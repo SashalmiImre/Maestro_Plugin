@@ -363,7 +363,9 @@ export const parsePath = (filePath) => {
  */
 export const joinPath = (parentPath, fileName) => {
     if (!parentPath) return fileName;
-    const pathSeparator = parentPath.includes('/') ? '/' : '\\';
+    // A default szeparátor mindig '/' (kanonikus formátum).
+    // Csak akkor használ '\'-t, ha a parentPath kifejezetten backslash-t tartalmaz (natív Windows path).
+    const pathSeparator = parentPath.includes('\\') ? '\\' : '/';
     return parentPath + pathSeparator + fileName;
 };
 
