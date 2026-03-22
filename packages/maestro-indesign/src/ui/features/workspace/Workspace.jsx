@@ -32,12 +32,21 @@ import { useData } from "../../../core/contexts/DataContext.jsx";
 import { useWorkflowValidation } from "../../../data/hooks/useWorkflowValidation.js";
 import { useThumbnails } from "../../../data/hooks/useThumbnails.js";
 
+// Konfiguráció & Konstansok
+import { account, DASHBOARD_URL } from "../../../core/config/appwriteConfig.js";
+
 // Utils
 import { toAbsoluteArticlePath, toNativePath } from "../../../core/utils/pathUtils.js";
 import { generateOpenDocumentScript } from "../../../core/utils/indesign/index.js";
 import { log, logWarn, logError } from "../../../core/utils/logger.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../core/config/maestroEvents.js";
 import { SCRIPT_LANGUAGE_JAVASCRIPT, TOAST_TYPES } from "../../../core/utils/constants.js";
+
+/** Fejléc monospace betűstílus (dashboard page-range stílushoz igazítva). */
+const HEADER_FONT_STYLE = {
+    fontFamily: "Consolas, 'Andale Mono', 'Lucida Console', 'Courier New', monospace",
+    fontSize: '11px'
+};
 
 /** Hibaüzenet: a cikkhez nem tartozik fájl útvonal */
 const NO_FILE_PATH_ERROR = {
@@ -141,6 +150,34 @@ export const Workspace = () => {
         setSelectedPublication(null);
     }, []);
 
+    /**
+     * Dashboard megnyitása böngészőben JWT auto-login-nal.
+     * Létrehoz egy 15 perces JWT tokent, majd a böngészőben megnyitja a dashboard URL-t
+     * a token query paraméterrel.
+     */
+    const handleOpenDashboard = useCallback(async () => {
+        try {
+            const { jwt } = await account.createJWT();
+            let url = `${DASHBOARD_URL}?jwt=${encodeURIComponent(jwt)}`;
+            if (activePublicationId) {
+                url += `&pub=${encodeURIComponent(activePublicationId)}`;
+            }
+            require('uxp').shell.openExternal(url);
+        } catch (error) {
+            logError('[Workspace] Dashboard megnyitás sikertelen:', error);
+            // Fallback: JWT nélkül is megnyitjuk a dashboardot
+            try {
+                let url = DASHBOARD_URL;
+                if (activePublicationId) {
+                    url += `?pub=${encodeURIComponent(activePublicationId)}`;
+                }
+                require('uxp').shell.openExternal(url);
+            } catch (fallbackError) {
+                logError('[Workspace] Böngésző megnyitása sikertelen:', fallbackError);
+                showToast('A böngésző nem nyitható meg', TOAST_TYPES.ERROR);
+            }
+        }
+    }, [showToast, activePublicationId]);
 
     /**
      * Kiadvány mező frissítése (pl. coverage)
@@ -238,6 +275,41 @@ export const Workspace = () => {
 
     return (
         <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
+            {/* Felhasználó info fejléc: név + dashboard link */}
+            <sp-body style={{
+                flexShrink: 0,
+                borderBottom: '1px solid var(--spectrum-global-color-gray-300)'
+            }}>
+                <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between'
+                }}>
+                    <span style={{
+                        ...HEADER_FONT_STYLE,
+                        fontWeight: 'bold',
+                        overflow: 'hidden',
+                        textOverflow: 'ellipsis',
+                        whiteSpace: 'nowrap'
+                    }}>
+                        {user?.name || user?.email || ''}
+                    </span>
+                    <span
+                        onClick={handleOpenDashboard}
+                        title="Dashboard megnyitása böngészőben"
+                        style={{
+                            ...HEADER_FONT_STYLE,
+                            cursor: 'pointer',
+                            textDecoration: 'underline',
+                            flexShrink: 0,
+                            opacity: 0.7
+                        }}
+                    >
+                        WEB DASHBOARD
+                    </span>
+                </div>
+            </sp-body>
+
             {/* PublicationList - always rendered, hidden with visibility when viewing properties
                 (display:none reseteli a scrollTop-ot, visibility:hidden megőrzi) */}
             <div style={{

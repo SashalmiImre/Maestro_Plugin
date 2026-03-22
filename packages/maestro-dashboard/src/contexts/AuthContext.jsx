@@ -51,6 +51,18 @@ export function AuthProvider({ children }) {
 
         (async () => {
             try {
+                // JWT auto-login: plugin-ből kapott token detektálása
+                const params = new URLSearchParams(window.location.search);
+                const jwt = params.get('jwt');
+
+                if (jwt) {
+                    client.setJWT(jwt);
+                    // URL takarítás — jwt paraméter eltávolítása a címsorból
+                    const cleanUrl = new URL(window.location.href);
+                    cleanUrl.searchParams.delete('jwt');
+                    window.history.replaceState({}, '', cleanUrl.toString());
+                }
+
                 const userData = await account.get();
                 const teamIds = await fetchTeamIds();
                 setUser({ ...userData, teamIds });

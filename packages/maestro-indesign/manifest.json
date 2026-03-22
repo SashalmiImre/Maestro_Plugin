@@ -11,7 +11,7 @@
     },
     "launchProcess": {
       "extensions": [],
-      "schemes": []
+      "schemes": ["https"]
     }
   },
   "featureFlags": {

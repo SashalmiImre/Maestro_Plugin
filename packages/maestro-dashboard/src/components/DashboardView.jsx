@@ -43,10 +43,19 @@ export default function DashboardView() {
                 // Csapattagok lekérése háttérben (lock nevek feloldásához)
                 fetchAllTeamMembers().catch(() => {});
 
-                // Utoljára kiválasztott kiadvány visszaállítása
-                const storedId = localStorage.getItem(STORAGE_KEYS.SELECTED_PUBLICATION);
-                if (storedId && pubs.some(p => p.$id === storedId)) {
-                    await switchPublication(storedId);
+                // Kiadvány visszaállítása: URL paraméter (plugin-ből) > localStorage > első kiadvány
+                const params = new URLSearchParams(window.location.search);
+                const urlPubId = params.get('pub');
+                if (urlPubId) {
+                    // URL takarítás — pub paraméter eltávolítása a címsorból
+                    const cleanUrl = new URL(window.location.href);
+                    cleanUrl.searchParams.delete('pub');
+                    window.history.replaceState({}, '', cleanUrl.toString());
+                }
+                const targetId = (urlPubId && pubs.some(p => p.$id === urlPubId)) ? urlPubId
+                    : localStorage.getItem(STORAGE_KEYS.SELECTED_PUBLICATION);
+                if (targetId && pubs.some(p => p.$id === targetId)) {
+                    await switchPublication(targetId);
                 } else if (pubs.length > 0) {
                     await switchPublication(pubs[0].$id);
                 }

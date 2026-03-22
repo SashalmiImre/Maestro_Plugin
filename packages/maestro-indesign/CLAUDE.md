@@ -232,7 +232,7 @@ Maestro/
 │   │   ├── index.jsx             ← App bootstrap, belépési pont, hamburgermenü handlerek (jelszókezelés, kijelentkezés), graceful shutdown, startup error capture
 │   │   ├── Main.jsx              ← Gyökér komponens (sleep/focus detektálás, RecoveryManager trigger)
 │   │   ├── config/
-│   │   │   ├── appwriteConfig.js       ← Appwrite kliens, EndpointManager (dual-proxy), db/collection/bucket ID-k, VERIFICATION_URL, RECOVERY_URL
+│   │   │   ├── appwriteConfig.js       ← Appwrite kliens, EndpointManager (dual-proxy), db/collection/bucket ID-k, DASHBOARD_URL, VERIFICATION_URL, RECOVERY_URL
 │   │   │   ├── realtimeClient.js       ← WebSocket kliens proxy auth injection-nel
 │   │   │   ├── recoveryManager.js      ← Központi recovery orchestrator (health check, reconnect, refresh)
 │   │   │   └── maestroEvents.js        ← MaestroEvent konstansok & dispatchMaestroEvent()
@@ -339,7 +339,7 @@ Maestro/
 │   │       │       ├── LayoutsSection.jsx
 │   │       │       └── DeadlinesSection.jsx
 │   │       ├── workspace/
-│   │       │   ├── Workspace.jsx        ← Fő munkaterület konténer
+│   │       │   ├── Workspace.jsx        ← Fő munkaterület konténer, felhasználó fejléc (név + dashboard link)
 │   │       │   ├── DocumentMonitor.jsx  ← InDesign dokumentum életciklus figyelő
 │   │       │   ├── LockManager.jsx      ← Dokumentumzárolás kezelő UI
 │   │       │   └── PropertiesPanel/     ← Jobb oldali tulajdonságok panel

@@ -22,6 +22,8 @@ export const VERIFICATION_URL = process.env.VERIFICATION_URL || `${RAILWAY_BASE}
 /** Jelszó-visszaállítási callback URL — RECOVERY_URL env változóból, vagy Railway fallback. */
 export const RECOVERY_URL = process.env.RECOVERY_URL || `${RAILWAY_BASE}/reset-password`;
 
+/** A Maestro Dashboard webes felület URL-je — DASHBOARD_URL env változóból, vagy production fallback. */
+export const DASHBOARD_URL = process.env.DASHBOARD_URL || 'https://maestro.emago.hu';
 
 
 // =============================================================================
