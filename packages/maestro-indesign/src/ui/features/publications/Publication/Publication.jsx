@@ -1,10 +1,9 @@
 // React
-import React, { useState, useCallback, useEffect, useMemo } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 
 // Components
 import { ArticleTable } from "../../articles/ArticleTable.jsx";
 import { ConfirmDialog } from "../../../common/ConfirmDialog.jsx";
-import { FilterBar } from "./FilterBar.jsx";
 
 // Custom Hooks
 import { useArticles } from "../../../../data/hooks/useArticles.js";
@@ -12,15 +11,13 @@ import { useUser } from "../../../../core/contexts/UserContext.jsx";
 import { useToast } from "../../../common/Toast/ToastContext.jsx";
 
 // Utils
-import { WORKFLOW_STATES, MARKERS, TEAM_ARTICLE_FIELD, labelMatchesSlug } from "../../../../core/utils/workflow/workflowConstants.js";
-import { DRIVE_CHECK_INTERVAL_MS, STORAGE_KEYS } from "../../../../core/utils/constants.js";
+import { MARKERS, TEAM_ARTICLE_FIELD, labelMatchesSlug } from "../../../../core/utils/workflow/workflowConstants.js";
 import { log, logError } from "../../../../core/utils/logger.js";
-import { checkPathAccessible, toNativePath } from "../../../../core/utils/pathUtils.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../../core/config/maestroEvents.js";
 import { checkElementPermission, PUBLICATION_ELEMENT_PERMISSIONS } from "../../../../core/utils/workflow/elementPermissions.js";
 import { buildPlaceholderRows } from "../../../../core/utils/pageGapUtils.js";
 
-export const Publication = React.memo(({ publication, onDelete, onRename, onShowProperties, isExpanded, onToggle }) => {
+export const Publication = React.memo(({ publication, onDelete, onRename, onShowProperties, isExpanded, onToggle, isDriveAccessible, filterState }) => {
     const { user } = useUser();
     const { showToast } = useToast();
     const {
@@ -31,119 +28,12 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
 
     const [isHovered, setIsHovered] = useState(false);
 
-    // Meghajtó/mappa elérhetőség ellenőrzése (rootPath)
-    const [isDriveAccessible, setIsDriveAccessible] = useState(true);
-    // Egyszeri elérhetőség-ellenőrzés mount-kor (összecsukott állapotban is fusson)
-    useEffect(() => {
-        let mounted = true;
-        checkPathAccessible(toNativePath(publication.rootPath))
-            .then(accessible => { if (mounted) setIsDriveAccessible(accessible); });
-        return () => { mounted = false; };
-    }, [publication.rootPath]);
-
-    // Folyamatos polling (2s) + event listenerek — ha a kiadvány ki van nyitva
-    useEffect(() => {
-        if (!isExpanded) return;
-
-        let mounted = true;
-        let isChecking = false;
-
-        const checkAccess = async () => {
-            if (isChecking) return;
-            isChecking = true;
-            try {
-                const accessible = await checkPathAccessible(
-                    toNativePath(publication.rootPath)
-                );
-                if (mounted) setIsDriveAccessible(accessible);
-            } finally {
-                isChecking = false;
-            }
-        };
-
-        checkAccess();
-
-        const pollIntervalId = setInterval(checkAccess, DRIVE_CHECK_INTERVAL_MS);
-
-        const handleFocus = () => checkAccess();
-        window.addEventListener('focus', handleFocus);
-        window.addEventListener(MaestroEvent.panelShown, handleFocus);
-        window.addEventListener(MaestroEvent.dataRefreshRequested, handleFocus);
-        return () => {
-            mounted = false;
-            clearInterval(pollIntervalId);
-            window.removeEventListener('focus', handleFocus);
-            window.removeEventListener(MaestroEvent.panelShown, handleFocus);
-            window.removeEventListener(MaestroEvent.dataRefreshRequested, handleFocus);
-        };
-    }, [isExpanded, publication.rootPath]);
-
     // Dialog state
     const [dialogOpen, setDialogOpen] = useState(false);
     const [dialogConfig, setDialogConfig] = useState({ title: "", message: "", isAlert: false });
 
-    // Filter state (localStorage-ból inicializálva)
-    const [filterOpen, setFilterOpen] = useState(false);
-    const [statusFilters, setStatusFilters] = useState(() => {
-        try {
-            const saved = localStorage.getItem(STORAGE_KEYS.FILTER_STATUS);
-            if (saved) {
-                const parsed = JSON.parse(saved);
-                if (Array.isArray(parsed)) return parsed;
-            }
-        } catch (error) {
-            logError(`[Publication] Error parsing statusFilters from localStorage (key: ${STORAGE_KEYS.FILTER_STATUS}):`, error);
-        }
-        return Object.values(WORKFLOW_STATES);
-    });
-    const [showIgnored, setShowIgnored] = useState(
-        () => localStorage.getItem(STORAGE_KEYS.FILTER_SHOW_IGNORED) !== 'false'
-    );
-    const [showOnlyMine, setShowOnlyMine] = useState(
-        () => localStorage.getItem(STORAGE_KEYS.FILTER_SHOW_ONLY_MINE) === 'true'
-    );
-    const [showPlaceholders, setShowPlaceholders] = useState(
-        () => localStorage.getItem(STORAGE_KEYS.FILTER_SHOW_PLACEHOLDERS) !== 'false'
-    );
-
-    const allStatuses = Object.values(WORKFLOW_STATES);
-    const isFilterActive = statusFilters.length !== allStatuses.length || !showIgnored || showOnlyMine || !showPlaceholders;
-
-    const handleFilterClick = (e) => {
-        e.stopPropagation();
-        setFilterOpen(!filterOpen);
-    };
-
-    const handleStatusFiltersChange = useCallback((newFilters) => {
-        setStatusFilters(newFilters);
-        localStorage.setItem(STORAGE_KEYS.FILTER_STATUS, JSON.stringify(newFilters));
-    }, []);
-
-    const handleShowIgnoredChange = useCallback((value) => {
-        setShowIgnored(value);
-        localStorage.setItem(STORAGE_KEYS.FILTER_SHOW_IGNORED, String(value));
-    }, []);
-
-    const handleShowOnlyMineChange = useCallback((value) => {
-        setShowOnlyMine(value);
-        localStorage.setItem(STORAGE_KEYS.FILTER_SHOW_ONLY_MINE, String(value));
-    }, []);
-
-    const handleShowPlaceholdersChange = useCallback((value) => {
-        setShowPlaceholders(value);
-        localStorage.setItem(STORAGE_KEYS.FILTER_SHOW_PLACEHOLDERS, String(value));
-    }, []);
-
-    const resetFilters = () => {
-        setStatusFilters(Object.values(WORKFLOW_STATES));
-        setShowIgnored(true);
-        setShowOnlyMine(false);
-        setShowPlaceholders(true);
-        localStorage.removeItem(STORAGE_KEYS.FILTER_STATUS);
-        localStorage.removeItem(STORAGE_KEYS.FILTER_SHOW_IGNORED);
-        localStorage.removeItem(STORAGE_KEYS.FILTER_SHOW_ONLY_MINE);
-        localStorage.removeItem(STORAGE_KEYS.FILTER_SHOW_PLACEHOLDERS);
-    };
+    // Szűrő állapot a központi filterState prop-ból
+    const { statusFilters, showIgnored, showOnlyMine, showPlaceholders } = filterState;
 
     /** A felhasználó csapattagságaihoz tartozó contributor mezőnevek */
     const userContributorFields = useMemo(() => {
@@ -340,50 +230,29 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                     </sp-heading>
                 </div>
 
-                {(isHovered || isFilterActive) && (
+                {isHovered && (
                     <sp-body style={{ margin: 0 }}>
                         <div style={{ display: "flex", alignItems: "center" }}>
-                            {isHovered && (
-                                <>
-                                    <div
-                                        onClick={handleAddArticleClick}
-                                        title="Cikk hozzáadása"
-                                        style={{ cursor: "pointer", display: "flex", alignItems: "center" }}
-                                    >
-                                        <sp-icon-add
-                                            size="s"
-                                            style={{ width: "14px", height: "14px", display: "inline-block" }}
-                                        ></sp-icon-add>
-                                    </div>
-
-                                    <div
-                                        onClick={deletePublication}
-                                        title="Kiadvány törlése"
-                                        style={{ cursor: "pointer", display: "flex", alignItems: "center", marginLeft: "8px" }}
-                                    >
-                                        <sp-icon-delete
-                                            size="s"
-                                            style={{ width: "14px", height: "14px", display: "inline-block" }}
-                                        ></sp-icon-delete>
-                                    </div>
-                                </>
-                            )}
                             <div
-                                onClick={handleFilterClick}
-                                title="Szűrés"
-                                style={{
-                                    display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "center",
-                                    cursor: "pointer",
-                                    marginLeft: "8px",
-                                    color: isFilterActive ? "var(--spectrum-global-color-static-blue-600)" : "inherit"
-                                }}
+                                onClick={handleAddArticleClick}
+                                title="Cikk hozzáadása"
+                                style={{ cursor: "pointer", display: "flex", alignItems: "center" }}
                             >
-                                <sp-icon-filter
+                                <sp-icon-add
                                     size="s"
                                     style={{ width: "14px", height: "14px", display: "inline-block" }}
-                                ></sp-icon-filter>
+                                ></sp-icon-add>
+                            </div>
+
+                            <div
+                                onClick={deletePublication}
+                                title="Kiadvány törlése"
+                                style={{ cursor: "pointer", display: "flex", alignItems: "center", marginLeft: "8px" }}
+                            >
+                                <sp-icon-delete
+                                    size="s"
+                                    style={{ width: "14px", height: "14px", display: "inline-block" }}
+                                ></sp-icon-delete>
                             </div>
                         </div>
                     </sp-body>
@@ -418,24 +287,6 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                             </div>
                         </div>
                     </div>
-                )
-            }
-
-            {/* Inline szűrősáv */}
-            {
-                filterOpen && isExpanded && (
-                    <FilterBar
-                        statusFilters={statusFilters}
-                        onStatusFiltersChange={handleStatusFiltersChange}
-                        showIgnored={showIgnored}
-                        onShowIgnoredChange={handleShowIgnoredChange}
-                        showOnlyMine={showOnlyMine}
-                        onShowOnlyMineChange={handleShowOnlyMineChange}
-                        showPlaceholders={showPlaceholders}
-                        onShowPlaceholdersChange={handleShowPlaceholdersChange}
-                        isFilterActive={isFilterActive}
-                        onReset={resetFilters}
-                    />
                 )
             }
 

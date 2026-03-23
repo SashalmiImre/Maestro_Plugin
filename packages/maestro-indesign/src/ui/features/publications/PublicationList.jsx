@@ -12,6 +12,7 @@ import { usePublications } from "../../../data/hooks/usePublications.js";
 import { useOverlapValidation } from "../../../data/hooks/useOverlapValidation.js";
 import { useDatabaseIntegrityValidation } from "../../../data/hooks/useDatabaseIntegrityValidation.js";
 import { useData } from "../../../core/contexts/DataContext.jsx";
+import { useDriveAccessibility } from "../../../data/hooks/useDriveAccessibility.js";
 
 // Utils
 import { STORAGE_KEYS } from "../../../core/utils/constants.js";
@@ -19,7 +20,7 @@ import { logDebug, logWarn, logError } from "../../../core/utils/logger.js";
 import { DocumentMonitor } from "../workspace/DocumentMonitor.jsx";
 
 
-export const PublicationList = ({ onShowProperties, style }) => {
+export const PublicationList = ({ onShowProperties, filterState }) => {
     // Access publication services
     const {
         publications,
@@ -31,6 +32,8 @@ export const PublicationList = ({ onShowProperties, style }) => {
         renamePublication
     } = usePublications();
 
+    // Központi mappa-elérhetőség figyelés (minden kiadványra, 2s polling)
+    const accessibilityMap = useDriveAccessibility(publications);
 
     useOverlapValidation();
 
@@ -172,10 +175,11 @@ export const PublicationList = ({ onShowProperties, style }) => {
                         publication={pub}
                         onDelete={confirmDeletePublication}
                         onRename={renamePublication}
-
                         onShowProperties={onShowProperties}
                         isExpanded={expandedId === pub.$id}
                         onToggle={() => toggleExpansion(pub.$id)}
+                        isDriveAccessible={accessibilityMap.get(pub.$id) ?? true}
+                        filterState={filterState}
                     />
                 ))}
             </div>

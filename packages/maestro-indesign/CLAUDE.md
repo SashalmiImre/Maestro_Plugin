@@ -159,7 +159,7 @@
     - **API Ellenállóképesség**: Centralizált `withRetry` segédfüggvény (`promiseUtils.js`) exponenciális backoff-fal (1s→2s→4s) az átmeneti szerverhibák (502, 503, 504) és hálózati hibák kezelésére.
     - **Szerverhiba Ellenállóképesség (Realtime)**: Speciális exponenciális backoff (5s→60s) + cooldown (5 hiba után 60s szünet) a Realtime WebSocket kapcsolatok védelmére.
     - **Proxy Server Keep-Alive**: A ProxyServer `server.js` TCP Keep-Alive (`keepAliveTimeout: 65s`) + 15s WebSocket ping frame-eket küld az aktív socket-ekre, megakadályozva az Apache/Passenger idle timeout-ot. EPIPE/ECONNRESET zajszűréssel és graceful shutdown-nal.
-    - **Mappa-elérhetőség Polling**: A `Publication.jsx` kétszintű ellenőrzést végez a `rootPath` mappára: (1) egyszeri ellenőrzés mount-kor (összecsukott állapotban is, a fejléc színéhez), (2) folyamatos `setInterval` polling (2s, `DRIVE_CHECK_INTERVAL_MS`) a kinyitott (`isExpanded`) kiadványnál. A fejléc (név + chevron) kék (`--spectrum-global-color-blue-400`) alapállapotban, piros (`--spectrum-global-color-red-400`) ha a mappa nem elérhető. Kinyitott állapotban piros figyelmeztető banner jelenik meg. A banner szövege lefedi a törölt mappa és a nem csatlakoztatott meghajtó esetét is.
+    - **Mappa-elérhetőség Polling**: A `useDriveAccessibility` hook (Workspace szinten) központilag ellenőrzi az összes kiadvány `rootPath` mappáját. Egyetlen batched ExtendScript hívást használ ciklusonként (`checkPathsAccessibleBatch()` — N mappa → 1 `doScript`), minimalizálva az InDesign blokkolást. Folyamatos `setInterval` polling (2s, `DRIVE_CHECK_INTERVAL_MS`) + `focus`/`panelShown`/`dataRefreshRequested` event listenerek. A `Publication.jsx` prop-ként (`isDriveAccessible`) kapja az eredményt. A fejléc (név + chevron) kék (`--spectrum-global-color-blue-400`) alapállapotban, piros (`--spectrum-global-color-red-400`) ha a mappa nem elérhető. Kinyitott állapotban piros figyelmeztető banner jelenik meg. A banner szövege lefedi a törölt mappa és a nem csatlakoztatott meghajtó esetét is.
     - Ld. `docs/diagrams/network-architecture.md`, `docs/REALTIME_ARCHITECTURE.md`, `docs/PROXY_SERVER.md`
 
 7. **Cross-Platform Útvonalkezelés**
@@ -256,7 +256,7 @@ Maestro/
 │   │       ├── errorUtils.js           ← Hibaosztályozás (Hálózati, Auth, stb.)
 │   │       ├── constants.js            ← Alkalmazás-szintű konstansok (MOUNT_PREFIX, LOCK_TYPE, stb.)
 │   │       ├── messageConstants.js     ← Felhasználónak megjelenő üzenet stringek
-│   │       ├── pathUtils.js            ← Cross-platform útvonalkezelés (kanonikus ↔ natív konverzió, MOUNT_PREFIX)
+│   │       ├── pathUtils.js            ← Cross-platform útvonalkezelés (kanonikus ↔ natív konverzió, MOUNT_PREFIX, checkPathsAccessibleBatch)
 │   │       ├── namingUtils.js          ← Név formázó helperek
 │   │       ├── promiseUtils.js         ← Promise segédfüggvények (withTimeout, withRetry)
 │   │       ├── archivingProcessor.js    ← Hibrid AI + szabály-alapú clustering (Union-Find, polygon clipping, TXT/XML output)
@@ -305,7 +305,9 @@ Maestro/
 │   │       ├── useLayouts.js                    ← Layoutok CRUD + layoutChanged esemény
 │   │       ├── useAllTeamMembers.js              ← Összes csapat tagjainak lekérése (deduplikálva)
 │   │       ├── useUrgency.js                    ← Sürgősség-számítás hook (percenkénti frissítés)
-│   │       └── useElementPermission.js          ← UI elem jogosultság hookok (useElementPermission, useElementPermissions)
+│   │       ├── useElementPermission.js          ← UI elem jogosultság hookok (useElementPermission, useElementPermissions)
+│   │       ├── useDriveAccessibility.js         ← Központi mappa-elérhetőség figyelő (batched ExtendScript)
+│   │       └── useFilters.js                    ← Központi szűrő állapot hook (localStorage perzisztált)
 │   │
 │   ├── ui/                       ← React Komponensek
 │   │   ├── common/               ← Újrafelhasználható UI elemek
@@ -330,7 +332,6 @@ Maestro/
 │   │       │   ├── PublicationListToolbar.jsx
 │   │       │   ├── Publication/         ← Egyetlen kiadvány nézet
 │   │       │   │   ├── Publication.jsx
-│   │       │   │   ├── FilterBar.jsx    ← Cikkszűrés (állapot, layout, marker, saját cikkek) + localStorage perzisztálás
 │   │       │   │   └── WorkflowStatus.jsx
 │   │       │   └── PublicationProperties/
 │   │       │       ├── PublicationProperties.jsx
@@ -339,7 +340,9 @@ Maestro/
 │   │       │       ├── LayoutsSection.jsx
 │   │       │       └── DeadlinesSection.jsx
 │   │       ├── workspace/
-│   │       │   ├── Workspace.jsx        ← Fő munkaterület konténer, felhasználó fejléc (név + dashboard link)
+│   │       │   ├── Workspace.jsx        ← Fő munkaterület konténer
+│   │       │   ├── WorkspaceHeader.jsx  ← Fejléc sáv (felhasználó név + szűrők gomb + dashboard link)
+│   │       │   ├── FilterBar.jsx        ← Központi szűrősáv (állapot, kimarad, saját cikkek, helykitöltők)
 │   │       │   ├── DocumentMonitor.jsx  ← InDesign dokumentum életciklus figyelő
 │   │       │   ├── LockManager.jsx      ← Dokumentumzárolás kezelő UI
 │   │       │   └── PropertiesPanel/     ← Jobb oldali tulajdonságok panel

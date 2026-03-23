@@ -1,7 +1,7 @@
 import React, { useCallback, useMemo } from "react";
 
-import { CustomCheckbox } from "../../../common/CustomCheckbox.jsx";
-import { WORKFLOW_STATES, WORKFLOW_CONFIG } from "../../../../core/utils/workflow/workflowConstants.js";
+import { CustomCheckbox } from "../../common/CustomCheckbox.jsx";
+import { WORKFLOW_STATES, WORKFLOW_CONFIG } from "../../../core/utils/workflow/workflowConstants.js";
 
 /** Státusz opciók (egyszer számítva, nem renderenként) */
 const statusOptions = Object.values(WORKFLOW_STATES).map(state => {
@@ -14,7 +14,7 @@ const statusOptions = Object.values(WORKFLOW_STATES).map(state => {
 });
 
 /**
- * Inline szűrősáv a publikáció neve alatt.
+ * Központi szűrősáv a fejléc alatt (minden kiadványra érvényes).
  * Státusz checkbox-ok 3 oszlopban + Kimarad checkbox + szűrők törlése.
  *
  * @param {Object} props
@@ -78,11 +78,12 @@ const FilterBar = React.memo(({
             }
         }
         return reordered;
-    }, [statusFilters, showIgnored, onShowIgnoredChange]);
+    }, [statusFilters, showIgnored, onShowIgnoredChange, toggleStatus]);
 
     return (
         <div style={{
             padding: "6px 0px 6px 0px",
+            marginBottom: "12px",
             flexShrink: 0,
             borderBottom: "1px solid var(--spectrum-global-color-gray-300)"
         }}>
@@ -154,26 +155,32 @@ const FilterBar = React.memo(({
                 ))}
             </div>
 
-            {/* Extra szűrők: Csak a saját cikkeim + Helykitöltők */}
+            {/* Extra szűrők: Csak a saját cikkeim + Helykitöltők (egy sorban) */}
             <div style={{
+                display: "flex",
+                flexWrap: "wrap",
                 borderTop: "1px solid var(--spectrum-global-color-gray-300)",
                 marginTop: "4px",
                 paddingTop: "4px"
             }}>
-                <CustomCheckbox
-                    checked={showOnlyMine}
-                    onChange={() => onShowOnlyMineChange(!showOnlyMine)}
-                    size="s"
-                >
-                    <span style={{ verticalAlign: "middle" }}>Csak a saját cikkeim</span>
-                </CustomCheckbox>
-                <CustomCheckbox
-                    checked={showPlaceholders}
-                    onChange={() => onShowPlaceholdersChange(!showPlaceholders)}
-                    size="s"
-                >
-                    <span style={{ verticalAlign: "middle" }}>Helykitöltők mutatása</span>
-                </CustomCheckbox>
+                <div style={{ width: "33.33%", padding: "2px 0", boxSizing: "border-box" }}>
+                    <CustomCheckbox
+                        checked={showOnlyMine}
+                        onChange={() => onShowOnlyMineChange(!showOnlyMine)}
+                        size="s"
+                    >
+                        <span style={{ verticalAlign: "middle" }}>Csak a saját cikkeim</span>
+                    </CustomCheckbox>
+                </div>
+                <div style={{ width: "33.33%", padding: "2px 0", boxSizing: "border-box" }}>
+                    <CustomCheckbox
+                        checked={showPlaceholders}
+                        onChange={() => onShowPlaceholdersChange(!showPlaceholders)}
+                        size="s"
+                    >
+                        <span style={{ verticalAlign: "middle" }}>Helykitöltők mutatása</span>
+                    </CustomCheckbox>
+                </div>
             </div>
         </div>
     );

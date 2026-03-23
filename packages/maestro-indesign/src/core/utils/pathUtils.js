@@ -460,3 +460,32 @@ export const checkPathAccessible = async (nativePath) => {
         return false;
     }
 };
+
+/**
+ * Több natív útvonal elérhetőségét ellenőrzi egyetlen ExtendScript hívásban.
+ * Egyetlen `app.doScript` futtatás → minimális InDesign blokkolás, N útvonal esetén is.
+ *
+ * @param {string[]} nativePaths - A vizsgálandó natív útvonalak tömbje.
+ * @returns {Promise<boolean[]>} Eredmény tömb (azonos sorrendben).
+ */
+export const checkPathsAccessibleBatch = async (nativePaths) => {
+    if (!nativePaths || nativePaths.length === 0) return [];
+    try {
+        const { app, ScriptLanguage } = require("indesign");
+        const escapedPaths = nativePaths.map(p => escapePathForExtendScript(p || ''));
+        const script = `
+            var paths = [${escapedPaths.map(p => `'${p}'`).join(',')}];
+            var results = [];
+            for (var i = 0; i < paths.length; i++) {
+                results.push(Folder(paths[i]).exists ? '1' : '0');
+            }
+            results.join(',');
+        `;
+        const result = await app.doScript(script, ScriptLanguage.JAVASCRIPT);
+        const resultStr = String(result || '');
+        return resultStr.split(',').map(v => v === '1');
+    } catch (err) {
+        logDebug('[PathUtils] Batch ExtendScript call failed:', err);
+        return nativePaths.map(() => false);
+    }
+};

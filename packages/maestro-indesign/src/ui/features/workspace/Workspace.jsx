@@ -23,6 +23,8 @@ import React, { useState, useCallback, useMemo, useEffect } from "react";
 // Components
 import { PublicationList } from "../publications/PublicationList.jsx";
 import { PropertiesPanel } from "./PropertiesPanel/PropertiesPanel.jsx";
+import { FilterBar } from "./FilterBar.jsx";
+import { WorkspaceHeader } from "./WorkspaceHeader.jsx";
 
 // Contexts & Custom Hooks
 import { useToast } from "../../common/Toast/ToastContext.jsx";
@@ -31,6 +33,7 @@ import { usePublications } from "../../../data/hooks/usePublications.js";
 import { useData } from "../../../core/contexts/DataContext.jsx";
 import { useWorkflowValidation } from "../../../data/hooks/useWorkflowValidation.js";
 import { useThumbnails } from "../../../data/hooks/useThumbnails.js";
+import { useFilters } from "../../../data/hooks/useFilters.js";
 
 // Konfiguráció & Konstansok
 import { account, DASHBOARD_URL } from "../../../core/config/appwriteConfig.js";
@@ -41,12 +44,6 @@ import { generateOpenDocumentScript } from "../../../core/utils/indesign/index.j
 import { log, logWarn, logError } from "../../../core/utils/logger.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../core/config/maestroEvents.js";
 import { SCRIPT_LANGUAGE_JAVASCRIPT, TOAST_TYPES } from "../../../core/utils/constants.js";
-
-/** Fejléc monospace betűstílus (dashboard page-range stílushoz igazítva). */
-const HEADER_FONT_STYLE = {
-    fontFamily: "Consolas, 'Andale Mono', 'Lucida Console', 'Courier New', monospace",
-    fontSize: '11px'
-};
 
 /** Hibaüzenet: a cikkhez nem tartozik fájl útvonal */
 const NO_FILE_PATH_ERROR = {
@@ -69,6 +66,21 @@ export const Workspace = () => {
     const { updatePublication, publications } = usePublications();
     const { runAndPersistPreflight } = useWorkflowValidation();
     useThumbnails();
+
+    // Központi szűrő állapot (minden kiadványra egységesen alkalmazva)
+    const {
+        filterOpen, toggleFilterOpen,
+        statusFilters, showIgnored, showOnlyMine, showPlaceholders,
+        isFilterActive,
+        handleStatusFiltersChange, handleShowIgnoredChange,
+        handleShowOnlyMineChange, handleShowPlaceholdersChange,
+        resetFilters
+    } = useFilters();
+
+    /** Memoizált filterState prop — Publication React.memo invalidáció elkerülése */
+    const filterState = useMemo(() => ({
+        statusFilters, showIgnored, showOnlyMine, showPlaceholders, isFilterActive
+    }), [statusFilters, showIgnored, showOnlyMine, showPlaceholders, isFilterActive]);
 
     // Központi adatok elérése a DataContext-ből
     // Az articles lista automatikusan frissül a Realtime események alapján
@@ -275,40 +287,28 @@ export const Workspace = () => {
 
     return (
         <div style={{ position: 'relative', height: '100%', display: 'flex', flexDirection: 'column' }}>
-            {/* Felhasználó info fejléc: név + dashboard link */}
-            <sp-body style={{
-                flexShrink: 0,
-                borderBottom: '1px solid var(--spectrum-global-color-gray-300)'
-            }}>
-                <div style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between'
-                }}>
-                    <span style={{
-                        ...HEADER_FONT_STYLE,
-                        fontWeight: 'bold',
-                        overflow: 'hidden',
-                        textOverflow: 'ellipsis',
-                        whiteSpace: 'nowrap'
-                    }}>
-                        {user?.name || user?.email || ''}
-                    </span>
-                    <span
-                        onClick={handleOpenDashboard}
-                        title="Dashboard megnyitása böngészőben"
-                        style={{
-                            ...HEADER_FONT_STYLE,
-                            cursor: 'pointer',
-                            textDecoration: 'underline',
-                            flexShrink: 0,
-                            opacity: 0.7
-                        }}
-                    >
-                        WEB DASHBOARD
-                    </span>
-                </div>
-            </sp-body>
+            <WorkspaceHeader
+                user={user}
+                isFilterActive={isFilterActive}
+                onToggleFilter={toggleFilterOpen}
+                onOpenDashboard={handleOpenDashboard}
+            />
+
+            {/* Központi szűrősáv — a fejléc alatt, minden kiadványra érvényes */}
+            {filterOpen && currentView === 'list' && (
+                <FilterBar
+                    statusFilters={statusFilters}
+                    onStatusFiltersChange={handleStatusFiltersChange}
+                    showIgnored={showIgnored}
+                    onShowIgnoredChange={handleShowIgnoredChange}
+                    showOnlyMine={showOnlyMine}
+                    onShowOnlyMineChange={handleShowOnlyMineChange}
+                    showPlaceholders={showPlaceholders}
+                    onShowPlaceholdersChange={handleShowPlaceholdersChange}
+                    isFilterActive={isFilterActive}
+                    onReset={resetFilters}
+                />
+            )}
 
             {/* PublicationList - always rendered, hidden with visibility when viewing properties
                 (display:none reseteli a scrollTop-ot, visibility:hidden megőrzi) */}
@@ -327,6 +327,7 @@ export const Workspace = () => {
             }}>
                 <PublicationList
                     onShowProperties={handleShowProperties}
+                    filterState={filterState}
                 />
             </div>
 
