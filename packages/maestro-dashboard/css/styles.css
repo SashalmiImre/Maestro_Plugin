@@ -660,11 +660,12 @@ html, body {
 
 .layout-container {
     flex: 1;
-    overflow: auto;
+    display: flex;
+    flex-direction: column;
     padding: 0;
 }
 
-/* Zoom toolbar — sticky a konténer tetején */
+/* Zoom toolbar — a scrollozható terület felett, mindig látható */
 .layout-toolbar {
     display: flex;
     align-items: center;
@@ -672,10 +673,14 @@ html, body {
     padding: 8px 20px;
     border-bottom: 1px solid #333;
     background: #1a1a1a;
-    position: sticky;
-    top: 0;
-    left: 0;
+    flex-shrink: 0;
     z-index: 2;
+}
+
+/* Scrollozható terület a layout nézethez */
+.layout-scroll-area {
+    flex: 1;
+    overflow: auto;
 }
 
 .zoom-control {
@@ -956,7 +961,8 @@ html, body {
     .dashboard,
     .dashboard-body,
     .main-content,
-    .layout-container {
+    .layout-container,
+    .layout-scroll-area {
         overflow: visible !important;
         height: auto !important;
         max-height: none !important;

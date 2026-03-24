@@ -423,26 +423,29 @@ export default function LayoutView({ filteredArticles }) {
                 </div>
             </div>
 
-            {/* Zoom wrapper — méretezés a scrollozható terület biztosításához */}
-            <div className="layout-zoom-wrapper" ref={wrapperRef}>
-                {/* Layout nézet — CSS Grid + transform: scale() (imperatív) */}
-                <div
-                    className="layout-view"
-                    ref={layoutViewRef}
-                    style={{ '--spread-columns': columns }}
-                >
-                    {spreads.map(spread => (
-                        <div className="spread" key={spread.leftNum ?? spread.rightNum}>
-                            <PageSlot
-                                pageData={spread.left}
-                                pageNum={spread.leftNum}
-                            />
-                            <PageSlot
-                                pageData={spread.right}
-                                pageNum={spread.rightNum}
-                            />
-                        </div>
-                    ))}
+            {/* Scrollozható terület — a toolbar ezen kívül marad */}
+            <div className="layout-scroll-area">
+                {/* Zoom wrapper — méretezés a scrollozható terület biztosításához */}
+                <div className="layout-zoom-wrapper" ref={wrapperRef}>
+                    {/* Layout nézet — CSS Grid + transform: scale() (imperatív) */}
+                    <div
+                        className="layout-view"
+                        ref={layoutViewRef}
+                        style={{ '--spread-columns': columns }}
+                    >
+                        {spreads.map(spread => (
+                            <div className="spread" key={spread.leftNum ?? spread.rightNum}>
+                                <PageSlot
+                                    pageData={spread.left}
+                                    pageNum={spread.leftNum}
+                                />
+                                <PageSlot
+                                    pageData={spread.right}
+                                    pageNum={spread.rightNum}
+                                />
+                            </div>
+                        ))}
+                    </div>
                 </div>
             </div>
         </>
