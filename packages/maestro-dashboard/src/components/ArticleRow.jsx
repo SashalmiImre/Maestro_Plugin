@@ -11,6 +11,23 @@ import { WORKFLOW_CONFIG, MARKERS, LOCK_TYPE, VALIDATION_TYPES } from '../config
 const ArticleRow = React.memo(function ArticleRow({
     article, maxPage, urgency, validationItems, currentUser, getMemberName
 }) {
+    // Placeholder sor — szürke, nem interaktív
+    if (article.isPlaceholder) {
+        return (
+            <tr className="placeholder-row">
+                <td className="col-range">
+                    <PageRange article={article} maxPage={maxPage} />
+                </td>
+                <td className="col-name">
+                    <span className="placeholder-name">Nincs hozzárendelt cikk</span>
+                </td>
+                <td className="col-lock" />
+                <td className="col-state" />
+                <td className="col-validate" />
+            </tr>
+        );
+    }
+
     const bgStyle = urgency?.background ? { background: urgency.background } : undefined;
 
     return (

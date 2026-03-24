@@ -11,6 +11,7 @@ import { useData } from '../contexts/DataContext.jsx';
 import { useToast } from '../contexts/ToastContext.jsx';
 import { useFilters } from '../hooks/useFilters.js';
 import { STORAGE_KEYS } from '../config.js';
+import { buildPlaceholderRows } from '@shared/pageGapUtils.js';
 
 import DashboardHeader from './DashboardHeader.jsx';
 import Sidebar from './Sidebar.jsx';
@@ -83,12 +84,29 @@ export default function DashboardView() {
         [articles, user, filters.applyFilters]
     );
 
+    // Aktív kiadvány
+    const publication = useMemo(
+        () => publications.find(p => p.$id === activePublicationId),
+        [publications, activePublicationId]
+    );
+
+    // Placeholder sorok (az ÖSSZES cikkből — szűrés előtt)
+    const placeholderRows = useMemo(
+        () => buildPlaceholderRows(articles, publication),
+        [articles, publication]
+    );
+
+    // Táblázat adatok: szűrt cikkek + placeholder sorok (ha engedélyezve)
+    const tableData = useMemo(() => {
+        if (filters.showOnlyMine || !filters.showPlaceholders) return filteredArticles;
+        return [...filteredArticles, ...placeholderRows];
+    }, [filteredArticles, placeholderRows, filters.showPlaceholders, filters.showOnlyMine]);
+
     // Aktív kiadvány neve
     const contentTitle = useMemo(() => {
         if (!activePublicationId) return 'Válassz egy kiadványt';
-        const pub = publications.find(p => p.$id === activePublicationId);
-        return pub ? pub.name : 'Kiadvány';
-    }, [publications, activePublicationId]);
+        return publication ? publication.name : 'Kiadvány';
+    }, [activePublicationId, publication]);
 
     return (
         <div className="dashboard active">
@@ -112,9 +130,12 @@ export default function DashboardView() {
                         statusFilter={filters.statusFilter}
                         showIgnored={filters.showIgnored}
                         showOnlyMine={filters.showOnlyMine}
+                        showPlaceholders={filters.showPlaceholders}
                         onToggleStatus={filters.toggleStatus}
                         onSetShowIgnored={filters.setShowIgnored}
                         onSetShowOnlyMine={filters.setShowOnlyMine}
+                        onSetShowPlaceholders={filters.setShowPlaceholders}
+                        isFilterActive={filters.isFilterActive}
                         onReset={filters.resetFilters}
                     />
 
@@ -134,7 +155,7 @@ export default function DashboardView() {
                     ) : (
                         <>
                             <div className="table-container" style={{ display: activeView === 'table' ? '' : 'none' }}>
-                                <ArticleTable filteredArticles={filteredArticles} />
+                                <ArticleTable filteredArticles={tableData} />
                             </div>
                             <div className="layout-container" style={{ display: activeView === 'layout' ? '' : 'none' }}>
                                 <LayoutView filteredArticles={filteredArticles} />

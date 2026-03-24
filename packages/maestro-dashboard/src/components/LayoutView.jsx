@@ -54,10 +54,34 @@ function saveColumns(publicationId, columns, publicationIds) {
 
 // ─── Komponens ──────────────────────────────────────────────────────────────
 
+/** Layout kiválasztás betöltése localStorage-ból. */
+function loadSelectedLayout(publicationId) {
+    if (!publicationId) return null;
+    try {
+        const map = JSON.parse(localStorage.getItem(STORAGE_KEYS.LAYOUT_SELECTED)) || {};
+        return map[publicationId] || null;
+    } catch { return null; }
+}
+
+/** Layout kiválasztás mentése localStorage-ba. */
+function saveSelectedLayout(publicationId, layoutId) {
+    if (!publicationId) return;
+    try {
+        const map = JSON.parse(localStorage.getItem(STORAGE_KEYS.LAYOUT_SELECTED)) || {};
+        if (layoutId) {
+            map[publicationId] = layoutId;
+        } else {
+            delete map[publicationId];
+        }
+        localStorage.setItem(STORAGE_KEYS.LAYOUT_SELECTED, JSON.stringify(map));
+    } catch { /* localStorage nem elérhető */ }
+}
+
 export default function LayoutView({ filteredArticles }) {
-    const { publications, activePublicationId, storage } = useData();
+    const { publications, layouts, activePublicationId, storage } = useData();
     const [columns, setColumns] = useState(() => loadColumns(activePublicationId));
     const [zoom, setZoom] = useState(ZOOM_DEFAULT);
+    const [selectedLayoutId, setSelectedLayoutId] = useState(() => loadSelectedLayout(activePublicationId));
     const layoutViewRef = useRef(null);
 
     // Ref-ek a stabil event handler closure-ökhoz
@@ -89,9 +113,10 @@ export default function LayoutView({ filteredArticles }) {
         [publications]
     );
 
-    // Kiadvány váltáskor oszlopszám betöltése + zoom reset + arány reset
+    // Kiadvány váltáskor oszlopszám betöltése + zoom reset + arány reset + layout reset
     useEffect(() => {
         setColumns(loadColumns(activePublicationId));
+        setSelectedLayoutId(loadSelectedLayout(activePublicationId));
         setZoom(ZOOM_DEFAULT);
         zoomRef.current = ZOOM_DEFAULT;
         pageAspectRef.current = null;
@@ -337,6 +362,28 @@ export default function LayoutView({ filteredArticles }) {
         }
     }, [storage]);
 
+    // ─── Layout választás kezelő ────────────────────────────────────────────
+
+    const handleLayoutChange = useCallback((e) => {
+        const value = e.target.value || null;
+        setSelectedLayoutId(value);
+        saveSelectedLayout(activePublicationId, value);
+    }, [activePublicationId]);
+
+    // Alap (első) layout ID — fallback oldalakhoz
+    const defaultLayoutId = useMemo(
+        () => layouts.length > 0 ? layouts[0].$id : null,
+        [layouts]
+    );
+
+    // Ha a kiválasztott layout már nem létezik, visszaállítás
+    useEffect(() => {
+        if (selectedLayoutId && layouts.length > 0 && !layouts.some(l => l.$id === selectedLayoutId)) {
+            setSelectedLayoutId(null);
+            saveSelectedLayout(activePublicationId, null);
+        }
+    }, [layouts, selectedLayoutId, activePublicationId]);
+
     // ─── Oldaltérkép + spreadek ──────────────────────────────────────────────
 
     const spreads = useMemo(() => {
@@ -346,9 +393,12 @@ export default function LayoutView({ filteredArticles }) {
         const coverageEnd = publication.coverageEnd || 1;
         if (coverageEnd < coverageStart) return [];
 
-        const pageMap = buildPageMap(filteredArticles, coverageStart, coverageEnd, getThumbnailUrl);
+        const pageMap = buildPageMap(
+            filteredArticles, coverageStart, coverageEnd, getThumbnailUrl,
+            selectedLayoutId, defaultLayoutId
+        );
         return buildSpreads(pageMap, coverageStart, coverageEnd);
-    }, [filteredArticles, publication, getThumbnailUrl]);
+    }, [filteredArticles, publication, getThumbnailUrl, selectedLayoutId, defaultLayoutId]);
 
     // ─── Layout mentése PDF-ként (böngésző print → Save as PDF) ─────────────
 
@@ -368,6 +418,20 @@ export default function LayoutView({ filteredArticles }) {
         <>
             {/* Oszlopszám + zoom toolbar */}
             <div className="layout-toolbar">
+                {/* Layout választó dropdown */}
+                {layouts.length > 1 && (
+                    <select
+                        className="layout-select"
+                        value={selectedLayoutId || ''}
+                        onChange={handleLayoutChange}
+                        title="Elrendezés szűrő"
+                    >
+                        <option value="">Összes</option>
+                        {layouts.map(l => (
+                            <option key={l.$id} value={l.$id}>{l.name}</option>
+                        ))}
+                    </select>
+                )}
                 <div className="zoom-control">
                     <button
                         className="zoom-btn"
@@ -454,13 +518,44 @@ export default function LayoutView({ filteredArticles }) {
 
 // ─── Oldaltérkép építés ─────────────────────────────────────────────────────
 
-function buildPageMap(articles, coverageStart, coverageEnd, getThumbnailUrl) {
+/**
+ * Oldaltérkép építés thumbnail-ekből.
+ *
+ * Ha selectedLayoutId meg van adva, csak az adott layout cikkeinek thumbnail-jeit
+ * használja elsődlegesen, és az üres oldalakhoz az alap layout (defaultLayoutId)
+ * cikkeinek thumbnail-jeit tölti be halvány fallback-ként.
+ */
+function buildPageMap(articles, coverageStart, coverageEnd, getThumbnailUrl, selectedLayoutId, defaultLayoutId) {
     const pageMap = {};
 
     for (let p = coverageStart; p <= coverageEnd; p++) {
         pageMap[p] = null;
     }
 
+    // Ha nincs layout szűrés, minden cikk megjelenik (eredeti viselkedés)
+    if (!selectedLayoutId) {
+        fillPageMap(pageMap, articles, coverageStart, coverageEnd, getThumbnailUrl, false);
+        return pageMap;
+    }
+
+    // 1. lépés: kiválasztott layout cikkei (elsődleges)
+    const selectedArticles = articles.filter(a => a.layout === selectedLayoutId);
+    fillPageMap(pageMap, selectedArticles, coverageStart, coverageEnd, getThumbnailUrl, false);
+
+    // 2. lépés: alap layout cikkei fallback-ként (halvány, csak üres oldalakhoz)
+    if (defaultLayoutId && defaultLayoutId !== selectedLayoutId) {
+        const fallbackArticles = articles.filter(a => a.layout === defaultLayoutId);
+        fillPageMap(pageMap, fallbackArticles, coverageStart, coverageEnd, getThumbnailUrl, true);
+    }
+
+    return pageMap;
+}
+
+/**
+ * Cikkek thumbnail-jeinek betöltése az oldaltérképbe.
+ * @param {boolean} isFallback - Ha true, csak üres oldalakat tölt ki, és fallback jelölést kap
+ */
+function fillPageMap(pageMap, articles, coverageStart, coverageEnd, getThumbnailUrl, isFallback) {
     for (const article of articles) {
         if (!article.thumbnails) continue;
 
@@ -479,8 +574,23 @@ function buildPageMap(articles, coverageStart, coverageEnd, getThumbnailUrl) {
 
             const existing = pageMap[pageNum];
 
-            if (existing && existing.articleName) {
-                // Ütközés
+            // Fallback: csak üres oldalakat tölt ki
+            if (isFallback) {
+                if (existing) continue;
+                pageMap[pageNum] = {
+                    fileId: thumb.fileId,
+                    thumbnailUrl: getThumbnailUrl(thumb.fileId),
+                    articleName: article.name,
+                    state: article.state,
+                    ignored: article.ignored,
+                    pageNum,
+                    isFallback: true
+                };
+                continue;
+            }
+
+            if (existing && existing.articleName && !existing.isFallback) {
+                // Ütközés (nem fallback elemek között)
                 if (!existing.conflict) {
                     existing.conflict = true;
                     existing.conflictArticles = [existing.articleName];
@@ -498,8 +608,6 @@ function buildPageMap(articles, coverageStart, coverageEnd, getThumbnailUrl) {
             }
         }
     }
-
-    return pageMap;
 }
 
 // ─── Spread építés ──────────────────────────────────────────────────────────

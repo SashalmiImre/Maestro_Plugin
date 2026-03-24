@@ -33,6 +33,9 @@ export function useFilters() {
     const [showOnlyMine, setShowOnlyMine] = useState(() =>
         loadBoolean(STORAGE_KEYS.FILTER_SHOW_ONLY_MINE, false)
     );
+    const [showPlaceholders, setShowPlaceholders] = useState(() =>
+        loadBoolean(STORAGE_KEYS.FILTER_SHOW_PLACEHOLDERS, true)
+    );
 
     const toggleStatus = useCallback((state) => {
         setStatusFilter(prev => {
@@ -54,22 +57,30 @@ export function useFilters() {
         localStorage.setItem(STORAGE_KEYS.FILTER_SHOW_ONLY_MINE, String(value));
     }, []);
 
+    const setShowPlaceholdersPersist = useCallback((value) => {
+        setShowPlaceholders(value);
+        localStorage.setItem(STORAGE_KEYS.FILTER_SHOW_PLACEHOLDERS, String(value));
+    }, []);
+
     const resetFilters = useCallback(() => {
         const allStates = new Set(Object.keys(WORKFLOW_CONFIG).map(Number));
         setStatusFilter(allStates);
         setShowIgnored(true);
         setShowOnlyMine(false);
+        setShowPlaceholders(true);
         localStorage.setItem(STORAGE_KEYS.FILTER_STATUS, JSON.stringify([...allStates]));
         localStorage.setItem(STORAGE_KEYS.FILTER_SHOW_IGNORED, 'true');
         localStorage.setItem(STORAGE_KEYS.FILTER_SHOW_ONLY_MINE, 'false');
+        localStorage.setItem(STORAGE_KEYS.FILTER_SHOW_PLACEHOLDERS, 'true');
     }, []);
 
     const isFilterActive = useMemo(() => {
         if (statusFilter.size !== Object.keys(WORKFLOW_CONFIG).length) return true;
         if (!showIgnored) return true;
         if (showOnlyMine) return true;
+        if (!showPlaceholders) return true;
         return false;
-    }, [statusFilter, showIgnored, showOnlyMine]);
+    }, [statusFilter, showIgnored, showOnlyMine, showPlaceholders]);
 
     /** Szűrés alkalmazása a cikkekre. */
     const applyFilters = useCallback((articles, user) => {
@@ -95,9 +106,10 @@ export function useFilters() {
     }, [statusFilter, showIgnored, showOnlyMine]);
 
     return {
-        statusFilter, showIgnored, showOnlyMine,
+        statusFilter, showIgnored, showOnlyMine, showPlaceholders,
         toggleStatus, setShowIgnored: setShowIgnoredPersist,
         setShowOnlyMine: setShowOnlyMinePersist,
+        setShowPlaceholders: setShowPlaceholdersPersist,
         resetFilters, isFilterActive, applyFilters
     };
 }

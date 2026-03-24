@@ -33,9 +33,10 @@ const PageSlot = React.memo(function PageSlot({ pageData, pageNum }) {
         ? (STATUS_COLORS[pageData.state] || '#999')
         : '#999';
     const ignoredClass = pageData.ignored ? ' ignored' : '';
+    const fallbackClass = pageData.isFallback ? ' fallback' : '';
 
     return (
-        <div className={`page-slot${ignoredClass}`}>
+        <div className={`page-slot${ignoredClass}${fallbackClass}`}>
             <div className="page-image">
                 <img
                     src={pageData.thumbnailUrl}

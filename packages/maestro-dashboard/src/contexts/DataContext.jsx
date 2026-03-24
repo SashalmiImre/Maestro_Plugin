@@ -23,6 +23,7 @@ export function useData() {
 export function DataProvider({ children }) {
     const [publications, setPublications] = useState([]);
     const [articles, setArticles] = useState([]);
+    const [layouts, setLayouts] = useState([]);
     const [deadlines, setDeadlines] = useState([]);
     const [validations, setValidations] = useState([]);
     const [activePublicationId, setActivePublicationIdState] = useState(null);
@@ -72,14 +73,20 @@ export function DataProvider({ children }) {
     const switchPublication = useCallback(async (publicationId) => {
         activePublicationIdRef.current = publicationId;
         setActivePublicationIdState(publicationId);
+        setLayouts([]);
         setIsLoading(true);
 
         try {
-            const [articlesResult, deadlinesResult, validationsResult] = await Promise.all([
+            const [articlesResult, layoutsResult, deadlinesResult, validationsResult] = await Promise.all([
                 databases.listDocuments(DATABASE_ID, COLLECTIONS.ARTICLES, [
                     Query.equal('publicationId', publicationId),
                     Query.limit(1000),
                     Query.orderAsc('startPage')
+                ]).catch(() => ({ documents: [] })),
+                databases.listDocuments(DATABASE_ID, COLLECTIONS.LAYOUTS, [
+                    Query.equal('publicationId', publicationId),
+                    Query.limit(100),
+                    Query.orderAsc('order')
                 ]).catch(() => ({ documents: [] })),
                 databases.listDocuments(DATABASE_ID, COLLECTIONS.DEADLINES, [
                     Query.equal('publicationId', publicationId),
@@ -92,6 +99,7 @@ export function DataProvider({ children }) {
             ]);
 
             setArticles(articlesResult.documents);
+            setLayouts(layoutsResult.documents);
             setDeadlines(deadlinesResult.documents);
             setValidations(validationsResult.documents);
         } finally {
@@ -152,6 +160,7 @@ export function DataProvider({ children }) {
         const unsubscribe = client.subscribe([
             channelName(COLLECTIONS.ARTICLES),
             channelName(COLLECTIONS.PUBLICATIONS),
+            channelName(COLLECTIONS.LAYOUTS),
             channelName(COLLECTIONS.DEADLINES),
             channelName(COLLECTIONS.USER_VALIDATIONS)
         ], (response) => {
@@ -170,6 +179,9 @@ export function DataProvider({ children }) {
                         break;
                     case 'publications':
                         applyPublicationEvent(eventType, payload, setPublications);
+                        break;
+                    case 'layouts':
+                        applyLayoutEvent(eventType, payload, activePublicationIdRef, setLayouts);
                         break;
                     case 'deadlines':
                         applyDeadlineEvent(eventType, payload, activePublicationIdRef, setDeadlines);
@@ -190,7 +202,7 @@ export function DataProvider({ children }) {
     }, []);
 
     const value = {
-        publications, articles, deadlines, validations,
+        publications, articles, layouts, deadlines, validations,
         activePublicationId, isLoading, storage,
         fetchPublications, switchPublication,
         fetchAllTeamMembers, getMemberName
@@ -218,6 +230,7 @@ function getCollection(channels) {
     for (const ch of channels) {
         if (ch.includes(COLLECTIONS.ARTICLES)) return 'articles';
         if (ch.includes(COLLECTIONS.PUBLICATIONS)) return 'publications';
+        if (ch.includes(COLLECTIONS.LAYOUTS)) return 'layouts';
         if (ch.includes(COLLECTIONS.DEADLINES)) return 'deadlines';
         if (ch.includes(COLLECTIONS.USER_VALIDATIONS)) return 'validations';
     }
@@ -260,6 +273,29 @@ function applyPublicationEvent(eventType, payload, setPublications) {
                 return next;
             }
             return [...prev, payload];
+        });
+    }
+}
+
+function applyLayoutEvent(eventType, payload, pubIdRef, setLayouts) {
+    if (payload.publicationId !== pubIdRef.current) return;
+
+    if (eventType === 'delete') {
+        setLayouts(prev => prev.filter(l => l.$id !== payload.$id));
+    } else {
+        setLayouts(prev => {
+            const idx = prev.findIndex(l => l.$id === payload.$id);
+            if (idx >= 0) {
+                const local = prev[idx];
+                if (local.$updatedAt && payload.$updatedAt &&
+                    new Date(local.$updatedAt) > new Date(payload.$updatedAt)) {
+                    return prev;
+                }
+                const next = [...prev];
+                next[idx] = payload;
+                return next;
+            }
+            return [...prev, payload].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
         });
     }
 }
