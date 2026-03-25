@@ -24,6 +24,7 @@ A bejegyzések származhatnak:
 1.  **Rendszer (System)**
     *   `preflight`: InDesign preflight ellenőrzés eredményei.
     *   `structure`: Kiadvány-szerkezeti hibák (pl. oldalszám-átfedés).
+    *   `thumbnail`: Thumbnail (oldalkép) ellenőrzés eredményei (hiányzó vagy elavult thumbnailek).
     *   `system`: Egyéb általános rendszerüzenetek.
 2.  **Felhasználó (User)**
     *   `user`: Felhasználók által manuálisan rögzített üzenetek (pl. "Cseréld ki a képet").
@@ -98,7 +99,7 @@ Minden felhasználói üzenet és rendszer-felülbírálat itt tárolódik.
 ### `validations` kollekció
 A rendszer validációs eredményeinek gyorsítótára (cache).
 *   `articleId`: Kapcsolódó cikk.
-*   `source`: `preflight` | `structure`
+*   `source`: `preflight` | `structure` | `thumbnail`
 *   `errors`: Szöveges tömb.
 *   `warnings`: Szöveges tömb.
 

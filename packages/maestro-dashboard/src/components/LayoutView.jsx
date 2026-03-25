@@ -538,15 +538,16 @@ function buildPageMap(articles, coverageStart, coverageEnd, getThumbnailUrl, sel
         return pageMap;
     }
 
-    // 1. lépés: kiválasztott layout cikkei (elsődleges)
-    const selectedArticles = articles.filter(a => a.layout === selectedLayoutId);
-    fillPageMap(pageMap, selectedArticles, coverageStart, coverageEnd, getThumbnailUrl, false);
-
-    // 2. lépés: alap layout cikkei fallback-ként (halvány, csak üres oldalakhoz)
-    if (defaultLayoutId && defaultLayoutId !== selectedLayoutId) {
-        const fallbackArticles = articles.filter(a => a.layout === defaultLayoutId);
-        fillPageMap(pageMap, fallbackArticles, coverageStart, coverageEnd, getThumbnailUrl, true);
+    // Layout variáció: alap layout halványítva + a kiválasztott layout felülírásai élénken.
+    // 1. lépés: alap layout cikkei (halványítva — örökölt oldalak)
+    if (defaultLayoutId) {
+        const defaultArticles = articles.filter(a => a.layout === defaultLayoutId);
+        fillPageMap(pageMap, defaultArticles, coverageStart, coverageEnd, getThumbnailUrl, true);
     }
+
+    // 2. lépés: kiválasztott layout cikkei felülírják az alap layout oldalait (élénken)
+    const selectedArticles = articles.filter(a => a.layout === selectedLayoutId);
+    fillPageMap(pageMap, selectedArticles, coverageStart, coverageEnd, getThumbnailUrl, false, true);
 
     return pageMap;
 }
@@ -554,8 +555,9 @@ function buildPageMap(articles, coverageStart, coverageEnd, getThumbnailUrl, sel
 /**
  * Cikkek thumbnail-jeinek betöltése az oldaltérképbe.
  * @param {boolean} isFallback - Ha true, csak üres oldalakat tölt ki, és fallback jelölést kap
+ * @param {boolean} override - Ha true, felülírja a meglévő oldal bejegyzéseket (layout variáció)
  */
-function fillPageMap(pageMap, articles, coverageStart, coverageEnd, getThumbnailUrl, isFallback) {
+function fillPageMap(pageMap, articles, coverageStart, coverageEnd, getThumbnailUrl, isFallback, override = false) {
     for (const article of articles) {
         if (!article.thumbnails) continue;
 
@@ -589,7 +591,29 @@ function fillPageMap(pageMap, articles, coverageStart, coverageEnd, getThumbnail
                 continue;
             }
 
-            if (existing && existing.articleName && !existing.isFallback) {
+            if (override) {
+                // Layout variáció: felülírja az alap layout oldalait
+                const entry = {
+                    fileId: thumb.fileId,
+                    thumbnailUrl: getThumbnailUrl(thumb.fileId),
+                    articleName: article.name,
+                    state: article.state,
+                    ignored: article.ignored,
+                    pageNum
+                };
+
+                // Ütközés-kezelés variáción belül is
+                const prev = pageMap[pageNum];
+                if (prev && prev.articleName && !prev.isFallback) {
+                    if (!prev.conflict) {
+                        prev.conflict = true;
+                        prev.conflictArticles = [prev.articleName];
+                    }
+                    prev.conflictArticles.push(article.name);
+                } else {
+                    pageMap[pageNum] = entry;
+                }
+            } else if (existing && existing.articleName && !existing.isFallback) {
                 // Ütközés (nem fallback elemek között)
                 if (!existing.conflict) {
                     existing.conflict = true;

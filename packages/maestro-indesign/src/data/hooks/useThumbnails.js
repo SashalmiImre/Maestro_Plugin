@@ -14,9 +14,11 @@ import { useEffect, useRef } from "react";
 
 import { MaestroEvent } from "../../core/config/maestroEvents.js";
 import { useData } from "../../core/contexts/DataContext.jsx";
+import { useValidation } from "../../core/contexts/ValidationContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 
 import { SCRIPT_LANGUAGE_JAVASCRIPT, TOAST_TYPES } from "../../core/utils/constants.js";
+import { VALIDATION_SOURCES } from "../../core/utils/validationConstants.js";
 import { log, logWarn, logError } from "../../core/utils/logger.js";
 import { getIndesignApp } from "../../core/utils/indesign/indesignUtils.js";
 import { generateThumbnailExportScript, parseThumbnailExportResult } from "../../core/utils/indesign/thumbnailScripts.js";
@@ -31,6 +33,7 @@ import { uploadThumbnails, deleteOldThumbnails, cleanupTempFiles, getTempFolderP
  */
 export const useThumbnails = () => {
     const { updateArticle } = useData();
+    const { clearArticleValidation } = useValidation();
     const { showToast } = useToast();
 
     // Konkurencia-védelem: egyszerre egy cikken fut
@@ -105,6 +108,9 @@ export const useThumbnails = () => {
             // 5. DB frissítés
             const thumbnailsJson = JSON.stringify(uploadedThumbnails);
             await updateArticle(article.$id, { thumbnails: thumbnailsJson });
+
+            // Sikeres regenerálás → elavulási figyelmeztetés törlése
+            clearArticleValidation(article.$id, VALIDATION_SOURCES.THUMBNAIL);
 
             log(`[useThumbnails] ${uploadedThumbnails.length} thumbnail feltöltve: ${article.name}`);
 

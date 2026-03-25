@@ -42,5 +42,6 @@ export const VALIDATION_SOURCES = {
     PREFLIGHT: 'preflight',             // Preflight ellenőrzés eredménye
     STRUCTURE: 'structure',             // Kiadvány struktúra / átfedés ellenőrzés
     USER: 'user',                       // Felhasználói üzenet / validáció
-    SYSTEM_OVERRIDE: 'system_override'  // Rendszer hiba (pl. visszaminősítés)
+    SYSTEM_OVERRIDE: 'system_override', // Rendszer hiba (pl. visszaminősítés)
+    THUMBNAIL: 'thumbnail'              // Thumbnail elavulás ellenőrzés
 };

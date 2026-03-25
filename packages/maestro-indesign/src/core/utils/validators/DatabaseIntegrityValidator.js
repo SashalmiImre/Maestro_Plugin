@@ -4,15 +4,20 @@
  */
 
 import { withTimeout } from "../promiseUtils.js";
-import { tables, DATABASE_ID, ARTICLES_COLLECTION_ID } from "../../config/appwriteConfig.js";
+import { tables, storage, DATABASE_ID, ARTICLES_COLLECTION_ID } from "../../config/appwriteConfig.js";
+import { BUCKETS } from "maestro-shared/appwriteIds.js";
 
 const { app, ScriptLanguage } = require("indesign");
 const { generateExtractPageNumbersInBackground, generateCloseDocumentScript, parsePageRangesResult } = require("../indesign/index.js");
 
 import { ValidatorBase } from "./ValidatorBase.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../config/maestroEvents.js";
+import { getFileTimestamp } from "../indesign/indesignUtils.js";
 
-import { log } from "../logger.js";
+import { log, logWarn } from "../logger.js";
+
+/** Tolerancia a thumbnail feldolgozási időre (export + upload) */
+const THUMBNAIL_STALENESS_TOLERANCE_MS = 5000;
 
 export class DatabaseIntegrityValidator extends ValidatorBase {
     constructor() {
@@ -146,6 +151,69 @@ export class DatabaseIntegrityValidator extends ValidatorBase {
 
         } catch (error) {
             return this.failure(`Integrity check exception: ${error.message}`);
+        }
+    }
+
+    /**
+     * Ellenőrzi a cikk thumbnail állapotát: hiányzik-e vagy elavult-e.
+     * Hiányzó thumbnail (null, üres, érvénytelen JSON) esetén figyelmeztetést ad.
+     * Ha létezik, összehasonlítja a fájl módosítási dátumát a thumbnail feltöltési idejével.
+     *
+     * @param {Object} article - A cikk objektum (thumbnails mező szükséges).
+     * @param {string} absoluteFilePath - A fájl abszolút natív útvonala.
+     * @returns {Promise<string|null>} Figyelmeztetés szövege, vagy null ha friss / nem ellenőrizhető (Storage hiba).
+     */
+    async checkThumbnailStaleness(article, absoluteFilePath) {
+        const MISSING_MSG = 'Hiányzó thumbnailek: a cikkhez nem tartozik oldalkép.';
+
+        try {
+            // Thumbnails JSON feldolgozása — hiányzó thumbnail is warning
+            if (!article.thumbnails) return MISSING_MSG;
+
+            let thumbnails;
+            try {
+                thumbnails = typeof article.thumbnails === 'string'
+                    ? JSON.parse(article.thumbnails)
+                    : article.thumbnails;
+            } catch {
+                return MISSING_MSG;
+            }
+
+            if (!Array.isArray(thumbnails) || thumbnails.length === 0) return MISSING_MSG;
+
+            // Első thumbnail ellenőrzése (mind egyszerre generálódnak, elég egyet nézni)
+            const firstFileId = thumbnails[0]?.fileId;
+            if (!firstFileId) return MISSING_MSG;
+
+            // Párhuzamosan: Storage metaadat + fájl módosítási idő
+            const [storageFile, fileModified] = await Promise.all([
+                withTimeout(
+                    storage.getFile(BUCKETS.THUMBNAILS, firstFileId),
+                    5000,
+                    "checkThumbnailStaleness: storage.getFile"
+                ).catch(err => {
+                    logWarn(`[DatabaseIntegrityValidator] Storage getFile hiba (${firstFileId}):`, err?.message);
+                    return null;
+                }),
+                getFileTimestamp(absoluteFilePath)
+            ]);
+
+            if (!storageFile || !fileModified) return null;
+
+            const thumbnailCreated = new Date(storageFile.$createdAt).getTime();
+            if (isNaN(thumbnailCreated)) return null;
+
+            // Összehasonlítás toleranciával
+            if (fileModified > thumbnailCreated + THUMBNAIL_STALENESS_TOLERANCE_MS) {
+                const fileDate = new Date(fileModified).toLocaleString('hu-HU');
+                const thumbDate = new Date(thumbnailCreated).toLocaleString('hu-HU');
+                return `Elavult thumbnailek: a fájl módosítva ${fileDate}, a thumbnail generálva ${thumbDate}.`;
+            }
+
+            return null;
+        } catch (error) {
+            logWarn("[DatabaseIntegrityValidator] Thumbnail staleness check hiba:", error?.message);
+            return null;
         }
     }
 }

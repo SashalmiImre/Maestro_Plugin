@@ -12,10 +12,15 @@
  */
 
 import { useEffect, useRef, useCallback } from "react";
+
 import { MaestroEvent } from "../../core/config/maestroEvents.js";
 import { useData } from "../../core/contexts/DataContext.jsx";
+import { useValidation } from "../../core/contexts/ValidationContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
+
 import { TOAST_TYPES } from "../../core/utils/constants.js";
+import { VALIDATION_SOURCES } from "../../core/utils/validationConstants.js";
+import { VALIDATION_TYPES } from "../../core/utils/messageConstants.js";
 import { toAbsoluteArticlePath } from "../../core/utils/pathUtils.js";
 import { DatabaseIntegrityValidator } from "../../core/utils/validators/index.js";
 import { log, logError } from "../../core/utils/logger.js";
@@ -26,6 +31,7 @@ import { log, logError } from "../../core/utils/logger.js";
  */
 export const useDatabaseIntegrityValidation = () => {
     const { applyArticleUpdate, publications } = useData();
+    const { updateArticleValidation, clearArticleValidation } = useValidation();
     const { showToast } = useToast();
     const validator = useRef(new DatabaseIntegrityValidator());
     const publicationsRef = useRef(publications);
@@ -72,11 +78,45 @@ export const useDatabaseIntegrityValidation = () => {
         }
     }, [showToast, applyArticleUpdate]);
 
-    // Ref a stabil hivatkozáshoz az event handlerekben
+    /**
+     * Thumbnail elavulás ellenőrzés.
+     * Csak documentClosed-kor fut — összehasonlítja a fájl módosítási dátumát a thumbnail feltöltési idejével.
+     * Eredményét a ValidationContext-be publikálja (látható a ValidationSection-ben).
+     */
+    const handleThumbnailStaleness = useCallback(async (article) => {
+        try {
+            const pub = publicationsRef.current?.find(p => p.$id === article.publicationId);
+            const absoluteFilePath = pub?.rootPath
+                ? toAbsoluteArticlePath(article.filePath, pub.rootPath)
+                : article.filePath;
+
+            const warning = await validator.current.checkThumbnailStaleness(article, absoluteFilePath);
+
+            if (warning) {
+                log(`[useDatabaseIntegrityValidation] Thumbnail elavulás: "${article.name}" — ${warning}`);
+                updateArticleValidation(article.$id, VALIDATION_SOURCES.THUMBNAIL, [{
+                    type: VALIDATION_TYPES.WARNING,
+                    message: warning,
+                    source: VALIDATION_SOURCES.THUMBNAIL
+                }]);
+            } else {
+                clearArticleValidation(article.$id, VALIDATION_SOURCES.THUMBNAIL);
+            }
+        } catch (error) {
+            logError("[useDatabaseIntegrityValidation] Thumbnail staleness hiba:", error);
+        }
+    }, [updateArticleValidation, clearArticleValidation]);
+
+    // Ref-ek a stabil hivatkozáshoz az event handlerekben
     const handleValidationRef = useRef(handleValidation);
     useEffect(() => {
         handleValidationRef.current = handleValidation;
     }, [handleValidation]);
+
+    const handleThumbnailStalenessRef = useRef(handleThumbnailStaleness);
+    useEffect(() => {
+        handleThumbnailStalenessRef.current = handleThumbnailStaleness;
+    }, [handleThumbnailStaleness]);
 
     /**
      * Event feliratkozások:
@@ -97,7 +137,10 @@ export const useDatabaseIntegrityValidation = () => {
 
         const handleDocumentClosed = (event) => {
             const { article, registerTask } = event.detail;
+            // Oldalszám integritás ellenőrzés
             registerTask(handleValidationRef.current(article));
+            // Thumbnail elavulás ellenőrzés (párhuzamosan fut)
+            registerTask(handleThumbnailStalenessRef.current(article));
         };
 
         window.addEventListener(MaestroEvent.documentSaved, handleDocumentSaved);
