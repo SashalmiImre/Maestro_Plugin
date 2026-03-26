@@ -6,19 +6,14 @@ import { useConnection } from "../../core/contexts/ConnectionContext.jsx";
 import { useData } from "../../core/contexts/DataContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 
-// Appwrite
-import { tables, DATABASE_ID, ARTICLES_COLLECTION_ID, Query } from "../../core/config/appwriteConfig.js";
-
 // Config & Constants
 import { TOAST_TYPES } from "../../core/utils/constants.js";
 
 // Utils
-import { withTimeout } from "../../core/utils/promiseUtils.js";
 import { logError } from "../../core/utils/logger.js";
 import { isNetworkError, isAuthError, getAPIErrorMessage } from "../../core/utils/errorUtils.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../core/config/maestroEvents.js";
 import { toCanonicalPath } from "../../core/utils/pathUtils.js";
-import { deleteOldThumbnails } from "../../core/utils/thumbnailUploader.js";
 
 /**
  * React Hook a kiadványok kezelésére
@@ -37,7 +32,6 @@ export const usePublications = () => {
         createPublication: dataCreatePublication,
         updatePublication: dataUpdatePublication,
         deletePublication: dataDeletePublication,
-        deleteArticle: dataDeleteArticle,
         createLayout: dataCreateLayout
     } = useData();
     const { showToast } = useToast();
@@ -87,56 +81,17 @@ export const usePublications = () => {
     }, [publications, dataCreatePublication, dataCreateLayout, setConnected, incrementAttempts, setOffline, showToast]);
 
     /**
-     * Kiadvány és összes hozzá tartozó cikk törlése
+     * Kiadvány törlése
      *
-     * Sorrend: kiadvány törlése ELŐSZÖR, majd cikkek takarítása.
-     * Ha a kiadvány törlése sikertelen → semmi nem változott (konzisztens állapot).
-     * Ha a cikk-takarítás részben sikertelen → árva cikkek láthatatlanok a UI-ban
-     * (a publicationId-jük már nem létezik), és nem blokkolják a felhasználót.
+     * A kapcsolódó adatok (cikkek, határidők, layoutok, thumbnailek) takarítását
+     * a szerver-oldali cascade-delete Cloud Function végzi automatikusan.
      *
      * @param {string} id - A törlendő kiadvány azonosítója
      */
     const deletePublication = useCallback(async (id) => {
         try {
-            // 1. Kapcsolódó cikkek lekérése a szerverről
-            // Nem a helyi state-ből szűrünk, mert a törlendő pub nem feltétlenül az aktív.
-            const articlesResponse = await withTimeout(
-                tables.listRows({
-                    databaseId: DATABASE_ID,
-                    tableId: ARTICLES_COLLECTION_ID,
-                    queries: [Query.equal("publicationId", id)]
-                }),
-                10000,
-                "usePublications: deletePublication (fetch articles)"
-            );
-
-            // 2. Kiadvány törlése ELŐSZÖR — ha ez sikertelen, semmi nem változott
             await dataDeletePublication(id);
-
-            // 3. Thumbnail takarítás (best-effort)
-            // A kiadvány már törölve van, ezek az árva thumbnailek feleslegesen foglalnák a tárhelyet.
-            const articlesWithThumbnails = articlesResponse.rows.filter(a => a.thumbnails);
-            if (articlesWithThumbnails.length > 0) {
-                await Promise.allSettled(
-                    articlesWithThumbnails.map(a => deleteOldThumbnails(a.thumbnails))
-                );
-            }
-
-            // 4. Kapcsolódó cikkek takarítása (best-effort)
-            // A kiadvány már törölve van, ezek az árva cikkek láthatatlanok a UI-ban.
-            if (articlesResponse.rows.length > 0) {
-                const deleteResults = await Promise.allSettled(
-                    articlesResponse.rows.map(article => dataDeleteArticle(article.$id))
-                );
-
-                const failedDeletes = deleteResults.filter(result => result.status === 'rejected');
-                if (failedDeletes.length > 0) {
-                    failedDeletes.forEach(result => { logError('[usePublications] Article cleanup failed:', result.reason); });
-                }
-            }
-
             setConnected();
-
         } catch (error) {
             logError('[usePublications] Delete failed:', error);
 
@@ -150,7 +105,7 @@ export const usePublications = () => {
             }
             throw error;
         }
-    }, [dataDeleteArticle, dataDeletePublication, setConnected, incrementAttempts, setOffline, showToast]);
+    }, [dataDeletePublication, setConnected, incrementAttempts, setOffline, showToast]);
 
     /**
      * Kiadvány nevének módosítása

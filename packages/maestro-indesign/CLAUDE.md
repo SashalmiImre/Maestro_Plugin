@@ -354,7 +354,7 @@ Maestro/
 │   └── assets/                   ← Statikus erőforrások (ikonok, stb.)
 │
 └── appwrite_functions/           ← Szerver-oldali Appwrite Cloud Funkciók
-    ├── cascade-delete-article/   ← Cikk törlés kaszkád takarítás (üzenetek, validációk)
+    ├── cascade-delete/            ← Kaszkád törlés (article: üzenetek, validációk, thumbnailek; publication: cikkek, határidők, layoutok)
     └── team/                     ← Csapat kezelő funkciók
 ```
 
