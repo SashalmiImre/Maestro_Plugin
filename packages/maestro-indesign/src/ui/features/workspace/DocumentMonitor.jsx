@@ -117,6 +117,14 @@ export const DocumentMonitor = () => {
         let toastId = null;
         let lockedArticle = null;
         try {
+            // Optimistic update — azonnal megjelenítjük a MAESTRO feliratot az ArticleTable-ben,
+            // nem várjuk meg a DB zárolás hálózati késleltetését.
+            applyArticleUpdate({
+                ...article,
+                lockType: LOCK_TYPE.SYSTEM,
+                lockOwnerId: user.$id
+            });
+
             // isVerifyingRef.current már a hívó által true-ra van állítva
             dispatchMaestroEvent(MaestroEvent.verificationStarted);
             toastId = showToast("Lezárt dokumentum ellenőrzése...", TOAST_TYPES.INFO);
@@ -188,13 +196,21 @@ export const DocumentMonitor = () => {
         } catch (err) {
             logError("[DocumentMonitor] Háttér ellenőrzés hiba:", err);
         } finally {
-            // Maestro zárolás feloldása
+            // Maestro zárolás feloldása / optimistic update visszavonása
             try {
-                // Itt a 'lockedArticle'-t használjuk, mert abban van a 'lockedBy' mező kitöltve.
-                // Ha az eredeti 'article'-t használjuk, abban még null lehet, így az unlockDocument korán visszatérne.
-                const unlockResult = await WorkflowEngine.unlockDocument(lockedArticle || article, user);
-                if (unlockResult?.success && unlockResult.document) {
-                    applyArticleUpdate(unlockResult.document);
+                if (lockedArticle) {
+                    // Normál útvonal: DB-ben megerősített lock feloldása
+                    const unlockResult = await WorkflowEngine.unlockDocument(lockedArticle, user);
+                    if (unlockResult?.success && unlockResult.document) {
+                        applyArticleUpdate(unlockResult.document);
+                    }
+                } else {
+                    // DB lock nem sikerült — optimistic update visszavonása
+                    applyArticleUpdate({
+                        ...article,
+                        lockType: null,
+                        lockOwnerId: null
+                    });
                 }
             } catch (unlockErr) {
                 logError("[DocumentMonitor] Maestro unlock hiba:", unlockErr);

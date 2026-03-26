@@ -120,21 +120,32 @@ Versenyhelyzetek megelőzése, amikor a Maestro háttérben ellenőriz egy fájl
 ```mermaid
 sequenceDiagram
     participant DM as DocumentMonitor
+    participant DC as DataContext
     participant LM as LockManager
+    participant AW as Appwrite DB
 
     rect rgb(200, 240, 200)
     Note right of DM: Háttérbeli Ellenőrzés
+    DM->>DC: Optimistic update (lockType=SYSTEM)
+    Note right of DC: MAESTRO azonnal megjelenik az ArticleTable-ben
+
     DM->>window: dispatch(verificationStarted)
     window->>LM: Automatikus Zárolás Szüneteltetése
 
-    DM->>DM: Fájl zárolása (Rendszer Zár)
-    DM->>DM: Megnyitás -> Validálás -> Bezárás
-    DM->>DM: Fájl feloldása
+    DM->>AW: lockDocument(SYSTEM) — DB megerősítés
+    AW-->>DC: applyArticleUpdate (szerver válasz)
+
+    DM->>DM: .idlk polling + validátorok (registerTask)
+    DM->>AW: unlockDocument — DB feloldás
+    AW-->>DC: applyArticleUpdate (lock törlés)
+    Note right of DC: MAESTRO eltűnik
 
     DM->>window: dispatch(verificationEnded)
     window->>LM: Automatikus Zárolás Folytatása
     end
 ```
+
+> **Optimistic update**: A `verifyDocumentInBackground()` a DB `lockDocument` hívás ELŐTT azonnal beállítja a SYSTEM lockot a helyi state-ben (`applyArticleUpdate`), így a „MAESTRO" felirat a toast-tal egy időben jelenik meg, nem a hálózati roundtrip után. Ha a DB lock sikertelen, a `finally` blokk visszavonja az optimistic update-et.
 
 ## Legjobb Gyakorlatok
 1.  **Laza Csatolás**: A komponensek lehetőleg ne importálják egymást; használj eseményeket.

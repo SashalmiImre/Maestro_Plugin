@@ -107,6 +107,7 @@
     - A DB zár **informatív** — a valódi fájlszintű zár az InDesign `.idlk` fájlja.
     - A `WorkflowEngine.lockDocument()` / `unlockDocument()` metódusokat használja → sima `updateRow` → Realtime.
     - **Kétfázisú unlock**: A `registerTask` minta lehetővé teszi, hogy a validátorok befejezzék a munkájukat a zárolás feloldása előtt.
+    - **Optimistic SYSTEM lock**: A `DocumentMonitor.verifyDocumentInBackground()` a DB `lockDocument` hívás ELŐTT azonnal beállítja a SYSTEM lockot a helyi state-ben (`applyArticleUpdate`), így a „MAESTRO" felirat azonnal megjelenik az ArticleTable-ben. Ha a DB lock sikertelen, a `finally` blokk visszavonja az optimistic update-et.
 
 4. **Validációs Rendszer**
     - **Egységes Architektúra**: Összefésüli a rendszer validációkat (Preflight, Overlap) és a felhasználói üzeneteket egyetlen listába.

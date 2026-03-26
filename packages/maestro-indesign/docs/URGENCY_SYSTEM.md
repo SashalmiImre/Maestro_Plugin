@@ -8,36 +8,36 @@ A Maestro plugin sürgősség-rendszere valós időben számítja ki, hogy egy a
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                        ArticleTable.jsx                             │
-│  urgencyMap = useUrgency(articles, deadlines, publication)          │
-│  getRowStyle(article) → { background: "linear-gradient(...)" }     │
+│                        ArticleTable.jsx                              │
+│  urgencyMap = useUrgency(articles, deadlines, publication)           │
+│  getRowStyle(article) → { background: "linear-gradient(...)" }       │
 └──────────────┬───────────────────────────────────────────────────────┘
                │
                ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│                       useUrgency.js (Hook)                          │
-│  - Ünnepnapok lekérése (fetchHolidays)                              │
-│  - Percenkénti újraszámítás (setInterval 60s)                       │
-│  - Minden cikkre: calculateUrgencyRatio() → { ratio, background }   │
-│  - Visszaadja: Map<articleId, { ratio, background }>                │
+│                       useUrgency.js (Hook)                           │
+│  - Ünnepnapok lekérése (fetchHolidays)                               │
+│  - Percenkénti újraszámítás (setInterval 60s)                        │
+│  - Minden cikkre: calculateUrgencyRatio() → { ratio, background }    │
+│  - Visszaadja: Map<articleId, { ratio, background }>                 │
 └──────────────┬───────────────────────────────────────────────────────┘
                │
                ▼
 ┌──────────────────────────────────────────────────────────────────────┐
-│                     urgencyUtils.js (Logika)                        │
+│                     urgencyUtils.js (Logika)                         │
 │                                                                      │
-│  fetchHolidays(year)             → Set<"YYYY-MM-DD">                │
-│  calculateWorkingMinutes(from, to, opts) → number (perc)            │
-│  calculateRemainingWorkMinutes(state, pageCount) → number (perc)    │
-│  getArticleDeadline(article, deadlines) → deadline | null           │
-│  calculateUrgencyRatio(article, deadlines, opts) → { ratio, bg }   │
-│  getUrgencyBackground(ratio) → CSS linear-gradient | null           │
+│  fetchHolidays(year)             → Set<"YYYY-MM-DD">                 │
+│  calculateWorkingMinutes(from, to, opts) → number (perc)             │
+│  calculateRemainingWorkMinutes(state, pageCount) → number (perc)     │
+│  getArticleDeadline(article, deadlines) → deadline | null            │
+│  calculateUrgencyRatio(article, deadlines, opts) → { ratio, bg }     │
+│  getUrgencyBackground(ratio) → CSS linear-gradient | null            │
 └──────────────────────────────────────────────────────────────────────┘
                │
                ▼
 ┌──────────────────────────────────────────────────────────────────────┐
 │                  workflowConstants.js                                │
-│  STATE_DURATIONS: { perPage, fixed } állapotonként                  │
+│  STATE_DURATIONS: { perPage, fixed } állapotonként                   │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
