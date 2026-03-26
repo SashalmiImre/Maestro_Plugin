@@ -19,8 +19,9 @@ const HEADER_FONT_STYLE = {
  * @param {boolean} props.isFilterActive - Van-e aktív szűrő
  * @param {Function} props.onToggleFilter - Szűrők megjelenítése/elrejtése
  * @param {Function} props.onOpenDashboard - Dashboard megnyitása böngészőben
+ * @param {boolean} props.isPropertiesView - Properties panel aktív-e (ilyenkor a szűrők gomb elrejtése)
  */
-const WorkspaceHeader = React.memo(({ user, isFilterActive, onToggleFilter, onOpenDashboard }) => (
+const WorkspaceHeader = React.memo(({ user, isFilterActive, onToggleFilter, onOpenDashboard, isPropertiesView }) => (
     <sp-body style={{
         flexShrink: 0,
         borderBottom: '1px solid var(--spectrum-global-color-gray-300)'
@@ -40,25 +41,29 @@ const WorkspaceHeader = React.memo(({ user, isFilterActive, onToggleFilter, onOp
                 {user?.name || user?.email || ''}
             </span>
             <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
-                <span
-                    onClick={onToggleFilter}
-                    title="Szűrők megjelenítése/elrejtése"
-                    style={{
-                        ...HEADER_FONT_STYLE,
-                        cursor: 'pointer',
-                        textDecoration: 'underline',
-                        opacity: isFilterActive ? 1 : 0.7,
-                        color: isFilterActive ? 'var(--spectrum-global-color-static-blue-600)' : 'inherit'
-                    }}
-                >
-                    SZŰRŐK
-                </span>
-                <div style={{
-                    margin: '0 8px',
-                    width: '1px',
-                    height: '12px',
-                    backgroundColor: 'var(--spectrum-global-color-gray-300)'
-                }} />
+                {!isPropertiesView && (
+                    <>
+                        <span
+                            onClick={onToggleFilter}
+                            title="Szűrők megjelenítése/elrejtése"
+                            style={{
+                                ...HEADER_FONT_STYLE,
+                                cursor: 'pointer',
+                                textDecoration: 'underline',
+                                opacity: isFilterActive ? 1 : 0.7,
+                                color: isFilterActive ? 'var(--spectrum-global-color-static-blue-600)' : 'inherit'
+                            }}
+                        >
+                            SZŰRŐK
+                        </span>
+                        <div style={{
+                            margin: '0 8px',
+                            width: '1px',
+                            height: '12px',
+                            backgroundColor: 'var(--spectrum-global-color-gray-300)'
+                        }} />
+                    </>
+                )}
                 <span
                     onClick={onOpenDashboard}
                     title="Dashboard megnyitása böngészőben"

@@ -292,6 +292,7 @@ export const Workspace = () => {
                 isFilterActive={isFilterActive}
                 onToggleFilter={toggleFilterOpen}
                 onOpenDashboard={handleOpenDashboard}
+                isPropertiesView={currentView === 'properties'}
             />
 
             {/* Központi szűrősáv — a fejléc alatt, minden kiadványra érvényes */}
