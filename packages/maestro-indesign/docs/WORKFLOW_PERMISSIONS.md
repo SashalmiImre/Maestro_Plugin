@@ -195,7 +195,7 @@ Az egyes parancsokhoz csapatszintű jogosultság van rendelve a `COMMANDS` objek
 
 | Parancs | Engedélyezett csapatok |
 |---------|----------------------|
-| `export_pdf` | Designers, Editors, Managing Editors, Art Directors |
+| `export_pdf` | Designers, Art Directors |
 | `export_final_pdf` | Designers, Art Directors |
 | `collect_images` | Designers, Art Directors |
 | `collect_selected_images` | Designers, Art Directors |
@@ -243,7 +243,7 @@ A `workflowConstants.js` fájlban a `COMMANDS` objektumban kell módosítani a `
 
 ```javascript
 export const COMMANDS = {
-    'export_pdf': { label: 'PDF írás', teams: ['designers', 'editors', 'art_directors'] },
+    'export_pdf': { label: 'PDF írás', teams: ['designers', 'art_directors'] },
     // ...
 };
 ```

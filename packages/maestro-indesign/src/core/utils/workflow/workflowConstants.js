@@ -20,7 +20,7 @@ export { WORKFLOW_STATES, MARKERS, STATE_DURATIONS, TEAM_ARTICLE_FIELD, labelMat
  * @type {Object.<string, { label: string, teams: string[] }>}
  */
 export const COMMANDS = {
-    'export_pdf':              { label: 'PDF írás',                 teams: ['designers', 'editors', 'managing_editors', 'art_directors'] },
+    'export_pdf':              { label: 'PDF írás',                 teams: ['designers', 'art_directors'] },
     'export_final_pdf':        { label: 'Végleges PDF írás',        teams: ['designers', 'art_directors'] },
     'collect_images':          { label: 'Képek összegyűjtése',      teams: ['designers', 'art_directors'] },
     'collect_selected_images': { label: 'Kijelölt képek gyűjtése',  teams: ['designers', 'art_directors'] },
