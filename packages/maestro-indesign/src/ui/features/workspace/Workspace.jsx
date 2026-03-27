@@ -25,6 +25,7 @@ import { PublicationList } from "../publications/PublicationList.jsx";
 import { PropertiesPanel } from "./PropertiesPanel/PropertiesPanel.jsx";
 import { FilterBar } from "./FilterBar.jsx";
 import { WorkspaceHeader } from "./WorkspaceHeader.jsx";
+import { ConfirmDialog } from "../../common/ConfirmDialog.jsx";
 
 // Contexts & Custom Hooks
 import { useToast } from "../../common/Toast/ToastContext.jsx";
@@ -34,6 +35,7 @@ import { useData } from "../../../core/contexts/DataContext.jsx";
 import { useWorkflowValidation } from "../../../data/hooks/useWorkflowValidation.js";
 import { useThumbnails } from "../../../data/hooks/useThumbnails.js";
 import { useFilters } from "../../../data/hooks/useFilters.js";
+import { usePublicationArchive } from "../../../data/hooks/usePublicationArchive.js";
 
 // Konfiguráció & Konstansok
 import { account, DASHBOARD_URL } from "../../../core/config/appwriteConfig.js";
@@ -66,6 +68,9 @@ export const Workspace = () => {
     const { updatePublication, publications } = usePublications();
     const { runAndPersistPreflight } = useWorkflowValidation();
     useThumbnails();
+    const { canArchivePublication, isArchiving, archiveProgress, archivePublication } = usePublicationArchive();
+    const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
+    const handleOpenArchiveDialog = useCallback(() => setArchiveDialogOpen(true), []);
 
     // Központi szűrő állapot (minden kiadványra egységesen alkalmazva)
     const {
@@ -293,6 +298,10 @@ export const Workspace = () => {
                 onToggleFilter={toggleFilterOpen}
                 onOpenDashboard={handleOpenDashboard}
                 isPropertiesView={currentView === 'properties'}
+                canArchivePublication={canArchivePublication}
+                isArchiving={isArchiving}
+                archiveProgress={archiveProgress}
+                onArchivePublication={handleOpenArchiveDialog}
             />
 
             {/* Központi szűrősáv — a fejléc alatt, minden kiadványra érvényes */}
@@ -343,6 +352,14 @@ export const Workspace = () => {
                     runAndPersistPreflight={runAndPersistPreflight}
                 />
             )}
+
+            <ConfirmDialog
+                isOpen={archiveDialogOpen}
+                title="Teljes kiadvány archiválása"
+                message="Az összes cikk archiválásra kerül (szövegkinyerés, INDD másolás, PDF export). Ez a művelet nem vonható vissza. Biztosan folytatod?"
+                onConfirm={() => { setArchiveDialogOpen(false); archivePublication(); }}
+                onCancel={() => setArchiveDialogOpen(false)}
+            />
         </div>
     );
 };

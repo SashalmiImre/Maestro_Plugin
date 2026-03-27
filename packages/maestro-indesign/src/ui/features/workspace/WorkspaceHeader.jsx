@@ -11,6 +11,14 @@ const HEADER_FONT_STYLE = {
     fontSize: '11px'
 };
 
+/** Függőleges elválasztó a fejléc linkek között. */
+const DIVIDER_STYLE = {
+    margin: '0 8px',
+    width: '1px',
+    height: '12px',
+    backgroundColor: 'var(--spectrum-global-color-gray-300)'
+};
+
 /**
  * Workspace fejléc komponens.
  *
@@ -20,8 +28,12 @@ const HEADER_FONT_STYLE = {
  * @param {Function} props.onToggleFilter - Szűrők megjelenítése/elrejtése
  * @param {Function} props.onOpenDashboard - Dashboard megnyitása böngészőben
  * @param {boolean} props.isPropertiesView - Properties panel aktív-e (ilyenkor a szűrők gomb elrejtése)
+ * @param {boolean} props.canArchivePublication - Megjelenik-e az archiválás gomb
+ * @param {boolean} props.isArchiving - Archiválás folyamatban van-e
+ * @param {Object|null} props.archiveProgress - Archiválási progress: { current, total, currentArticleName }
+ * @param {Function} props.onArchivePublication - Archiválás indítása
  */
-const WorkspaceHeader = React.memo(({ user, isFilterActive, onToggleFilter, onOpenDashboard, isPropertiesView }) => (
+const WorkspaceHeader = React.memo(({ user, isFilterActive, onToggleFilter, onOpenDashboard, isPropertiesView, canArchivePublication, isArchiving, archiveProgress, onArchivePublication }) => (
     <sp-body style={{
         flexShrink: 0,
         borderBottom: '1px solid var(--spectrum-global-color-gray-300)'
@@ -43,6 +55,30 @@ const WorkspaceHeader = React.memo(({ user, isFilterActive, onToggleFilter, onOp
             <div style={{ display: 'flex', alignItems: 'center', flexShrink: 0 }}>
                 {!isPropertiesView && (
                     <>
+                        {canArchivePublication && (
+                            <>
+                                <span
+                                    onClick={!isArchiving ? onArchivePublication : undefined}
+                                    title={isArchiving
+                                        ? `Archiválás: ${archiveProgress?.currentArticleName} (${archiveProgress?.current}/${archiveProgress?.total})`
+                                        : "Teljes kiadvány archiválása (archív + PDF)"
+                                    }
+                                    style={{
+                                        ...HEADER_FONT_STYLE,
+                                        cursor: isArchiving ? 'wait' : 'pointer',
+                                        textDecoration: 'underline',
+                                        opacity: isArchiving ? 0.5 : 1,
+                                        color: '#B366FF'
+                                    }}
+                                >
+                                    {isArchiving
+                                        ? `ARCHIVÁLÁS (${archiveProgress?.current}/${archiveProgress?.total})…`
+                                        : 'ARCHIVÁLÁS'
+                                    }
+                                </span>
+                                <div style={DIVIDER_STYLE} />
+                            </>
+                        )}
                         <span
                             onClick={onToggleFilter}
                             title="Szűrők megjelenítése/elrejtése"
@@ -56,12 +92,7 @@ const WorkspaceHeader = React.memo(({ user, isFilterActive, onToggleFilter, onOp
                         >
                             SZŰRŐK
                         </span>
-                        <div style={{
-                            margin: '0 8px',
-                            width: '1px',
-                            height: '12px',
-                            backgroundColor: 'var(--spectrum-global-color-gray-300)'
-                        }} />
+                        <div style={DIVIDER_STYLE} />
                     </>
                 )}
                 <span
