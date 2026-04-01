@@ -175,10 +175,12 @@ export const Workspace = () => {
     const handleOpenDashboard = useCallback(async () => {
         try {
             const { jwt } = await account.createJWT();
-            let url = `${DASHBOARD_URL}?jwt=${encodeURIComponent(jwt)}`;
+            // JWT fragment-ben (#) utazik, nem query paraméterben — így nem kerül szerver logba
+            let url = DASHBOARD_URL;
             if (activePublicationId) {
-                url += `&pub=${encodeURIComponent(activePublicationId)}`;
+                url += `?pub=${encodeURIComponent(activePublicationId)}`;
             }
+            url += `#jwt=${encodeURIComponent(jwt)}`;
             require('uxp').shell.openExternal(url);
         } catch (error) {
             logError('[Workspace] Dashboard megnyitás sikertelen:', error);

@@ -1,7 +1,7 @@
 {
   "name": "Maestro",
   "id": "com.sashalmiimre.maestro",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "main": "index.html",
   "manifestVersion": 5,
   "requiredPermissions": {

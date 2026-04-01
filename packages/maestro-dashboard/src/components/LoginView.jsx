@@ -24,7 +24,9 @@ export default function LoginView() {
             if (msg.includes('Invalid credentials') || msg.includes('Invalid email')) {
                 setError('Hibás email vagy jelszó.');
             } else if (msg.includes('not been verified')) {
-                setError('Az email cím nincs megerősítve. Ellenőrizd a postafiókodat.');
+                setError('Hibás bejelentkezési adatok vagy megerősítetlen fiók.');
+            } else if (msg.toLowerCase().includes('session') && msg.toLowerCase().includes('active')) {
+                setError('Már van aktív bejelentkezés. Frissítsd az oldalt.');
             } else {
                 setError('Bejelentkezési hiba. Próbáld újra később.');
             }

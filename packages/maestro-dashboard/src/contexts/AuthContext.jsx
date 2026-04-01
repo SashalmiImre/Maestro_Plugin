@@ -52,15 +52,20 @@ export function AuthProvider({ children }) {
         (async () => {
             try {
                 // JWT auto-login: plugin-ből kapott token detektálása
-                const params = new URLSearchParams(window.location.search);
-                const jwt = params.get('jwt');
+                // A JWT fragment-ből (#jwt=...) érkezik, hogy ne kerüljön szerver logba
+                const hash = new URLSearchParams(window.location.hash.slice(1));
+                const jwt = hash.get('jwt');
 
                 if (jwt) {
+                    // Meglévő session törlése, hogy a JWT auth ne ütközzön
+                    try {
+                        await account.deleteSession('current');
+                    } catch {
+                        // Nincs aktív session, nem baj
+                    }
                     client.setJWT(jwt);
-                    // URL takarítás — jwt paraméter eltávolítása a címsorból
-                    const cleanUrl = new URL(window.location.href);
-                    cleanUrl.searchParams.delete('jwt');
-                    window.history.replaceState({}, '', cleanUrl.toString());
+                    // URL takarítás — fragment eltávolítása a címsorból
+                    window.history.replaceState({}, '', window.location.pathname + window.location.search);
                 }
 
                 const userData = await account.get();
@@ -75,6 +80,12 @@ export function AuthProvider({ children }) {
     }, []);
 
     const login = useCallback(async (email, password) => {
+        // Meglévő session törlése, hogy ne ütközzön az új bejelentkezéssel
+        try {
+            await account.deleteSession('current');
+        } catch {
+            // Nincs aktív session, nem baj
+        }
         await account.createEmailPasswordSession(email, password);
         const userData = await account.get();
         const teamIds = await fetchTeamIds();
