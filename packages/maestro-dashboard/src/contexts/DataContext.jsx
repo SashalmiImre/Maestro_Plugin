@@ -77,7 +77,8 @@ export function DataProvider({ children }) {
         setIsLoading(true);
 
         try {
-            const [articlesResult, layoutsResult, deadlinesResult, validationsResult] = await Promise.all([
+            // 1. fázis: cikkek, layoutok, határidők párhuzamosan
+            const [articlesResult, layoutsResult, deadlinesResult] = await Promise.all([
                 databases.listDocuments(DATABASE_ID, COLLECTIONS.ARTICLES, [
                     Query.equal('publicationId', publicationId),
                     Query.limit(1000),
@@ -91,17 +92,47 @@ export function DataProvider({ children }) {
                 databases.listDocuments(DATABASE_ID, COLLECTIONS.DEADLINES, [
                     Query.equal('publicationId', publicationId),
                     Query.limit(100)
-                ]).catch(() => ({ documents: [] })),
-                databases.listDocuments(DATABASE_ID, COLLECTIONS.USER_VALIDATIONS, [
-                    Query.equal('publicationId', publicationId),
-                    Query.limit(1000)
                 ]).catch(() => ({ documents: [] }))
             ]);
 
             setArticles(articlesResult.documents);
             setLayouts(layoutsResult.documents);
             setDeadlines(deadlinesResult.documents);
-            setValidations(validationsResult.documents);
+
+            // 2. fázis: validációk articleId alapján (plugin DataContext mintájára)
+            const articleIds = articlesResult.documents.map(a => a.$id);
+            let allValidations = [];
+
+            if (articleIds.length > 0) {
+                const CHUNK_SIZE = 100;
+                const chunks = [];
+                for (let i = 0; i < articleIds.length; i += CHUNK_SIZE) {
+                    chunks.push(articleIds.slice(i, i + CHUNK_SIZE));
+                }
+
+                // Mindkét validáció kollekció lekérése párhuzamosan, kötegelt articleId lekérdezéssel
+                const [userValResults, sysValResults] = await Promise.all([
+                    Promise.all(chunks.map(ids =>
+                        databases.listDocuments(DATABASE_ID, COLLECTIONS.USER_VALIDATIONS, [
+                            Query.equal('articleId', ids),
+                            Query.limit(ids.length * 10)
+                        ]).catch(() => ({ documents: [] }))
+                    )),
+                    Promise.all(chunks.map(ids =>
+                        databases.listDocuments(DATABASE_ID, COLLECTIONS.SYSTEM_VALIDATIONS, [
+                            Query.equal('articleId', ids),
+                            Query.limit(ids.length * 5)
+                        ]).catch(() => ({ documents: [] }))
+                    ))
+                ]);
+
+                const userValidationDocs = userValResults.flatMap(r => r.documents);
+                const sysValidationDocs = sysValResults.flatMap(r => r.documents);
+                const flatSysValidations = sysValidationDocs.flatMap(flattenSystemValidationRecord);
+                allValidations = [...flatSysValidations, ...userValidationDocs];
+            }
+
+            setValidations(allValidations);
         } finally {
             setIsLoading(false);
         }
@@ -162,7 +193,8 @@ export function DataProvider({ children }) {
             channelName(COLLECTIONS.PUBLICATIONS),
             channelName(COLLECTIONS.LAYOUTS),
             channelName(COLLECTIONS.DEADLINES),
-            channelName(COLLECTIONS.USER_VALIDATIONS)
+            channelName(COLLECTIONS.USER_VALIDATIONS),
+            channelName(COLLECTIONS.SYSTEM_VALIDATIONS)
         ], (response) => {
             const eventType = getEventType(response.events);
             if (!eventType) return;
@@ -188,6 +220,9 @@ export function DataProvider({ children }) {
                         break;
                     case 'validations':
                         applyValidationEvent(eventType, payload, activePublicationIdRef, setValidations);
+                        break;
+                    case 'system_validations':
+                        applySystemValidationEvent(eventType, payload, activePublicationIdRef, setValidations);
                         break;
                 }
             } catch (error) {
@@ -232,7 +267,10 @@ function getCollection(channels) {
         if (ch.includes(COLLECTIONS.PUBLICATIONS)) return 'publications';
         if (ch.includes(COLLECTIONS.LAYOUTS)) return 'layouts';
         if (ch.includes(COLLECTIONS.DEADLINES)) return 'deadlines';
+        // USER_VALIDATIONS ('uservalidations') ellenőrzése a SYSTEM_VALIDATIONS ('validations')
+        // előtt, mert 'validations' substring of 'uservalidations'
         if (ch.includes(COLLECTIONS.USER_VALIDATIONS)) return 'validations';
+        if (ch.includes(COLLECTIONS.SYSTEM_VALIDATIONS)) return 'system_validations';
     }
     return null;
 }
@@ -319,8 +357,7 @@ function applyDeadlineEvent(eventType, payload, pubIdRef, setDeadlines) {
 }
 
 function applyValidationEvent(eventType, payload, pubIdRef, setValidations) {
-    if (payload.publicationId !== pubIdRef.current) return;
-
+    // uservalidations — articleId-alapú azonosítás (nincs publicationId a rekordban)
     if (eventType === 'delete') {
         setValidations(prev => prev.filter(v => v.$id !== payload.$id));
     } else {
@@ -334,4 +371,50 @@ function applyValidationEvent(eventType, payload, pubIdRef, setValidations) {
             return [...prev, payload];
         });
     }
+}
+
+/**
+ * Egy `validations` (rendszer) rekordból lapos validáció-itemeket generál,
+ * amelyek kompatibilisek az ArticleTable validationIndex formátumával.
+ *
+ * @param {Object} record - Appwrite validations rekord (errors[], warnings[], articleId, source)
+ * @returns {Array} Lapos validáció-itemek tömbje
+ */
+function flattenSystemValidationRecord(record) {
+    const errors = (record.errors || []).map((msg, i) => ({
+        $id: `${record.$id}-e-${i}`,
+        articleId: record.articleId,
+        type: 'error',
+        description: msg,
+        source: record.source,
+        isResolved: false
+    }));
+    const warnings = (record.warnings || []).map((msg, i) => ({
+        $id: `${record.$id}-w-${i}`,
+        articleId: record.articleId,
+        type: 'warning',
+        description: msg,
+        source: record.source,
+        isResolved: false
+    }));
+    return [...errors, ...warnings];
+}
+
+/**
+ * Realtime handler a `validations` (rendszer) kollekció eseményeire.
+ * Egy rekord create/update esetén az adott articleId + source kombinációhoz tartozó
+ * összes lapos itemet lecseréli az újra lapított eredménnyel.
+ */
+function applySystemValidationEvent(eventType, payload, pubIdRef, setValidations) {
+    if (payload.publicationId !== pubIdRef.current) return;
+
+    const { articleId, source } = payload;
+
+    setValidations(prev => {
+        // Régi lapos itemek eltávolítása erre az articleId + source párra
+        const filtered = prev.filter(v => !(v.articleId === articleId && v.source === source));
+        if (eventType === 'delete') return filtered;
+        // Új lapos itemek hozzáadása
+        return [...filtered, ...flattenSystemValidationRecord(payload)];
+    });
 }

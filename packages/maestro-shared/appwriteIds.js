@@ -16,6 +16,7 @@ export const COLLECTIONS = {
     PUBLICATIONS: 'publications',
     ARTICLES: 'articles',
     USER_VALIDATIONS: 'uservalidations',
+    SYSTEM_VALIDATIONS: 'validations',
     LAYOUTS: 'layouts',
     DEADLINES: 'deadlines'
 };
