@@ -96,14 +96,23 @@ export async function deleteOldThumbnails(thumbnailsJson) {
 
     if (!Array.isArray(thumbnails) || thumbnails.length === 0) return;
 
-    const deletePromises = thumbnails.map(({ fileId }) =>
+    // fileId nélküli bejegyzések kiszűrése (az Appwrite SDK szinkron throw-ol undefined fileId-ra)
+    const validThumbnails = thumbnails.filter(t => t && t.fileId);
+
+    if (validThumbnails.length < thumbnails.length) {
+        logWarn(`[thumbnailUploader] ${thumbnails.length - validThumbnails.length} thumbnail bejegyzés kihagyva (hiányzó fileId)`);
+    }
+
+    if (validThumbnails.length === 0) return;
+
+    const deletePromises = validThumbnails.map(({ fileId }) =>
         storage.deleteFile(BUCKETS.THUMBNAILS, fileId).catch(e => {
             logWarn(`[thumbnailUploader] Thumbnail törlés sikertelen (${fileId}):`, e.message);
         })
     );
 
     await Promise.allSettled(deletePromises);
-    log(`[thumbnailUploader] ${thumbnails.length} régi thumbnail törölve`);
+    log(`[thumbnailUploader] ${validThumbnails.length} régi thumbnail törölve`);
 }
 
 /**
