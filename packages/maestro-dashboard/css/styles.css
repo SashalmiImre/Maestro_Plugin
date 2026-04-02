@@ -1,9 +1,52 @@
 /**
  * Maestro Dashboard — Stílusok
- * Dark theme, responsive, a plugin esztétikáját követi.
+ * GitHub Dark-inspirált modern dizájn, rétegzett háttérrendszerrel.
  */
 
-/* ─── Reset & Alapok ───────────────────────────────────────────────────── */
+/* ─── Design Tokens ────────────────────────────────────────────────────────── */
+
+:root {
+    /* Rétegzett háttér */
+    --bg-base:     #0d1117;
+    --bg-surface:  #161b22;
+    --bg-elevated: #21262d;
+    --bg-overlay:  #1c2128;
+
+    /* Keretek */
+    --border:       rgba(240, 246, 252, 0.10);
+    --border-muted: rgba(240, 246, 252, 0.06);
+
+    /* Szöveg hierarchia */
+    --text-primary:   #e6edf3;
+    --text-secondary: #8b949e;
+    --text-muted:     #6e7681;
+    --text-disabled:  #484f58;
+
+    /* Accent */
+    --accent:        #3b82f6;
+    --accent-hover:  #2563eb;
+    --accent-subtle: rgba(59, 130, 246, 0.15);
+
+    /* Státusz */
+    --c-error:   #f85149;
+    --c-warning: #e3b341;
+    --c-success: #3fb950;
+
+    /* Lock badge variánsok */
+    --badge-me-bg:      rgba(59, 130, 246, 0.18);
+    --badge-me-text:    #79c0ff;
+    --badge-me-border:  rgba(59, 130, 246, 0.40);
+
+    --badge-sys-bg:     rgba(245, 158, 11, 0.15);
+    --badge-sys-text:   #ffa657;
+    --badge-sys-border: rgba(245, 158, 11, 0.35);
+
+    --badge-other-bg:     rgba(139, 148, 158, 0.12);
+    --badge-other-text:   #8b949e;
+    --badge-other-border: rgba(139, 148, 158, 0.28);
+}
+
+/* ─── Reset & Alapok ───────────────────────────────────────────────────────── */
 
 *, *::before, *::after {
     box-sizing: border-box;
@@ -13,15 +56,37 @@
 
 html, body {
     height: 100%;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, 'Helvetica Neue', Arial, sans-serif;
     font-size: 13px;
     line-height: 1.4;
-    color: #e0e0e0;
-    background: #1a1a1a;
+    color: var(--text-primary);
+    background: var(--bg-base);
     -webkit-font-smoothing: antialiased;
 }
 
-/* ─── Login nézet ──────────────────────────────────────────────────────── */
+/* Custom scrollbar */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: #30363d;
+    border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: #484f58;
+}
+
+/* Focus ring */
+:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+/* ─── Login nézet ──────────────────────────────────────────────────────────── */
 
 .login-container {
     display: flex;
@@ -29,28 +94,33 @@ html, body {
     justify-content: center;
     min-height: 100vh;
     padding: 20px;
+    background: var(--bg-base);
 }
 
 .login-card {
-    background: #2a2a2a;
-    border-radius: 12px;
+    background: var(--bg-overlay);
+    border: 1px solid var(--border);
+    border-radius: 14px;
     padding: 40px;
     width: 100%;
     max-width: 380px;
-    box-shadow: 0 4px 24px rgba(0, 0, 0, 0.4);
+    box-shadow:
+        0 8px 32px rgba(0, 0, 0, 0.5),
+        inset 0 1px 0 rgba(255, 255, 255, 0.05);
 }
 
 .login-card h1 {
     font-size: 20px;
-    font-weight: 600;
+    font-weight: 700;
     text-align: center;
     margin-bottom: 8px;
-    color: #fff;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
 }
 
 .login-card .subtitle {
     text-align: center;
-    color: #999;
+    color: var(--text-muted);
     font-size: 12px;
     margin-bottom: 28px;
 }
@@ -64,59 +134,67 @@ html, body {
     font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: #999;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
     margin-bottom: 6px;
 }
 
 .form-group input {
     width: 100%;
-    padding: 10px 12px;
-    background: #333;
-    border: 1px solid #444;
+    padding: 9px 12px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
     border-radius: 6px;
-    color: #e0e0e0;
+    color: var(--text-primary);
     font-size: 13px;
     outline: none;
-    transition: border-color 0.2s;
+    transition: border-color 0.15s, box-shadow 0.15s;
 }
 
 .form-group input:focus {
-    border-color: #3b82f6;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+}
+
+.form-group input::placeholder {
+    color: var(--text-disabled);
 }
 
 .login-btn {
     width: 100%;
     padding: 10px;
-    background: #3b82f6;
+    background: var(--accent);
     color: #fff;
     border: none;
     border-radius: 6px;
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
-    transition: background 0.2s;
+    transition: background 0.15s, box-shadow 0.15s;
     margin-top: 8px;
 }
 
 .login-btn:hover {
-    background: #2563eb;
+    background: var(--accent-hover);
+    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
 }
 
 .login-btn:disabled {
-    background: #555;
+    background: var(--bg-elevated);
+    color: var(--text-disabled);
     cursor: not-allowed;
+    box-shadow: none;
 }
 
 .login-error {
-    color: #ef4444;
+    color: var(--c-error);
     font-size: 12px;
     text-align: center;
     margin-top: 12px;
     min-height: 18px;
 }
 
-/* ─── Dashboard layout ─────────────────────────────────────────────────── */
+/* ─── Dashboard layout ─────────────────────────────────────────────────────── */
 
 .dashboard {
     display: none;
@@ -133,16 +211,19 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 10px 20px;
-    background: #222;
-    border-bottom: 1px solid #333;
+    padding: 12px 20px;
+    background: var(--bg-surface);
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
 }
 
 .dashboard-header h1 {
     font-size: 15px;
-    font-weight: 600;
-    color: #fff;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
 }
 
 .dashboard-header .user-info {
@@ -150,23 +231,24 @@ html, body {
     align-items: center;
     gap: 12px;
     font-size: 12px;
-    color: #999;
+    color: var(--text-secondary);
 }
 
 .logout-btn {
     padding: 5px 12px;
     background: transparent;
-    border: 1px solid #555;
-    border-radius: 4px;
-    color: #999;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-secondary);
     font-size: 11px;
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all 0.15s;
 }
 
 .logout-btn:hover {
-    border-color: #ef4444;
-    color: #ef4444;
+    border-color: var(--c-error);
+    color: var(--c-error);
+    background: rgba(248, 81, 73, 0.08);
 }
 
 /* Fő tartalom (oldalsáv + tábla) */
@@ -176,13 +258,13 @@ html, body {
     overflow: hidden;
 }
 
-/* ─── Oldalsáv (kiadvány lista) ────────────────────────────────────────── */
+/* ─── Oldalsáv (kiadvány lista) ────────────────────────────────────────────── */
 
 .sidebar {
     width: 220px;
     min-width: 220px;
-    background: #222;
-    border-right: 1px solid #333;
+    background: var(--bg-surface);
+    border-right: 1px solid var(--border);
     overflow-y: auto;
     flex-shrink: 0;
 }
@@ -192,35 +274,37 @@ html, body {
     font-size: 10px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.1em;
-    color: #666;
-    border-bottom: 1px solid #333;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
 }
 
 .publication-item {
     padding: 10px 16px;
     cursor: pointer;
-    font-size: 12px;
-    color: #bbb;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-    transition: all 0.15s;
+    font-size: 12.5px;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border-muted);
+    transition: all 0.12s;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    border-left: 3px solid transparent;
 }
 
 .publication-item:hover {
-    background: rgba(255, 255, 255, 0.05);
-    color: #e0e0e0;
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-primary);
 }
 
 .publication-item.active {
-    background: rgba(59, 130, 246, 0.12);
-    color: #3b82f6;
+    background: var(--accent-subtle);
+    color: var(--accent);
     font-weight: 600;
+    border-left-color: var(--accent);
 }
 
-/* ─── Fő tartalom (tábla terület) ──────────────────────────────────────── */
+/* ─── Fő tartalom (tábla terület) ──────────────────────────────────────────── */
 
 .main-content {
     flex: 1;
@@ -234,14 +318,14 @@ html, body {
     align-items: center;
     justify-content: space-between;
     padding: 10px 16px;
-    border-bottom: 1px solid #333;
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
 
 .content-header h2 {
     font-size: 14px;
     font-weight: 600;
-    color: #fff;
+    color: var(--text-primary);
 }
 
 .content-header-actions {
@@ -252,14 +336,19 @@ html, body {
 
 .article-count {
     font-size: 11px;
-    color: #666;
+    color: var(--text-muted);
+    background: var(--bg-elevated);
+    padding: 2px 8px;
+    border-radius: 10px;
+    border: 1px solid var(--border-muted);
 }
 
-/* ─── Szűrő sáv ───────────────────────────────────────────────────────── */
+/* ─── Szűrő sáv ───────────────────────────────────────────────────────────── */
 
 .filter-bar {
     padding: 10px 16px;
-    border-bottom: 1px solid #333;
+    border-bottom: 1px solid var(--border);
+    background: rgba(22, 27, 34, 0.6);
     flex-shrink: 0;
     display: none;
 }
@@ -274,27 +363,29 @@ html, body {
     justify-content: center;
     padding: 6px 8px;
     background: transparent;
-    border: 1px solid #444;
-    border-radius: 4px;
-    color: #999;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-secondary);
     cursor: pointer;
-    transition: all 0.2s;
+    transition: all 0.15s;
 }
 
 .filter-toggle-btn:hover {
-    border-color: #666;
-    color: #ccc;
+    border-color: var(--text-muted);
+    color: var(--text-primary);
+    background: var(--bg-elevated);
 }
 
 .filter-toggle-btn.active {
-    border-color: #3b82f6;
-    color: #3b82f6;
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-subtle);
 }
 
 .filter-status-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 4px 16px;
+    gap: 4px 20px;
     margin-bottom: 8px;
 }
 
@@ -303,27 +394,33 @@ html, body {
     align-items: center;
     gap: 6px;
     font-size: 11px;
-    color: #bbb;
+    color: var(--text-secondary);
     cursor: pointer;
     padding: 3px 0;
     user-select: none;
+    transition: color 0.12s;
+}
+
+.filter-checkbox:hover {
+    color: var(--text-primary);
 }
 
 .filter-checkbox input[type="checkbox"] {
     appearance: none;
     width: 14px;
     height: 14px;
-    border: 1px solid #555;
+    border: 1px solid #444c56;
     border-radius: 3px;
-    background: #333;
+    background: var(--bg-elevated);
     cursor: pointer;
     position: relative;
     flex-shrink: 0;
+    transition: background 0.12s, border-color 0.12s;
 }
 
 .filter-checkbox input[type="checkbox"]:checked {
-    background: #3b82f6;
-    border-color: #3b82f6;
+    background: var(--accent);
+    border-color: var(--accent);
 }
 
 .filter-checkbox input[type="checkbox"]:checked::after {
@@ -357,7 +454,7 @@ html, body {
     gap: 16px;
     align-items: center;
     padding-top: 8px;
-    border-top: 1px solid #333;
+    border-top: 1px solid var(--border);
 }
 
 .filter-reset-btn {
@@ -367,31 +464,32 @@ html, body {
     padding: 0;
     background: none;
     border: none;
-    color: #999;
+    color: var(--text-muted);
     font-size: 11px;
     cursor: pointer;
+    transition: color 0.12s;
 }
 
 .filter-reset-btn:hover {
-    color: #ef4444;
+    color: var(--c-error);
 }
 
 .filter-reset-icon {
     font-size: 10px;
 }
 
-/* ─── Placeholder sorok ───────────────────────────────────────────────── */
+/* ─── Placeholder sorok ───────────────────────────────────────────────────── */
 
 .placeholder-row {
-    background: rgba(128, 128, 128, 0.06);
+    background: rgba(128, 128, 128, 0.04) !important;
 }
 
 .placeholder-name {
-    color: #666;
+    color: var(--text-disabled);
     font-style: italic;
 }
 
-/* ─── Cikk tábla ──────────────────────────────────────────────────────── */
+/* ─── Cikk tábla ──────────────────────────────────────────────────────────── */
 
 .table-container {
     flex: 1;
@@ -409,30 +507,30 @@ html, body {
     position: sticky;
     top: 0;
     z-index: 1;
-    background: #222;
+    background: var(--bg-surface);
 }
 
 .article-table th {
     padding: 8px 10px;
-    font-size: 10px;
+    font-size: 10.5px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: #666;
+    letter-spacing: 0.06em;
+    color: var(--text-muted);
     text-align: left;
-    border-bottom: 1px solid #444;
+    border-bottom: 1px solid var(--border);
     cursor: pointer;
     user-select: none;
     white-space: nowrap;
-    transition: color 0.15s;
+    transition: color 0.12s;
 }
 
 .article-table th:hover {
-    color: #999;
+    color: var(--text-secondary);
 }
 
 .article-table th.sorted {
-    color: #3b82f6;
+    color: var(--accent);
 }
 
 .article-table th .sort-arrow {
@@ -445,22 +543,23 @@ html, body {
 }
 
 .article-table tbody tr {
-    border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+    border-bottom: 1px solid var(--border-muted);
     transition: background 0.1s;
 }
 
 .article-table tbody tr:hover {
-    background: rgba(255, 255, 255, 0.05) !important;
+    background: var(--bg-elevated) !important;
 }
 
 .article-table td {
-    padding: 6px 10px;
-    font-size: 12px;
+    padding: 7px 10px;
+    font-size: 12.5px;
     vertical-align: middle;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
     max-width: 0;
+    color: var(--text-primary);
 }
 
 /* Oszlop szélességek */
@@ -470,33 +569,59 @@ html, body {
 .col-state    { width: 15%; }
 .col-validate { width: 13%; text-align: center; }
 
-/* Terjedelm (monospace) */
+/* Terjedelem (monospace) */
 .page-range {
-    font-family: Consolas, 'Andale Mono', 'Lucida Console', 'Courier New', monospace;
+    font-family: 'SF Mono', Consolas, 'Andale Mono', 'Lucida Console', 'Courier New', monospace;
     font-size: 11px;
-    font-weight: bold;
+    font-weight: 600;
+    color: var(--text-secondary);
 }
 
 /* Névtelen cikk */
 .article-unnamed {
     font-style: italic;
-    color: #ef4444;
+    color: var(--c-error);
 }
 
-/* Lock label */
+/* Lock label badge-ek */
 .lock-label {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 7px;
+    border-radius: 4px;
     font-size: 10px;
-    font-weight: bold;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    border: 1px solid;
+    white-space: nowrap;
     text-transform: uppercase;
-    color: #999;
+}
+
+.lock-label--me {
+    background: var(--badge-me-bg);
+    color: var(--badge-me-text);
+    border-color: var(--badge-me-border);
+}
+
+.lock-label--maestro {
+    background: var(--badge-sys-bg);
+    color: var(--badge-sys-text);
+    border-color: var(--badge-sys-border);
+}
+
+.lock-label--other {
+    background: var(--badge-other-bg);
+    color: var(--badge-other-text);
+    border-color: var(--badge-other-border);
 }
 
 /* Státusz pont (tábla cella) */
 .state-dot {
-    width: 12px;
-    height: 12px;
+    width: 10px;
+    height: 10px;
     border-radius: 50%;
     display: inline-block;
+    box-shadow: 0 0 5px 1px currentColor;
 }
 
 /* Validáció ikonok */
@@ -507,18 +632,18 @@ html, body {
     gap: 4px;
 }
 
-/* ─── Üres állapot ─────────────────────────────────────────────────────── */
+/* ─── Üres állapot ─────────────────────────────────────────────────────────── */
 
 .empty-state {
     display: flex;
     align-items: center;
     justify-content: center;
     height: 100%;
-    color: #555;
+    color: var(--text-muted);
     font-size: 13px;
 }
 
-/* ─── Loading spinner ──────────────────────────────────────────────────── */
+/* ─── Loading spinner ──────────────────────────────────────────────────────── */
 
 .loading-overlay {
     display: flex;
@@ -526,15 +651,15 @@ html, body {
     justify-content: center;
     height: 100%;
     gap: 10px;
-    color: #666;
+    color: var(--text-muted);
     font-size: 12px;
 }
 
 .spinner {
     width: 20px;
     height: 20px;
-    border: 2px solid #444;
-    border-top-color: #3b82f6;
+    border: 2px solid var(--bg-elevated);
+    border-top-color: var(--accent);
     border-radius: 50%;
     animation: spin 0.8s linear infinite;
 }
@@ -543,7 +668,7 @@ html, body {
     to { transform: rotate(360deg); }
 }
 
-/* ─── Toast ────────────────────────────────────────────────────────────── */
+/* ─── Toast ────────────────────────────────────────────────────────────────── */
 
 .toast-container {
     position: fixed;
@@ -557,49 +682,50 @@ html, body {
 
 .toast {
     padding: 10px 16px;
-    background: #333;
-    border-radius: 6px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
     font-size: 12px;
-    color: #e0e0e0;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-    animation: slideUp 0.3s ease-out;
+    color: var(--text-primary);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+    animation: slideUp 0.25s ease-out;
     max-width: 360px;
 }
 
 .toast.error {
-    border-left: 3px solid #ef4444;
+    border-left: 3px solid var(--c-error);
 }
 
 .toast.success {
-    border-left: 3px solid #22c55e;
+    border-left: 3px solid var(--c-success);
 }
 
 .toast.warning {
-    border-left: 3px solid #f59e0b;
+    border-left: 3px solid var(--c-warning);
 }
 
 @keyframes slideUp {
-    from { opacity: 0; transform: translateY(20px); }
+    from { opacity: 0; transform: translateY(12px); }
     to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ─── Responsive ───────────────────────────────────────────────────────── */
+/* ─── Responsive ───────────────────────────────────────────────────────────── */
 
 /* Mobil sáv */
 .mobile-pub-select {
     display: none;
     padding: 10px 16px;
-    border-bottom: 1px solid #333;
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
 }
 
 .mobile-pub-select select {
     width: 100%;
     padding: 8px 10px;
-    background: #333;
-    border: 1px solid #444;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
     border-radius: 6px;
-    color: #e0e0e0;
+    color: var(--text-primary);
     font-size: 12px;
     outline: none;
 }
@@ -644,13 +770,14 @@ html, body {
     }
 }
 
-/* ─── Nézet-váltó gombok ──────────────────────────────────────────────── */
+/* ─── Nézet-váltó gombok ──────────────────────────────────────────────────── */
 
 .view-toggle {
     display: flex;
-    gap: 3px;
-    background: #2a2a2a;
-    border-radius: 6px;
+    gap: 2px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 8px;
     padding: 3px;
 }
 
@@ -658,26 +785,27 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 6px 8px;
+    padding: 5px 8px;
     border: none;
-    border-radius: 4px;
+    border-radius: 5px;
     background: transparent;
-    color: #888;
+    color: var(--text-muted);
     cursor: pointer;
     line-height: 1;
     transition: background 0.15s, color 0.15s;
 }
 
 .view-btn:hover {
-    color: #ccc;
+    color: var(--text-primary);
+    background: rgba(255, 255, 255, 0.06);
 }
 
 .view-btn.active {
-    background: #3b82f6;
+    background: var(--accent);
     color: #fff;
 }
 
-/* ─── Layout (Flatplan) nézet ─────────────────────────────────────────── */
+/* ─── Layout (Flatplan) nézet ─────────────────────────────────────────────── */
 
 .layout-container {
     flex: 1;
@@ -694,8 +822,8 @@ html, body {
     justify-content: flex-end;
     gap: 12px;
     padding: 8px 20px;
-    border-bottom: 1px solid #333;
-    background: #1a1a1a;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-surface);
     flex-shrink: 0;
     z-index: 2;
 }
@@ -704,21 +832,23 @@ html, body {
 .layout-select {
     margin-right: auto;
     padding: 4px 8px;
-    background: #333;
-    color: #ccc;
-    border: 1px solid #444;
-    border-radius: 4px;
+    background: var(--bg-elevated);
+    color: var(--text-secondary);
+    border: 1px solid var(--border);
+    border-radius: 6px;
     font-size: 12px;
     cursor: pointer;
+    outline: none;
+    transition: border-color 0.12s;
 }
 
 .layout-select:hover {
-    border-color: #666;
+    border-color: var(--text-muted);
+    color: var(--text-primary);
 }
 
 .layout-select:focus {
-    outline: none;
-    border-color: #3b82f6;
+    border-color: var(--accent);
 }
 
 /* Scrollozható terület a layout nézethez */
@@ -731,40 +861,49 @@ html, body {
 .zoom-control {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
 }
 
 .zoom-btn {
-    width: 24px;
-    height: 24px;
+    width: 26px;
+    height: 26px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: #333;
-    border: 1px solid #444;
-    border-radius: 4px;
-    color: #ccc;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-secondary);
     font-size: 14px;
     cursor: pointer;
     line-height: 1;
+    transition: all 0.12s;
 }
 
 .zoom-btn:hover {
-    border-color: #666;
-    color: #fff;
+    border-color: var(--text-muted);
+    color: var(--text-primary);
+    background: #2d333b;
+}
+
+.zoom-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
 }
 
 /* Oszlopszám beviteli mező */
 .columns-input {
-    width: 48px;
-    height: 24px;
+    width: 44px;
+    height: 26px;
     text-align: center;
-    background: #333;
-    border: 1px solid #444;
-    border-radius: 4px;
-    color: #ccc;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-secondary);
     font-size: 13px;
     -moz-appearance: textfield;
+    outline: none;
+    transition: border-color 0.12s, color 0.12s;
 }
 
 .columns-input::-webkit-inner-spin-button,
@@ -774,16 +913,15 @@ html, body {
 }
 
 .columns-input:focus {
-    outline: none;
-    border-color: #3b82f6;
-    color: #fff;
+    border-color: var(--accent);
+    color: var(--text-primary);
 }
 
-/* Zoom elválasztó és visszaállító gomb */
+/* Zoom elválasztó */
 .zoom-separator {
     width: 1px;
     height: 16px;
-    background: #444;
+    background: var(--border);
 }
 
 /* Zoom csúszka */
@@ -792,7 +930,8 @@ html, body {
     height: 4px;
     -webkit-appearance: none;
     appearance: none;
-    background: #444;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
     border-radius: 2px;
     outline: none;
     cursor: pointer;
@@ -800,50 +939,50 @@ html, body {
 
 .zoom-slider::-webkit-slider-thumb {
     -webkit-appearance: none;
+    appearance: none;
     width: 12px;
     height: 12px;
-    background: #ccc;
+    background: var(--accent);
     border-radius: 50%;
     cursor: pointer;
+    transition: filter 0.12s;
 }
 
 .zoom-slider::-webkit-slider-thumb:hover {
-    background: #fff;
+    filter: brightness(1.2);
 }
 
 .zoom-slider::-moz-range-thumb {
     width: 12px;
     height: 12px;
-    background: #ccc;
+    background: var(--accent);
     border: none;
     border-radius: 50%;
     cursor: pointer;
 }
 
-.zoom-slider::-moz-range-thumb:hover {
-    background: #fff;
+/* Zoom visszaállító / %-kijelző gomb */
+.zoom-reset {
+    height: 26px;
+    padding: 0 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all 0.12s;
+}
+
+.zoom-reset:hover {
+    border-color: var(--text-muted);
+    color: var(--text-primary);
 }
 
 /* Export gomb */
 .export-btn {
     font-size: 13px;
-}
-
-.zoom-reset {
-    height: 24px;
-    padding: 0 8px;
-    background: #333;
-    border: 1px solid #444;
-    border-radius: 4px;
-    color: #ccc;
-    font-size: 12px;
-    cursor: pointer;
-    white-space: nowrap;
-}
-
-.zoom-reset:hover {
-    border-color: #666;
-    color: #fff;
 }
 
 /* Zoom wrapper — méretezés a scrollozható terület biztosításához */
@@ -857,7 +996,7 @@ html, body {
 .layout-view {
     display: grid;
     grid-template-columns: repeat(var(--spread-columns, 5), minmax(0, 1fr));
-    gap: 16px 20px;
+    gap: 20px 24px;
     padding: 24px 20px;
     transform-origin: 0 0;
 }
@@ -868,12 +1007,12 @@ html, body {
     align-items: flex-end;
 }
 
-/* Oldal slot — flex: 1 az egyenlő szélesség biztosításához a spread-en belül */
+/* Oldal slot */
 .page-slot {
     position: relative;
     flex: 1;
     min-width: 0;
-    background: #2a2a2a;
+    background: var(--bg-overlay);
     overflow: hidden;
 }
 
@@ -894,7 +1033,7 @@ html, body {
     height: 3px;
 }
 
-/* Oldalütközés figyelmeztető badge — thumbnail jobb felső sarka */
+/* Oldalütközés figyelmeztető badge */
 .page-conflict-badge {
     position: absolute;
     top: 4px;
@@ -905,8 +1044,8 @@ html, body {
     justify-content: center;
     width: 20px;
     height: 20px;
-    background: rgba(0, 0, 0, 0.6);
-    border-radius: 3px;
+    background: rgba(0, 0, 0, 0.65);
+    border-radius: 4px;
     cursor: default;
 }
 
@@ -915,17 +1054,10 @@ html, body {
 }
 
 /* Cikk információk a kép alatt */
-/* Betűméret-skálázás: 6–24pt között arányos a display zoom-mal.
- * --page-ratio = oldal CSS-pixel szélesség / eredeti thumbnail pixel-szélesség
- * --layout-zoom = belső zoom szorzó (transform: scale értéke)
- *
- * Képlet: clamp(min, arányos, max) / belső-zoom
- *   - 100%-os pixel-zoom-on: page-ratio * zoom ≈ 1 → font = 32px CSS → 32px képernyőn (24pt)
- *   - Kicsinyítésnél: arányosan csökken, de 8px (6pt) alá nem megy képernyőn
- *   - Nagyításnál: 24pt felett nem nő (max = 32px / zoom) */
 .page-info {
     padding: calc(2px / var(--layout-zoom, 1)) calc(4px / var(--layout-zoom, 1));
-    background: #252525;
+    background: var(--bg-surface);
+    border-radius: 0 0 5px 5px;
 }
 
 .page-info .page-number {
@@ -934,7 +1066,7 @@ html, body {
         calc(28px * var(--page-ratio, 0)),
         calc(28px / var(--layout-zoom, 1))
     );
-    color: #777;
+    color: var(--text-muted);
     display: block;
     line-height: 1.2;
 }
@@ -945,7 +1077,7 @@ html, body {
         calc(32px * var(--page-ratio, 0)),
         calc(32px / var(--layout-zoom, 1))
     );
-    color: #ccc;
+    color: var(--text-secondary);
     display: block;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -953,12 +1085,13 @@ html, body {
     line-height: 1.3;
 }
 
-/* Üres slot (címlap bal oldala) — arány az első betöltött thumbnail-ből */
+/* Üres slot (címlap bal oldala) */
 .page-slot.empty-slot {
     flex: 1;
     min-width: 0;
     aspect-ratio: var(--page-aspect-ratio, 210 / 297);
     background: transparent;
+    box-shadow: none;
 }
 
 /* Placeholder (nincs thumbnail) */
@@ -972,26 +1105,27 @@ html, body {
     align-items: center;
     justify-content: center;
     aspect-ratio: var(--page-aspect-ratio, 210 / 297);
-    background: #252525;
-    border: 1px dashed #444;
+    background: var(--bg-elevated);
+    border: 1px dashed var(--border);
+    border-radius: 5px 5px 0 0;
 }
 
 .page-slot.placeholder .page-thumb-area .page-number {
     font-size: 18px;
-    color: #555;
+    color: var(--text-disabled);
 }
 
 /* Figyelmen kívül hagyott cikkek */
 .page-slot.ignored {
-    opacity: 0.4;
+    opacity: 0.35;
 }
 
-/* Fallback layout oldalak (más elrendezésből) */
+/* Fallback layout oldalak */
 .page-slot.fallback {
     opacity: 0.3;
 }
 
-/* Responsive — kis képernyő padding csökkentés */
+/* Responsive */
 @media (max-width: 600px) {
     .layout-view {
         gap: 8px 10px;
@@ -1003,10 +1137,9 @@ html, body {
     }
 }
 
-/* ─── Nyomtatás (PDF export) ─────────────────────────────────────────── */
+/* ─── Nyomtatás (PDF export) ─────────────────────────────────────────────── */
 
 @media print {
-    /* Minden elrejtése a layout nézeten kívül */
     .dashboard-header,
     .sidebar,
     .content-header,
@@ -1017,7 +1150,6 @@ html, body {
         display: none !important;
     }
 
-    /* Konténerek felszabadítása — nincs scroll, nincs fix magasság */
     html, body {
         height: auto;
         overflow: visible;
@@ -1040,13 +1172,11 @@ html, body {
         flex: none !important;
     }
 
-    /* Zoom wrapper reset */
     .layout-zoom-wrapper {
         width: auto !important;
         height: auto !important;
     }
 
-    /* Layout nézet — nincs zoom, természetes méret */
     .layout-view {
         transform: none !important;
         width: auto !important;
@@ -1054,7 +1184,6 @@ html, body {
         padding: 10px;
     }
 
-    /* Színek megőrzése nyomtatásban */
     .page-state-bar,
     .page-conflict-badge {
         -webkit-print-color-adjust: exact;

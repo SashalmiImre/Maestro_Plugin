@@ -170,6 +170,39 @@ export default function LayoutView({ filteredArticles }) {
         return () => view.removeEventListener('load', handleLoad, true);
     }, []);
 
+    // ─── Thumbnail URL ───────────────────────────────────────────────────────
+
+    const getThumbnailUrl = useCallback((fileId) => {
+        if (!storage) return '';
+        try {
+            return storage.getFileView(BUCKETS.THUMBNAILS, fileId);
+        } catch {
+            return '';
+        }
+    }, [storage]);
+
+    // Alap (első) layout ID — fallback oldalakhoz
+    const defaultLayoutId = useMemo(
+        () => layouts.length > 0 ? layouts[0].$id : null,
+        [layouts]
+    );
+
+    // ─── Oldaltérkép + spreadek ──────────────────────────────────────────────
+
+    const spreads = useMemo(() => {
+        if (!publication) return [];
+
+        const coverageStart = publication.coverageStart || 1;
+        const coverageEnd = publication.coverageEnd || 1;
+        if (coverageEnd < coverageStart) return [];
+
+        const pageMap = buildPageMap(
+            filteredArticles, coverageStart, coverageEnd, getThumbnailUrl,
+            selectedLayoutId, defaultLayoutId
+        );
+        return buildSpreads(pageMap, coverageStart, coverageEnd);
+    }, [filteredArticles, publication, getThumbnailUrl, selectedLayoutId, defaultLayoutId]);
+
     // Cache-ből szinkron betöltött képek esetén a load event a listener regisztrálása
     // előtt tüzel — ezért renderelés UTÁN is ellenőrizzük a már kész képeket.
     useEffect(() => {
@@ -396,17 +429,6 @@ export default function LayoutView({ filteredArticles }) {
         };
     }, []);
 
-    // ─── Thumbnail URL ───────────────────────────────────────────────────────
-
-    const getThumbnailUrl = useCallback((fileId) => {
-        if (!storage) return '';
-        try {
-            return storage.getFileView(BUCKETS.THUMBNAILS, fileId);
-        } catch {
-            return '';
-        }
-    }, [storage]);
-
     // ─── Layout választás kezelő ────────────────────────────────────────────
 
     const handleLayoutChange = useCallback((e) => {
@@ -415,12 +437,6 @@ export default function LayoutView({ filteredArticles }) {
         saveSelectedLayout(activePublicationId, value);
     }, [activePublicationId]);
 
-    // Alap (első) layout ID — fallback oldalakhoz
-    const defaultLayoutId = useMemo(
-        () => layouts.length > 0 ? layouts[0].$id : null,
-        [layouts]
-    );
-
     // Ha a kiválasztott layout már nem létezik, visszaállítás
     useEffect(() => {
         if (selectedLayoutId && layouts.length > 0 && !layouts.some(l => l.$id === selectedLayoutId)) {
@@ -428,22 +444,6 @@ export default function LayoutView({ filteredArticles }) {
             saveSelectedLayout(activePublicationId, null);
         }
     }, [layouts, selectedLayoutId, activePublicationId]);
-
-    // ─── Oldaltérkép + spreadek ──────────────────────────────────────────────
-
-    const spreads = useMemo(() => {
-        if (!publication) return [];
-
-        const coverageStart = publication.coverageStart || 1;
-        const coverageEnd = publication.coverageEnd || 1;
-        if (coverageEnd < coverageStart) return [];
-
-        const pageMap = buildPageMap(
-            filteredArticles, coverageStart, coverageEnd, getThumbnailUrl,
-            selectedLayoutId, defaultLayoutId
-        );
-        return buildSpreads(pageMap, coverageStart, coverageEnd);
-    }, [filteredArticles, publication, getThumbnailUrl, selectedLayoutId, defaultLayoutId]);
 
     // ─── Layout mentése PDF-ként (böngésző print → Save as PDF) ─────────────
 

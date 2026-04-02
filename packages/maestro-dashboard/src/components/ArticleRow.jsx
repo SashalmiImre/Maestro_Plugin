@@ -74,16 +74,20 @@ function LockLabel({ article, currentUser, getMemberName }) {
     if (!article.lockOwnerId) return null;
 
     let label;
+    let variant;
     if (article.lockType === LOCK_TYPE.SYSTEM) {
         label = 'MAESTRO';
+        variant = 'maestro';
     } else if (article.lockOwnerId === currentUser?.$id) {
         label = 'ÉN';
+        variant = 'me';
     } else {
         const name = getMemberName(article.lockOwnerId);
         label = name ? name.toUpperCase() : 'MÁS';
+        variant = 'other';
     }
 
-    return <span className="lock-label">{label}</span>;
+    return <span className={`lock-label lock-label--${variant}`}>{label}</span>;
 }
 
 function StateIndicator({ article }) {
