@@ -1,5 +1,8 @@
 /**
  * Maestro Dashboard — Bejelentkezés nézet
+ *
+ * Premium "Digital Curator" dark login képernyő glassmorphism kártyával,
+ * gradiens CTA gombbal és fadeIn animációval.
  */
 
 import React, { useState } from 'react';
@@ -37,15 +40,21 @@ export default function LoginView() {
 
     return (
         <div className="login-container">
+            <div className="login-brand">
+                <div className="wordmark">Maestro</div>
+                <div className="tagline">Szerkesztőségi munkafolyamat</div>
+                <div className="divider" />
+            </div>
+
             <div className="login-card">
-                <h1>Maestro</h1>
-                <p className="subtitle">Bejelentkezés a műhely-nyomkövetőbe</p>
+                <div className="form-heading">Bejelentkezés</div>
                 <form onSubmit={handleSubmit}>
                     <div className="form-group">
                         <label htmlFor="email">Email</label>
                         <input
                             type="email"
                             id="email"
+                            placeholder="pelda@email.com"
                             autoComplete="email"
                             required
                             value={email}
@@ -57,6 +66,7 @@ export default function LoginView() {
                         <input
                             type="password"
                             id="password"
+                            placeholder="••••••••"
                             autoComplete="current-password"
                             required
                             value={password}

@@ -93,70 +93,120 @@ html, body {
 
 .login-container {
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
     min-height: 100vh;
     padding: 20px;
     background: var(--bg-base);
+    /* Finom radiális fényhatás a háttérben */
+    background-image:
+        radial-gradient(ellipse 600px 400px at 50% 40%, rgba(59, 130, 246, 0.06), transparent);
 }
 
+/* Brand szekció */
+.login-brand {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 32px;
+    animation: loginFadeIn 0.4s ease-out;
+}
+
+.login-brand .wordmark {
+    font-size: 1.75rem;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+}
+
+.login-brand .tagline {
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-bottom: 18px;
+}
+
+/* Dekoratív gradiens vonal */
+.login-brand .divider {
+    width: 40px;
+    height: 2px;
+    border-radius: 1px;
+    background: linear-gradient(135deg, var(--accent), #93c5fd);
+}
+
+/* Kártya — glassmorphism */
 .login-card {
-    background: var(--bg-overlay);
-    border: 1px solid var(--border);
-    border-radius: 14px;
-    padding: 40px;
+    background: rgba(22, 27, 34, 0.75);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(240, 246, 252, 0.08);
+    border-radius: 16px;
+    padding: 36px 40px;
     width: 100%;
     max-width: 380px;
     box-shadow:
-        0 8px 32px rgba(0, 0, 0, 0.5),
-        inset 0 1px 0 rgba(255, 255, 255, 0.05);
+        0 16px 48px rgba(0, 0, 0, 0.45),
+        inset 0 1px 0 rgba(255, 255, 255, 0.04);
+    animation: loginFadeIn 0.5s ease-out 0.05s both;
 }
 
 .login-card h1 {
-    font-size: 20px;
-    font-weight: 700;
-    text-align: center;
-    margin-bottom: 8px;
-    color: var(--text-primary);
-    letter-spacing: -0.01em;
+    display: none;
 }
 
 .login-card .subtitle {
-    text-align: center;
-    color: var(--text-muted);
-    font-size: 12px;
-    margin-bottom: 28px;
+    display: none;
+}
+
+/* Kártya fejléc — form előtt */
+.login-card .form-heading {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 24px;
+    letter-spacing: -0.01em;
 }
 
 .form-group {
-    margin-bottom: 16px;
+    margin-bottom: 18px;
 }
 
 .form-group label {
     display: block;
     font-size: 11px;
-    font-weight: 600;
+    font-weight: 500;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
+    letter-spacing: 0.08em;
     color: var(--text-secondary);
     margin-bottom: 6px;
 }
 
 .form-group input {
     width: 100%;
-    padding: 9px 12px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    padding: 10px 14px;
+    background: var(--bg-base);
+    border: 1px solid transparent;
+    border-radius: 8px;
     color: var(--text-primary);
     font-size: 13px;
+    font-family: inherit;
     outline: none;
-    transition: border-color 0.15s, box-shadow 0.15s;
+    transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.form-group input:hover:not(:focus) {
+    border-color: rgba(240, 246, 252, 0.1);
 }
 
 .form-group input:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15);
+    border-color: rgba(59, 130, 246, 0.5);
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
+    background: rgba(13, 17, 23, 0.8);
 }
 
 .form-group input::placeholder {
@@ -165,21 +215,27 @@ html, body {
 
 .login-btn {
     width: 100%;
-    padding: 10px;
-    background: var(--accent);
+    padding: 11px;
+    background: linear-gradient(135deg, #3b82f6, #60a5fa);
     color: #fff;
     border: none;
-    border-radius: 6px;
+    border-radius: 8px;
     font-size: 13px;
     font-weight: 600;
+    font-family: inherit;
     cursor: pointer;
-    transition: background 0.15s, box-shadow 0.15s;
+    box-shadow: 0 4px 16px rgba(59, 130, 246, 0.25);
+    transition: filter 0.15s, transform 0.1s, box-shadow 0.15s;
     margin-top: 8px;
 }
 
-.login-btn:hover {
-    background: var(--accent-hover);
-    box-shadow: 0 4px 12px rgba(59, 130, 246, 0.3);
+.login-btn:hover:not(:disabled) {
+    filter: brightness(1.08);
+    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.35);
+}
+
+.login-btn:active:not(:disabled) {
+    transform: scale(0.98);
 }
 
 .login-btn:disabled {
@@ -187,14 +243,27 @@ html, body {
     color: var(--text-disabled);
     cursor: not-allowed;
     box-shadow: none;
+    filter: none;
 }
 
 .login-error {
     color: var(--c-error);
     font-size: 12px;
     text-align: center;
-    margin-top: 12px;
+    margin-top: 14px;
     min-height: 18px;
+    animation: loginFadeIn 0.2s ease-out;
+}
+
+@keyframes loginFadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
 }
 
 /* ─── Dashboard layout ─────────────────────────────────────────────────────── */
