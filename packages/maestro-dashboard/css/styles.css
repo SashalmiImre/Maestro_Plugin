@@ -11,6 +11,7 @@
     --bg-surface:  #161b22;
     --bg-elevated: #21262d;
     --bg-overlay:  #1c2128;
+    --bg-hover:    #2d333b;
 
     /* Keretek */
     --border:       rgba(240, 246, 252, 0.10);
@@ -62,6 +63,8 @@ html, body {
     color: var(--text-primary);
     background: var(--bg-base);
     -webkit-font-smoothing: antialiased;
+    scrollbar-width: thin;
+    scrollbar-color: #30363d transparent;
 }
 
 /* Custom scrollbar */
@@ -409,7 +412,7 @@ html, body {
     appearance: none;
     width: 14px;
     height: 14px;
-    border: 1px solid #444c56;
+    border: 1px solid var(--text-disabled, #444c56);
     border-radius: 3px;
     background: var(--bg-elevated);
     cursor: pointer;
@@ -880,10 +883,10 @@ html, body {
     transition: all 0.12s;
 }
 
-.zoom-btn:hover {
+.zoom-btn:not(:disabled):hover {
     border-color: var(--text-muted);
     color: var(--text-primary);
-    background: #2d333b;
+    background: var(--bg-hover);
 }
 
 .zoom-btn:disabled {

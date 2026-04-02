@@ -464,7 +464,7 @@ export default function LayoutView({ filteredArticles }) {
     const spreadAreaWidth = Math.max(1, viewWidth - 40 - (columns - 1) * 20);
     const displayZoom = naturalWidth && viewWidth > 0
         ? Math.round(zoom * spreadAreaWidth / (columns * 2) / naturalWidth * 100)
-        : Math.round(zoom * 100);
+        : null;
 
     return (
         <>
@@ -526,7 +526,7 @@ export default function LayoutView({ filteredArticles }) {
                         title="Zoom visszaállítása"
                         onClick={() => zoomTo(ZOOM_DEFAULT)}
                     >
-                        {displayZoom}%
+                        {displayZoom != null ? `${displayZoom}%` : '—'}
                     </button>
                     <span className="zoom-separator" />
                     <button
