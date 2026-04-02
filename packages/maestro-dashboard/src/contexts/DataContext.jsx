@@ -31,6 +31,8 @@ export function DataProvider({ children }) {
 
     // Ref-ek a Realtime handler számára (stabil referencia)
     const activePublicationIdRef = useRef(null);
+    // Az aktuális kiadvány article $id-jainak Set-je — validáció Realtime szűréshez
+    const articleIdsRef = useRef(new Set());
 
     // Appwrite szolgáltatások
     const servicesRef = useRef(null);
@@ -99,37 +101,45 @@ export function DataProvider({ children }) {
             setLayouts(layoutsResult.documents);
             setDeadlines(deadlinesResult.documents);
 
+            // articleIdsRef szinkronizálása — Realtime szűréshez
+            articleIdsRef.current = new Set(articlesResult.documents.map(a => a.$id));
+
             // 2. fázis: validációk articleId alapján (plugin DataContext mintájára)
             const articleIds = articlesResult.documents.map(a => a.$id);
             let allValidations = [];
 
-            if (articleIds.length > 0) {
-                const CHUNK_SIZE = 100;
-                const chunks = [];
-                for (let i = 0; i < articleIds.length; i += CHUNK_SIZE) {
-                    chunks.push(articleIds.slice(i, i + CHUNK_SIZE));
+            try {
+                if (articleIds.length > 0) {
+                    const CHUNK_SIZE = 100;
+                    const chunks = [];
+                    for (let i = 0; i < articleIds.length; i += CHUNK_SIZE) {
+                        chunks.push(articleIds.slice(i, i + CHUNK_SIZE));
+                    }
+
+                    // Mindkét validáció kollekció lekérése párhuzamosan, kötegelt articleId lekérdezéssel
+                    const [userValResults, sysValResults] = await Promise.all([
+                        Promise.all(chunks.map(ids =>
+                            databases.listDocuments(DATABASE_ID, COLLECTIONS.USER_VALIDATIONS, [
+                                Query.equal('articleId', ids),
+                                Query.limit(Math.min(5000, ids.length * 10))
+                            ]).catch(() => ({ documents: [] }))
+                        )),
+                        Promise.all(chunks.map(ids =>
+                            databases.listDocuments(DATABASE_ID, COLLECTIONS.SYSTEM_VALIDATIONS, [
+                                Query.equal('articleId', ids),
+                                Query.limit(Math.min(5000, ids.length * 5))
+                            ]).catch(() => ({ documents: [] }))
+                        ))
+                    ]);
+
+                    const userValidationDocs = userValResults.flatMap(r => r.documents);
+                    const sysValidationDocs = sysValResults.flatMap(r => r.documents);
+                    const flatSysValidations = sysValidationDocs.flatMap(flattenSystemValidationRecord);
+                    allValidations = [...flatSysValidations, ...userValidationDocs];
                 }
-
-                // Mindkét validáció kollekció lekérése párhuzamosan, kötegelt articleId lekérdezéssel
-                const [userValResults, sysValResults] = await Promise.all([
-                    Promise.all(chunks.map(ids =>
-                        databases.listDocuments(DATABASE_ID, COLLECTIONS.USER_VALIDATIONS, [
-                            Query.equal('articleId', ids),
-                            Query.limit(ids.length * 10)
-                        ]).catch(() => ({ documents: [] }))
-                    )),
-                    Promise.all(chunks.map(ids =>
-                        databases.listDocuments(DATABASE_ID, COLLECTIONS.SYSTEM_VALIDATIONS, [
-                            Query.equal('articleId', ids),
-                            Query.limit(ids.length * 5)
-                        ]).catch(() => ({ documents: [] }))
-                    ))
-                ]);
-
-                const userValidationDocs = userValResults.flatMap(r => r.documents);
-                const sysValidationDocs = sysValResults.flatMap(r => r.documents);
-                const flatSysValidations = sysValidationDocs.flatMap(flattenSystemValidationRecord);
-                allValidations = [...flatSysValidations, ...userValidationDocs];
+            } catch {
+                // Hálózati hiba esetén üres validáció-lista (stale adat elkerülése)
+                allValidations = [];
             }
 
             setValidations(allValidations);
@@ -219,10 +229,10 @@ export function DataProvider({ children }) {
                         applyDeadlineEvent(eventType, payload, activePublicationIdRef, setDeadlines);
                         break;
                     case 'validations':
-                        applyValidationEvent(eventType, payload, activePublicationIdRef, setValidations);
+                        applyValidationEvent(eventType, payload, articleIdsRef, setValidations);
                         break;
                     case 'system_validations':
-                        applySystemValidationEvent(eventType, payload, activePublicationIdRef, setValidations);
+                        applySystemValidationEvent(eventType, payload, articleIdsRef, setValidations);
                         break;
                 }
             } catch (error) {
@@ -356,21 +366,23 @@ function applyDeadlineEvent(eventType, payload, pubIdRef, setDeadlines) {
     }
 }
 
-function applyValidationEvent(eventType, payload, pubIdRef, setValidations) {
-    // uservalidations — articleId-alapú azonosítás (nincs publicationId a rekordban)
+function applyValidationEvent(eventType, payload, articleIdsRef, setValidations) {
+    // uservalidations: csak az aktív kiadvány cikkeihez tartozó eseményeket kezeljük.
+    // Delete esetén $id alapján szűrünk (a cikk már törölve lehet az articleIdsRef-ből).
     if (eventType === 'delete') {
         setValidations(prev => prev.filter(v => v.$id !== payload.$id));
-    } else {
-        setValidations(prev => {
-            const idx = prev.findIndex(v => v.$id === payload.$id);
-            if (idx >= 0) {
-                const next = [...prev];
-                next[idx] = payload;
-                return next;
-            }
-            return [...prev, payload];
-        });
+        return;
     }
+    if (!articleIdsRef.current.has(payload.articleId)) return;
+    setValidations(prev => {
+        const idx = prev.findIndex(v => v.$id === payload.$id);
+        if (idx >= 0) {
+            const next = [...prev];
+            next[idx] = payload;
+            return next;
+        }
+        return [...prev, payload];
+    });
 }
 
 /**
@@ -405,10 +417,12 @@ function flattenSystemValidationRecord(record) {
  * Egy rekord create/update esetén az adott articleId + source kombinációhoz tartozó
  * összes lapos itemet lecseréli az újra lapított eredménnyel.
  */
-function applySystemValidationEvent(eventType, payload, pubIdRef, setValidations) {
-    if (payload.publicationId !== pubIdRef.current) return;
-
+function applySystemValidationEvent(eventType, payload, articleIdsRef, setValidations) {
+    // system validations: csak az aktív kiadvány cikkeihez tartozó eseményeket kezeljük.
+    // Delete esetén articleId + source alapján törlünk, ha még szerepel a state-ben.
     const { articleId, source } = payload;
+
+    if (eventType !== 'delete' && !articleIdsRef.current.has(articleId)) return;
 
     setValidations(prev => {
         // Régi lapos itemek eltávolítása erre az articleId + source párra

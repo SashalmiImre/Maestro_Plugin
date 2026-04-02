@@ -81,6 +81,7 @@ export default function LayoutView({ filteredArticles }) {
     const { publications, layouts, activePublicationId, storage } = useData();
     const [columns, setColumns] = useState(() => loadColumns(activePublicationId));
     const [zoom, setZoom] = useState(ZOOM_DEFAULT);
+    const [naturalWidth, setNaturalWidth] = useState(null);
     const [selectedLayoutId, setSelectedLayoutId] = useState(() => loadSelectedLayout(activePublicationId));
     const layoutViewRef = useRef(null);
 
@@ -97,6 +98,9 @@ export default function LayoutView({ filteredArticles }) {
 
     // Dinamikus oldalarány — az első betöltött thumbnail-ből detektálva
     const pageAspectRef = useRef(null);
+
+    // Thumbnail természetes pixelszélesség — pixel-arány alapú zoom%-kijelzőhöz
+    const naturalWidthRef = useRef(null);
 
     // Zoom természetes méretek — transform: scale() wrapper méretezéséhez
     const baseWidthRef = useRef(null);
@@ -120,12 +124,16 @@ export default function LayoutView({ filteredArticles }) {
         setZoom(ZOOM_DEFAULT);
         zoomRef.current = ZOOM_DEFAULT;
         pageAspectRef.current = null;
+        naturalWidthRef.current = null;
+        setNaturalWidth(null);
         baseWidthRef.current = null;
         baseHeightRef.current = null;
         if (layoutViewRef.current) {
             layoutViewRef.current.style.transform = '';
             layoutViewRef.current.style.removeProperty('width');
             layoutViewRef.current.style.removeProperty('--page-aspect-ratio');
+            layoutViewRef.current.style.removeProperty('--layout-zoom');
+            layoutViewRef.current.style.removeProperty('--page-ratio');
         }
         if (wrapperRef.current) {
             wrapperRef.current.style.width = '';
@@ -147,13 +155,40 @@ export default function LayoutView({ filteredArticles }) {
             const { naturalWidth, naturalHeight } = e.target;
             if (naturalWidth > 0 && naturalHeight > 0) {
                 pageAspectRef.current = `${naturalWidth} / ${naturalHeight}`;
+                naturalWidthRef.current = naturalWidth;
                 view.style.setProperty('--page-aspect-ratio', pageAspectRef.current);
+                // --page-ratio: oldal CSS-pixel szélessége / eredeti pixelszélesség
+                // Ezt a CSS clamp() alapú betűméret-skálázáshoz használjuk
+                const vw = view.offsetWidth;
+                const sw = Math.max(1, vw - 40 - (columnsRef.current - 1) * 20);
+                view.style.setProperty('--page-ratio', String(sw / (columnsRef.current * 2) / naturalWidth));
+                setNaturalWidth(naturalWidth); // state → re-render a displayZoom frissítéséhez
             }
         };
 
         view.addEventListener('load', handleLoad, true);
         return () => view.removeEventListener('load', handleLoad, true);
     }, []);
+
+    // Cache-ből szinkron betöltött képek esetén a load event a listener regisztrálása
+    // előtt tüzel — ezért renderelés UTÁN is ellenőrizzük a már kész képeket.
+    useEffect(() => {
+        if (pageAspectRef.current) return;
+        const view = layoutViewRef.current;
+        if (!view) return;
+        const img = view.querySelector('img');
+        if (!img?.complete || img.naturalWidth <= 0) return;
+
+        const nw = img.naturalWidth;
+        const nh = img.naturalHeight;
+        pageAspectRef.current = `${nw} / ${nh}`;
+        naturalWidthRef.current = nw;
+        view.style.setProperty('--page-aspect-ratio', pageAspectRef.current);
+        const vw = view.offsetWidth;
+        const sw = Math.max(1, vw - 40 - (columnsRef.current - 1) * 20);
+        view.style.setProperty('--page-ratio', String(sw / (columnsRef.current * 2) / nw));
+        setNaturalWidth(nw);
+    }, [spreads]);
 
     /**
      * Oszlopszám alkalmazása a nézet középpontjának megőrzésével.
@@ -193,6 +228,14 @@ export default function LayoutView({ filteredArticles }) {
         // Scroll visszaállítás
         container.scrollTop = ratioY * container.scrollHeight - container.clientHeight / 2;
 
+        // --page-ratio frissítése: oszlopszám-váltáskor az oldalszélesség megváltozik
+        const nw = naturalWidthRef.current;
+        if (nw) {
+            const vw = baseWidthRef.current ?? view.offsetWidth;
+            const sw = Math.max(1, vw - 40 - (clamped - 1) * 20);
+            view.style.setProperty('--page-ratio', String(sw / (clamped * 2) / nw));
+        }
+
         // React state + localStorage szinkron
         setColumns(clamped);
     }, []);
@@ -230,6 +273,7 @@ export default function LayoutView({ filteredArticles }) {
                     // Reset → reszponzív layout visszaállítása
                     view.style.transform = '';
                     view.style.width = '';
+                    view.style.removeProperty('--layout-zoom');
                     wrapper.style.width = '';
                     wrapper.style.height = '';
                     baseWidthRef.current = null;
@@ -244,6 +288,7 @@ export default function LayoutView({ filteredArticles }) {
 
                     // Transform alkalmazás (tisztán vizuális — layout nem változik)
                     view.style.transform = `scale(${target})`;
+                    view.style.setProperty('--layout-zoom', String(target));
 
                     // Wrapper méretezés → scroll terület a konténerben
                     wrapper.style.width = (baseWidthRef.current * target) + 'px';
@@ -414,6 +459,13 @@ export default function LayoutView({ filteredArticles }) {
         return <div className="empty-state">Érvénytelen oldaltartomány</div>;
     }
 
+    // Pixel-arány alapú zoom% — eredeti thumbnail pixelszám vs. megjelenített pixelszám
+    const viewWidth = baseWidthRef.current ?? layoutViewRef.current?.offsetWidth ?? 0;
+    const spreadAreaWidth = Math.max(1, viewWidth - 40 - (columns - 1) * 20);
+    const displayZoom = naturalWidth && viewWidth > 0
+        ? Math.round(zoom * spreadAreaWidth / (columns * 2) / naturalWidth * 100)
+        : Math.round(zoom * 100);
+
     return (
         <>
             {/* Oszlopszám + zoom toolbar */}
@@ -471,10 +523,10 @@ export default function LayoutView({ filteredArticles }) {
                     />
                     <button
                         className="zoom-reset"
-                        title="Zoom visszaállítása (100%)"
+                        title="Zoom visszaállítása"
                         onClick={() => zoomTo(ZOOM_DEFAULT)}
                     >
-                        {Math.round(zoom * 100)}%
+                        {displayZoom}%
                     </button>
                     <span className="zoom-separator" />
                     <button

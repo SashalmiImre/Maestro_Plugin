@@ -915,20 +915,36 @@ html, body {
 }
 
 /* Cikk információk a kép alatt */
+/* Betűméret-skálázás: 6–24pt között arányos a display zoom-mal.
+ * --page-ratio = oldal CSS-pixel szélesség / eredeti thumbnail pixel-szélesség
+ * --layout-zoom = belső zoom szorzó (transform: scale értéke)
+ *
+ * Képlet: clamp(min, arányos, max) / belső-zoom
+ *   - 100%-os pixel-zoom-on: page-ratio * zoom ≈ 1 → font = 32px CSS → 32px képernyőn (24pt)
+ *   - Kicsinyítésnél: arányosan csökken, de 8px (6pt) alá nem megy képernyőn
+ *   - Nagyításnál: 24pt felett nem nő (max = 32px / zoom) */
 .page-info {
-    padding: 2px 4px;
+    padding: calc(2px / var(--layout-zoom, 1)) calc(4px / var(--layout-zoom, 1));
     background: #252525;
 }
 
 .page-info .page-number {
-    font-size: 7px;
+    font-size: clamp(
+        calc(8px / var(--layout-zoom, 1)),
+        calc(28px * var(--page-ratio, 0)),
+        calc(28px / var(--layout-zoom, 1))
+    );
     color: #777;
     display: block;
     line-height: 1.2;
 }
 
 .page-info .article-name {
-    font-size: 8px;
+    font-size: clamp(
+        calc(8px / var(--layout-zoom, 1)),
+        calc(32px * var(--page-ratio, 0)),
+        calc(32px / var(--layout-zoom, 1))
+    );
     color: #ccc;
     display: block;
     overflow: hidden;
