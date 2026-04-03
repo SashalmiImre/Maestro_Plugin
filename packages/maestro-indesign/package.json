@@ -33,7 +33,7 @@
     "@swc-uxp-wrappers/tags": "^2.0.0",
     "@swc-uxp-wrappers/textfield": "^2.0.0",
     "@swc-uxp-wrappers/utils": "2.0.0",
-    "appwrite": "^21.2.1",
+    "appwrite": "^24.1.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },

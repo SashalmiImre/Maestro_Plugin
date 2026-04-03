@@ -59,7 +59,7 @@ export function AuthProvider({ children }) {
                 if (jwt) {
                     // Meglévő session törlése, hogy a JWT auth ne ütközzön
                     try {
-                        await account.deleteSession('current');
+                        await account.deleteSession({ sessionId: 'current' });
                     } catch {
                         // Nincs aktív session, nem baj
                     }
@@ -82,11 +82,11 @@ export function AuthProvider({ children }) {
     const login = useCallback(async (email, password) => {
         // Meglévő session törlése, hogy ne ütközzön az új bejelentkezéssel
         try {
-            await account.deleteSession('current');
+            await account.deleteSession({ sessionId: 'current' });
         } catch {
             // Nincs aktív session, nem baj
         }
-        await account.createEmailPasswordSession(email, password);
+        await account.createEmailPasswordSession({ email, password });
         const userData = await account.get();
         const teamIds = await fetchTeamIds();
         const fullUser = { ...userData, teamIds };
@@ -96,7 +96,7 @@ export function AuthProvider({ children }) {
 
     const logout = useCallback(async () => {
         try {
-            await account.deleteSession('current');
+            await account.deleteSession({ sessionId: 'current' });
         } catch {
             // Ha a session már nem létezik, nem baj
         }

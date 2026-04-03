@@ -175,7 +175,7 @@ export default function LayoutView({ filteredArticles }) {
     const getThumbnailUrl = useCallback((fileId) => {
         if (!storage) return '';
         try {
-            return storage.getFileView(BUCKETS.THUMBNAILS, fileId);
+            return storage.getFileView({ bucketId: BUCKETS.THUMBNAILS, fileId });
         } catch {
             return '';
         }

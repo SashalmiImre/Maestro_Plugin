@@ -222,13 +222,13 @@ export function AuthorizationProvider({ children }) {
     const register = async (name, email, password) => {
         try {
             // 1. Fiók létrehozása
-            await account.create(ID.unique(), email, password, name);
+            await account.create({ userId: ID.unique(), email, password, name });
 
             // 2. Ideiglenes bejelentkezés (a createVerification session-t igényel)
             await executeLogin(email, password);
 
             // 3. Verificációs email küldése
-            await account.createVerification(VERIFICATION_URL);
+            await account.createVerification({ url: VERIFICATION_URL });
 
             // 4. Kijelentkezés (blokkoljuk amíg nem verifikál)
             await handleSignOut();

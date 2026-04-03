@@ -23,7 +23,7 @@
  * @see src/core/config/recoveryManager.js — Központi recovery orchestrator
  * @see docs/PROXY_SERVER.md — Proxy szerver implementáció
  */
-import { Client, Realtime } from "appwrite";
+import { Client, Realtime, Query as AppwriteQuery } from "appwrite";
 import { log, logError, logWarn, logDebug } from "../utils/logger.js";
 import { MaestroEvent, dispatchMaestroEvent } from "./maestroEvents.js";
 // MEGJEGYZÉS: A `client as mainClient` import cirkuláris függőséget hoz létre
@@ -217,10 +217,33 @@ class RealtimeClient {
          * @returns {Promise<void>} A socket megnyitásának Promise-a
          */
         this.realtime.createSocket = () => {
-            const channelArray = Array.from(this.realtime.activeChannels);
+            // v24: activeChannels eltávolítva → activeSubscriptions Map-ből kinyerjük a csatornákat
+            const allChannels = new Set();
+            for (const sub of this.realtime.activeSubscriptions.values()) {
+                for (const ch of sub.channels) {
+                    allChannels.add(ch);
+                }
+            }
+            const channelArray = Array.from(allChannels);
             const query = new URLSearchParams();
             query.append('project', this.client.config.project);
             channelArray.forEach(ch => query.append('channels[]', ch));
+
+            // v24 per-slot query paraméterek — a szerver ezek alapján rendeli hozzá
+            // a subscription ID-kat a slotokhoz, amelyeket a handleResponseConnected()
+            // eltárol, és a handleResponseEvent() az event routing-hoz használ.
+            // Enélkül a szerver nem küld data.subscriptions-t → az események droppolódnak.
+            const selectAllQuery = AppwriteQuery.select(['*']).toString();
+            for (const [slot, subscription] of this.realtime.activeSubscriptions) {
+                const queries = subscription.queries.length === 0
+                    ? [selectAllQuery]
+                    : subscription.queries;
+                for (const channel of subscription.channels) {
+                    for (const q of queries) {
+                        query.append(`${channel}[${slot}][]`, q);
+                    }
+                }
+            }
             
             // 1. Auth Query Params (ha a proxy/szerver támogatja)
             query.append('x-appwrite-package-name', "com.sashalmiimre.maestro");

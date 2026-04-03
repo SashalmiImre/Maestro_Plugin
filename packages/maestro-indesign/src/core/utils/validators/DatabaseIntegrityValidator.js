@@ -188,7 +188,7 @@ export class DatabaseIntegrityValidator extends ValidatorBase {
             // Párhuzamosan: Storage metaadat + fájl módosítási idő
             const [storageFile, fileModified] = await Promise.all([
                 withTimeout(
-                    storage.getFile(BUCKETS.THUMBNAILS, firstFileId),
+                    storage.getFile({ bucketId: BUCKETS.THUMBNAILS, fileId: firstFileId }),
                     5000,
                     "checkThumbnailStaleness: storage.getFile"
                 ).catch(err => {

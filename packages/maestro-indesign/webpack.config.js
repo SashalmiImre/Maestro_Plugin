@@ -91,6 +91,11 @@ const shared = {
         "@spectrum-web-components/styles": resolve(__dirname, "node_modules/@spectrum-web-components/styles"),
         // Közös csomag (maestro-shared) — a plugin és a dashboard által megosztott konstansok és logika
         "maestro-shared": resolve(__dirname, "../maestro-shared"),
+        // A json-bigint (Appwrite SDK dependency) CJS require()-t használ a bignumber.js-hez.
+        // A conditionNames: ["import", ...] beállítás miatt a webpack az ESM verzióra resolválna
+        // (bignumber.mjs), de CJS require() hívás ESM default export-ra namespace objektumot kap
+        // a konstruktor helyett → `instanceof BigNumber` TypeError. Explicit CJS-re kényszerítjük.
+        "bignumber.js": resolve(__dirname, "node_modules/bignumber.js/bignumber.js"),
     },
   },
   externals: {

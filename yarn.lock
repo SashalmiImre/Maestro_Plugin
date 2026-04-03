@@ -2309,15 +2309,12 @@ append-field@^1.0.0:
   resolved "https://registry.npmjs.org/append-field/-/append-field-1.0.0.tgz"
   integrity sha512-klpgFSWLW1ZEs8svjfb7g4qWY0YS5imI82dTg+QahUvJ8YqAY0P10Uk8tTyh9ZGuYEZEMaeJYCF5BFuX552hsw==
 
-appwrite@^16.0.2:
-  version "16.1.0"
-  resolved "https://registry.npmjs.org/appwrite/-/appwrite-16.1.0.tgz"
-  integrity sha512-fFkhpOjxvobKKWdgvG3fcsYt93QEk0VJ86q7ALD53eWAFiFmpklNXeE4rpXqdmtWpin4VuyWhkmH1aOF/QxvsA==
-
-appwrite@^21.2.1:
-  version "21.5.0"
-  resolved "https://registry.npmjs.org/appwrite/-/appwrite-21.5.0.tgz"
-  integrity sha512-643bMRZVYXMluXvSXbdaLAi9qqTJLWbVGguKH4vH6IdKHur6gGIirhCOqAEt33pV4TOFJ55VBu8c/+Ft1ke2SA==
+appwrite@^24.1.1:
+  version "24.1.1"
+  resolved "https://registry.npmjs.org/appwrite/-/appwrite-24.1.1.tgz"
+  integrity sha512-6dTKZe059GWyrH1AObfC0KR20vmQ9+wUo3iCRmM4lFofTRMrSzjCEcblpNERXHVKrLlzsr1T4kQweQEgrp89yQ==
+  dependencies:
+    json-bigint "1.0.0"
 
 array-flatten@1.1.1:
   version "1.1.1"
@@ -3994,10 +3991,10 @@ node-addon-api@^7.0.0:
   resolved "https://registry.npmjs.org/node-addon-api/-/node-addon-api-7.1.1.tgz"
   integrity sha512-5m3bsyrjFWE1xf7nz7YXdN4udnVtXK6/Yfgn5qnahL6bCkf2yKt4k3nuTKAtT4r3IG8JNR2ncsIMdZuAzJjHQQ==
 
-node-appwrite@^22.1.2:
-  version "22.1.2"
-  resolved "https://registry.npmjs.org/node-appwrite/-/node-appwrite-22.1.2.tgz"
-  integrity sha512-iK30EBV+/rkU2jbHR+i2BK+7axlxjuF/G7X290jGwOc7Wa/qkkK67icgU4M+XJgCUsInha4ZeH0dWs7Gw0RT9A==
+node-appwrite@^23.1.0:
+  version "23.1.0"
+  resolved "https://registry.npmjs.org/node-appwrite/-/node-appwrite-23.1.0.tgz"
+  integrity sha512-XYv23uIIrEfAomubIrQZFMo6jbIpCfmFwkvTwwo8zEJM1KTpFnSuXg8mSvtnu1ssSp6NqxVbasSAyQ8XF8cEmg==
   dependencies:
     json-bigint "1.0.0"
     node-fetch-native-with-agent "1.7.2"

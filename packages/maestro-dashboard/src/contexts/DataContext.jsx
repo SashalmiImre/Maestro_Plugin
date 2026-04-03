@@ -56,11 +56,15 @@ export function DataProvider({ children }) {
         let offset = 0;
 
         while (true) {
-            const result = await databases.listDocuments(DATABASE_ID, COLLECTIONS.PUBLICATIONS, [
-                Query.limit(PAGE_SIZE),
-                Query.offset(offset),
-                Query.orderAsc('name')
-            ]);
+            const result = await databases.listDocuments({
+                databaseId: DATABASE_ID,
+                collectionId: COLLECTIONS.PUBLICATIONS,
+                queries: [
+                    Query.limit(PAGE_SIZE),
+                    Query.offset(offset),
+                    Query.orderAsc('name')
+                ]
+            });
             allDocuments.push(...result.documents);
             if (result.documents.length < PAGE_SIZE) break;
             offset += PAGE_SIZE;
@@ -81,20 +85,32 @@ export function DataProvider({ children }) {
         try {
             // 1. fázis: cikkek, layoutok, határidők párhuzamosan
             const [articlesResult, layoutsResult, deadlinesResult] = await Promise.all([
-                databases.listDocuments(DATABASE_ID, COLLECTIONS.ARTICLES, [
-                    Query.equal('publicationId', publicationId),
-                    Query.limit(1000),
-                    Query.orderAsc('startPage')
-                ]).catch(() => ({ documents: [] })),
-                databases.listDocuments(DATABASE_ID, COLLECTIONS.LAYOUTS, [
-                    Query.equal('publicationId', publicationId),
-                    Query.limit(100),
-                    Query.orderAsc('order')
-                ]).catch(() => ({ documents: [] })),
-                databases.listDocuments(DATABASE_ID, COLLECTIONS.DEADLINES, [
-                    Query.equal('publicationId', publicationId),
-                    Query.limit(100)
-                ]).catch(() => ({ documents: [] }))
+                databases.listDocuments({
+                    databaseId: DATABASE_ID,
+                    collectionId: COLLECTIONS.ARTICLES,
+                    queries: [
+                        Query.equal('publicationId', publicationId),
+                        Query.limit(1000),
+                        Query.orderAsc('startPage')
+                    ]
+                }).catch(() => ({ documents: [] })),
+                databases.listDocuments({
+                    databaseId: DATABASE_ID,
+                    collectionId: COLLECTIONS.LAYOUTS,
+                    queries: [
+                        Query.equal('publicationId', publicationId),
+                        Query.limit(100),
+                        Query.orderAsc('order')
+                    ]
+                }).catch(() => ({ documents: [] })),
+                databases.listDocuments({
+                    databaseId: DATABASE_ID,
+                    collectionId: COLLECTIONS.DEADLINES,
+                    queries: [
+                        Query.equal('publicationId', publicationId),
+                        Query.limit(100)
+                    ]
+                }).catch(() => ({ documents: [] }))
             ]);
 
             setArticles(articlesResult.documents);
@@ -119,16 +135,24 @@ export function DataProvider({ children }) {
                     // Mindkét validáció kollekció lekérése párhuzamosan, kötegelt articleId lekérdezéssel
                     const [userValResults, sysValResults] = await Promise.all([
                         Promise.all(chunks.map(ids =>
-                            databases.listDocuments(DATABASE_ID, COLLECTIONS.USER_VALIDATIONS, [
-                                Query.equal('articleId', ids),
-                                Query.limit(Math.min(5000, ids.length * 10))
-                            ]).catch(() => ({ documents: [] }))
+                            databases.listDocuments({
+                                databaseId: DATABASE_ID,
+                                collectionId: COLLECTIONS.USER_VALIDATIONS,
+                                queries: [
+                                    Query.equal('articleId', ids),
+                                    Query.limit(Math.min(5000, ids.length * 10))
+                                ]
+                            }).catch(() => ({ documents: [] }))
                         )),
                         Promise.all(chunks.map(ids =>
-                            databases.listDocuments(DATABASE_ID, COLLECTIONS.SYSTEM_VALIDATIONS, [
-                                Query.equal('articleId', ids),
-                                Query.limit(Math.min(5000, ids.length * 5))
-                            ]).catch(() => ({ documents: [] }))
+                            databases.listDocuments({
+                                databaseId: DATABASE_ID,
+                                collectionId: COLLECTIONS.SYSTEM_VALIDATIONS,
+                                queries: [
+                                    Query.equal('articleId', ids),
+                                    Query.limit(Math.min(5000, ids.length * 5))
+                                ]
+                            }).catch(() => ({ documents: [] }))
                         ))
                     ]);
 
@@ -160,11 +184,11 @@ export function DataProvider({ children }) {
         const allTeamIds = Object.values(TEAMS);
         const results = await Promise.allSettled(
             allTeamIds.map(teamId =>
-                functions.createExecution(
-                    GET_TEAM_MEMBERS_FUNCTION_ID,
-                    JSON.stringify({ teamId }),
-                    false
-                )
+                functions.createExecution({
+                    functionId: GET_TEAM_MEMBERS_FUNCTION_ID,
+                    body: JSON.stringify({ teamId }),
+                    async: false
+                })
             )
         );
 

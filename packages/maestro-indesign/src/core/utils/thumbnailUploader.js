@@ -62,7 +62,7 @@ export async function uploadThumbnails(filePaths, articleId) {
 
             // Feltöltés retry-val
             const uploaded = await withRetry(
-                () => storage.createFile(BUCKETS.THUMBNAILS, fileId, blob),
+                () => storage.createFile({ bucketId: BUCKETS.THUMBNAILS, fileId, file: blob }),
                 { operationName: `thumbnailUpload(${page})` }
             );
 
@@ -106,7 +106,7 @@ export async function deleteOldThumbnails(thumbnailsJson) {
     if (validThumbnails.length === 0) return;
 
     const deletePromises = validThumbnails.map(({ fileId }) =>
-        storage.deleteFile(BUCKETS.THUMBNAILS, fileId).catch(e => {
+        storage.deleteFile({ bucketId: BUCKETS.THUMBNAILS, fileId }).catch(e => {
             logWarn(`[thumbnailUploader] Thumbnail törlés sikertelen (${fileId}):`, e.message);
         })
     );
