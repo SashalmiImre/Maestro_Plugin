@@ -8,6 +8,7 @@ tags: [feladatok]
 > Ide gyűjtsd a fejlesztési ötleteket, bugokat, teendőket. A Claude Code is olvassa — megbeszéljük, majd kipipáljuk.
 
 ## Aktív
+- [ ] Appwrite SDK frissítés 21.5.0 → 24.x (major breaking change). A `tsconfig.json`-ban deprecated `moduleResolution: "node"` és `baseUrl` opciók vannak. A frissítéshez API kompatibilitás ellenőrzés szükséges az Appwrite Cloud szerver verzióval.
 
 
 

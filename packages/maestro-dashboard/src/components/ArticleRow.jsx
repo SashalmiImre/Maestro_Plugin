@@ -102,7 +102,7 @@ function StateIndicator({ article }) {
     return (
         <span
             className="state-dot"
-            style={{ backgroundColor: color }}
+            style={{ backgroundColor: color, color }}
             title={label + suffix}
         />
     );
