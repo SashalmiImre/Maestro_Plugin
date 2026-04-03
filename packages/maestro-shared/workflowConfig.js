@@ -102,22 +102,21 @@ export const TEAM_ARTICLE_FIELD = {
 
 // ─── Label segédfüggvények ──────────────────────────────────────────────────
 
-/**
- * Normalizál egy slug-ot az összehasonlításhoz (underscore eltávolítás).
- * @param {string} value
- * @returns {string}
- */
-const normalizeSlug = (value) => value.replace(/_/g, '').toLowerCase();
+import { resolveGrantedTeams } from './labelConfig.js';
 
 /**
- * Ellenőrzi, hogy a felhasználói label-ek között megtalálható-e a team slug.
- * Normalizált összehasonlítást végez (underscore-mentes).
+ * Ellenőrzi, hogy a felhasználói capability label-ek alapján
+ * a felhasználó rendelkezik-e az adott csapat jogaival.
+ *
+ * A capability label-ek a labelConfig.js központi konfigurációja
+ * alapján oldódnak fel csapat slug-okra (grantTeams).
  *
  * @param {string[]} userLabels - A felhasználó Appwrite label-jei.
  * @param {string} slug - A team slug (pl. "art_directors").
  * @returns {boolean}
  */
 export function labelMatchesSlug(userLabels, slug) {
-    const normalizedSlug = normalizeSlug(slug);
-    return userLabels.some(label => normalizeSlug(label) === normalizedSlug);
+    if (!userLabels || userLabels.length === 0) return false;
+    const grantedTeams = resolveGrantedTeams(userLabels);
+    return grantedTeams.has(slug);
 }

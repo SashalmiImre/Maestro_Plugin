@@ -30,6 +30,13 @@ export {
     VALIDATION_TYPES
 } from '@shared/constants.js';
 
+export {
+    resolveGrantedTeams,
+    hasCapability,
+    CAPABILITY_LABELS,
+    VALID_LABELS
+} from '@shared/labelConfig.js';
+
 // ─── Dashboard-specifikus ───────────────────────────────────────────────────
 
 /** Közvetlen Appwrite endpoint (nem proxy-n keresztül). */

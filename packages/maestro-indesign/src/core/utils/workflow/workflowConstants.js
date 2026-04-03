@@ -9,8 +9,11 @@ import {
     labelMatchesSlug
 } from "maestro-shared/workflowConfig.js";
 
+import { resolveGrantedTeams, hasCapability, CAPABILITY_LABELS, VALID_LABELS, isValidLabel } from "maestro-shared/labelConfig.js";
+
 // Re-export a shared-ből — a fogyasztó fájlok változatlanul importálhatnak innen
 export { WORKFLOW_STATES, MARKERS, STATE_DURATIONS, TEAM_ARTICLE_FIELD, labelMatchesSlug };
+export { resolveGrantedTeams, hasCapability, CAPABILITY_LABELS, VALID_LABELS, isValidLabel };
 
 /**
  * Parancs-regiszter: az összes elérhető parancs definíciója.

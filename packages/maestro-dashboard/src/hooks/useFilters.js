@@ -5,7 +5,7 @@
  */
 
 import { useState, useCallback, useMemo } from 'react';
-import { WORKFLOW_CONFIG, MARKERS, TEAM_ARTICLE_FIELD, STORAGE_KEYS } from '../config.js';
+import { WORKFLOW_CONFIG, MARKERS, TEAM_ARTICLE_FIELD, STORAGE_KEYS, resolveGrantedTeams } from '../config.js';
 
 // ─── localStorage segédfüggvények ───────────────────────────────────────────
 
@@ -123,11 +123,12 @@ function getUserContributorFields(user) {
         const field = TEAM_ARTICLE_FIELD[teamId];
         if (field) fields.push(field);
     }
+    // Capability label-ek feloldása csapat slug-okra
     if (user.labels) {
+        const grantedTeams = resolveGrantedTeams(user.labels);
         for (const [slug, field] of Object.entries(TEAM_ARTICLE_FIELD)) {
-            const normalizedSlug = slug.replace(/_/g, '').toLowerCase();
-            if (user.labels.some(l => l.replace(/_/g, '').toLowerCase() === normalizedSlug)) {
-                if (!fields.includes(field)) fields.push(field);
+            if (grantedTeams.has(slug) && !fields.includes(field)) {
+                fields.push(field);
             }
         }
     }

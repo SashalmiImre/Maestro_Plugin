@@ -14,7 +14,7 @@
  * @module utils/workflow/elementPermissions
  */
 
-import { STATE_PERMISSIONS, labelMatchesSlug } from "./workflowConstants.js";
+import { STATE_PERMISSIONS, labelMatchesSlug, hasCapability, resolveGrantedTeams } from "./workflowConstants.js";
 
 // ─── Jogosultsági szintek ───────────────────────────────────────────────────
 
@@ -93,9 +93,11 @@ export function checkElementPermission(permission, user) {
     const userTeams = user.teamIds || [];
     const userLabels = user.labels || [];
 
-    // ANY_TEAM: legalább egy csapat/label kell
+    // ANY_TEAM: legalább egy csapattagság VAGY csapat-ekvivalens capability label kell.
+    // Az exkluzív capability label-ek (pl. canAddArticlePlan) NEM számítanak ide —
+    // azok célzott jogosultságok, nem általános szerkesztési hozzáférés.
     if (permission === ANY_TEAM) {
-        if (userTeams.length > 0 || userLabels.length > 0) {
+        if (userTeams.length > 0 || resolveGrantedTeams(userLabels).size > 0) {
             return { allowed: true };
         }
         return { allowed: false, reason: "Nincs jogosultságod az elem szerkesztéséhez." };

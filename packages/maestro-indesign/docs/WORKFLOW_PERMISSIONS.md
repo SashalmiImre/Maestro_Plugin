@@ -3,7 +3,9 @@
 A munkafolyamat állapotátmeneteit csapat-alapú jogosultsági rendszer védi. A rendszer meghatározza, hogy egy adott felhasználó mozgathatja-e a cikket a jelenlegi állapotából — előre és hátra egyaránt.
 
 **Forrásfájlok:**
-- Konfiguráció: `src/core/utils/workflow/workflowConstants.js` (`STATE_PERMISSIONS`, `TEAM_ARTICLE_FIELD`, `COMMANDS`)
+- Capability label konfiguráció: `maestro-shared/labelConfig.js` (`CAPABILITY_LABELS`, `resolveGrantedTeams`, `hasCapability`)
+- Label → csapat feloldás: `maestro-shared/workflowConfig.js` (`labelMatchesSlug`)
+- Állapot-jogosultság konfiguráció: `src/core/utils/workflow/workflowConstants.js` (`STATE_PERMISSIONS`, `TEAM_ARTICLE_FIELD`, `COMMANDS`)
 - Logika: `src/core/utils/workflow/workflowPermissions.js` (`canUserMoveArticle`, `hasTransitionPermission`)
 - User adatok: `src/core/contexts/UserContext.jsx` (`user.teamIds`, `user.labels`)
 
@@ -49,9 +51,51 @@ A jogosultság két egymást kiegészítő forrásból származik:
 | Forrás | Mező | Beállítás | Cél |
 |--------|------|-----------|-----|
 | **Csapattagság** | `user.teamIds` | Appwrite Console → Teams → tag hozzáadás | Alap jogosultság a munkahelyi pozíció alapján |
-| **Label override** | `user.labels` | Appwrite Console → User → Labels | Plusz jogosultságok egyedi hozzárendeléssel |
+| **Capability label** | `user.labels` | Appwrite Console → User → Labels | Képesség-alapú jogosultság-kiterjesztés |
 
-Mindkettő csapat slug-okat tartalmaz (pl. `"designers"`, `"editors"`). A permission ellenőrzés mindkettőt vizsgálja — ha **bármelyikben** megtalálható a releváns csapat slug-ja, a jogosultság megvan.
+A `user.teamIds` csapat slug-okat tartalmaz (pl. `"designers"`, `"editors"`). A `user.labels` **capability neveket** tartalmaz (`can` + ige + tárgy, camelCase — pl. `"canEditContent"`, `"canUseDesignerFeatures"`), amelyeket a `labelConfig.js` központi konfiguráció old fel csapat slug-okra.
+
+### Capability Label Rendszer
+
+**Forrásfájl:** `maestro-shared/labelConfig.js`
+
+A capability label-ek két típusúak:
+
+| Típus | Működés | Példa |
+|-------|---------|-------|
+| **Csapat-ekvivalens** (`grantTeams`) | A label a megadott csapat(ok) jogait adja | `canEditContent` → `['editors']` jogokat ad |
+| **Exkluzív** (`exclusive`) | Egyedi képesség, csapattagsággal nem kapható meg | `canAddArticlePlan` → cikk terv InDesign nélkül |
+
+#### Elérhető capability label-ek
+
+| Label név | Típus | grantTeams | Leírás |
+|-----------|-------|------------|--------|
+| `canUseDesignerFeatures` | grant | `['designers']` | Tervezői funkciók használata |
+| `canApproveDesigns` | grant | `['art_directors']` | Tervek jóváhagyása |
+| `canEditContent` | grant | `['editors']` | Szerkesztői funkciók |
+| `canManageEditorial` | grant | `['managing_editors']` | Vezetőszerkesztői jogok |
+| `canProofread` | grant | `['proofwriters']` | Korrektúrázás |
+| `canWriteArticles` | grant | `['writers']` | Íráshoz való hozzáférés |
+| `canEditImages` | grant | `['image_editors']` | Képszerkesztői hozzáférés |
+| `canUseEditorFeatures` | grant | `['editors']` | Szerkesztői UI jogok (pl. tördelőnek) |
+| `canAddArticlePlan` | exclusive | — | Cikk terv hozzáadása InDesign fájl nélkül |
+
+#### Feloldási logika
+
+A `labelMatchesSlug(userLabels, slug)` függvény a `resolveGrantedTeams()` segítségével oldja fel a capability label-eket csapat slug-okra. Az összes meglévő jogosultság-ellenőrző függvény (`canUserMoveArticle`, `checkElementPermission`, `canUserAccessInState`, `canEditContributorDropdown`) változatlanul a `labelMatchesSlug`-ot hívja — a capability mapping transzparens.
+
+#### Példa
+
+Egy tördelő (designers csapattag) szerkesztői jogokat kap:
+- Appwrite Console → User → Labels: `["canEditContent"]`
+- A `canEditContent` label → `grantTeams: ['editors']` → a rendszer úgy kezeli, mintha az editors csapatba is tartozna
+- Eredmény: szerkesztheti az `articleName` mezőt, mozgathatja a cikket EDITORIAL_APPROVAL állapotból stb.
+
+#### Új capability hozzáadása
+
+1. `maestro-shared/labelConfig.js` → `CAPABILITY_LABELS` objektumba felvenni
+2. Ha exkluzív: `hasCapability()` hívás a releváns ellenőrző függvénybe
+3. Ha csapat-ekvivalens: automatikusan működik a `resolveGrantedTeams` feloldáson keresztül
 
 ---
 
@@ -75,7 +119,7 @@ A közvetlen hozzárendelés (contributor mező) **nem ad** önálló átmenet-j
 Egy cikk `DESIGN_APPROVAL` (1) állapotban van:
 
 - **user_A** (Art Directors csapat tagja) → **mozgathatja** (csapattagság)
-- **user_B** (`labels: ["art_directors"]`) → **mozgathatja** (label override)
+- **user_B** (`labels: ["canApproveDesigns"]`) → **mozgathatja** (capability label → `art_directors` jog)
 - **user_C** (Editor csapat tagja, de az `artDirectorId` mezőbe van beállítva) → **NEM mozgathatja** (az Editors csapat nem szerepel a DESIGN_APPROVAL STATE_PERMISSIONS-ben)
 - **user_D** (nem tag, nincs label) → **NEM mozgathatja**
 

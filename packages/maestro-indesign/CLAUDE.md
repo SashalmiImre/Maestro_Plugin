@@ -122,18 +122,20 @@
 
 5. **Jogosultsági Rendszer (Workflow Permissions)**
     - **Állapot-alapú átmenet**: Minden workflow állapothoz csapatok vannak rendelve (`STATE_PERMISSIONS`), amelyek mozgathatják a cikkeket onnan.
-    - **Kétszintű jogosultság**: (1) **Csapattagság** (`user.teamIds`) — alap jogosultság a munkahelyi pozíció alapján (`teams.list()` lekérés login/recovery/Realtime-kor). (2) **Label override** (`user.labels`) — plusz jogosultságok adminisztrátori hozzárendeléssel.
-    - **Fallback**: Ha nincs senki hozzárendelve a releváns csapatok contributor mezőiből → csapattagság VAGY label szükséges.
+    - **Kétszintű jogosultság**: (1) **Csapattagság** (`user.teamIds`) — alap jogosultság a munkahelyi pozíció alapján (`teams.list()` lekérés login/recovery/Realtime-kor). (2) **Capability label** (`user.labels`) — képesség-alapú jogosultság-kiterjesztés adminisztrátori hozzárendeléssel.
+    - **Capability Label Rendszer** (`maestro-shared/labelConfig.js`): Központi konfiguráció (`CAPABILITY_LABELS`), ahol minden label egy képességet fejez ki (`can` + ige + tárgy, camelCase). Két típus: (a) **Csapat-ekvivalens** (`grantTeams`) — a megadott csapat(ok) jogait adja (pl. `canEditContent` → `['editors']`). (b) **Exkluzív** (`exclusive`) — egyedi képesség, amit csapattagsággal nem lehet megkapni (pl. `canAddArticlePlan`).
+    - **Label → csapat feloldás**: A `labelMatchesSlug()` (`workflowConfig.js`) a `resolveGrantedTeams()` segítségével oldja fel a capability label-eket csapat slug-okra. Az összes jogosultság-ellenőrző függvény transzparensen működik a capability mapping-gel.
+    - **Fallback**: Ha nincs senki hozzárendelve a releváns csapatok contributor mezőiből → csapattagság VAGY capability label szükséges.
     - **Háromszintű védelem**: UI gomb disabled → handler toast → engine guard.
     - **Realtime szinkron**: A `teams` Realtime csatorna → `teamMembershipChanged` MaestroEvent → UserContext frissíti a `user.teamIds`-t → UI azonnal reagál.
     - **UI Elem Jogosultságok**: Deklaratív, központi konfiguráció (`elementPermissions.js`) határozza meg, mely csapatok szerkeszthetik az egyes UI elemcsoportokat. Csapat/label nélküli felhasználó teljes read-only módot kap.
       - `ARTICLE_ELEMENT_PERMISSIONS` / `PUBLICATION_ELEMENT_PERMISSIONS` — elemcsoport → csapat-slug tömb vagy `ANY_TEAM` szimbólum.
       - `checkElementPermission(permission, user)` — állapotfüggetlen ellenőrzés (cikk és kiadvány mezők).
       - `canUserAccessInState(user, articleState)` — állapotfüggő ellenőrzés (fájlmegnyitás + parancsok): designers/artDirectors mindig, mások csak `STATE_PERMISSIONS` szerinti állapotaikban.
-      - `canEditContributorDropdown(user, teamSlug, articleState)` — per-dropdown contributor jogosultság: vezetők (`LEADER_TEAMS`) mindig, nem-vezetők csak a saját csapatjuknak megfelelő dropdown-ot, és csak a `STATE_PERMISSIONS` szerinti állapotaikban. Label-ek ugyanúgy kiterjesztik a hozzáférést.
+      - `canEditContributorDropdown(user, teamSlug, articleState)` — per-dropdown contributor jogosultság: vezetők (`LEADER_TEAMS`) mindig, nem-vezetők csak a saját csapatjuknak megfelelő dropdown-ot, és csak a `STATE_PERMISSIONS` szerinti állapotaikban. Capability label-ek ugyanúgy kiterjesztik a hozzáférést.
       - `useElementPermission(key)` / `useElementPermissions(keys[])` / `useContributorPermissions(articleState)` hookok (`useElementPermission.js`) — React komponensekben.
       - **Kompozíció**: `disabled={isIgnored || isSyncing || !perm.allowed}` + tooltip a `reason`-nel.
-    - **Konfiguráció**: `workflowConstants.js` (`STATE_PERMISSIONS`, `TEAM_ARTICLE_FIELD`), `workflowPermissions.js` (`canUserMoveArticle`), `elementPermissions.js` (UI elem jogosultságok).
+    - **Konfiguráció**: `labelConfig.js` (capability label-ek), `workflowConstants.js` (`STATE_PERMISSIONS`, `TEAM_ARTICLE_FIELD`), `workflowPermissions.js` (`canUserMoveArticle`), `elementPermissions.js` (UI elem jogosultságok).
     - Ld. `docs/WORKFLOW_PERMISSIONS.md`
 
 6. **Kapcsolat-helyreállítás (RecoveryManager) & Dual-Proxy Failover**
@@ -208,7 +210,8 @@ Maestro/
 ├── ../maestro-shared/            ← Közös csomag (plugin + dashboard által megosztott konstansok és logika)
 │   ├── appwriteIds.js            ← Appwrite projekt/DB/gyűjtemény/csapat/bucket ID-k
 │   ├── constants.js              ← Platform-független enumerációk (LOCK_TYPE, VALIDATION_TYPES)
-│   ├── workflowConfig.js         ← Workflow állapotok, markerek, időtartamok, STATUS_LABELS, TEAM_ARTICLE_FIELD
+│   ├── labelConfig.js            ← Capability-based label konfiguráció (CAPABILITY_LABELS, resolveGrantedTeams, hasCapability)
+│   ├── workflowConfig.js         ← Workflow állapotok, markerek, időtartamok, STATUS_LABELS, TEAM_ARTICLE_FIELD, labelMatchesSlug
 │   └── urgency.js                ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színskála)
 │
 ├── docs/                         ← Architektúra dokumentáció (ld. §Dokumentáció Katalógus)
