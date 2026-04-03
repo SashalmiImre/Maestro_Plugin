@@ -23,6 +23,25 @@
                 "databases.6880850e000da87a3d55.collections.publications.documents.*.delete"
             ],
             "specification": "s-0.5vcpu-512mb"
+        },
+        {
+            "$id": "validate-labels",
+            "name": "Validate Labels",
+            "runtime": "node-18.0",
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "path": "appwrite_functions/validate-labels",
+            "scopes": [
+                "users.read",
+                "users.write"
+            ],
+            "events": [
+                "users.*.update"
+            ],
+            "specification": "s-0.5vcpu-512mb"
         }
     ]
 }
