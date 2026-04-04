@@ -13,6 +13,10 @@
       "name": "Maestro Web Dashboard"
     },
     {
+      "path": "packages/maestro-server",
+      "name": "Maestro Server"
+    },
+    {
       "path": "packages/maestro-shared",
       "name": "Maestro Shared"
     }

@@ -12,6 +12,7 @@ A Maestro rendszer egy szerkesztőségi munkafolyamat-kezelő platform, amely Ad
 maestro-workspace/
   packages/
     maestro-indesign/    ← Adobe InDesign UXP plugin (React 18 + Appwrite)
+    maestro-server/      ← Szerver-oldali Appwrite Cloud Function-ök
     maestro-proxy/       ← CORS/WebSocket proxy szerver (Express)
     maestro-shared/      ← [JÖVŐBELI] Megosztott kód (contexts, hooks, utils, UI)
     maestro-incopy/      ← [JÖVŐBELI] Adobe InCopy UXP plugin
@@ -24,6 +25,7 @@ maestro-workspace/
 | Package | Szerep | Technológia | Deployment |
 |---------|--------|-------------|------------|
 | `maestro-indesign` | InDesign plugin — szerkesztőségi munkafolyamat, cikkkezelés, zárolás, validáció | React 18, UXP, Webpack, Appwrite SDK | InDesign plugin betöltés (`dist/`) |
+| `maestro-server` | Szerver-oldali Appwrite Cloud Function-ök (guard, cleanup, cascade) | Node.js 18+, node-appwrite SDK | Appwrite Cloud Functions |
 | `maestro-proxy` | CORS proxy + WebSocket auth bridge az Appwrite API-hoz | Express, http-proxy-middleware | emago.hu szerveren |
 | `maestro-shared` | **[JÖVŐBELI]** Megosztott üzleti logika, adatréteg, UI komponensek | React, Appwrite SDK | Nem önálló — bundled mindkét pluginba |
 | `maestro-incopy` | **[JÖVŐBELI]** InCopy plugin — szerkesztői nézet | React 18, UXP, Webpack | InCopy plugin betöltés |
@@ -35,10 +37,12 @@ maestro-workspace/
 ```
 maestro-indesign ──→ maestro-shared (jövőbeli)
 maestro-incopy   ──→ maestro-shared (jövőbeli)
+maestro-server   ──→ Appwrite Cloud (közvetlen, API key-jel)
 maestro-proxy    ──→ (standalone, nincs belső függősége)
 
-Mindkét plugin ──→ maestro-proxy (runtime, hálózaton keresztül)
-Mindkét plugin ──→ Appwrite Cloud (a proxy-n át)
+maestro-indesign ──→ maestro-server (syncWorkflowConfig → config collection → functions olvassák)
+Mindkét plugin   ──→ maestro-proxy (runtime, hálózaton keresztül)
+Mindkét plugin   ──→ Appwrite Cloud (a proxy-n át)
 ```
 
 ---
@@ -49,6 +53,7 @@ Mindkét plugin ──→ Appwrite Cloud (a proxy-n át)
 |----------------|---------------------|--------|
 | `maestro-proxy` (API, WebSocket kezelés) | `maestro-indesign`, `maestro-incopy` | Mindkét plugin tesztelése szükséges |
 | `maestro-shared` (jövőbeli) | `maestro-indesign`, `maestro-incopy` | Mindkét plugin újraépítése + tesztelése |
+| `maestro-server` (Cloud Function-ök) | `maestro-indesign` (config sync) | Config verzió léptetés szükséges |
 | `maestro-indesign` (InDesign-specifikus kód) | Csak az InDesign plugin | Nincs cross-project hatás |
 | Appwrite collection/function változás | Mindegyik | Proxy + mindkét plugin érintett |
 | `appwriteConfig.js` (endpoint, ID-k) | Mindkét plugin (jelenleg csak InDesign) | Ha shared-be kerül: automatikus |
@@ -65,6 +70,17 @@ npm run watch          # Development watch mode
 npm run uxp:load       # Plugin betöltése InDesign-ba
 npm run uxp:reload     # Plugin újratöltése
 npm run uxp:debug      # UXP Developer Tool
+```
+
+### maestro-server
+```bash
+cd packages/maestro-server
+# Deployment Appwrite CLI-vel:
+appwrite functions create-deployment \
+  --function-id <function-id> \
+  --code functions/<function-dir> \
+  --entrypoint src/main.js \
+  --activate true
 ```
 
 ### maestro-proxy

@@ -1,0 +1,183 @@
+{
+    "projectId": "68808427001c20418996",
+    "projectName": "Maestro",
+    "functions": [
+        {
+            "$id": "article-update-guard",
+            "name": "Article Update Guard",
+            "runtime": "node-18.0",
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "timeout": 30,
+            "enabled": true,
+            "logging": true,
+            "path": "functions/article-update-guard",
+            "scopes": [
+                "databases.read",
+                "databases.write",
+                "users.read",
+                "teams.read"
+            ],
+            "events": [
+                "databases.6880850e000da87a3d55.collections.articles.documents.*.update"
+            ],
+            "specification": "s-0.5vcpu-512mb"
+        },
+        {
+            "$id": "validate-article-creation",
+            "name": "Validate Article Creation",
+            "runtime": "node-18.0",
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "path": "functions/validate-article-creation",
+            "scopes": [
+                "databases.read",
+                "databases.write",
+                "users.read"
+            ],
+            "events": [
+                "databases.6880850e000da87a3d55.collections.articles.documents.*.create"
+            ],
+            "specification": "s-0.5vcpu-512mb"
+        },
+        {
+            "$id": "validate-publication-update",
+            "name": "Validate Publication Update",
+            "runtime": "node-18.0",
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "path": "functions/validate-publication-update",
+            "scopes": [
+                "databases.read",
+                "databases.write",
+                "users.read"
+            ],
+            "events": [
+                "databases.6880850e000da87a3d55.collections.publications.documents.*.create",
+                "databases.6880850e000da87a3d55.collections.publications.documents.*.update"
+            ],
+            "specification": "s-0.5vcpu-512mb"
+        },
+        {
+            "$id": "validate-labels",
+            "name": "Validate Labels",
+            "runtime": "node-18.0",
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "path": "functions/validate-labels",
+            "scopes": [
+                "users.read",
+                "users.write",
+                "databases.read"
+            ],
+            "events": [
+                "users.*.update"
+            ],
+            "specification": "s-0.5vcpu-512mb"
+        },
+        {
+            "$id": "cascade-delete",
+            "name": "Cascade Delete",
+            "runtime": "node-18.0",
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "path": "functions/cascade-delete",
+            "scopes": [
+                "databases.read",
+                "databases.write",
+                "files.read",
+                "files.write"
+            ],
+            "events": [
+                "databases.6880850e000da87a3d55.collections.articles.documents.*.delete",
+                "databases.6880850e000da87a3d55.collections.publications.documents.*.delete"
+            ],
+            "specification": "s-0.5vcpu-512mb"
+        },
+        {
+            "$id": "cleanup-orphaned-locks",
+            "name": "Cleanup Orphaned Locks",
+            "runtime": "node-18.0",
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "timeout": 30,
+            "enabled": true,
+            "logging": true,
+            "path": "functions/cleanup-orphaned-locks",
+            "scopes": [
+                "databases.read",
+                "databases.write",
+                "users.read"
+            ],
+            "events": [],
+            "schedule": "0 3 * * *",
+            "specification": "s-0.5vcpu-512mb"
+        },
+        {
+            "$id": "cleanup-orphaned-thumbnails",
+            "name": "Cleanup Orphaned Thumbnails",
+            "runtime": "node-18.0",
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "timeout": 120,
+            "enabled": true,
+            "logging": true,
+            "path": "functions/cleanup-orphaned-thumbnails",
+            "scopes": [
+                "databases.read",
+                "files.read",
+                "files.write"
+            ],
+            "events": [],
+            "schedule": "0 4 * * 0",
+            "specification": "s-0.5vcpu-512mb"
+        },
+        {
+            "$id": "migrate-legacy-paths",
+            "name": "Migrate Legacy Paths",
+            "runtime": "node-18.0",
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "timeout": 120,
+            "enabled": true,
+            "logging": true,
+            "path": "functions/migrate-legacy-paths",
+            "execute": ["users"],
+            "scopes": [
+                "databases.read",
+                "databases.write"
+            ],
+            "events": [],
+            "specification": "s-0.5vcpu-512mb"
+        },
+        {
+            "$id": "69599cf9000a865db98a",
+            "name": "Get Team Members",
+            "runtime": "node-22",
+            "entrypoint": "main.js",
+            "commands": "npm install",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "path": "functions/team",
+            "execute": ["users"],
+            "scopes": [
+                "users.read"
+            ],
+            "events": [],
+            "specification": "s-0.5vcpu-512mb"
+        }
+    ]
+}

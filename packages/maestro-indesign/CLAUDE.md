@@ -203,13 +203,8 @@
     - **Verzió léptetés**: Ha bármely szerver-oldali konstans változik, a `CONFIG_VERSION`-t kell léptetni a `maestro-shared/workflowConfig.js`-ben.
 
 11. **Szerver-oldali Guard Function-ök (Cloud Functions)**
-    - **`article-update-guard`**: Összevont workflow állapotátmenet + contributor validáció. `previousState` mező biztosítja az előző állapot ismeretét. `modifiedByClientId = 'server-guard'` sentinel védi a végtelen ciklus ellen.
-    - **`validate-article-creation`**: publicationId létezés, state érvényesség, contributor user létezés, filePath formátum. Érvénytelen publicationId → cikk törlés.
-    - **`validate-publication-update`**: Default contributor ID-k user létezés ellenőrzés, rootPath kanonikus formátum figyelés.
-    - **`validate-labels`**: Érvénytelen label-ek automatikus eltávolítása. A `validLabels` listát a config collection-ből olvassa (fallback: hardcoded).
-    - **`cleanup-orphaned-locks`**: Naponta 3:00 UTC. 24h-nál régebbi vagy nem létező owner-ű lockokat feloldja.
-    - **`cleanup-orphaned-thumbnails`**: Hetente vasárnap 4:00 UTC. Storage ↔ DB összehasonlítás, orphaned fájlok törlése.
-    - **`migrate-legacy-paths`**: Manuális futtatás. DRY_RUN=true alapértelmezett. Legacy útvonalak kanonikus/relatív konverziója.
+    - A Cloud Function-ök külön csomagban élnek: `../maestro-server/`
+    - Részletes leírás: `../maestro-server/CLAUDE.md`
 
 ---
 
@@ -224,6 +219,7 @@ Maestro/
 ├── package.json                  ← Függőségek & scriptek (Yarn)
 ├── webpack.config.js             ← Webpack 5 konfig (entry: src/core/index.jsx → dist/bundle.js)
 │
+├── ../maestro-server/             ← Szerver-oldali Appwrite Cloud Function-ök (ld. maestro-server/CLAUDE.md)
 ├── ../maestro-shared/            ← Közös csomag (plugin + dashboard által megosztott konstansok és logika)
 │   ├── appwriteIds.js            ← Appwrite projekt/DB/gyűjtemény/csapat/bucket ID-k
 │   ├── constants.js              ← Platform-független enumerációk (LOCK_TYPE, VALIDATION_TYPES)
@@ -374,16 +370,7 @@ Maestro/
 │   │
 │   └── assets/                   ← Statikus erőforrások (ikonok, stb.)
 │
-└── appwrite_functions/           ← Szerver-oldali Appwrite Cloud Funkciók
-    ├── article-update-guard/      ← Cikk frissítés guard (állapotátmenet + jogosultság + contributor validáció)
-    ├── validate-article-creation/ ← Cikk létrehozás validáció (publicationId, state, contributor-ok)
-    ├── validate-publication-update/ ← Kiadvány módosítás validáció (default contributor-ok, rootPath)
-    ├── validate-labels/           ← Felhasználói label validáció (érvénytelen label-ek automatikus eltávolítása)
-    ├── cascade-delete/            ← Kaszkád törlés (article: üzenetek, validációk, thumbnailek; publication: cikkek, határidők, layoutok)
-    ├── cleanup-orphaned-locks/    ← Árva zárolások időszakos takarítása (naponta, 24h-nál régebbi)
-    ├── cleanup-orphaned-thumbnails/ ← Árva thumbnail fájlok takarítása (hetente, Storage ↔ DB összehasonlítás)
-    ├── migrate-legacy-paths/      ← Régi formátumú útvonalak batch migrációja (manuális, DRY_RUN)
-    └── team/                     ← Csapat kezelő funkciók
+└── (A Cloud Function-ök a ../maestro-server/ csomagba kerültek)
 ```
 
 ---
@@ -451,7 +438,7 @@ Appwrite `memberships` Realtime csatorna → `DataContext` handler → `teamMemb
 | `docs/URGENCY_SYSTEM.md`                  | Sürgősség-számítás: munkaidő, ünnepnapok, ratio, progresszív sáv   |
 | `docs/VALIDATION_MECHANISM.md`            | Egységes validációs és üzenetküldő rendszer működése                |
 | `docs/ARCHIVING_TEXT_EXTRACTION.md`       | Archiválási szövegkinyerés: clustering, típusosztályozás, XML/TXT   |
-| `docs/CLOUD_FUNCTIONS.md`                 | Cloud Function-ök üzemeltetési referencia: ID-k, triggerek, env vars |
+| `../maestro-server/CLAUDE.md`             | Cloud Function-ök üzemeltetési referencia: ID-k, triggerek, env vars |
 | `CONTRIBUTING.md`                         | Fejlesztési szabályok, JSDoc policy, import sorrend, PR workflow    |
 
 ---

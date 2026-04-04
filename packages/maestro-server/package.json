@@ -1,0 +1,6 @@
+{
+  "name": "maestro-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Maestro szerver-oldali Appwrite Cloud Function-ök és szolgáltatások"
+}

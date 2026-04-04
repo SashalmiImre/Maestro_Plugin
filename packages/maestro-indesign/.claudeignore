@@ -17,4 +17,3 @@ src/assets/         # Ikonok, képek (bináris)
 # --- Dokumentáció, amit a CLAUDE.md már lefed ---
 README.md
 CONTRIBUTING.md
-appwrite_functions/ # Felhő kódok, nem a plugin része
