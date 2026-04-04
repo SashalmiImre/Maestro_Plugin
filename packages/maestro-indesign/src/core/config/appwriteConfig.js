@@ -215,6 +215,7 @@ export const USER_VALIDATIONS_COLLECTION_ID = COLLECTIONS.USER_VALIDATIONS;
 export const VALIDATIONS_COLLECTION_ID = "validations"; // Plugin-only gyűjtemény (rendszer validációk)
 export const LAYOUTS_COLLECTION_ID = COLLECTIONS.LAYOUTS;
 export const DEADLINES_COLLECTION_ID = COLLECTIONS.DEADLINES;
+export const CONFIG_COLLECTION_ID = COLLECTIONS.CONFIG;
 
 // =============================================================================
 // cookieFallback Diagnosztika — Session token eltűnés nyomkövetés

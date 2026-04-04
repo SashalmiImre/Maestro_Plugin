@@ -63,6 +63,9 @@ const shared = {
     port: 3030, // you can change the port
   },
   module: {
+    // A bignumber.js UMD modul AMD `define()`-t is tartalmaz.
+    // noParse megakadályozza, hogy webpack AMD-ként kezelje → CJS `module.exports` útvonal fut le.
+    noParse: /node_modules\/bignumber\.js\/bignumber\.js$/,
     rules: [
       {
         test: /\.(js|jsx)$/, // .js and .jsx files

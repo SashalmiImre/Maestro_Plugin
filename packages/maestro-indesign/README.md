@@ -227,13 +227,21 @@ A Maestro a Adobe Spectrum Design System komponenseket használja. Fontos:
 
 ## 🌐 Appwrite Cloud Functions
 
-A `appwrite_functions/` mappa tartalmazza a backend funkciókat:
+A `appwrite_functions/` mappa tartalmazza a szerver-oldali funkciókat:
 
-- **Get Team Members**: Csapattagok lekérdezése dropdown menükhöz
-- **Delete Article Messages**: Cikk törlésekor a hozzá tartozó üzenetek automatikus törlése
-- További funkciók a kiadványkezeléshez
+| Function | Trigger | Leírás |
+|---|---|---|
+| **Article Update Guard** | `articles.*.update` | Workflow állapotátmenet + jogosultság + contributor validáció |
+| **Validate Article Creation** | `articles.*.create` | publicationId, state, contributor, filePath ellenőrzés |
+| **Validate Publication Update** | `publications.*.create/update` | Default contributor ID-k, rootPath formátum |
+| **Validate Labels** | `users.*.update` | Érvénytelen capability label-ek automatikus eltávolítása |
+| **Cascade Delete** | `articles/publications.*.delete` | Kaszkád törlés (üzenetek, validációk, thumbnailek, layoutok, deadlines) |
+| **Cleanup Orphaned Locks** | Schedule: naponta 3:00 UTC | 24h-nál régebbi árva zárolások feloldása |
+| **Cleanup Orphaned Thumbnails** | Schedule: vasárnap 4:00 UTC | Storage ↔ DB összehasonlítás, orphaned fájlok törlése |
+| **Migrate Legacy Paths** | Manuális | Régi útvonalak kanonikus/relatív konverziója (DRY_RUN=true) |
+| **Get Team Members** | Kliens hívás | Csapattagok lekérdezése dropdown menükhöz |
 
-Deployment: Appwrite CLI vagy Dashboard használatával.
+> Részletes üzemeltetési referencia: [`docs/CLOUD_FUNCTIONS.md`](./docs/CLOUD_FUNCTIONS.md)
 
 ## 🔐 Jogosultságok
 

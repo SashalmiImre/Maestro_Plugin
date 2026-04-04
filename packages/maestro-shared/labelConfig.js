@@ -8,8 +8,9 @@
  * 1. **Csapat-ekvivalens** (grantTeams): A label a megadott csapat(ok) jogait adja.
  * 2. **Exkluzív** (exclusive): Egyedi képesség, amit csapattagsággal nem lehet megkapni.
  *
- * FONTOS: Ha új label-t adsz hozzá, frissítsd a VALID_LABELS listát a
- * validate-labels Cloud Function-ben is: appwrite_functions/validate-labels/src/main.js
+ * FONTOS: Ha új label-t adsz hozzá, léptesd a CONFIG_VERSION-t
+ * a workflowConfig.js-ben — a plugin automatikusan szinkronizálja
+ * a config collection-t, amiből a Cloud Function-ök olvasnak.
  *
  * @module shared/labelConfig
  */

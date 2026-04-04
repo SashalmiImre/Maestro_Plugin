@@ -9,10 +9,36 @@ tags: [feladatok]
 
 ## Aktív
 
-- [ ] Előfizettem az Appwrite-ra de lett egy új szervezetem. Ebbe az új szervezetbe kellene áthelyezni MCP-vel a másikból a maestro projektet. Állítólag át lehet helyezni, de vigyázni kell mert van egy bug, hogy ha a régi szervezetből kitörlődik a projekt, akkor az újból is eltűnik. Nem tudom, hogy ez van e már javítva. Ha ez megvan, akkor a label-ek elgépelésének megelőzésére tervezett funkció is implementálható.
+### Appwrite Cloud Function-ök — Szerver-oldali üzleti logika
+
+> A kliens-oldali (InDesign plugin / Dashboard) kód jelenleg "becsületalapú" — a jogosultságokat, zárolást és adatintegritást csak a UI ellenőrzi. Közvetlen API hívással ezek megkerülhetők. Az alábbi Cloud Function-ök szerver-oldalon is kikényszerítik a szabályokat.
+
+#### Kritikus — Biztonsági kockázat
+
+- [x] **`validate-workflow-transition`** + **`validate-article-update`** → Összevonva: **`article-update-guard`** Cloud Function. A `config` collection `workflow_config` dokumentumából olvassa a konstansokat (STATE_PERMISSIONS, VALID_TRANSITIONS, TEAM_ARTICLE_FIELD, CAPABILITY_LABELS). A `previousState` mező az articles collection-ben biztosítja az előző állapot ismeretét. `modifiedByClientId = 'server-guard'` sentinel védi a végtelen ciklus ellen.
+
+- [x] **`validate-article-creation`** — Cikk létrehozás szerver-oldali validáció. publicationId ellenőrzés (404 → törlés), state validáció, contributor user létezés ellenőrzés, filePath formátum.
+
+#### Fontos — Adatintegritás
+
+- [x] **`validate-article-update`** — Összevonva az `article-update-guard`-dal (ld. fent).
+
+- [x] **`validate-publication-update`** — Kiadvány módosítás szerver-oldali validáció. Default contributor ID-k ellenőrzése, rootPath kanonikus formátum figyelése.
+
+- [x] **`cascade-delete` bővítés** — MÁR KÉSZ: A `cascade-delete/src/main.js` `deleteThumbnails()` függvénye (94-129. sor) már törli a Storage fájlokat. A publication ág az article törlés re-triggerelésén keresztül kezeli.
+
+#### Alacsony prioritás — Karbantartás
+
+- [x] **`cleanup-orphaned-locks`** — Árva zárolások időszakos takarítása. Schedule: naponta 3:00 UTC. 24h-nál régebbi vagy nem létező owner-ű lockokat feloldja.
+
+- [x] **`migrate-legacy-paths`** — Régi formátumú útvonalak egyszeri batch migrációja. DRY_RUN=true alapértelmezett. Path konverziós logika portolva pathUtils.js-ből.
+
+- [x] **`cleanup-orphaned-thumbnails`** — Árva thumbnail fájlok időszakos takarítása. Schedule: hetente vasárnap 4:00 UTC. Storage ↔ DB összehasonlítás, orphaned fájlok törlése.
 
 
 ## Kész
+
+- [x] Előfizettem az Appwrite-ra de lett egy új szervezetem. Ebbe az új szervezetbe kellene áthelyezni MCP-vel a másikból a maestro projektet. Állítólag át lehet helyezni, de vigyázni kell mert van egy bug, hogy ha a régi szervezetből kitörlődik a projekt, akkor az újból is eltűnik. Nem tudom, hogy ez van e már javítva. Ha ez megvan, akkor a label-ek elgépelésének megelőzésére tervezett funkció is implementálható.
 - [x] Appwrite SDK frissítés 21.5.0 → 24.1.1 (major breaking change). InDesign plugin: appwrite 21.5.0→24.1.1, Dashboard: 16.0.2→24.1.1, Proxy: node-appwrite 22.1.2→23.1.0. Kritikus: realtimeClient.js activeChannels→activeSubscriptions migráció. Összes API hívás object params stílusra átírva.
 - [x] A @Maestro Web Dashboard/src/components/LayoutView.jsx-ben a nagyítás százalékos kijelzésének úgy kellene számítódni, hogy az eredeti kép pixelszáma és a megjelenítés pixelszáma közti százalékos arány legyen. Jelenleg azt veszi 100%-nak, ha az adott képernyőméreten a megadott oldalpár-oszlopszám kifér a képernyőre. A kiegészítő információknak is ezen a méreten kellene alap méreten látszódniuk ami 24pt-os lenne.
 - [x] A webes felületen olyan, mintha a validátorok eredményeit saját magának generálja a weboldal, pedig az adatbázisból kellene kiolvasnia az egyes cikkekhez tartozó validátor eredményeket.

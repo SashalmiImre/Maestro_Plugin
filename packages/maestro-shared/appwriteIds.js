@@ -18,7 +18,8 @@ export const COLLECTIONS = {
     USER_VALIDATIONS: 'uservalidations',
     SYSTEM_VALIDATIONS: 'validations',
     LAYOUTS: 'layouts',
-    DEADLINES: 'deadlines'
+    DEADLINES: 'deadlines',
+    CONFIG: 'config'
 };
 
 /**

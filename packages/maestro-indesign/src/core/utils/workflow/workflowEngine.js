@@ -103,7 +103,8 @@ export class WorkflowEngine {
                     tableId: ARTICLES_COLLECTION_ID,
                     rowId: article.$id,
                     data: {
-                        state: targetState
+                        state: targetState,
+                        previousState: Number(article.state)
                     }
                 }),
                 20000,

@@ -26,6 +26,7 @@ import { isNetworkError, isAuthError } from "../utils/errorUtils.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../config/maestroEvents.js";
 import { FETCH_TIMEOUT_CONFIG, TOAST_TYPES } from "../utils/constants.js";
 import { isLegacyRootPath, isAbsoluteFilePath, toCanonicalPath, toRelativeArticlePath } from "../utils/pathUtils.js";
+import { syncWorkflowConfig } from "../utils/syncWorkflowConfig.js";
 
 /** Név szerinti komparátor rendezéshez. */
 const compareByName = (a, b) => (a?.name ?? '').localeCompare(b?.name ?? '');
@@ -489,6 +490,16 @@ export const DataProvider = ({ children }) => {
     useEffect(() => {
         fetchData();
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Workflow config szinkronizálás — egyszer fut, inicializálás után.
+    // A Cloud Function-ök a config collection-ből olvassák a konstansokat.
+    const configSyncedRef = useRef(false);
+    useEffect(() => {
+        if (isInitialized && !configSyncedRef.current) {
+            configSyncedRef.current = true;
+            syncWorkflowConfig();
+        }
+    }, [isInitialized]);
 
     // Active Publication váltás kezelése
     const updateActivePublicationId = useCallback((id) => {

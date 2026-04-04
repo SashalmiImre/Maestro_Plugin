@@ -6,13 +6,15 @@ import {
     STATE_DURATIONS,
     TEAM_ARTICLE_FIELD,
     STATUS_LABELS,
+    CONFIG_VERSION,
+    CONFIG_DOCUMENT_ID,
     labelMatchesSlug
 } from "maestro-shared/workflowConfig.js";
 
 import { resolveGrantedTeams, hasCapability, CAPABILITY_LABELS, VALID_LABELS, isValidLabel } from "maestro-shared/labelConfig.js";
 
 // Re-export a shared-ből — a fogyasztó fájlok változatlanul importálhatnak innen
-export { WORKFLOW_STATES, MARKERS, STATE_DURATIONS, TEAM_ARTICLE_FIELD, labelMatchesSlug };
+export { WORKFLOW_STATES, MARKERS, STATE_DURATIONS, TEAM_ARTICLE_FIELD, CONFIG_VERSION, CONFIG_DOCUMENT_ID, labelMatchesSlug };
 export { resolveGrantedTeams, hasCapability, CAPABILITY_LABELS, VALID_LABELS, isValidLabel };
 
 /**
@@ -193,4 +195,41 @@ export const STATE_PERMISSIONS = {
     [WORKFLOW_STATES.FINAL_APPROVAL]:      ["editors", "managing_editors"],
     [WORKFLOW_STATES.PRINTABLE]:           ["designers", "art_directors"]
 };
+
+// ─── Config builder (szerver-oldali konstansok) ────────────────────────────
+
+/**
+ * Összeállítja a workflow config dokumentumot a DB `config` collection számára.
+ * A Cloud Function-ök ezt a dokumentumot olvassák — nem hardkódolnak konstansokat.
+ *
+ * A WORKFLOW_CONFIG transitions tömbjéből kinyeri az érvényes átmeneteket
+ * (VALID_TRANSITIONS), a többi konstanst közvetlenül JSON-ná szerializálja.
+ *
+ * @returns {Object} A config dokumentum mezői (JSON string értékekkel).
+ */
+export function buildWorkflowConfigDocument() {
+    // Érvényes átmenetek kinyerése a WORKFLOW_CONFIG-ból
+    const validTransitions = {};
+    for (const [stateStr, config] of Object.entries(WORKFLOW_CONFIG)) {
+        validTransitions[stateStr] = config.transitions.map(t => t.target);
+    }
+
+    // Capability label → csapat mapping (csak a grantTeams, ami a szerveren kell)
+    const capabilityLabels = {};
+    for (const [label, config] of Object.entries(CAPABILITY_LABELS)) {
+        if (config.grantTeams) {
+            capabilityLabels[label] = config.grantTeams;
+        }
+    }
+
+    return {
+        configVersion: CONFIG_VERSION,
+        statePermissions: JSON.stringify(STATE_PERMISSIONS),
+        validTransitions: JSON.stringify(validTransitions),
+        teamArticleField: JSON.stringify(TEAM_ARTICLE_FIELD),
+        capabilityLabels: JSON.stringify(capabilityLabels),
+        validLabels: JSON.stringify([...VALID_LABELS]),
+        validStates: JSON.stringify(Object.values(WORKFLOW_STATES))
+    };
+}
 

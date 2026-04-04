@@ -194,6 +194,23 @@
     - **Sürgősség**: Placeholder állapota `DESIGNING` → teljes hátralévő munkaidő jelenik meg.
     - **Szűrés**: A placeholder generálás az **összes** (szűrés nélküli) cikket figyelembe veszi, hogy a lefedettség pontos legyen.
 
+10. **Szerver-oldali Config Szinkronizáció**
+    - **Cél**: A Cloud Function-ök nem hardkódolnak workflow konstansokat — a DB `config` collection-ből olvassák.
+    - **Config Collection**: Egyetlen `workflow_config` dokumentum (fix ID) a `config` collection-ben, JSON string mezőkkel: `statePermissions`, `validTransitions`, `teamArticleField`, `capabilityLabels`, `validLabels`, `validStates`, `configVersion`.
+    - **Plugin Writer** (`syncWorkflowConfig.js`): A `DataContext` inicializálása után fut. `CONFIG_VERSION` (maestro-shared) alapján ellenőrzi: ha a DB-ben eltérő verzió van → upsert. Normál induláskor: 1 olvasás, 0 írás.
+    - **Config Builder** (`buildWorkflowConfigDocument()`, workflowConstants.js): A `WORKFLOW_CONFIG` transitions tömbjéből kinyeri a `VALID_TRANSITIONS`-t, a `STATE_PERMISSIONS`-t, `TEAM_ARTICLE_FIELD`-et, `CAPABILITY_LABELS`-t JSON-ná szerializálja.
+    - **Cloud Function Reader**: Minden guard function induláskor `getDocument('workflow_config')` → JSON.parse → validáció. Ha a config nem elérhető → hardkódolt fallback konstansok (fail-closed: mindig validál).
+    - **Verzió léptetés**: Ha bármely szerver-oldali konstans változik, a `CONFIG_VERSION`-t kell léptetni a `maestro-shared/workflowConfig.js`-ben.
+
+11. **Szerver-oldali Guard Function-ök (Cloud Functions)**
+    - **`article-update-guard`**: Összevont workflow állapotátmenet + contributor validáció. `previousState` mező biztosítja az előző állapot ismeretét. `modifiedByClientId = 'server-guard'` sentinel védi a végtelen ciklus ellen.
+    - **`validate-article-creation`**: publicationId létezés, state érvényesség, contributor user létezés, filePath formátum. Érvénytelen publicationId → cikk törlés.
+    - **`validate-publication-update`**: Default contributor ID-k user létezés ellenőrzés, rootPath kanonikus formátum figyelés.
+    - **`validate-labels`**: Érvénytelen label-ek automatikus eltávolítása. A `validLabels` listát a config collection-ből olvassa (fallback: hardcoded).
+    - **`cleanup-orphaned-locks`**: Naponta 3:00 UTC. 24h-nál régebbi vagy nem létező owner-ű lockokat feloldja.
+    - **`cleanup-orphaned-thumbnails`**: Hetente vasárnap 4:00 UTC. Storage ↔ DB összehasonlítás, orphaned fájlok törlése.
+    - **`migrate-legacy-paths`**: Manuális futtatás. DRY_RUN=true alapértelmezett. Legacy útvonalak kanonikus/relatív konverziója.
+
 ---
 
 ## Projektstruktúra
@@ -211,7 +228,7 @@ Maestro/
 │   ├── appwriteIds.js            ← Appwrite projekt/DB/gyűjtemény/csapat/bucket ID-k
 │   ├── constants.js              ← Platform-független enumerációk (LOCK_TYPE, VALIDATION_TYPES)
 │   ├── labelConfig.js            ← Capability-based label konfiguráció (CAPABILITY_LABELS, resolveGrantedTeams, hasCapability)
-│   ├── workflowConfig.js         ← Workflow állapotok, markerek, időtartamok, STATUS_LABELS, TEAM_ARTICLE_FIELD, labelMatchesSlug
+│   ├── workflowConfig.js         ← Workflow állapotok, markerek, időtartamok, STATUS_LABELS, TEAM_ARTICLE_FIELD, labelMatchesSlug, CONFIG_VERSION
 │   └── urgency.js                ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színskála)
 │
 ├── docs/                         ← Architektúra dokumentáció (ld. §Dokumentáció Katalógus)
@@ -266,6 +283,7 @@ Maestro/
 │   │       ├── archivingProcessor.js    ← Hibrid AI + szabály-alapú clustering (Union-Find, polygon clipping, TXT/XML output)
 │   │       ├── thumbnailUploader.js    ← Thumbnail JPEG feltöltés/törlés/takarítás (Appwrite Storage)
 │   │       ├── pageGapUtils.js         ← Placeholder sorok generálása lefedetlen oldalakhoz
+│   │       ├── syncWorkflowConfig.js    ← Workflow config szinkronizálás DB-be (Cloud Function-ök számára)
 │   │       ├── urgencyUtils.js         ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színek)
 │   │       ├── validationConstants.js  ← VALIDATOR_TYPES és VALIDATION_SOURCES enumerációk
 │   │       ├── validationRunner.js     ← Validátor futtatás orchestrálása + standalone fájl létezés ellenőrzés
@@ -357,7 +375,14 @@ Maestro/
 │   └── assets/                   ← Statikus erőforrások (ikonok, stb.)
 │
 └── appwrite_functions/           ← Szerver-oldali Appwrite Cloud Funkciók
+    ├── article-update-guard/      ← Cikk frissítés guard (állapotátmenet + jogosultság + contributor validáció)
+    ├── validate-article-creation/ ← Cikk létrehozás validáció (publicationId, state, contributor-ok)
+    ├── validate-publication-update/ ← Kiadvány módosítás validáció (default contributor-ok, rootPath)
+    ├── validate-labels/           ← Felhasználói label validáció (érvénytelen label-ek automatikus eltávolítása)
     ├── cascade-delete/            ← Kaszkád törlés (article: üzenetek, validációk, thumbnailek; publication: cikkek, határidők, layoutok)
+    ├── cleanup-orphaned-locks/    ← Árva zárolások időszakos takarítása (naponta, 24h-nál régebbi)
+    ├── cleanup-orphaned-thumbnails/ ← Árva thumbnail fájlok takarítása (hetente, Storage ↔ DB összehasonlítás)
+    ├── migrate-legacy-paths/      ← Régi formátumú útvonalak batch migrációja (manuális, DRY_RUN)
     └── team/                     ← Csapat kezelő funkciók
 ```
 
@@ -426,6 +451,7 @@ Appwrite `memberships` Realtime csatorna → `DataContext` handler → `teamMemb
 | `docs/URGENCY_SYSTEM.md`                  | Sürgősség-számítás: munkaidő, ünnepnapok, ratio, progresszív sáv   |
 | `docs/VALIDATION_MECHANISM.md`            | Egységes validációs és üzenetküldő rendszer működése                |
 | `docs/ARCHIVING_TEXT_EXTRACTION.md`       | Archiválási szövegkinyerés: clustering, típusosztályozás, XML/TXT   |
+| `docs/CLOUD_FUNCTIONS.md`                 | Cloud Function-ök üzemeltetési referencia: ID-k, triggerek, env vars |
 | `CONTRIBUTING.md`                         | Fejlesztési szabályok, JSDoc policy, import sorrend, PR workflow    |
 
 ---

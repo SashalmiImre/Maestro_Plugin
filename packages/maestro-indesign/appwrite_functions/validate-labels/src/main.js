@@ -21,10 +21,11 @@ const sdk = require("node-appwrite");
  */
 
 // ─── Érvényes capability label-ek ─────────────────────────────────────────
-// FONTOS: Ezt a listát szinkronban kell tartani a maestro-shared/labelConfig.js
-// CAPABILITY_LABELS kulcsaival! Ha új label-t adsz hozzá ott, ide is írd be.
-// A labelConfig.js-ben is van visszahivatkozás erre a fájlra.
-const VALID_LABELS = new Set([
+// A config collection `workflow_config` dokumentumából olvassuk.
+// Fallback: hardcoded lista, ha a config nem elérhető.
+const CONFIG_DOCUMENT_ID = 'workflow_config';
+
+const FALLBACK_VALID_LABELS = new Set([
     'canUseDesignerFeatures',
     'canApproveDesigns',
     'canEditContent',
@@ -35,6 +36,22 @@ const VALID_LABELS = new Set([
     'canUseEditorFeatures',
     'canAddArticlePlan',
 ]);
+
+/**
+ * Betölti az érvényes label-ek listáját a config collection-ből.
+ * Ha nem elérhető, a hardcoded fallback listát adja vissza.
+ */
+async function loadValidLabels(databases, databaseId, configCollectionId, log) {
+    if (!configCollectionId) return FALLBACK_VALID_LABELS;
+    try {
+        const doc = await databases.getDocument(databaseId, configCollectionId, CONFIG_DOCUMENT_ID);
+        const labels = JSON.parse(doc.validLabels || '[]');
+        if (labels.length > 0) return new Set(labels);
+    } catch (e) {
+        log(`[Config] Fallback valid labels használata: ${e.message}`);
+    }
+    return FALLBACK_VALID_LABELS;
+}
 
 module.exports = async function ({ req, res, log, error }) {
     try {
@@ -54,6 +71,23 @@ module.exports = async function ({ req, res, log, error }) {
             return res.json({ success: true, action: 'skipped', reason: 'No labels in payload' });
         }
 
+        // ── SDK inicializálás ──
+        const client = new sdk.Client()
+            .setEndpoint(process.env.APPWRITE_FUNCTION_ENDPOINT || 'https://cloud.appwrite.io/v1')
+            .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
+            .setKey(process.env.APPWRITE_API_KEY);
+
+        const users = new sdk.Users(client);
+        const databases = new sdk.Databases(client);
+
+        // Érvényes label-ek betöltése a config collection-ből (fallback: hardcoded lista)
+        const VALID_LABELS = await loadValidLabels(
+            databases,
+            process.env.DATABASE_ID,
+            process.env.CONFIG_COLLECTION_ID,
+            log
+        );
+
         // Gyors ellenőrzés az event payload alapján — ha minden érvényes, nincs teendő
         const quickCheck = eventUser.labels.some(l => !VALID_LABELS.has(l));
         if (!quickCheck) {
@@ -61,12 +95,6 @@ module.exports = async function ({ req, res, log, error }) {
         }
 
         // ── Érvénytelen label észlelve → friss állapot lekérése (stale snapshot védelem) ──
-        const client = new sdk.Client()
-            .setEndpoint(process.env.APPWRITE_FUNCTION_ENDPOINT || 'https://cloud.appwrite.io/v1')
-            .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
-            .setKey(process.env.APPWRITE_API_KEY);
-
-        const users = new sdk.Users(client);
         const freshUser = await users.get(eventUser.$id);
 
         const validLabels = freshUser.labels.filter(l => VALID_LABELS.has(l));

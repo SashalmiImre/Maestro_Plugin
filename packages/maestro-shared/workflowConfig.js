@@ -5,6 +5,18 @@
  * Egyetlen igazságforrás a plugin és a dashboard számára.
  */
 
+// ─── Config verzió ─────────────────────────────────────────────────────────
+// A Cloud Function-ök a DB-ből olvassák a workflow konstansokat.
+// A plugin induláskor ellenőrzi: ha a DB-ben eltérő verzió van, upsert-eli.
+// Léptesd ezt az értéket, ha bármely szerver-oldali konstans változik
+// (STATE_PERMISSIONS, VALID_TRANSITIONS, TEAM_ARTICLE_FIELD, CAPABILITY_LABELS).
+
+/** @type {string} */
+export const CONFIG_VERSION = '1.0.0';
+
+/** Fix dokumentum ID a config collection-ben. */
+export const CONFIG_DOCUMENT_ID = 'workflow_config';
+
 // ─── Állapotok ──────────────────────────────────────────────────────────────
 
 /**
