@@ -6,7 +6,8 @@
  */
 
 import React from 'react';
-import { WORKFLOW_CONFIG, MARKERS, LOCK_TYPE, VALIDATION_TYPES } from '../config.js';
+import { WORKFLOW_CONFIG, MARKERS, LOCK_TYPE } from '../config.js';
+import ValidationIcons from './ValidationIcons.jsx';
 
 const ArticleRow = React.memo(function ArticleRow({
     article, maxPage, urgency, validationItems, currentUser, getMemberName
@@ -108,34 +109,3 @@ function StateIndicator({ article }) {
     );
 }
 
-function ValidationIcons({ items }) {
-    if (!items || items.length === 0) return null;
-
-    const hasErrors = items.some(i => i.type === VALIDATION_TYPES.ERROR);
-    const hasWarnings = items.some(i => i.type === VALIDATION_TYPES.WARNING);
-
-    const tooltip = items.map(i => {
-        const prefix = i.type === VALIDATION_TYPES.ERROR
-            ? (i.source === 'user' ? '[Gond]' : '[Hiba]')
-            : (i.source === 'user' ? '[Infó]' : '[Figy.]');
-        return `${prefix} ${i.message}`;
-    }).join('\n');
-
-    return (
-        <div className="validation-icons" title={tooltip}>
-            {hasErrors && (
-                <svg width="14" height="14" viewBox="0 0 14 14">
-                    <circle cx="7" cy="7" r="6" fill="#dc2626"/>
-                    <path d="M4.5 4.5l5 5M9.5 4.5l-5 5" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
-                </svg>
-            )}
-            {hasWarnings && (
-                <svg width="14" height="14" viewBox="0 0 14 14">
-                    <path d="M7 1L13 13H1L7 1Z" fill="#ea580c"/>
-                    <path d="M7 5.5v3" stroke="white" strokeWidth="1.5" strokeLinecap="round"/>
-                    <circle cx="7" cy="10.5" r="0.8" fill="white"/>
-                </svg>
-            )}
-        </div>
-    );
-}

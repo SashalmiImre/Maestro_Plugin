@@ -7,8 +7,9 @@
 
 import React from 'react';
 import { STATUS_COLORS } from '../config.js';
+import ValidationIcons from './ValidationIcons.jsx';
 
-const PageSlot = React.memo(function PageSlot({ pageData, pageNum }) {
+const PageSlot = React.memo(function PageSlot({ pageData, pageNum, validationItems }) {
     // Üres hely (pl. címlap bal oldala)
     if (!pageData && pageNum === null) {
         return <div className="page-slot empty-slot" />;
@@ -55,6 +56,11 @@ const PageSlot = React.memo(function PageSlot({ pageData, pageNum }) {
                         </svg>
                     </div>
                 )}
+                <ValidationIcons
+                    items={validationItems}
+                    className="page-validation-badge"
+                    size={16}
+                />
             </div>
             <div className="page-state-bar" style={{ backgroundColor: stateColor }} />
             <div className="page-info">

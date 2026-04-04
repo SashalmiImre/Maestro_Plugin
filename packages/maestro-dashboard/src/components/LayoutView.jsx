@@ -78,7 +78,7 @@ function saveSelectedLayout(publicationId, layoutId) {
 }
 
 export default function LayoutView({ filteredArticles }) {
-    const { publications, layouts, activePublicationId, storage } = useData();
+    const { publications, layouts, activePublicationId, storage, validations } = useData();
     const [columns, setColumns] = useState(() => loadColumns(activePublicationId));
     const [zoom, setZoom] = useState(ZOOM_DEFAULT);
     const [naturalWidth, setNaturalWidth] = useState(null);
@@ -180,6 +180,23 @@ export default function LayoutView({ filteredArticles }) {
             return '';
         }
     }, [storage]);
+
+    // Validáció indexelés (articleId → [{type, message, source}])
+    const validationIndex = useMemo(() => {
+        const map = new Map();
+        for (const v of validations) {
+            if (v.isResolved) continue;
+            const item = {
+                type: v.type || 'info',
+                message: v.description || v.message || '',
+                source: v.source || 'user'
+            };
+            const list = map.get(v.articleId);
+            if (list) list.push(item);
+            else map.set(v.articleId, [item]);
+        }
+        return map;
+    }, [validations]);
 
     // Alap (első) layout ID — fallback oldalakhoz
     const defaultLayoutId = useMemo(
@@ -432,16 +449,18 @@ export default function LayoutView({ filteredArticles }) {
     // ─── Layout választás kezelő ────────────────────────────────────────────
 
     const handleLayoutChange = useCallback((e) => {
-        const value = e.target.value || null;
+        const value = e.target.value;
         setSelectedLayoutId(value);
         saveSelectedLayout(activePublicationId, value);
     }, [activePublicationId]);
 
-    // Ha a kiválasztott layout már nem létezik, visszaállítás
+    // Ha nincs kiválasztott layout, vagy a kiválasztott layout már nem létezik → első layout auto-kiválasztás
     useEffect(() => {
-        if (selectedLayoutId && layouts.length > 0 && !layouts.some(l => l.$id === selectedLayoutId)) {
-            setSelectedLayoutId(null);
-            saveSelectedLayout(activePublicationId, null);
+        if (layouts.length === 0) return;
+        if (!selectedLayoutId || !layouts.some(l => l.$id === selectedLayoutId)) {
+            const firstId = layouts[0].$id;
+            setSelectedLayoutId(firstId);
+            saveSelectedLayout(activePublicationId, firstId);
         }
     }, [layouts, selectedLayoutId, activePublicationId]);
 
@@ -478,7 +497,6 @@ export default function LayoutView({ filteredArticles }) {
                         onChange={handleLayoutChange}
                         title="Elrendezés szűrő"
                     >
-                        <option value="">Összes</option>
                         {layouts.map(l => (
                             <option key={l.$id} value={l.$id}>{l.name}</option>
                         ))}
@@ -554,10 +572,12 @@ export default function LayoutView({ filteredArticles }) {
                                 <PageSlot
                                     pageData={spread.left}
                                     pageNum={spread.leftNum}
+                                    validationItems={spread.left?.articleId ? validationIndex.get(spread.left.articleId) || null : null}
                                 />
                                 <PageSlot
                                     pageData={spread.right}
                                     pageNum={spread.rightNum}
+                                    validationItems={spread.right?.articleId ? validationIndex.get(spread.right.articleId) || null : null}
                                 />
                             </div>
                         ))}
@@ -634,6 +654,7 @@ function fillPageMap(pageMap, articles, coverageStart, coverageEnd, getThumbnail
                 pageMap[pageNum] = {
                     fileId: thumb.fileId,
                     thumbnailUrl: getThumbnailUrl(thumb.fileId),
+                    articleId: article.$id,
                     articleName: article.name,
                     state: article.state,
                     ignored: article.ignored,
@@ -648,6 +669,7 @@ function fillPageMap(pageMap, articles, coverageStart, coverageEnd, getThumbnail
                 const entry = {
                     fileId: thumb.fileId,
                     thumbnailUrl: getThumbnailUrl(thumb.fileId),
+                    articleId: article.$id,
                     articleName: article.name,
                     state: article.state,
                     ignored: article.ignored,
@@ -676,6 +698,7 @@ function fillPageMap(pageMap, articles, coverageStart, coverageEnd, getThumbnail
                 pageMap[pageNum] = {
                     fileId: thumb.fileId,
                     thumbnailUrl: getThumbnailUrl(thumb.fileId),
+                    articleId: article.$id,
                     articleName: article.name,
                     state: article.state,
                     ignored: article.ignored,
