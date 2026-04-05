@@ -6,45 +6,55 @@
 /* ─── Design Tokens ────────────────────────────────────────────────────────── */
 
 :root {
-    /* Rétegzett háttér */
-    --bg-base:     #0d1117;
-    --bg-surface:  #161b22;
-    --bg-elevated: #21262d;
-    --bg-overlay:  #1c2128;
-    --bg-hover:    #2d333b;
+    /* Rétegzett háttér — Stitch "Digital Curator" tónusok */
+    --bg-base:     #111319;     /* background/surface */
+    --bg-surface:  #191b22;     /* surface-container-low */
+    --bg-elevated: #282a30;     /* surface-container-high */
+    --bg-overlay:  #1e1f26;     /* surface-container */
+    --bg-hover:    #33343b;     /* surface-container-highest */
 
-    /* Keretek */
-    --border:       rgba(240, 246, 252, 0.10);
-    --border-muted: rgba(240, 246, 252, 0.06);
+    /* Keretek — "No-Line" szabály: ghost border-ek */
+    --border:       rgba(66, 71, 84, 0.15);    /* outline-variant/15 */
+    --border-muted: rgba(66, 71, 84, 0.05);    /* outline-variant/5 */
 
     /* Szöveg hierarchia */
-    --text-primary:   #e6edf3;
-    --text-secondary: #8b949e;
-    --text-muted:     #6e7681;
-    --text-disabled:  #484f58;
+    --text-primary:   #e2e2eb;   /* on-surface */
+    --text-secondary: #c2c6d6;   /* on-surface-variant */
+    --text-muted:     #8c909f;   /* outline */
+    --text-disabled:  #424754;   /* outline-variant */
 
-    /* Accent */
-    --accent:        #3b82f6;
-    --accent-hover:  #2563eb;
-    --accent-subtle: rgba(59, 130, 246, 0.15);
+    /* Accent — Stitch primary paletta */
+    --accent:        #adc6ff;    /* primary */
+    --accent-hover:  #4d8eff;    /* primary-container */
+    --accent-subtle: rgba(173, 198, 255, 0.15);
+    --accent-solid:  #3b82f6;    /* interaktív háttér: sidebar blade, gombok */
 
     /* Státusz */
-    --c-error:   #f85149;
+    --c-error:   #ffb4ab;        /* error */
     --c-warning: #e3b341;
-    --c-success: #3fb950;
+    --c-success: #4ade80;        /* green-400 */
 
-    /* Lock badge variánsok */
-    --badge-me-bg:      rgba(59, 130, 246, 0.18);
-    --badge-me-text:    #79c0ff;
-    --badge-me-border:  rgba(59, 130, 246, 0.40);
+    /* Lila — Tervezet állapot */
+    --tertiary:           #ddb7ff;
+    --tertiary-container: #b76dff;
 
-    --badge-sys-bg:     rgba(245, 158, 11, 0.15);
-    --badge-sys-text:   #ffa657;
-    --badge-sys-border: rgba(245, 158, 11, 0.35);
+    /* Felszín tokenek (közvetlen hivatkozáshoz) */
+    --surface-container:         #1e1f26;
+    --surface-container-highest: #33343b;
+    --outline-variant:           #424754;
 
-    --badge-other-bg:     rgba(139, 148, 158, 0.12);
-    --badge-other-text:   #8b949e;
-    --badge-other-border: rgba(139, 148, 158, 0.28);
+    /* Lock badge variánsok — Stitch tónusok */
+    --badge-me-bg:      rgba(173, 198, 255, 0.10);
+    --badge-me-text:    #adc6ff;
+    --badge-me-border:  rgba(173, 198, 255, 0.20);
+
+    --badge-sys-bg:     rgba(183, 109, 255, 0.10);
+    --badge-sys-text:   #ddb7ff;
+    --badge-sys-border: rgba(221, 183, 255, 0.20);
+
+    --badge-other-bg:     #33343b;
+    --badge-other-text:   #c2c6d6;
+    --badge-other-border: rgba(66, 71, 84, 0.20);
 }
 
 /* ─── Reset & Alapok ───────────────────────────────────────────────────────── */
@@ -57,14 +67,14 @@
 
 html, body {
     height: 100%;
-    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
     font-size: 13px;
     line-height: 1.4;
     color: var(--text-primary);
     background: var(--bg-base);
     -webkit-font-smoothing: antialiased;
     scrollbar-width: thin;
-    scrollbar-color: #30363d transparent;
+    scrollbar-color: var(--bg-hover) transparent;
 }
 
 /* Custom scrollbar */
@@ -73,14 +83,14 @@ html, body {
     height: 6px;
 }
 ::-webkit-scrollbar-track {
-    background: transparent;
+    background: var(--bg-base);
 }
 ::-webkit-scrollbar-thumb {
-    background: #30363d;
-    border-radius: 3px;
+    background: var(--bg-hover);
+    border-radius: 10px;
 }
 ::-webkit-scrollbar-thumb:hover {
-    background: #484f58;
+    background: var(--outline-variant);
 }
 
 /* Focus ring */
@@ -101,7 +111,7 @@ html, body {
     background: var(--bg-base);
     /* Finom radiális fényhatás a háttérben */
     background-image:
-        radial-gradient(ellipse 600px 400px at 50% 40%, rgba(59, 130, 246, 0.06), transparent);
+        radial-gradient(ellipse 600px 400px at 50% 40%, rgba(173, 198, 255, 0.04), transparent);
 }
 
 /* Brand szekció */
@@ -136,15 +146,15 @@ html, body {
     width: 40px;
     height: 2px;
     border-radius: 1px;
-    background: linear-gradient(135deg, var(--accent), #93c5fd);
+    background: linear-gradient(135deg, var(--accent-solid), var(--accent));
 }
 
-/* Kártya — glassmorphism */
+/* Kártya — glassmorphism (Stitch tónusok) */
 .login-card {
-    background: rgba(22, 27, 34, 0.75);
+    background: rgba(25, 27, 34, 0.75);
     backdrop-filter: blur(20px);
     -webkit-backdrop-filter: blur(20px);
-    border: 1px solid rgba(240, 246, 252, 0.08);
+    border: 1px solid rgba(66, 71, 84, 0.15);
     border-radius: 16px;
     padding: 36px 40px;
     width: 100%;
@@ -200,13 +210,13 @@ html, body {
 }
 
 .form-group input:hover:not(:focus) {
-    border-color: rgba(240, 246, 252, 0.1);
+    border-color: rgba(66, 71, 84, 0.15);
 }
 
 .form-group input:focus {
-    border-color: rgba(59, 130, 246, 0.5);
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.12);
-    background: rgba(13, 17, 23, 0.8);
+    border-color: rgba(173, 198, 255, 0.5);
+    box-shadow: 0 0 0 3px rgba(173, 198, 255, 0.10);
+    background: rgba(12, 14, 20, 0.8);
 }
 
 .form-group input::placeholder {
@@ -216,7 +226,7 @@ html, body {
 .login-btn {
     width: 100%;
     padding: 11px;
-    background: linear-gradient(135deg, #3b82f6, #60a5fa);
+    background: linear-gradient(135deg, var(--accent-solid), var(--accent-hover));
     color: #fff;
     border: none;
     border-radius: 8px;
@@ -224,14 +234,14 @@ html, body {
     font-weight: 600;
     font-family: inherit;
     cursor: pointer;
-    box-shadow: 0 4px 16px rgba(59, 130, 246, 0.25);
+    box-shadow: 0 4px 20px rgba(173, 198, 255, 0.25);
     transition: filter 0.15s, transform 0.1s, box-shadow 0.15s;
     margin-top: 8px;
 }
 
 .login-btn:hover:not(:disabled) {
     filter: brightness(1.08);
-    box-shadow: 0 6px 20px rgba(59, 130, 246, 0.35);
+    box-shadow: 0 6px 24px rgba(173, 198, 255, 0.35);
 }
 
 .login-btn:active:not(:disabled) {
@@ -278,24 +288,26 @@ html, body {
     display: flex;
 }
 
-/* Fejléc */
+/* Fejléc — "No-Line": border nélkül, shadow-val */
 .dashboard-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
     padding: 12px 20px;
     background: var(--bg-surface);
-    border-bottom: 1px solid var(--border);
+    border-bottom: none;
     flex-shrink: 0;
     backdrop-filter: blur(12px);
     -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
+    z-index: 10;
 }
 
 .dashboard-header h1 {
-    font-size: 15px;
-    font-weight: 700;
+    font-size: 16px;
+    font-weight: 800;
     color: var(--text-primary);
-    letter-spacing: -0.01em;
+    letter-spacing: -0.02em;
 }
 
 .dashboard-header .user-info {
@@ -309,18 +321,17 @@ html, body {
 .logout-btn {
     padding: 5px 12px;
     background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    border: none;
+    border-radius: 8px;
     color: var(--text-secondary);
     font-size: 11px;
     cursor: pointer;
-    transition: all 0.15s;
+    transition: all 0.2s;
 }
 
 .logout-btn:hover {
-    border-color: var(--c-error);
     color: var(--c-error);
-    background: rgba(248, 81, 73, 0.08);
+    background: rgba(255, 180, 171, 0.08);
 }
 
 /* Fő tartalom (oldalsáv + tábla) */
@@ -336,44 +347,47 @@ html, body {
     width: 220px;
     min-width: 220px;
     background: var(--bg-surface);
-    border-right: 1px solid var(--border);
+    border-right: none;
     overflow-y: auto;
     flex-shrink: 0;
 }
 
 .sidebar-header {
-    padding: 12px 16px;
+    padding: 16px 20px 12px;
     font-size: 10px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.08em;
+    letter-spacing: 0.1em;
     color: var(--text-muted);
-    border-bottom: 1px solid var(--border);
+    border-bottom: none;
 }
 
 .publication-item {
-    padding: 10px 16px;
+    padding: 12px 16px;
     cursor: pointer;
-    font-size: 12.5px;
-    color: var(--text-secondary);
-    border-bottom: 1px solid var(--border-muted);
-    transition: all 0.12s;
+    font-size: 10px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: rgba(226, 226, 235, 0.6);
+    border-bottom: none;
+    transition: all 0.3s;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    border-left: 3px solid transparent;
+    border-left: 4px solid transparent;
 }
 
 .publication-item:hover {
-    background: rgba(255, 255, 255, 0.04);
+    background: var(--bg-elevated);
     color: var(--text-primary);
 }
 
 .publication-item.active {
-    background: var(--accent-subtle);
+    background: rgba(40, 42, 48, 0.3);
     color: var(--accent);
-    font-weight: 600;
-    border-left-color: var(--accent);
+    font-weight: 700;
+    border-left-color: var(--accent-solid);
 }
 
 /* ─── Fő tartalom (tábla terület) ──────────────────────────────────────────── */
@@ -390,13 +404,14 @@ html, body {
     align-items: center;
     justify-content: space-between;
     padding: 10px 16px;
-    border-bottom: 1px solid var(--border);
+    border-bottom: none;
     flex-shrink: 0;
 }
 
 .content-header h2 {
-    font-size: 14px;
-    font-weight: 600;
+    font-size: 18px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
     color: var(--text-primary);
 }
 
@@ -408,21 +423,25 @@ html, body {
 
 .article-count {
     font-size: 11px;
-    color: var(--text-muted);
-    background: var(--bg-elevated);
-    padding: 2px 8px;
-    border-radius: 10px;
-    border: 1px solid var(--border-muted);
+    color: var(--text-secondary);
+    background: var(--surface-container);
+    padding: 3px 10px;
+    border-radius: 12px;
+    border: 1px solid rgba(66, 71, 84, 0.15);
 }
 
 /* ─── Szűrő sáv ───────────────────────────────────────────────────────────── */
 
 .filter-bar {
-    padding: 10px 16px;
-    border-bottom: 1px solid var(--border);
-    background: rgba(22, 27, 34, 0.6);
+    padding: 20px 24px;
+    border-bottom: none;
+    background: var(--bg-surface);
+    border-radius: 16px;
+    margin: 0 16px 16px;
     flex-shrink: 0;
     display: none;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+    outline: 1px solid rgba(66, 71, 84, 0.10);
 }
 
 .filter-bar.active {
@@ -435,11 +454,11 @@ html, body {
     justify-content: center;
     padding: 6px 8px;
     background: transparent;
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    border: 1px solid rgba(66, 71, 84, 0.15);
+    border-radius: 8px;
     color: var(--text-secondary);
     cursor: pointer;
-    transition: all 0.15s;
+    transition: all 0.2s;
 }
 
 .filter-toggle-btn:hover {
@@ -457,37 +476,43 @@ html, body {
 .filter-status-grid {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 4px 20px;
-    margin-bottom: 8px;
+    gap: 8px 24px;
+    margin-bottom: 12px;
 }
 
 .filter-checkbox {
     display: flex;
     align-items: center;
-    gap: 6px;
-    font-size: 11px;
+    gap: 10px;
+    font-size: 12px;
+    font-weight: 500;
     color: var(--text-secondary);
     cursor: pointer;
-    padding: 3px 0;
+    padding: 4px 0;
     user-select: none;
-    transition: color 0.12s;
+    transition: color 0.2s;
 }
 
 .filter-checkbox:hover {
     color: var(--text-primary);
 }
 
+/* Kerek (pill) checkbox-ok — Stitch stílus */
 .filter-checkbox input[type="checkbox"] {
     appearance: none;
-    width: 14px;
-    height: 14px;
-    border: 1px solid var(--text-disabled, #444c56);
-    border-radius: 3px;
-    background: var(--bg-elevated);
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--outline-variant);
+    border-radius: 50%;
+    background: transparent;
     cursor: pointer;
     position: relative;
     flex-shrink: 0;
-    transition: background 0.12s, border-color 0.12s;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.filter-checkbox:hover input[type="checkbox"] {
+    border-color: var(--accent);
 }
 
 .filter-checkbox input[type="checkbox"]:checked {
@@ -496,15 +521,15 @@ html, body {
 }
 
 .filter-checkbox input[type="checkbox"]:checked::after {
-    content: '';
+    content: '✓';
     position: absolute;
-    top: 1px;
-    left: 4px;
-    width: 4px;
-    height: 8px;
-    border: solid #fff;
-    border-width: 0 2px 2px 0;
-    transform: rotate(45deg);
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    font-size: 12px;
+    font-weight: 700;
+    color: #00285d;
+    line-height: 1;
 }
 
 .status-dot {
@@ -513,20 +538,23 @@ html, body {
     border-radius: 50%;
     display: inline-block;
     flex-shrink: 0;
+    filter: drop-shadow(0 0 4px currentColor);
 }
 
 .filter-header {
     display: flex;
     justify-content: flex-end;
-    margin-bottom: 4px;
+    margin-bottom: 8px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid rgba(66, 71, 84, 0.10);
 }
 
 .filter-extra {
     display: flex;
     gap: 16px;
     align-items: center;
-    padding-top: 8px;
-    border-top: 1px solid var(--border);
+    padding-top: 12px;
+    border-top: 1px solid rgba(66, 71, 84, 0.10);
 }
 
 .filter-reset-btn {
@@ -536,14 +564,17 @@ html, body {
     padding: 0;
     background: none;
     border: none;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
     cursor: pointer;
-    transition: color 0.12s;
+    transition: color 0.15s;
 }
 
 .filter-reset-btn:hover {
-    color: var(--c-error);
+    color: var(--accent);
 }
 
 .filter-reset-icon {
@@ -553,7 +584,8 @@ html, body {
 /* ─── Placeholder sorok ───────────────────────────────────────────────────── */
 
 .placeholder-row {
-    background: rgba(128, 128, 128, 0.04) !important;
+    background: rgba(25, 27, 34, 0.4) !important;
+    opacity: 0.6;
 }
 
 .placeholder-name {
@@ -563,10 +595,16 @@ html, body {
 
 /* ─── Cikk tábla ──────────────────────────────────────────────────────────── */
 
+/* Tábla konténer — Stitch rounded card */
 .table-container {
     flex: 1;
     overflow-y: auto;
     overflow-x: auto;
+    margin: 0 16px 16px;
+    background: var(--surface-container);
+    border-radius: 16px;
+    outline: 1px solid rgba(66, 71, 84, 0.10);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.35);
 }
 
 .article-table {
@@ -575,22 +613,25 @@ html, body {
     border-collapse: collapse;
 }
 
+/* Glassmorphism fejléc */
 .article-table thead {
     position: sticky;
     top: 0;
     z-index: 1;
-    background: var(--bg-surface);
+    background: rgba(40, 42, 48, 0.5);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
 }
 
 .article-table th {
-    padding: 8px 10px;
-    font-size: 10.5px;
+    padding: 16px 24px;
+    font-size: 11px;
     font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-muted);
+    letter-spacing: 0.1em;
+    color: var(--text-secondary);
     text-align: left;
-    border-bottom: 1px solid var(--border);
+    border-bottom: 1px solid rgba(66, 71, 84, 0.05);
     cursor: pointer;
     user-select: none;
     white-space: nowrap;
@@ -615,17 +656,17 @@ html, body {
 }
 
 .article-table tbody tr {
-    border-bottom: 1px solid var(--border-muted);
-    transition: background 0.1s;
+    border-bottom: 1px solid rgba(66, 71, 84, 0.05);
+    transition: background 0.15s;
 }
 
 .article-table tbody tr:hover {
-    background: var(--bg-elevated) !important;
+    background: rgba(51, 52, 59, 0.20) !important;
 }
 
 .article-table td {
-    padding: 7px 10px;
-    font-size: 12.5px;
+    padding: 18px 24px;
+    font-size: 13px;
     vertical-align: middle;
     white-space: nowrap;
     overflow: hidden;
@@ -644,8 +685,8 @@ html, body {
 /* Terjedelem (monospace) */
 .page-range {
     font-family: 'SF Mono', Consolas, 'Andale Mono', 'Lucida Console', 'Courier New', monospace;
-    font-size: 11px;
-    font-weight: 600;
+    font-size: 13px;
+    font-weight: 400;
     color: var(--text-secondary);
 }
 
@@ -655,15 +696,15 @@ html, body {
     color: var(--c-error);
 }
 
-/* Lock label badge-ek */
+/* Lock label badge-ek — Stitch stílus */
 .lock-label {
     display: inline-flex;
     align-items: center;
-    padding: 2px 7px;
+    padding: 2px 8px;
     border-radius: 4px;
     font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.04em;
+    font-weight: 700;
+    letter-spacing: 0.06em;
     border: 1px solid;
     white-space: nowrap;
     text-transform: uppercase;
@@ -687,13 +728,13 @@ html, body {
     border-color: var(--badge-other-border);
 }
 
-/* Státusz pont (tábla cella) */
+/* Státusz pont (tábla cella) — Stitch glow-effekt */
 .state-dot {
-    width: 10px;
-    height: 10px;
+    width: 6px;
+    height: 6px;
     border-radius: 50%;
     display: inline-block;
-    box-shadow: 0 0 3px currentColor;
+    filter: drop-shadow(0 0 4px currentColor);
 }
 
 /* Validáció ikonok */
@@ -753,13 +794,15 @@ html, body {
 }
 
 .toast {
-    padding: 10px 16px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 8px;
+    padding: 12px 18px;
+    background: rgba(40, 42, 48, 0.80);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid rgba(66, 71, 84, 0.15);
+    border-radius: 12px;
     font-size: 12px;
     color: var(--text-primary);
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.5), 0 2px 8px rgba(0, 0, 0, 0.3);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.4);
     animation: slideUp 0.25s ease-out;
     max-width: 360px;
 }
@@ -787,16 +830,16 @@ html, body {
 .mobile-pub-select {
     display: none;
     padding: 10px 16px;
-    border-bottom: 1px solid var(--border);
+    border-bottom: none;
     flex-shrink: 0;
 }
 
 .mobile-pub-select select {
     width: 100%;
     padding: 8px 10px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 6px;
+    background: var(--surface-container);
+    border: 1px solid rgba(66, 71, 84, 0.15);
+    border-radius: 8px;
     color: var(--text-primary);
     font-size: 12px;
     outline: none;
@@ -847,34 +890,34 @@ html, body {
 .view-toggle {
     display: flex;
     gap: 2px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 3px;
+    background: var(--bg-surface);
+    border: none;
+    border-radius: 12px;
+    padding: 4px;
 }
 
 .view-btn {
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 5px 8px;
+    padding: 8px 10px;
     border: none;
-    border-radius: 5px;
+    border-radius: 8px;
     background: transparent;
-    color: var(--text-muted);
+    color: var(--text-secondary);
     cursor: pointer;
     line-height: 1;
-    transition: background 0.15s, color 0.15s;
+    transition: background 0.15s, color 0.15s, box-shadow 0.15s;
 }
 
 .view-btn:hover {
     color: var(--text-primary);
-    background: rgba(255, 255, 255, 0.06);
 }
 
 .view-btn.active {
-    background: var(--accent);
-    color: #fff;
+    background: var(--bg-elevated);
+    color: var(--accent);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3), 0 0 0 1px rgba(255, 255, 255, 0.05);
 }
 
 /* ─── Layout (Flatplan) nézet ─────────────────────────────────────────────── */
@@ -887,15 +930,17 @@ html, body {
     padding: 0;
 }
 
-/* Zoom toolbar — a scrollozható terület felett, mindig látható */
+/* Zoom toolbar — glassmorphism */
 .layout-toolbar {
     display: flex;
     align-items: center;
     justify-content: flex-end;
     gap: 12px;
-    padding: 8px 20px;
-    border-bottom: 1px solid var(--border);
-    background: var(--bg-surface);
+    padding: 12px 20px;
+    border-bottom: none;
+    background: rgba(25, 27, 34, 0.5);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
     flex-shrink: 0;
     z-index: 2;
 }
@@ -903,24 +948,25 @@ html, body {
 /* Layout választó dropdown */
 .layout-select {
     margin-right: auto;
-    padding: 4px 8px;
-    background: var(--bg-elevated);
+    padding: 6px 10px;
+    background: var(--surface-container);
     color: var(--text-secondary);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    font-size: 12px;
+    border: none;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
     cursor: pointer;
     outline: none;
-    transition: border-color 0.12s;
+    transition: background 0.12s, color 0.12s;
 }
 
 .layout-select:hover {
-    border-color: var(--text-muted);
+    background: var(--bg-elevated);
     color: var(--text-primary);
 }
 
 .layout-select:focus {
-    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
 }
 
 /* Scrollozható terület a layout nézethez */
@@ -937,25 +983,24 @@ html, body {
 }
 
 .zoom-btn {
-    width: 26px;
-    height: 26px;
+    width: 28px;
+    height: 28px;
     display: flex;
     align-items: center;
     justify-content: center;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
+    background: var(--surface-container);
+    border: none;
     border-radius: 6px;
     color: var(--text-secondary);
     font-size: 14px;
     cursor: pointer;
     line-height: 1;
-    transition: all 0.12s;
+    transition: all 0.15s;
 }
 
 .zoom-btn:not(:disabled):hover {
-    border-color: var(--text-muted);
     color: var(--text-primary);
-    background: var(--bg-hover);
+    background: var(--bg-elevated);
 }
 
 .zoom-btn:disabled {
@@ -966,16 +1011,17 @@ html, body {
 /* Oszlopszám beviteli mező */
 .columns-input {
     width: 44px;
-    height: 26px;
+    height: 28px;
     text-align: center;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
+    background: transparent;
+    border: none;
     border-radius: 6px;
-    color: var(--text-secondary);
-    font-size: 13px;
+    color: var(--text-primary);
+    font-size: 12px;
+    font-weight: 700;
     -moz-appearance: textfield;
     outline: none;
-    transition: border-color 0.12s, color 0.12s;
+    transition: color 0.12s;
 }
 
 .columns-input::-webkit-inner-spin-button,
@@ -985,7 +1031,7 @@ html, body {
 }
 
 .columns-input:focus {
-    border-color: var(--accent);
+    box-shadow: 0 0 0 1px var(--accent);
     color: var(--text-primary);
 }
 
@@ -993,18 +1039,18 @@ html, body {
 .zoom-separator {
     width: 1px;
     height: 16px;
-    background: var(--border);
+    background: rgba(66, 71, 84, 0.30);
 }
 
 /* Zoom csúszka */
 .zoom-slider {
-    width: 100px;
+    width: 120px;
     height: 4px;
     -webkit-appearance: none;
     appearance: none;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
-    border-radius: 2px;
+    background: var(--surface-container-highest);
+    border: none;
+    border-radius: 4px;
     outline: none;
     cursor: pointer;
 }
@@ -1035,21 +1081,21 @@ html, body {
 
 /* Zoom visszaállító / %-kijelző gomb */
 .zoom-reset {
-    height: 26px;
+    height: 28px;
     padding: 0 8px;
-    background: var(--bg-elevated);
-    border: 1px solid var(--border);
+    background: transparent;
+    border: none;
     border-radius: 6px;
-    color: var(--text-secondary);
-    font-size: 12px;
+    color: var(--accent);
+    font-size: 11px;
+    font-weight: 700;
     cursor: pointer;
     white-space: nowrap;
     transition: all 0.12s;
 }
 
 .zoom-reset:hover {
-    border-color: var(--text-muted);
-    color: var(--text-primary);
+    text-decoration: underline;
 }
 
 /* Export gomb */
@@ -1079,13 +1125,15 @@ html, body {
     align-items: flex-end;
 }
 
-/* Oldal slot */
+/* Oldal slot — Stitch rounded card + shadow */
 .page-slot {
     position: relative;
     flex: 1;
     min-width: 0;
-    background: var(--bg-overlay);
+    background: var(--bg-surface);
     overflow: hidden;
+    /* border-radius: 0px; */
+    /* box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3); */
 }
 
 .page-slot img {
@@ -1105,19 +1153,21 @@ html, body {
     height: 3px;
 }
 
-/* Oldalütközés figyelmeztető badge */
+/* Oldalütközés figyelmeztető badge — Stitch rounded pill */
 .page-conflict-badge {
     position: absolute;
-    top: 4px;
-    right: 4px;
+    top: 6px;
+    right: 6px;
     z-index: 2;
     display: flex;
     align-items: center;
     justify-content: center;
     width: 20px;
     height: 20px;
-    background: rgba(0, 0, 0, 0.65);
-    border-radius: 4px;
+    background: var(--c-error);
+    border-radius: 50%;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+    border: 1px solid rgba(255, 255, 255, 0.2);
     cursor: default;
 }
 
@@ -1128,15 +1178,17 @@ html, body {
 /* Validáció figyelmeztető badge (bal felső sarok) */
 .page-validation-badge {
     position: absolute;
-    top: 4px;
-    left: 4px;
+    top: 6px;
+    left: 6px;
     z-index: 2;
     display: flex;
     align-items: center;
     gap: 2px;
-    padding: 2px;
-    background: rgba(0, 0, 0, 0.65);
-    border-radius: 4px;
+    padding: 3px;
+    background: rgba(0, 0, 0, 0.55);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-radius: 6px;
     cursor: default;
 }
 
@@ -1185,10 +1237,12 @@ html, body {
     box-shadow: none;
 }
 
-/* Placeholder (nincs thumbnail) */
+/* Placeholder (nincs thumbnail) — Stitch dashed border */
 .page-slot.placeholder {
     display: flex;
     flex-direction: column;
+    box-shadow: none;
+    background: var(--bg-base);
 }
 
 .page-slot.placeholder .page-thumb-area {
@@ -1196,14 +1250,15 @@ html, body {
     align-items: center;
     justify-content: center;
     aspect-ratio: var(--page-aspect-ratio, 210 / 297);
-    background: var(--bg-elevated);
-    border: 1px dashed var(--border);
-    border-radius: 5px 5px 0 0;
+    background: rgba(12, 14, 20, 0.6);
+    border: 2px dashed rgba(66, 71, 84, 0.30);
+    border-radius: 8px 8px 0 0;
 }
 
 .page-slot.placeholder .page-thumb-area .page-number {
-    font-size: 18px;
-    color: var(--text-disabled);
+    font-size: 20px;
+    font-weight: 800;
+    color: var(--outline-variant);
 }
 
 /* Figyelmen kívül hagyott cikkek */

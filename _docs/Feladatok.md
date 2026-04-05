@@ -11,7 +11,6 @@ tags: [feladatok]
 
 
 
-
 ## Kész
 ### Appwrite Cloud Function-ök — Szerver-oldali üzleti logika
 
