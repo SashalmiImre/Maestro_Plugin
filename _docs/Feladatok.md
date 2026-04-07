@@ -34,16 +34,16 @@ tags: [feladatok]
 - [ ] Meglévő CF-ek (article-update-guard, validate-article-creation, validate-publication-update) officeId scope átvétele
 - [x] Dashboard: `react-router-dom` telepítés (v7.14.0)
 - [x] Dashboard route `/login` — bejelentkezés (LoginRoute.jsx, az AuthSplitLayout brand részével)
-- [ ] Dashboard route `/register` — regisztráció (név, e-mail, jelszó) + `account.createVerification(DASHBOARD_URL/verify)` *(B.3: placeholder kész, B.4-ben implementáció)*
-- [ ] Dashboard route `/verify?userId=&secret=` — e-mail verifikáció callback + átirányítás `/onboarding`-ra *(B.3: placeholder kész, B.4-ben implementáció)*
-- [ ] Dashboard route `/onboarding` — első belépés: új org létrehozása (org név + office név → automatikus workflow seed) vagy meghívó token bevitel *(B.3: placeholder kész, B.4-ben implementáció)*
-- [ ] Dashboard route `/invite?token=` — meghívó elfogadás (token validáció, user bejelentkezve vagy regisztrációra redirect) *(B.3: placeholder kész, B.4-ben implementáció)*
-- [ ] Dashboard route `/forgot-password` — `account.createRecovery(email, DASHBOARD_URL/reset-password)` *(B.3: placeholder kész, B.4-ben implementáció)*
-- [ ] Dashboard route `/reset-password?userId=&secret=` — új jelszó form, `account.updateRecovery()` *(B.3: placeholder kész, B.4-ben implementáció)*
+- [x] Dashboard route `/register` — regisztráció (név, e-mail, jelszó) + `account.createVerification(DASHBOARD_URL/verify)` *(B.4 kész)*
+- [x] Dashboard route `/verify?userId=&secret=` — e-mail verifikáció callback + átirányítás `/login?verified=1`-re *(B.4 kész)*
+- [ ] Dashboard route `/onboarding` — első belépés: új org létrehozása (org név + office név → automatikus workflow seed) vagy meghívó token bevitel *(B.4: placeholder finomítás kijelentkezés gombbal, 4-collection write B.5-ben)*
+- [ ] Dashboard route `/invite?token=` — meghívó elfogadás (token validáció, user bejelentkezve vagy regisztrációra redirect) *(B.4: token mentés + redirect kész, acceptInvite() B.5-ben)*
+- [x] Dashboard route `/forgot-password` — `account.createRecovery(email, DASHBOARD_URL/reset-password)` *(B.4 kész)*
+- [x] Dashboard route `/reset-password?userId=&secret=` — új jelszó form, `account.updateRecovery()` *(B.4 kész)*
 - [ ] Dashboard route `/settings/password` — bejelentkezett jelszó módosítás `account.updatePassword()`
 - [ ] Plugin `appwriteConfig.js` `VERIFICATION_URL` + `RECOVERY_URL` átállítása Dashboard domainre
 - [ ] Proxy régi reset oldalának megszüntetése vagy Dashboard redirect
-- [ ] Plugin `UserContext` + Dashboard `AuthContext` új state-ek: `organizations`, `editorialOffices`, `activeOrganizationId`, `activeEditorialOfficeId`
+- [ ] Plugin `UserContext` + Dashboard `AuthContext` új state-ek: `organizations`, `editorialOffices`, `activeOrganizationId`, `activeEditorialOfficeId` *(B.4: Dashboard `AuthContext` `organizations` + `editorialOffices` kész + `fetchMemberships`/`reloadMemberships`; `activeOrganizationId`/`activeEditorialOfficeId` a `ScopeContext`-ben él, Plugin oldal B.7-ben jön)*
 - [ ] Plugin + Dashboard `DataContext`: minden lekérdezésbe `Query.equal('editorialOfficeId', activeOfficeId)` szűrés
 - [ ] Teszt adat törlése, új user regisztrációval indulás
 - [ ] **Verifikáció**: regisztráció → e-mail verifikáció → onboarding → org + office létrejön → üres workspace. Elfelejtett jelszó flow. Meghívó flow két user között. Plugin bejelentkezés.

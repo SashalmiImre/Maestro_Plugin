@@ -10,13 +10,16 @@
  */
 
 import React, { useState } from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
+import { useNavigate, useLocation, NavLink, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext.jsx';
 
 export default function LoginRoute() {
     const { login } = useAuth();
     const navigate = useNavigate();
     const location = useLocation();
+    const [searchParams] = useSearchParams();
+    const verifiedFlag = searchParams.get('verified');
+    const resetFlag = searchParams.get('reset');
     const [email, setEmail] = useState('');
     const [password, setPassword] = useState('');
     const [error, setError] = useState('');
@@ -54,7 +57,20 @@ export default function LoginRoute() {
 
     return (
         <div className="login-card">
-            <div className="form-heading">Bejelentkezés</div>
+            <div className="auth-tabs">
+                <NavLink to="/login" className={({ isActive }) => `auth-tab ${isActive ? 'active' : ''}`}>
+                    Bejelentkezés
+                </NavLink>
+                <NavLink to="/register" className={({ isActive }) => `auth-tab ${isActive ? 'active' : ''}`}>
+                    Regisztráció
+                </NavLink>
+            </div>
+            {verifiedFlag === '1' && (
+                <div className="auth-success">E-mail megerősítve. Most már bejelentkezhetsz.</div>
+            )}
+            {resetFlag === '1' && (
+                <div className="auth-success">Jelszavad sikeresen módosítva. Jelentkezz be az új jelszóval.</div>
+            )}
             <form onSubmit={handleSubmit}>
                 <div className="form-group">
                     <label htmlFor="email">Email</label>
@@ -79,6 +95,9 @@ export default function LoginRoute() {
                         value={password}
                         onChange={e => setPassword(e.target.value)}
                     />
+                </div>
+                <div className="form-row-end">
+                    <Link to="/forgot-password" className="auth-link">Elfelejtett jelszó?</Link>
                 </div>
                 <button type="submit" className="login-btn" disabled={isSubmitting}>
                     {isSubmitting ? 'Bejelentkezés...' : 'Bejelentkezés'}

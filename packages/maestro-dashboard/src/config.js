@@ -54,6 +54,13 @@ export const WORKFLOW_CONFIG = Object.fromEntries(
     ])
 );
 
+/**
+ * A Dashboard saját origin URL-je az Appwrite verifikációs/recovery callback-ekhez.
+ * Az `account.createVerification()` és `account.createRecovery()` ezt használja
+ * abszolút URL-ként. Production-ban env var (`VITE_DASHBOARD_URL`) felülírhatja.
+ */
+export const DASHBOARD_URL = import.meta.env.VITE_DASHBOARD_URL || window.location.origin;
+
 /** Dashboard localStorage kulcsok. */
 export const STORAGE_KEYS = {
     SELECTED_PUBLICATION: 'maestro.dashboard.selectedPublication',
