@@ -133,9 +133,11 @@ A plugin [appwriteConfig.js](../../packages/maestro-indesign/src/core/config/app
 │     validate-article-creation (compiled-et olvas)               │
 │     validate-publication-update                                 │
 │     group-membership-guard                                      │
-│     organization-membership-guard                               │
-│     invite-to-organization                                      │
+│     invite-to-organization (bootstrap + create + accept)        │
 │     cascade-delete, cleanup-orphaned-*                          │
+│                                                                 │
+│   Tenant collection védelem: ACL `read("users")` only —         │
+│     minden írás CF-en keresztül (API key bypass), nincs guard CF │
 │                                                                 │
 └───────────────────────▲─────────────────────────────────────────┘
                         │ Appwrite SDK + Realtime (proxy-n át)

@@ -178,6 +178,27 @@
             ],
             "events": [],
             "specification": "s-0.5vcpu-512mb"
+        },
+        {
+            "$id": "invite-to-organization",
+            "name": "Invite To Organization",
+            "runtime": "node-18.0",
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "path": "functions/invite-to-organization",
+            "execute": ["users"],
+            "scopes": [
+                "databases.read",
+                "databases.write",
+                "documents.read",
+                "documents.write",
+                "users.read"
+            ],
+            "events": [],
+            "specification": "s-0.5vcpu-512mb"
         }
     ]
 }

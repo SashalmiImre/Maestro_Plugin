@@ -1,14 +1,18 @@
 /**
- * Maestro Dashboard — InviteRoute (B.4 placeholder finomítás)
+ * Maestro Dashboard — InviteRoute (B.5 — token tárolás, accept az OnboardingRoute-on)
  *
- * Az `/invite?token=` route. B.4-ben csak a token tárolás kerül be:
+ * Az `/invite?token=` route. Csak a token tárolás történik itt:
  * - Anonymous user → token mentés localStorage-ba + redirect /register.
  *   A regisztráció után az onboarding flow felismeri a tárolt tokent.
- * - Bejelentkezett user → token mentés + redirect /onboarding. Az
- *   acceptInvite() valódi flow-ját a B.5 implementálja, miután az
- *   `organization-membership-guard` Cloud Function felkerült (a guard
- *   nélkül a kliens nem tudná létrehozni az `organizationMemberships`
- *   rekordot saját magának).
+ * - Bejelentkezett user → token mentés + redirect /onboarding.
+ *
+ * A meghívó tényleges elfogadása az `OnboardingRoute`-ban történik:
+ * az ottani UI észleli a localStorage-beli pending tokent és felajánlja
+ * az `AuthContext.acceptInvite()` (→ `invite-to-organization` CF, accept ág)
+ * meghívását. A kliens szándékosan nem hozza létre közvetlenül az
+ * `organizationMemberships` rekordot — a tenant collection-ök ACL-je
+ * `read("users")` only, az írás csak az API key-t használó CF-en keresztül
+ * történhet.
  *
  * A route szándékosan publikus (az App.jsx-ben az AuthSplitLayout alatt
  * van, nem a ProtectedRoute alatt) — különben az új user nem tudná a
@@ -33,11 +37,11 @@ export default function InviteRoute() {
             navigate('/login', { replace: true });
             return;
         }
-        // Token mentése (a B.5-ös acceptInvite() ezt fogja olvasni)
+        // Token mentése — az OnboardingRoute acceptInvite() ágja olvassa
         try { localStorage.setItem(STORAGE_KEY, token); } catch { /* nem baj */ }
 
         if (user) {
-            // Bejelentkezett user → onboarding (B.5 itt fogja elfogadni a meghívót)
+            // Bejelentkezett user → onboarding (ott történik az acceptInvite())
             navigate('/onboarding', { replace: true });
         } else {
             // Anonymous → register (a regisztráció után automatikusan megy az onboarding-ra)

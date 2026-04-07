@@ -19,10 +19,19 @@
  *   e-mail küldése elhasal, egy `verification_send_failed` kódú hibát dob,
  *   amit a RegisterRoute „partial success" UI-jal kezel + resendVerification
  *   gombbal. Így a user nem reked az „account already exists" zsákutcában.
+ *
+ * B.5 review fix-ek (2026-04-07):
+ * - callInviteFunction(): közös helper az `invite-to-organization` CF
+ *   hívásához. A három korábbi másolat (createOrganization, acceptInvite,
+ *   createInvite) ugyanazt a boilerplate-et használta (execution + JSON.parse
+ *   + success + wrapped error), így egy helyen javítható / bővíthető.
+ * - A createOrganization / acceptInvite utáni memberships reload már nem
+ *   `.catch(() => null)` — explicit warn a konzolra, a ProtectedRoute a
+ *   `membershipsError` state-ből fogja látni a hibát.
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import { Client, Account, Teams, Databases, Query, ID } from 'appwrite';
+import { Client, Account, Teams, Databases, Functions, Query, ID } from 'appwrite';
 import {
     APPWRITE_ENDPOINT,
     APPWRITE_PROJECT_ID,
@@ -30,6 +39,9 @@ import {
     COLLECTIONS,
     DASHBOARD_URL
 } from '../config.js';
+
+// Cloud Function ID — invite-to-organization (B.5)
+const INVITE_FUNCTION_ID = 'invite-to-organization';
 
 const AuthContext = createContext(null);
 
@@ -45,6 +57,7 @@ const client = new Client()
 const account = new Account(client);
 const teams = new Teams(client);
 const databases = new Databases(client);
+const functions = new Functions(client);
 
 export function getClient() { return client; }
 export function getAccount() { return account; }
@@ -116,6 +129,54 @@ async function fetchMemberships(userId) {
         orgMemberships: orgMembershipsResult.documents,
         officeMemberships: officeMembershipsResult.documents
     };
+}
+
+/**
+ * Közös helper az `invite-to-organization` Cloud Function hívásához.
+ *
+ * A CF három action-t szolgál ki (`bootstrap_organization`, `accept`,
+ * `create`), amelyek mind ugyanazt a kliens oldali boilerplate-et
+ * igényelték korábban (execution + JSON parse + success ellenőrzés +
+ * wrapped error). Ez egyetlen helyen kezeli a dolgot, így:
+ * - egy helyen javítható a JSON parse / error wrapping logika,
+ * - új action-höz elég a hívó helyen a payload-ot összerakni,
+ * - a tesztelés könnyebb (egy common code path).
+ *
+ * A dobott hiba `code` propertyt hordoz a CF `reason` mezőjéből,
+ * vagy a megadott `defaultReason` értéket, ha a CF nem adott vissza
+ * explicit okot. Az `errorMessage()` segéd (route-okban) ezt olvassa.
+ *
+ * @param {string} action - A CF action név (pl. 'bootstrap_organization').
+ * @param {object} payload - A action-specifikus mezők (a CF body-jához fűzve).
+ * @param {string} defaultReason - Fallback hibakód, ha a CF nem ad vissza reason-t.
+ * @returns {Promise<object>} A CF teljes success response-ja.
+ */
+async function callInviteFunction(action, payload, defaultReason) {
+    const execution = await functions.createExecution({
+        functionId: INVITE_FUNCTION_ID,
+        body: JSON.stringify({ action, ...payload }),
+        async: false,
+        method: 'POST',
+        headers: { 'content-type': 'application/json' }
+    });
+
+    let response;
+    try {
+        response = JSON.parse(execution.responseBody || '{}');
+    } catch {
+        const wrapped = new Error('invalid_response');
+        wrapped.code = 'invalid_response';
+        throw wrapped;
+    }
+
+    if (!response.success) {
+        const reason = response.reason || defaultReason;
+        const wrapped = new Error(reason);
+        wrapped.code = reason;
+        throw wrapped;
+    }
+
+    return response;
 }
 
 export function AuthProvider({ children }) {
@@ -339,6 +400,125 @@ export function AuthProvider({ children }) {
         }
     }, [user?.$id, loadAndSetMemberships]);
 
+    /**
+     * B.5 — Új organization + editorial office létrehozása az OnboardingRoute-ról.
+     *
+     * Az `invite-to-organization` Cloud Function `bootstrap_organization`
+     * action-jét hívja. A CF API key-jel, atomikusan hoz létre 4 rekordot
+     * (organizations + organizationMemberships[owner] + editorialOffices +
+     * editorialOfficeMemberships[admin]), és hibakezelés + rollback is a
+     * szerveren történik.
+     *
+     * Miért CF és nem közvetlen kliens-írás? A 4 tenant collection ACL-je
+     * `read("users")`-re van szűkítve — csak a szerver írhat. Így nincs
+     * módja egy malicious kliensnek arbitrárisan membership-et létrehozni.
+     *
+     * @returns {Promise<{organizationId: string, editorialOfficeId: string}>}
+     */
+    const createOrganization = useCallback(async (orgName, orgSlug, officeName, officeSlug) => {
+        if (!user?.$id) {
+            throw new Error('not_authenticated');
+        }
+
+        const response = await callInviteFunction(
+            'bootstrap_organization',
+            { orgName, orgSlug, officeName, officeSlug },
+            'bootstrap_failed'
+        );
+
+        // Memberships frissítése a state-ben — az új org/office azonnal megjelenjen.
+        // A loadAndSetMemberships már kezeli a membershipsError state-et, ha elszáll;
+        // itt csak loggoljuk a figyelmeztetést, és a CF sikerét visszaadjuk a hívónak.
+        try {
+            await loadAndSetMemberships(user.$id);
+        } catch (refreshErr) {
+            console.warn('[AuthContext] createOrganization: memberships reload sikertelen (a CF sikeres volt):', refreshErr?.message);
+        }
+
+        return {
+            organizationId: response.organizationId,
+            editorialOfficeId: response.editorialOfficeId
+        };
+    }, [user?.$id, loadAndSetMemberships]);
+
+    /**
+     * B.5 — Meghívó (invite) elfogadása.
+     *
+     * Az `invite-to-organization` Cloud Function `accept` action-jét hívja.
+     * A CF validálja a tokent (lookup, status, expiry, e-mail egyezés), majd
+     * API key-jel létrehozza az `organizationMemberships` rekordot. A tenant
+     * collection-ök ACL-je `read("users")` only — közvetlen kliens írás
+     * nem lehetséges, így a membership csak a CF-en keresztül jöhet létre.
+     *
+     * @param {string} token - Az invite token a localStorage-ból.
+     * @returns {Promise<{organizationId: string, role: string}>}
+     */
+    const acceptInvite = useCallback(async (token) => {
+        if (!user?.$id) {
+            throw new Error('not_authenticated');
+        }
+        if (!token) {
+            throw new Error('missing_token');
+        }
+
+        const response = await callInviteFunction(
+            'accept',
+            { token },
+            'accept_failed'
+        );
+
+        // A token már elfogyott, töröljük a localStorage-ből
+        try { localStorage.removeItem('maestro.pendingInviteToken'); } catch { /* nem baj */ }
+
+        // Frissítsük a memberships state-et, hogy az új org megjelenjen.
+        // Ha a reload elszáll, a membershipsError state beállítódik és a
+        // ProtectedRoute mutat retry UI-t — itt csak warn-t loggolunk.
+        try {
+            await loadAndSetMemberships(user.$id);
+        } catch (refreshErr) {
+            console.warn('[AuthContext] acceptInvite: memberships reload sikertelen (a CF sikeres volt):', refreshErr?.message);
+        }
+
+        return {
+            organizationId: response.organizationId,
+            membershipId: response.membershipId,
+            role: response.role
+        };
+    }, [user?.$id, loadAndSetMemberships]);
+
+    /**
+     * B.5 — Meghívó létrehozása (admin → e-mail).
+     *
+     * Az `invite-to-organization` Cloud Function `create` action-jét hívja.
+     * B.5-ben még nincs admin UI, ami ezt használná — de B.10 manual happy
+     * path teszthez szükség lehet rá. A Fázis 6 admin UI is ezt fogja hívni.
+     *
+     * Az e-mail küldés Fázis 6-ra halasztva — a CF most csak a tokent és a
+     * link felépítéséhez szükséges adatokat adja vissza.
+     *
+     * @returns {Promise<{inviteId: string, token: string, expiresAt: string}>}
+     */
+    const createInvite = useCallback(async (organizationId, email, role = 'member') => {
+        if (!user?.$id) {
+            throw new Error('not_authenticated');
+        }
+
+        const response = await callInviteFunction(
+            'create',
+            { organizationId, email, role },
+            'create_failed'
+        );
+
+        return {
+            inviteId: response.inviteId,
+            token: response.token,
+            expiresAt: response.expiresAt,
+            role: response.role,
+            email: response.email,
+            organizationId: response.organizationId
+        };
+    }, [user?.$id]);
+
     const value = {
         user,
         loading,
@@ -353,7 +533,10 @@ export function AuthProvider({ children }) {
         requestRecovery,
         confirmRecovery,
         updatePassword,
-        reloadMemberships
+        reloadMemberships,
+        createOrganization,
+        acceptInvite,
+        createInvite
     };
 
     return (

@@ -29,15 +29,15 @@ tags: [feladatok]
 - [x] Új collectionök: `organizations`, `organizationMemberships`, `editorialOffices`, `editorialOfficeMemberships`, `organizationInvites`
 - [x] Scope mezők (`organizationId`, `editorialOfficeId`) hozzáadása a `publications`, `articles`, `layouts`, `deadlines`, `uservalidations`, `validations` collectionökhöz
 - [x] `appwriteIds.js` frissítés az új collection ID-kkal (a régi `TEAMS` enum egyelőre marad, `@deprecated` JSDoc-kal)
-- [ ] Új Cloud Function: `invite-to-organization` — token generálás, e-mail küldés Appwrite Messaging-en
-- [ ] Új Cloud Function: `organization-membership-guard` — create/delete trigger, csak owner/admin hozhat létre
+- [x] Új Cloud Function: `invite-to-organization` — token generálás (e-mail küldés Fázis 6-ra halasztva), `bootstrap_organization` + `create` + `accept` action egy CF-ben, ACL-alapú védelem *(B.5 kész + biztonsági javítás)*
+- [x] ~~Új Cloud Function: `organization-membership-guard`~~ — **TÖRÖLVE** *(B.5 adversarial review után): a sentinel pattern kliens-forgeable volt, helyette ACL lockdown (5 tenant collection `read("users")` only) + `bootstrap_organization` action a `invite-to-organization` CF-ben.*
 - [ ] Meglévő CF-ek (article-update-guard, validate-article-creation, validate-publication-update) officeId scope átvétele
 - [x] Dashboard: `react-router-dom` telepítés (v7.14.0)
 - [x] Dashboard route `/login` — bejelentkezés (LoginRoute.jsx, az AuthSplitLayout brand részével)
 - [x] Dashboard route `/register` — regisztráció (név, e-mail, jelszó) + `account.createVerification(DASHBOARD_URL/verify)` *(B.4 kész)*
 - [x] Dashboard route `/verify?userId=&secret=` — e-mail verifikáció callback + átirányítás `/login?verified=1`-re *(B.4 kész)*
-- [ ] Dashboard route `/onboarding` — első belépés: új org létrehozása (org név + office név → automatikus workflow seed) vagy meghívó token bevitel *(B.4: placeholder finomítás kijelentkezés gombbal, 4-collection write B.5-ben)*
-- [ ] Dashboard route `/invite?token=` — meghívó elfogadás (token validáció, user bejelentkezve vagy regisztrációra redirect) *(B.4: token mentés + redirect kész, acceptInvite() B.5-ben)*
+- [x] Dashboard route `/onboarding` — első belépés: új org létrehozása (org név + office név → automatikus workflow seed) vagy meghívó token bevitel *(B.5 kész — 4-collection write `createOrganization` + invite accept ág; `workflowId: null` Fázis 4-ig)*
+- [x] Dashboard route `/invite?token=` — meghívó elfogadás (token validáció, user bejelentkezve vagy regisztrációra redirect) *(B.5 kész — token tárolás InviteRoute, acceptInvite() OnboardingRoute-on)*
 - [x] Dashboard route `/forgot-password` — `account.createRecovery(email, DASHBOARD_URL/reset-password)` *(B.4 kész)*
 - [x] Dashboard route `/reset-password?userId=&secret=` — új jelszó form, `account.updateRecovery()` *(B.4 kész)*
 - [ ] Dashboard route `/settings/password` — bejelentkezett jelszó módosítás `account.updatePassword()`

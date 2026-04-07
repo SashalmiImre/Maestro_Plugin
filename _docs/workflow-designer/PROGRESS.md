@@ -26,7 +26,7 @@
 - [x] B.2 — `appwriteIds.js` frissítés az 5 új COLLECTIONS konstanssal + `TEAMS` `@deprecated` JSDoc
 - [x] B.3 — Dashboard `react-router-dom` + auth route skeleton (`ProtectedRoute`, `AuthSplitLayout`, `BrandHero`, 8 auth route, `ScopeContext`)
 - [x] B.4 — Dashboard `AuthContext` bővítés + auth route-ok implementáció (register, verifyEmail, requestRecovery, confirmRecovery, updatePassword, fetchMemberships, reloadMemberships) — `acceptInvite` B.5-ig vár
-- [ ] B.5 — Új Cloud Function-ök: `invite-to-organization`, `organization-membership-guard`
+- [x] B.5 — Új Cloud Function-ök: `invite-to-organization`, `organization-membership-guard` + Onboarding/Invite élesítés
 - [ ] B.6 — Plugin `appwriteConfig.js` `VERIFICATION_URL` + `RECOVERY_URL` átirányítás Dashboard domainre
 - [ ] B.7 — Plugin `UserContext` + `DataContext` scope bevezetés (`organizations`, `editorialOffices`, `activeOrganizationId`, `activeEditorialOfficeId`, scope-szűrt fetch)
 - [ ] B.8 — Meglévő CF-ek (`validate-article-creation`, `article-update-guard`, `validate-publication-update`) officeId scope kiterjesztés + `editorialOfficeMemberships` lookup
@@ -48,7 +48,7 @@
 | # | Fázis | Cél | Állapot |
 |---|-------|-----|---------|
 | 0 | Dokumentációs alap + Stitch tervek | Tudás-megőrzés, első UI képek | **Kész** |
-| 1 | Scope bevezetés + teljes Dashboard auth flow | `organizationId` + `editorialOfficeId` mindenhol, saját tagság collectionök, login/regisztráció/elfelejtett jelszó | **Folyamatban** (B.1–B.4 kész) |
+| 1 | Scope bevezetés + teljes Dashboard auth flow | `organizationId` + `editorialOfficeId` mindenhol, saját tagság collectionök, login/regisztráció/elfelejtett jelszó | **Folyamatban** (B.1–B.5 kész) |
 | 2 | Dinamikus csoportok | A 7 fix Appwrite Team helyett saját `groups` + `groupMemberships` | Vár |
 | 3 | Dinamikus contributor mezők | `articles.contributors: {slug: userId}` JSON a 7 hardkódolt oszlop helyett | Vár |
 | 4 | Workflow runtime | `workflows` collection, `compiled` JSON, Realtime hot-reload, régi workflowConstants törlése | Vár |
@@ -220,4 +220,92 @@ _(egyelőre nincs)_
 - **B.5/B.7 follow-up** (NEM ebben a sessionben):
   - `InviteRoute` bejelentkezett user esetén jelenleg a placeholder onboarding-ra dob — B.5-ben az `OnboardingRoute` fel kell ismerje a tárolt `maestro.pendingInviteToken` localStorage kulcsot és felajánlja az invite elfogadását.
   - `fetchMemberships` `Query.limit(100)` cap — B.7-ben cursor-paging vagy explicit warning, ha a `total > documents.length`. Most még nem releváns (test wipe lesz a B.9-ben).
-- **Következő session feladata** (változatlan): B.5 — Új Cloud Function-ök (`invite-to-organization`, `organization-membership-guard`) létrehozása, telepítése és integrálása.
+
+### 2026-04-07 (folyt.) — Fázis 1 / B.5 kész (új CF-ek + Onboarding/Invite élesítés)
+
+- **Plan fájl**: [`~/.claude/plans/memoized-tumbling-thimble.md`](../../../../.claude/plans/memoized-tumbling-thimble.md) — F.0–F.8 sub-task bontás. A user jóváhagyta változtatás nélkül.
+- **Eldöntött opciók (a felhasználóval, AskUserQuestion-nel)**:
+  1. **E-mail küldés**: Halasztva Fázis 6-ra — a `messaging.*` SDK egyáltalán nem kerül be a CF-be. A B.10-es tesztelés Appwrite Console manuális invite generálással történik.
+  2. **Accept flow**: Egyetlen bővített `invite-to-organization` CF, két `action`-nel (`create` admin oldal, `accept` invitee oldal). A guard egyszerű marad.
+  3. **`workflowId`**: `null` marad Fázis 4-ig (a `workflows` collection és `defaultWorkflow.json` template Fázis 4 hatókör).
+- **F.0 — `organizationMemberships` schema bővítés Appwrite MCP-vel**: új `modifiedByClientId` string oszlop (size 36, opcionális). Státusz: `available`. Ez a sentinel oszlop teszi lehetővé, hogy a guard CF skipelje a CF által (`'server-guard'`) létrehozott membership rekordokat.
+- **F.1 — `organization-membership-guard` CF**:
+  - [packages/maestro-server/functions/organization-membership-guard/package.json](../../packages/maestro-server/functions/organization-membership-guard/package.json) (új)
+  - [packages/maestro-server/functions/organization-membership-guard/src/main.js](../../packages/maestro-server/functions/organization-membership-guard/src/main.js) (új) — trigger CF, `organizationMemberships` create + delete eseményeken.
+  - **Logika**: payload parse → event detect → create ágon: (1) **SENTINEL CHECK**: `payload.modifiedByClientId === 'server-guard'` → allow. (2) **SELF-BOOTSTRAP CHECK**: `getDocument(organizations, payload.organizationId)` → ha `org.ownerUserId === payload.userId` → allow (új org első owner-jének felvétele). (3) **EGYÉB**: `deleteDocument` az imént létrejött rekordon, log + 200 response. Delete ágon: csak loggol (Fázis 6/7 szigorítja).
+  - **Trigger**: `databases.6880850e000da87a3d55.collections.organizationMemberships.documents.*.create` + `.delete`.
+  - **Scopes**: `databases.read`, `databases.write`. Idle gyors marad (~50ms): csak 1 `getDocument` hívás, semmi `users.list()`.
+- **F.2 — `invite-to-organization` CF**:
+  - [packages/maestro-server/functions/invite-to-organization/package.json](../../packages/maestro-server/functions/invite-to-organization/package.json) (új)
+  - [packages/maestro-server/functions/invite-to-organization/src/main.js](../../packages/maestro-server/functions/invite-to-organization/src/main.js) (új) — HTTP CF, `execute: ["users"]`, két `action` ágban.
+  - **ACTION='create'** (admin oldal): caller jogosultság ellenőrzés (`listDocuments(memberships, [eq(orgId), eq(userId)])` → role=`owner`/`admin` szükséges), idempotencia (létező pending invite tokenjének visszaadása lejárat előtt; lejárt invite expired-re állítása), token generálás (`crypto.randomBytes(32).toString('hex')` → 64 char), 7 napos lejárat, `createDocument(organizationInvites, ...)`. NINCS `messaging.*` hívás (Fázis 6).
+  - **ACTION='accept'** (invitee oldal): caller user kötelező → token lookup → status check (`pending`?) → expiry check (lejártnál `expired`-re állítás + 410) → e-mail egyezés check (`usersApi.get(callerId)` → caller.email vs invite.email, lowercase összehasonlítás) → duplikátum check (idempotens: ha már tagja, csak invite status frissül) → `createDocument(organizationMemberships, { ..., modifiedByClientId: 'server-guard' })` → `updateDocument(invite, { status: 'accepted' })`.
+  - **Hibakódok**: `invalid_payload`, `invalid_action`, `unauthenticated`, `missing_fields`, `invalid_email`, `invalid_role`, `not_a_member`, `insufficient_role`, `invite_not_found`, `invite_not_pending`, `invite_expired`, `email_mismatch`, `caller_lookup_failed`. Minden hibakód a `fail()` wrapperen keresztül `{ success: false, reason, ...extra }` formátumban.
+  - **Scopes**: `databases.read`, `databases.write`, `users.read`. `execute: ["users"]` — bárki bejelentkezett user hívhatja, a caller jogosultságot a CF maga ellenőrzi.
+- **`appwrite.json` bővítés**: 2 új function bejegyzés (`organization-membership-guard`, `invite-to-organization`). [packages/maestro-server/appwrite.json](../../packages/maestro-server/appwrite.json).
+- **F.4 — `AuthContext.jsx` bővítés** ([packages/maestro-dashboard/src/contexts/AuthContext.jsx](../../packages/maestro-dashboard/src/contexts/AuthContext.jsx)):
+  - Új importok: `Functions` az `appwrite`-ból + `INVITE_FUNCTION_ID = 'invite-to-organization'` konstans.
+  - Új `functions` singleton ugyanazon a `client`-en.
+  - **`createOrganization(orgName, orgSlug, officeName, officeSlug)`** — 4-collection write: (1) `organizations` create, (2) `organizationMemberships` create role=`owner` (a guard self-bootstrap ága engedélyezi), (3) `editorialOffices` create `workflowId: null`-lal, (4) `editorialOfficeMemberships` create role=`admin`. Hibakezelés: ha a 2. lépés (membership) sikertelen, az imént létrehozott `organizations` rekordot megpróbáljuk törölni (best-effort rollback), hogy ne ragadjon árva org. A sikeres write után `loadAndSetMemberships(user.$id)` újratölti a membership state-eket.
+  - **`acceptInvite(token)`** — `functions.createExecution(INVITE_FUNCTION_ID, body, false, '/', 'POST')` → `JSON.parse(execution.responseBody)` → ha `!response.success` → `Error` (with `code = response.reason`) → localStorage törlés → `loadAndSetMemberships()` → return response. A frontend-nek így a CF hibakódjai (`invite_not_found`, stb.) közvetlenül kódoltan elérhetők hibakezelésre.
+  - **`createInvite(organizationId, email, role)`** — opcionális, B.5-ben még nincs admin UI, de B.10 invite teszthez kell. Ugyanaz a `createExecution` minta `action: 'create'` body-val.
+  - Value object kiegészítve mindhárom új metódussal.
+- **F.5 — `OnboardingRoute.jsx` teljes átírás** ([packages/maestro-dashboard/src/routes/auth/OnboardingRoute.jsx](../../packages/maestro-dashboard/src/routes/auth/OnboardingRoute.jsx)):
+  - `slugify()` helper: NFD normalize ékezet eltávolításhoz + kisbetűsítés + alfanumerikus dash + max 64 char.
+  - `errorMessage()` helper: magyar üzenetek a CF/Appwrite hibakódokhoz (`document_already_exists` → „Már létezik szervezet ezzel a slug-gal", `invite_not_found` → „A meghívó nem található", `invite_expired`, `email_mismatch`, network → „Hálózati hiba", stb.).
+  - **Két ágra bontott UI**: (1) Ha `localStorage.maestro.pendingInviteToken` van → „Egy meghívó vár az elfogadásodra" + Elfogadás gomb (`acceptInvite()`) + „Inkább új szervezetet hozok létre" link (token elvetése). (2) Ha nincs token → 4 mezős form (orgName, orgSlug, officeName, officeSlug), `pattern="[a-z0-9-]+"` validációval. Auto-slug useEffect-ek: ha a user nem nyúlt hozzá a slug mezőhöz (`*Touched` flag), a slug a name-ből regenerálódik.
+  - `handleSubmit`: validáció (minden mező kitöltött) → `createOrganization()` → `setActiveOrganization(result.organizationId)` + `setActiveOffice(result.editorialOfficeId)` (a `useScope()`-ból) → `navigate('/', { replace: true })`.
+  - `handleAcceptInvite`: `acceptInvite(pendingToken)` → setActiveOrganization → navigate. Hard error esetén (`invite_not_found`/`invite_expired`/`invite_not_pending`/`email_mismatch`) localStorage cleanup, hogy a token ne ragadjon.
+  - Logout gomb a card alján marad (escape hatch).
+- **F.6 — `InviteRoute.jsx` komment frissítés**: a fájl-fejléc komment frissítve, hogy tükrözze: az acceptInvite() most az OnboardingRoute-on történik (a guard miatt a kliens szándékosan nem hozza létre közvetlenül a membership rekordot). Logika változatlan.
+- **F.7 — Build verifikáció**: `cd packages/maestro-dashboard && yarn build` — 565ms, 82 modul, 355.56 kB JS / 106.42 kB gzip, 21.09 kB CSS / 4.89 kB gzip. Hibamentes.
+- **F.3 — CF deploy (teendő a felhasználó által)**: az `appwrite.json` bejegyzések léteznek, de a CF-ek deploy-a (Appwrite Console vagy `appwrite functions create-deployment`) és az env vars beállítása (`APPWRITE_API_KEY`, `DATABASE_ID`, `ORGANIZATIONS_COLLECTION_ID`, `ORGANIZATION_MEMBERSHIPS_COLLECTION_ID`, `ORGANIZATION_INVITES_COLLECTION_ID`) a felhasználó oldalán történik. A B.10 manual happy path verifikációja előtt szükséges.
+- **Megkötések / halasztott elemek**:
+  - **Admin „Meghívó küldése" UI**: Fázis 6 — addig Console-ról manuálisan tesztelhető a `createInvite` AuthContext metóduson keresztül, vagy az `invite-to-organization` CF-en keresztül.
+  - **Appwrite Messaging Provider** + e-mail küldés: Fázis 6.
+  - **`editorialOfficeMemberships` guard CF**: Fázis 6/7 (B.5-ben csak az `organizationMemberships` van védve, a Feladatok.md szerint).
+- **Kritikus érintett fájlok**:
+  - **Új**: `organization-membership-guard/{package.json,src/main.js}`, `invite-to-organization/{package.json,src/main.js}`.
+  - **Bővített**: `appwrite.json` (+2 function), `AuthContext.jsx` (+3 metódus), `OnboardingRoute.jsx` (teljes átírás).
+  - **Komment update**: `InviteRoute.jsx`.
+  - **Schema változás**: `organizationMemberships.modifiedByClientId` (Appwrite MCP).
+- **Manual happy path** (csak deklaratív, futtatás nem volt — a CF deploy + env vars + Plugin/Dashboard dev szerverek a user oldalán futnak): (1) build sikerül, (2) az új user regisztráció után az `OnboardingRoute` form-ot lát, (3) submit → 4-collection write → a guard self-bootstrap engedélyezi → ScopeContext aktívvá teszi az új org+office-t → `/` redirect, (4) második user invite linken keresztül (Console-ról manuálisan generált invite) → `OnboardingRoute` észleli a tokent → Elfogadás → CF accept ág → membership létrehozás sentinellel → guard skipeli → `/` redirect.
+- **Következő session feladata**: B.6 — Plugin `appwriteConfig.js` `VERIFICATION_URL` + `RECOVERY_URL` átirányítás Dashboard domainre. A két URL most a Plugin saját domainjére mutat (ahol nincs is verifikációs/reset oldal), a Dashboard pedig már fel van készülve a `/verify` és `/reset-password` route-okra.
+
+### 2026-04-07 (folyt.) — Fázis 1 / B.5 adversarial review fix-ek (KRITIKUS biztonsági javítás)
+
+- **Trigger**: a B.5 lezárása után `/codex:adversarial-review` futtatás háttérben — a Codex `verdict: needs-attention`-t jelzett **2 megalapozott találattal**. A user instrukciója: „Nézd át kérlek, és ami jogos, azt javítsuk".
+- **Codex finding #1 — [critical] forgeable sentinel**: az `organization-membership-guard` `payload.modifiedByClientId === 'server-guard'` ellenőrzése **kliens-forgeable** volt. Bármely hitelesített user beállíthatta a saját `createDocument(organizationMemberships, { ..., modifiedByClientId: 'server-guard' })` payload-ban → a guard skipelte. Ez **cross-tenant privilege escalation**-t engedett: tetszőleges user tetszőleges org-ba beírhatta magát tetszőleges role-lal.
+- **Codex finding #2 — [high] védtelen delete trigger**: az `organization-membership-guard` delete ága csak loggolt, semmit nem érvényesített. Bárki, aki a kliens ACL-en keresztül elérte, törölhetett owner/admin membership-eket → user lockout, org árvulás.
+- **Mindkét finding gyökere**: a guard pattern egy adat-mező (`modifiedByClientId`) alapján próbálta megkülönböztetni a CF-eredetű és kliens-eredetű írásokat. Ez fundamentálisan rossz — adat-mezőt sosem lehet trust source-nak használni. A javítás csak **ACL-szigorítás + teljes szerver-oldali írási útvonal**.
+- **Megoldás architektúra**:
+  1. **5 tenant collection ACL lockdown** (Appwrite MCP, `tables_db_update_table`):
+     - `organizations`, `organizationMemberships`, `editorialOffices`, `editorialOfficeMemberships`: `["read(\"users\")"]` — csak olvasás. Írást, törlést, módosítást semmilyen kliens nem tud végezni.
+     - `organizationInvites`: `[]` — nincs kliens hozzáférés (a kódbázisban sincs kliens-oldali olvasás, az invite token-t a CF response adja vissza).
+     - Az API key-jel futó CF-ek bypass-olják az ACL-t, így a `invite-to-organization` továbbra is szabadon ír.
+  2. **`bootstrap_organization` action** az `invite-to-organization` CF-be ([packages/maestro-server/functions/invite-to-organization/src/main.js](../../packages/maestro-server/functions/invite-to-organization/src/main.js)):
+     - A teljes 4-collection write logika átköltözött a Dashboard `AuthContext.createOrganization`-ből a CF-be.
+     - Bemenet: `{ orgName, orgSlug, officeName, officeSlug }` + caller `x-appwrite-user-id` header.
+     - Validáció: trim + length check + slug regex (`/^[a-z0-9]+(?:-[a-z0-9]+)*$/`, max 64 char).
+     - Atomikus 4-step write: `organizations` → `organizationMemberships`(owner) → `editorialOffices` → `editorialOfficeMemberships`(admin), mind API key-jel.
+     - **Best-effort rollback**: minden lépés saját try/catch-ben, ha hiba van → fordított sorrendben deleteDocument a már létrehozott rekordokra.
+     - Új hibakódok: `invalid_slug`, `org_slug_taken`, `org_create_failed`, `membership_create_failed`, `office_slug_taken`, `office_create_failed`, `office_membership_create_failed`.
+     - Response: `{ success: true, organizationId, editorialOfficeId }`.
+  3. **`accept` action sentinel eltávolítás**: a `createDocument(memberships, ...)` hívásból eltűnt a `modifiedByClientId: 'server-guard'` mező. A membership a tiszta API key írással jön létre, az ACL miatt csak így lehetséges.
+  4. **`AuthContext.createOrganization` refactor** ([packages/maestro-dashboard/src/contexts/AuthContext.jsx](../../packages/maestro-dashboard/src/contexts/AuthContext.jsx)): a ~100 soros, 4 direkt `databases.createDocument` hívásból álló logika helyett egyetlen `functions.createExecution(INVITE_FUNCTION_ID, { action: 'bootstrap_organization', ... })` hívás. A CF response-ból veszi az `organizationId` + `editorialOfficeId`-t, majd `loadAndSetMemberships()` újratölti a state-et.
+  5. **`organization-membership-guard` CF teljes törlés**: a guard CF már szükségtelen, mert az ACL megakadályozza a kliens írást. A `packages/maestro-server/functions/organization-membership-guard/` mappa törölve, az `appwrite.json` `functions` array bejegyzése törölve.
+  6. **`organizationMemberships.modifiedByClientId` oszlop törlés**: a sentinel mező feleslegessé vált — Appwrite MCP `tables_db_delete_column`. Verifikáció: az oszlop eltűnt, a többi 4 oszlop (`organizationId`, `userId`, `role`, `addedByUserId`) `available`.
+- **Build verifikáció**: `cd packages/maestro-dashboard && yarn build` — 619ms, 82 modul, 354.85 kB JS / 106.26 kB gzip, 21.09 kB CSS / 4.89 kB gzip. Hibamentes.
+- **CF deploy (teendő a felhasználó által)**:
+  - `invite-to-organization` CF újradeploy szükséges (új `bootstrap_organization` action + új env vars: `EDITORIAL_OFFICES_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`).
+  - `organization-membership-guard` CF Appwrite Console-on TÖRLENDŐ (a függvény még él, csak az `appwrite.json` és a forrás tűnt el a repo-ból).
+- **Tanulság / kódstílus megerősítés**:
+  - **Adat-mező sosem lehet trust source**. Ha a security döntés azon múlik, hogy a kliens „barát" vagy „ellenség", csak unforgeable szignál (API key origin, JWT claims, ACL) működik.
+  - A `modifiedByClientId` sentinel pattern az `articles` és `users` collection-ön továbbra is OK — ott a célja **végtelen ciklus megelőzése** (a CF-ek saját update-jei ne triggerelje a guard CF-et újra), nem authorizáció. A két use case nyelvileg hasonló, szemantikailag teljesen más.
+- **Érintett fájlok**:
+  - **Új**: bootstrap_organization action a [packages/maestro-server/functions/invite-to-organization/src/main.js](../../packages/maestro-server/functions/invite-to-organization/src/main.js)-ben.
+  - **Törölve**: `packages/maestro-server/functions/organization-membership-guard/` mappa (mindkét fájl), `appwrite.json`-ban a function bejegyzés, `organizationMemberships.modifiedByClientId` oszlop.
+  - **Refaktorálva**: [packages/maestro-dashboard/src/contexts/AuthContext.jsx](../../packages/maestro-dashboard/src/contexts/AuthContext.jsx) `createOrganization`, `accept` action a CF-ben (sentinel eltávolítás).
+  - **ACL módosítva**: 5 collection (`organizations`, `organizationMemberships`, `editorialOffices`, `editorialOfficeMemberships`, `organizationInvites`).
+  - **Doc frissítés**: ez a fájl, [packages/maestro-server/CLAUDE.md](../../packages/maestro-server/CLAUDE.md), [_docs/Feladatok.md](../Feladatok.md).
+- **Következő session feladata** (változatlan): B.6 — Plugin `appwriteConfig.js` `VERIFICATION_URL` + `RECOVERY_URL` átirányítás Dashboard domainre.

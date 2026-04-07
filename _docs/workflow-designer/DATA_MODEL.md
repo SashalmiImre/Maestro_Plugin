@@ -62,7 +62,7 @@ Ki melyik org tagja és milyen szerepkörrel.
 
 **Index**: `(organizationId, userId)` unique, `userId`.
 
-**Guard**: `organization-membership-guard` Cloud Function — csak owner/admin hozhat létre vagy törölhet.
+**Védelem**: collection-szintű ACL `read("users")` only — a kliens NEM tud közvetlenül írni. Minden membership-művelet az `invite-to-organization` Cloud Function-ön keresztül történik (API key-jel), amely a `bootstrap_organization` (új org első owner), `accept` (invite elfogadás) és későbbi admin műveleteket implementálja.
 
 ---
 
