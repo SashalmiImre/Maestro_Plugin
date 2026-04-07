@@ -1,5 +1,14 @@
 # CLAUDE.md — Maestro Plugin Projekt Útmutató
 
+> ⚠ **ÁTALAKÍTÁS FOLYAMATBAN — Workflow Designer + Multi-tenant**
+>
+> A projekt jelenleg egy jelentős átalakuláson megy keresztül: **egybérlős, hardkódolt workflow → multi-tenant, dinamikus workflow** ComfyUI-stílusú vizuális designerrel a Dashboardon.
+> **Minden új session első olvasnivalója**: [../../_docs/workflow-designer/PROGRESS.md](../../_docs/workflow-designer/PROGRESS.md) — aktuális fázis, checklist, nyitott kérdések.
+> **Teljes terv**: [../../_docs/workflow-designer/ARCHITECTURE.md](../../_docs/workflow-designer/ARCHITECTURE.md)
+> **Feladatlista**: [../../_docs/Feladatok.md](../../_docs/Feladatok.md) `## Aktív` szekció
+>
+> Az alábbi dokumentáció a **jelenlegi (még statikus)** állapotot írja le. Ahogy a fázisok haladnak, ez a fájl frissül — figyeld a banner eltűnését.
+
 > **Mindig olvasd el a `docs/` mappában lévő dokumentumokat is — részletes architektúrát és diagramokat tartalmaznak.**
 
 ---

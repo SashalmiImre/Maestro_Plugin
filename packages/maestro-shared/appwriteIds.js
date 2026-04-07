@@ -19,12 +19,18 @@ export const COLLECTIONS = {
     SYSTEM_VALIDATIONS: 'validations',
     LAYOUTS: 'layouts',
     DEADLINES: 'deadlines',
-    CONFIG: 'config'
+    CONFIG: 'config',
+    ORGANIZATIONS: 'organizations',
+    ORGANIZATION_MEMBERSHIPS: 'organizationMemberships',
+    EDITORIAL_OFFICES: 'editorialOffices',
+    EDITORIAL_OFFICE_MEMBERSHIPS: 'editorialOfficeMemberships',
+    ORGANIZATION_INVITES: 'organizationInvites'
 };
 
 /**
  * Csapat slug-ok.
  * @enum {string}
+ * @deprecated Fázis 4 végén törlendő — a dinamikus `groups` collection váltja.
  */
 export const TEAMS = {
     EDITORS: 'editors',

@@ -9,7 +9,131 @@ tags: [feladatok]
 
 ## Aktív
 
+### 🎯 Workflow Designer + Multi-tenant átalakítás
 
+> A Maestro egybérlős, hardkódolt workflow-jának teljes átalakítása dinamikus, multi-tenant rendszerré ComfyUI-stílusú vizuális designerrel a Dashboardon. Teljes terv: [workflow-designer/ARCHITECTURE.md](workflow-designer/ARCHITECTURE.md). State tracker: [workflow-designer/PROGRESS.md](workflow-designer/PROGRESS.md).
+
+#### Fázis 0 — Dokumentációs alap + Stitch UI tervek
+
+- [x] `_docs/workflow-designer/` mappa létrehozása PROGRESS/ARCHITECTURE/DATA_MODEL/COMPILED_SCHEMA/MIGRATION_NOTES/UI_DESIGN fájlokkal
+- [x] Régi workflow dokumentumok (`WORKFLOW_CONFIGURATION.md`, `WORKFLOW_PERMISSIONS.md`) áthelyezése `_docs/archive/`-ba
+- [x] `packages/maestro-indesign/CLAUDE.md` tetejére „Átalakítás folyamatban" banner
+- [x] `_docs/Feladatok.md` `## Aktív` szekcióba a Fázis 0–7 teljes task lista
+- [x] `auth-flow` Stitch kép mentve: [workflow-designer/stitch-screens/auth-flow.png](workflow-designer/stitch-screens/auth-flow.png) + annotáció
+- [x] `designer-canvas` Stitch kép mentve: [workflow-designer/stitch-screens/designer-canvas.png](workflow-designer/stitch-screens/designer-canvas.png) + annotáció
+- [x] `state-node` Stitch kép mentve: [workflow-designer/stitch-screens/state-node.png](workflow-designer/stitch-screens/state-node.png) + annotáció
+- [x] `properties-sidebar` Stitch kép mentve: [workflow-designer/stitch-screens/properties-sidebar.png](workflow-designer/stitch-screens/properties-sidebar.png) + annotáció
+
+#### Fázis 1 — Scope bevezetés + teljes auth flow a Dashboardon
+
+- [x] Új collectionök: `organizations`, `organizationMemberships`, `editorialOffices`, `editorialOfficeMemberships`, `organizationInvites`
+- [x] Scope mezők (`organizationId`, `editorialOfficeId`) hozzáadása a `publications`, `articles`, `layouts`, `deadlines`, `uservalidations`, `validations` collectionökhöz
+- [x] `appwriteIds.js` frissítés az új collection ID-kkal (a régi `TEAMS` enum egyelőre marad, `@deprecated` JSDoc-kal)
+- [ ] Új Cloud Function: `invite-to-organization` — token generálás, e-mail küldés Appwrite Messaging-en
+- [ ] Új Cloud Function: `organization-membership-guard` — create/delete trigger, csak owner/admin hozhat létre
+- [ ] Meglévő CF-ek (article-update-guard, validate-article-creation, validate-publication-update) officeId scope átvétele
+- [x] Dashboard: `react-router-dom` telepítés (v7.14.0)
+- [x] Dashboard route `/login` — bejelentkezés (LoginRoute.jsx, az AuthSplitLayout brand részével)
+- [ ] Dashboard route `/register` — regisztráció (név, e-mail, jelszó) + `account.createVerification(DASHBOARD_URL/verify)` *(B.3: placeholder kész, B.4-ben implementáció)*
+- [ ] Dashboard route `/verify?userId=&secret=` — e-mail verifikáció callback + átirányítás `/onboarding`-ra *(B.3: placeholder kész, B.4-ben implementáció)*
+- [ ] Dashboard route `/onboarding` — első belépés: új org létrehozása (org név + office név → automatikus workflow seed) vagy meghívó token bevitel *(B.3: placeholder kész, B.4-ben implementáció)*
+- [ ] Dashboard route `/invite?token=` — meghívó elfogadás (token validáció, user bejelentkezve vagy regisztrációra redirect) *(B.3: placeholder kész, B.4-ben implementáció)*
+- [ ] Dashboard route `/forgot-password` — `account.createRecovery(email, DASHBOARD_URL/reset-password)` *(B.3: placeholder kész, B.4-ben implementáció)*
+- [ ] Dashboard route `/reset-password?userId=&secret=` — új jelszó form, `account.updateRecovery()` *(B.3: placeholder kész, B.4-ben implementáció)*
+- [ ] Dashboard route `/settings/password` — bejelentkezett jelszó módosítás `account.updatePassword()`
+- [ ] Plugin `appwriteConfig.js` `VERIFICATION_URL` + `RECOVERY_URL` átállítása Dashboard domainre
+- [ ] Proxy régi reset oldalának megszüntetése vagy Dashboard redirect
+- [ ] Plugin `UserContext` + Dashboard `AuthContext` új state-ek: `organizations`, `editorialOffices`, `activeOrganizationId`, `activeEditorialOfficeId`
+- [ ] Plugin + Dashboard `DataContext`: minden lekérdezésbe `Query.equal('editorialOfficeId', activeOfficeId)` szűrés
+- [ ] Teszt adat törlése, új user regisztrációval indulás
+- [ ] **Verifikáció**: regisztráció → e-mail verifikáció → onboarding → org + office létrejön → üres workspace. Elfelejtett jelszó flow. Meghívó flow két user között. Plugin bejelentkezés.
+
+#### Fázis 2 — Dinamikus csoportok (groups, groupMemberships)
+
+- [ ] Új collection: `groups` (editorialOfficeId, slug, label, color, isContributorGroup, isLeaderGroup, description)
+- [ ] Új collection: `groupMemberships` (groupId, userId, editorialOfficeId, organizationId)
+- [ ] Új Cloud Function: `group-membership-guard` — create/delete trigger, office admin jogkört ellenőriz
+- [ ] Új shared modul: [packages/maestro-shared/groups.js](../packages/maestro-shared/groups.js) — `getUserGroupSlugs(userId, officeId)`, helper lookupok
+- [ ] Dashboard view: minimális „Csoportok" form office-szinten (csoport CRUD, user hozzárendelés)
+- [ ] Plugin `UserContext` új állapota: `groupSlugsByOffice: Map<officeId, Set<slug>>` + Realtime feliratkozás saját `groupMemberships` rekordokra
+- [ ] `workflowPermissions.js`, `elementPermissions.js` helperek átalakítása: `user.teamIds` helyett `user.groupSlugsByOffice.get(activeOfficeId)`
+- [ ] CF-ek (article-update-guard, validate-article-creation): `teams.list()` + label resolve helyett `groupMemberships` lookup
+- [ ] `teamMembershipChanged` MaestroEvent átnevezve `groupMembershipChanged`-re, Realtime csatorna `groupMemberships`-re iratkozik fel
+- [ ] **Verifikáció**: admin létrehoz `designers` és `editors` csoportot → user2-t `designers`-be → user2 tud cikket létrehozni és state-et váltani
+
+#### Fázis 3 — Dinamikus contributor mezők
+
+- [ ] `articles` schema: új `contributors` longtext (JSON), a 7 régi `*Id` mező törlése
+- [ ] `publications` schema: új `defaultContributors` longtext (JSON), a 7 régi `default*Id` mező törlése
+- [ ] `TEAM_ARTICLE_FIELD` mapping törlése — a kulcs a csoport `slug`-ja
+- [ ] `ContributorsSection.jsx` (plugin és Dashboard): fix JSX helyett loop a `compiled.contributorGroups` alapján, dinamikus dropdown rendering
+- [ ] `canEditContributorDropdown`: `FIELD_TO_TEAM` lookup helyett közvetlen `groupSlug` paraméter
+- [ ] `validate-article-creation` és `article-update-guard`: `contributors` objektum kulcsait iterálja, minden kulcsra user létezés + csoporttagság lookup → nem-tag → mező nullázása + logolás (soft correction)
+- [ ] **Verifikáció**: cikk létrehozás → dinamikus dropdown render → DB-ben `contributors: {designers: "...", editors: "..."}` formátum
+
+#### Fázis 4 — Workflow runtime (workflows collection, `compiled`)
+
+- [ ] Új collection: `workflows` — minden új office auto kap egy dokumentumot a `defaultWorkflow.json` template másolataként
+- [ ] Új shared modul: [packages/maestro-shared/workflowRuntime.js](../packages/maestro-shared/workflowRuntime.js) — a projekt szíve, fogyasztói helperek a `compiled` JSON fölött (getStateConfig, canUserMoveArticle, canEditElement, canRunCommand, canEditContributorDropdown, canUserAccessInState, hasCapability, getContributorGroups, getAvailableTransitions, validateTransition)
+- [ ] Új template: [packages/maestro-shared/defaultWorkflow.json](../packages/maestro-shared/defaultWorkflow.json) — jelenlegi 8 állapotos magazin workflow `compiled` formátumban
+- [ ] **TÖRÖLT**: `packages/maestro-shared/workflowConfig.js`
+- [ ] **TÖRÖLT**: `packages/maestro-shared/labelConfig.js`
+- [ ] **TÖRÖLT**: `packages/maestro-indesign/src/core/utils/workflow/workflowConstants.js`
+- [ ] **TÖRÖLT**: `packages/maestro-indesign/src/core/utils/workflow/elementPermissions.js`
+- [ ] **TÖRÖLT**: `packages/maestro-indesign/src/core/utils/syncWorkflowConfig.js`
+- [ ] `workflowEngine.js` és `workflowPermissions.js` proxy a `workflowRuntime.js`-re — minden hívás kap `workflow` (compiled) paramétert
+- [ ] Plugin `DataContext` új állapota: `workflow` (compiled JSON) + Realtime feliratkozás `workflows.{id}` update-ekre
+- [ ] Snapshot pattern a hot-reloadhoz: `executeTransition` belépéskor `const wf = workflowRef.current`, a futás végéig ezzel dolgozik
+- [ ] Cloud Function-ök átírása (article-update-guard, validate-article-creation, validate-publication-update): `workflow_config` helyett `workflows` dokumentum olvasás az article `editorialOfficeId` alapján, 60s TTL process cache
+- [ ] `FALLBACK_CONFIG` hardkódolt konstansok törlése — fail-closed viselkedés, ha nincs workflow doc → update revertál
+- [ ] `validate-labels` Cloud Function törlése — a label rendszer megszűnik
+- [ ] CLAUDE.md „5. Jogosultsági Rendszer" szekció újraírása a dinamikus modellre
+- [ ] **Verifikáció**: `workflows.{id}.compiled` manuális módosítás → plugin Realtime hot-reloadol → ArticleTable új színnel/címkével mutatja. CF-ek betiltanak egy kivett átmenetet.
+
+#### Fázis 5 — Workflow Designer UI (Dashboardon)
+
+- [ ] Függőségek: `@xyflow/react` (MIT, React Flow), `react-router-dom`
+- [ ] Új mappa: `packages/maestro-dashboard/src/features/workflowDesigner/`
+- [ ] `WorkflowDesigner.jsx` — konténer, betölt + ment `workflows` dokumentumot
+- [ ] `WorkflowCanvas.jsx` — xyflow-alapú canvas
+- [ ] `nodes/StateNode.jsx` — custom state node komponens (label, szín, duration, portok, validator badge, command lista)
+- [ ] `edges/TransitionEdge.jsx` — custom edge (label + allowedGroups chipek)
+- [ ] `NodePalette.jsx` — bal oldali palette drag-n-drop-pal
+- [ ] `PropertiesSidebar.jsx` — jobb oldali panel, kiválasztott elem tulajdonságai (state/transition/üres)
+- [ ] `GroupsPanel.jsx` — külön tab: csoport CRUD, tag-hozzárendelés
+- [ ] `ElementPermissionsEditor.jsx` — tab: UI elem × csoport rács, checkboxok
+- [ ] `CapabilitiesEditor.jsx` — tab: exkluzív capability-k (pl. `canAddArticlePlan`) csoportokhoz rendelése
+- [ ] `compiler.js` — graph → compiled normalizálás a mentéskor
+- [ ] `validator.js` — mentés előtti ellenőrzés (initial state, elárvult cikk state, körkörös forward-only path)
+- [ ] `exportImport.js` — workflow JSON export/import logika
+- [ ] `ImportDialog.jsx` — fájlfeltöltés, séma validáció, diff megjelenítés, megerősítés dialog
+- [ ] Export gomb: két változat — „Export aktuális" (DB-ben mentett) és „Export szerkesztett" (még-nem-mentett canvas állapot)
+- [ ] Export fájlnév formátum: `workflow-<office-slug>-v<version>-<YYYYMMDD>.json`
+- [ ] Import flow: JSON feltöltés → validator → diff megjelenítés → csoport-hivatkozás ellenőrzés (ismeretlen slug-ok figyelmeztetése + create/map opció) → megerősítés → `graph` + `compiled` mentés aktuális workflow dokumentumba + verzió auto-inkrement
+- [ ] `react-router-dom` route-ok: `/`, `/login`, `/register`, `/admin/organization`, `/admin/office/:officeId`, `/admin/office/:officeId/workflow`
+- [ ] Jelenlegi view-switch (`table`/`layout`) a `/` alatti gyerek route-okká konvertálva
+- [ ] Dashboard `DataContext` új `workflow` state + Realtime + kliens oldali `compiler.js` mentés előtt
+- [ ] **Verifikáció**: admin átnevez egy állapotot → ment → plugin pillanatok alatt az új címkét mutatja. Új csoport + transition → tagok azonnal használhatják. Export/import happy path.
+
+#### Fázis 6 — Org/Office Admin UI finomítás
+
+- [ ] `OrganizationAdminView.jsx` — org név szerkesztés, meghívó flow, user lista, office lista
+- [ ] `EditorialOfficeAdminView.jsx` — office áttekintés, csoport lista (link a `GroupsPanel`-re), user → csoport hozzárendelés dashboard, workflow designer link
+- [ ] `InviteUserModal.jsx` — e-mail, szerepkör választó, opcionális üzenet
+- [ ] Plugin `UserContext` több-org mode: ha a user több org-hoz tartozik, WorkspaceHeader kap egy org + office választó dropdown-t
+- [ ] **Verifikáció**: teljes happy path a `ARCHITECTURE.md` Verifikáció szekció szerint
+
+#### Fázis 7 — Cleanup
+
+- [ ] `grep` ellenőrzés: 0 találat a következőkre: `designerId`, `CAPABILITY_LABELS`, `STATE_PERMISSIONS`, `TEAM_ARTICLE_FIELD`, `ARTICLE_ELEMENT_PERMISSIONS`, `LEADER_TEAMS`, `workflow_config`, `workflowConstants`
+- [ ] `appwriteIds.js`: `TEAMS` enum és `CONFIG` collection ID törlése
+- [ ] Appwrite Console: régi 7 Appwrite Team és `config` collection manuális törlése
+- [ ] `getTeamMembers` Cloud Function átnevezése `get-group-members`-re vagy törlés
+- [ ] `packages/maestro-indesign/CLAUDE.md` teljes frissítése a végső architektúrával, „Átalakítás folyamatban" banner törlése
+- [ ] `_docs/workflow-designer/PROGRESS.md` lezárás, `MIGRATION_NOTES.md` véglegesítés
+- [ ] `_docs/Feladatok.md`: aktív feladatok átkerülnek `## Kész` szekcióba egy összefoglaló kommenttel
+
+---
 
 ## Kész
 ### Appwrite Cloud Function-ök — Szerver-oldali üzleti logika
