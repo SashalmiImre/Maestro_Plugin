@@ -122,9 +122,9 @@ maestro-server/
 
 | Function | Változók |
 |---|---|
-| `article-update-guard` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `CONFIG_COLLECTION_ID` |
-| `validate-article-creation` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `CONFIG_COLLECTION_ID` |
-| `validate-publication-update` | `DATABASE_ID`, `PUBLICATIONS_COLLECTION_ID` |
+| `article-update-guard` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `CONFIG_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID` |
+| `validate-article-creation` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `CONFIG_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID` |
+| `validate-publication-update` | `DATABASE_ID`, `PUBLICATIONS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID` |
 | `validate-labels` | `DATABASE_ID`, `CONFIG_COLLECTION_ID` |
 | `cascade-delete` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `ARTICLE_MESSAGES_COLLECTION_ID`, `USER_VALIDATIONS_COLLECTION_ID`, `VALIDATIONS_COLLECTION_ID`, `DEADLINES_COLLECTION_ID`, `LAYOUTS_COLLECTION_ID`, `THUMBNAILS_BUCKET_ID` |
 | `cleanup-orphaned-locks` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID` |
@@ -164,17 +164,23 @@ maestro-server/
 2. **Config betöltés** — DB `workflow_config` dokumentumból, fallback hardkódolt értékekre (fail-closed)
 3. **Állapot érvényesség** — `validStates` halmazban van-e (érvénytelen → 0)
 4. **Állapotátmenet** — `previousState → state` a `validTransitions` alapján
-5. **Jogosultság** — felhasználó csapattagsága/label-jei engedélyezik-e az átmenetet
-6. **Contributor mezők** — létező felhasználókra mutatnak-e (log only)
-7. **previousState karbantartás** — null esetén inicializálás, revert esetén frissítés
+5. **Parent scope sync (B.8)** — szülő publikáció `editorialOfficeId`/`organizationId` mezőkhöz igazítás (cross-tenant scope támadás scenario 1 védelem)
+6. **Scope ellenőrzés (B.8)** — caller user tagja-e a cikk `editorialOfficeId`-jának (`editorialOfficeMemberships` lookup); nem-tag → state revert. Legacy null scope → skip + warning log.
+7. **Jogosultság** — felhasználó csapattagsága/label-jei engedélyezik-e az átmenetet
+8. **Contributor mezők** — létező felhasználókra mutatnak-e (log only)
+9. **previousState karbantartás** — null esetén inicializálás, revert esetén frissítés
 
 ### validate-article-creation
 
 Új cikk létrehozásakor fut. Érvénytelen `publicationId` → cikk törlés. Ellenőrzi a state érvényességét, contributor user létezést, filePath formátumot.
 
+**Scope ellenőrzés (B.8):** hiányzó `organizationId`/`editorialOfficeId`, parent publication office mismatch, vagy nem-tag caller → cikk törlése (`editorialOfficeMemberships` lookup).
+
 ### validate-publication-update
 
 Kiadvány létrehozás/módosításkor fut. Nem létező default contributor → nullázás. Legacy rootPath → logolás.
+
+**Scope ellenőrzés (B.8):** create eseménynél hiányzó scope mezők vagy nem-tag caller → publikáció törlése. Update path: nem-tag caller csak logolódik (teljes field-level revert Fázis 6 hatáskör).
 
 ### validate-labels
 

@@ -29,8 +29,8 @@
 - [x] B.5 — Új Cloud Function-ök: `invite-to-organization`, `organization-membership-guard` + Onboarding/Invite élesítés
 - [x] B.6 — Plugin `appwriteConfig.js` `VERIFICATION_URL` + `RECOVERY_URL` átirányítás Dashboard domainre + proxy legacy endpoint-ok 302 redirect
 - [x] B.7 — Plugin `UserContext` + `DataContext` scope bevezetés (`organizations`, `editorialOffices`, `activeOrganizationId`, `activeEditorialOfficeId`, scope-szűrt fetch)
-- [ ] B.8 — Meglévő CF-ek (`validate-article-creation`, `article-update-guard`, `validate-publication-update`) officeId scope kiterjesztés + `editorialOfficeMemberships` lookup
-- [ ] B.9 — Teszt adat wipe
+- [x] B.8 — Meglévő CF-ek (`validate-article-creation`, `article-update-guard`, `validate-publication-update`) officeId scope kiterjesztés + `editorialOfficeMemberships` lookup
+- [x] B.9 — Teszt adat wipe
 - [ ] B.10 — Manual happy path verifikáció
 
 ### Fázis 0 checklist
@@ -357,3 +357,52 @@ _(egyelőre nincs)_
   - **Módosítva**: [packages/maestro-indesign/src/core/contexts/UserContext.jsx](../../packages/maestro-indesign/src/core/contexts/UserContext.jsx), [packages/maestro-indesign/src/core/contexts/DataContext.jsx](../../packages/maestro-indesign/src/core/contexts/DataContext.jsx), [packages/maestro-indesign/src/core/Main.jsx](../../packages/maestro-indesign/src/core/Main.jsx), [packages/maestro-indesign/CLAUDE.md](../../packages/maestro-indesign/CLAUDE.md), [_docs/Feladatok.md](../Feladatok.md), ez a fájl.
   - **Új**: [packages/maestro-indesign/src/core/contexts/ScopeContext.jsx](../../packages/maestro-indesign/src/core/contexts/ScopeContext.jsx), [packages/maestro-indesign/src/ui/features/workspace/ScopeMissingPlaceholder.jsx](../../packages/maestro-indesign/src/ui/features/workspace/ScopeMissingPlaceholder.jsx).
 - **Következő session feladata**: B.8 — meglévő Cloud Function guardok (`validate-article-creation`, `article-update-guard`, `validate-publication-update`) kiterjesztése `editorialOfficeId` scope validációval + `editorialOfficeMemberships` lookup. Ez már a régi collection-eken futó guard-ok átalakítása; a B.9 wipe előtti utolsó lépés.
+
+### 2026-04-08 — Fázis 1 / B.8 kész (CF scope kiterjesztés)
+
+- **Plan fájl**: [`~/.claude/plans/groovy-brewing-wall.md`](../../../../.claude/plans/groovy-brewing-wall.md). A user jóváhagyta változtatás nélkül, 4 döntéssel előtte.
+- **Cél**: a három régi data-layer guard CF (`article-update-guard`, `validate-article-creation`, `validate-publication-update`) felzárkóztatása a multi-tenant scope modellre. A Plugin happy path (`withScope()`) már scope mezőkkel ír, de a szerver-oldal eddig semmit nem tudott róluk — egy hitelesített user direkt API hívással tetszőleges `editorialOfficeId`-vel tudott írni, illetve másik office cikkét módosítani. Ez blokkolta B.9-et (teszt wipe) és B.10-et (happy path verifikáció).
+- **Döntések (4 user-megerősített)**:
+  1. **Cross-tenant viselkedés**: update-nél revert (state visszaállítás), create-nél delete.
+  2. **Legacy null scope**: skip + warning log (B.9 wipe után már nem fut).
+  3. **Team/label check változatlan marad**, az office-check mellé kerül.
+  4. **Parent consistency check**: igen — `article.editorialOfficeId === publication.editorialOfficeId` a `validate-article-creation`-ben.
+- **Közös minta (mindhárom CF)**:
+  - Új env var: `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`.
+  - Fail-fast env var guard az `invite-to-organization` CF mintájára — hiány esetén 500-as response `{ success: false, reason: 'misconfigured', missing: [...] }`.
+  - Copy-paste `hasOfficeMembership(databases, databaseId, collectionId, userId, officeId)` helper: `listDocuments` + `Query.equal('userId') + Query.equal('editorialOfficeId') + Query.limit(1)` → `total > 0`. Hiba esetén `false` (fail-closed).
+  - Caller ID olvasás: `req.headers['x-appwrite-user-id']`. Ha nincs (pl. server-oldali process) → skip.
+  - Legacy skip: ha `freshDoc.editorialOfficeId` falsy → `[Scope] Legacy ... — office check kihagyva` warning log, a többi validáció (contributor, preflight) lefut.
+- **Változások**:
+  - **[`packages/maestro-server/functions/article-update-guard/src/main.js`](../../packages/maestro-server/functions/article-update-guard/src/main.js)**: új `hasOfficeMembership` helper, új env var + fail-fast guard, új Step 6 office scope check a state transition (Step 5) és a team permission (Step 7, korábban Step 6) között. Nem-tag caller esetén state revert (`corrections.state = Number(previousState)` ha stateChanged). A contributor check és a `previousState` karbantartás a meglévő sorrendben maradt, csak átszámozódott.
+  - **[`packages/maestro-server/functions/validate-article-creation/src/main.js`](../../packages/maestro-server/functions/validate-article-creation/src/main.js)**: új helper, új env var + guard, refaktor: a publicationId fetch eredménye `parentPublication` változóba kerül (nincs dupla getDocument). Három új step a publicationId check után: (2) scope mezők jelenlét → hiány esetén delete; (3) parent publication consistency → office mismatch esetén delete, legacy null parent scope esetén skip + log; (4) caller membership → nem-tag esetén delete. A contributor, filePath, corrections lépések a meglévő sorrendben maradtak.
+  - **[`packages/maestro-server/functions/validate-publication-update/src/main.js`](../../packages/maestro-server/functions/validate-publication-update/src/main.js)**: új helper, új env var + guard, új event type detection a `x-appwrite-event` header alapján (`isCreate = eventHeader.includes('.create')`). Új scope check: create eventnél hiányzó `organizationId` / `editorialOfficeId` → delete; caller membership check: create-nél nem-tag → delete, update-nél csak logolás (B.8 korlát). Az update path nem revertel field-level változásokat (rootPath, default contributors) — ez a `validate-publication-update` mostani architektúrális korlátja, a teljes field-level revert Fázis 6 hatáskör. A contributor + rootPath validáció továbbfut, hogy nem-tag user által írt rossz adatok javíthatók legyenek.
+  - **[`packages/maestro-server/CLAUDE.md`](../../packages/maestro-server/CLAUDE.md)**: per-function env var tábla bővítése mindhárom érintett soron az `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`-vel. Működési leírás szekció: `article-update-guard` új Step 5 (Scope ellenőrzés) a lista közepén, `validate-article-creation` + `validate-publication-update` leírás alá új bekezdés „Scope ellenőrzés (B.8)" címmel a viselkedés összefoglalóval.
+  - **[`_docs/Feladatok.md`](../Feladatok.md) sor 34**: `[ ]` → `[x]` + `*(B.8 kész — ...)*` komment a helper, env var, és viselkedés röviden.
+- **Felhasználói verifikáció (következő lépésben a user oldalán)**: a CF-ek deploy + env var beállítás Appwrite Console-ban vagy CLI-vel (`EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID=editorialOfficeMemberships`). A B.10 manual happy path session során tesztelhető: (1) friss bejelentkezés → publication + article létrehozás → `validated`; (2) cross-tenant kísérlet (Console-ból vagy második user) → a megfelelő guard revert/delete-tel reagál; (3) legacy null scope (csak wipe előtt) → warning log, nincs változás.
+- **Korlátok (Fázis 6 hatáskör)**:
+  - `validate-publication-update` update path nem revertel `rootPath`, default contributors, vagy egyéb mezőket — csak logol. A teljes field-level cross-tenant védelem ACL lockdown-nal + mező-szintű revert-tel jön a `publications` collection-re Fázis 6-ban.
+  - A három guard nem védi a `layouts`, `deadlines`, `uservalidations` collection-öket. Ezeket vagy új guard CF-ek, vagy ACL lockdown fogja fedni Fázis 6/7-ben.
+- **Érintett fájlok**:
+  - **Módosítva**: [packages/maestro-server/functions/article-update-guard/src/main.js](../../packages/maestro-server/functions/article-update-guard/src/main.js), [packages/maestro-server/functions/validate-article-creation/src/main.js](../../packages/maestro-server/functions/validate-article-creation/src/main.js), [packages/maestro-server/functions/validate-publication-update/src/main.js](../../packages/maestro-server/functions/validate-publication-update/src/main.js), [packages/maestro-server/CLAUDE.md](../../packages/maestro-server/CLAUDE.md), [_docs/Feladatok.md](../Feladatok.md), ez a fájl.
+- **Következő session feladata**: B.9 — teszt adat wipe. A `publications`, `articles`, `layouts`, `deadlines`, `uservalidations`, `validations` collection-ök régi (null scope) rekordjait Appwrite MCP-vel törölni. Utána B.10 — manual happy path verifikáció: friss bejelentkezés, publication létrehozás, article felvétel, scope ellenőrzés a Console-ban, cross-tenant tesztek.
+
+### 2026-04-08 — Fázis 1 / B.8 deploy + B.9 teszt wipe kész (Appwrite MCP + CLI)
+
+- **Cél**: a B.8-ban kész CF kódot élesbe tenni, majd a Fázis 1 / B.9 szerint a teljes adatbázist (6 tenant collection + articlemessages + thumbnails bucket) kitakarítani, hogy a B.10 manual happy path friss, üres állapotból induljon.
+- **B.8 deploy (Appwrite MCP + CLI)**:
+  - Mindhárom CF-re (`article-update-guard`, `validate-article-creation`, `validate-publication-update`) `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID=editorialOfficeMemberships` env var beállítva MCP `functions_create_variable` (secret: true) hívással.
+  - `mcp__appwrite__functions_create_deployment` nem működött (belső Python wrapper bug: `'str' object has no attribute 'source_type'`), helyette Appwrite CLI v16.0.0 `appwrite functions create-deployment` (direkt, non-interactive) a `packages/maestro-server/` mappából futtatva.
+  - Deployment ID-k (mind `ready`): `article-update-guard` → `69d6c7a47d0aa3f9c728`, `validate-article-creation` → `69d6c7a90dd5d52f555e` (15s build), `validate-publication-update` → `69d6c7a9d73573567daf` (16s build). Verifikáció `mcp__appwrite__functions_get` + `functions_get_deployment`.
+- **B.9 teszt wipe scope döntés**:
+  - User választása a két felkínált opcióból: **Opció 1** (teljes wipe, nem csak null scope) + **Opció B** (6 collection + `articlemessages` + thumbnail Storage fájlok) → tiszta lap a B.10-hez.
+- **B.9 végrehajtás (Appwrite MCP)**:
+  - Párhuzamos bulk delete `mcp__appwrite__tables_db_delete_rows` no-query hívásokkal → 6 collection egyben: `publications` 4, `articles` 139, `layouts` 16, `deadlines` 10, `uservalidations` 13, `validations` 3 = **185 row**. `articlemessages` előzetes list-tel 0 → skip.
+  - Thumbnails bucket (`thumbnails`) induló count: **147 fájl**. Az első delete batch (50 parallel `storage_delete_file` hívás) összes elemre `The requested file could not be found` hibát adott → kiderült, hogy az `articles` bulk delete automatikusan kiváltott egy cascade CF-et, ami 146 fájlt már törölt a thumbnails bucket-ből. Újralistázás után **1 orphan** (`69c5bd9e001d66d398aa`) maradt, azt manuálisan töröltem.
+  - Verifikációs round (`list_rows` limit 1 + `list_files` limit 1): minden 6 collection és a thumbnails bucket `total: 0`.
+- **Tanulság**: a `cleanup-article-thumbnails` (vagy hasonló) cascade CF a `articles.*.delete` trigger alatt bulk delete esetén is tüzel és paralel ki tudja üríteni a bucket-et. A B.9-hez tervezett 147 iteratív delete feleslegesre vált — a wipe jóval gyorsabb volt mint vártuk.
+- **MCP query format**: a list/delete operációkhoz a `queries` paraméter JSON string formátumot kíván (pl. `{"method":"limit","values":[1]}`), nem a legacy `"limit(1)"` stringet. Ezt rögzítem mint használható pattern a jövőbeli Appwrite MCP hívásokhoz.
+- **Érintett fájlok**:
+  - **Módosítva**: [_docs/Feladatok.md](../Feladatok.md) sor 48 (`[x]` + B.9 komment), [_docs/workflow-designer/PROGRESS.md](PROGRESS.md) B.9 checklist + ez a session jegyzet.
+  - **Nem módosítva**: a B.8 kódváltozások már a korábbi session-ben commitolva + most élesítve.
+- **Következő session feladata**: B.10 — manual happy path verifikáció user oldalon. (1) Friss regisztráció a Dashboardon → email verifikáció → onboarding (új org + office) → Plugin bejelentkezés. (2) Publication létrehozás, article felvétel → CF guard-ok `validated` válasszal engedik. (3) Cross-tenant teszt: második user / office-ban levő cikk módosítása → `article-update-guard` state revert, publication módosítás → log-only, create mismatch → delete. (4) Scope leak ellenőrzés a Plugin UI-ban (csak az aktív office adatai látszanak). (5) Opcionális: második org + invite flow a `invite-to-organization` CF-en keresztül.

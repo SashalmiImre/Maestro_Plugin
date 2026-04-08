@@ -7,11 +7,15 @@ const sdk = require("node-appwrite");
  *
  * Ellenőrzések:
  * 1. publicationId — létezik-e a Publications gyűjteményben
- * 2. state — érvényes workflow állapot-e (0-7)
- * 3. Contributor mezők — létező felhasználókra mutatnak-e
- * 4. filePath — nem üres, nem tartalmaz tiltott karaktereket
+ * 2. Scope mezők — organizationId + editorialOfficeId jelen van-e (B.8)
+ * 3. Parent scope consistency — a cikk officeId-je megegyezik-e a publication-éval (B.8)
+ * 4. Caller membership — a user tagja-e a cikk editorialOfficeId-jának (B.8)
+ * 5. state — érvényes workflow állapot-e (0-7)
+ * 6. Contributor mezők — létező felhasználókra mutatnak-e
+ * 7. filePath — nem üres, nem tartalmaz tiltott karaktereket
  *
- * Érvénytelen publicationId → a cikk törlődik (nincs szülő).
+ * Érvénytelen publicationId / scope mismatch / hiányzó scope / cross-tenant
+ * caller → a cikk törlődik (nincs legitim szülő vagy jogosultság).
  * Egyéb hibák → mező nullázás / alapértékre állítás.
  *
  * Trigger: databases.*.collections.articles.documents.*.create
@@ -23,6 +27,7 @@ const sdk = require("node-appwrite");
  * - ARTICLES_COLLECTION_ID
  * - PUBLICATIONS_COLLECTION_ID
  * - CONFIG_COLLECTION_ID
+ * - EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID (B.8)
  */
 
 const SERVER_GUARD_ID = 'server-guard';
@@ -49,6 +54,33 @@ async function loadValidStates(databases, databaseId, configCollectionId, log) {
         log(`[Config] Fallback valid states használata: ${e.message}`);
         return new Set([0, 1, 2, 3, 4, 5, 6, 7]);
     }
+}
+
+/**
+ * Lekéri a felhasználó membership rekordját az adott szerkesztőségben.
+ * Fázis 1 / B.8 — cross-tenant leakage elleni védelem.
+ *
+ * Lásd article-update-guard/src/main.js-ben a részletes leírást.
+ * **Hibakezelés**: a lookup hibák felfelé dobódnak; a caller dönti el,
+ * hogyan reagál (ez a CF fail-fast 500-zal, hogy ne töröljön frissen
+ * létrehozott cikket átmeneti DB hiba miatt).
+ *
+ * @param {sdk.Databases} databases
+ * @param {string} databaseId
+ * @param {string} collectionId
+ * @param {string} userId
+ * @param {string} officeId
+ * @returns {Promise<Object|null>} membership doc vagy null
+ * @throws a listDocuments() bármely hibája
+ */
+async function findOfficeMembership(databases, databaseId, collectionId, userId, officeId) {
+    const result = await databases.listDocuments(databaseId, collectionId, [
+        sdk.Query.equal('userId', userId),
+        sdk.Query.equal('editorialOfficeId', officeId),
+        sdk.Query.limit(1)
+    ]);
+    if ((result.total || 0) === 0) return null;
+    return result.documents[0] || null;
 }
 
 module.exports = async function ({ req, res, log, error }) {
@@ -81,6 +113,13 @@ module.exports = async function ({ req, res, log, error }) {
         const articlesCollectionId = process.env.ARTICLES_COLLECTION_ID;
         const publicationsCollectionId = process.env.PUBLICATIONS_COLLECTION_ID;
         const configCollectionId = process.env.CONFIG_COLLECTION_ID;
+        const officeMembershipsCollectionId = process.env.EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID;
+
+        // ── Fail-fast env var guard (B.8) ──
+        if (!officeMembershipsCollectionId) {
+            error('[Config] Hiányzó környezeti változó: EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID');
+            return res.json({ success: false, reason: 'misconfigured', missing: ['EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID'] }, 500);
+        }
 
         // ── 1. publicationId validáció ──
         if (!payload.publicationId) {
@@ -89,8 +128,11 @@ module.exports = async function ({ req, res, log, error }) {
             return res.json({ success: true, action: 'deleted', reason: 'Missing publicationId' });
         }
 
+        // A parent publication-t elmentjük változóba, hogy a scope consistency
+        // check ne igényeljen újabb getDocument hívást.
+        let parentPublication;
         try {
-            await databases.getDocument(databaseId, publicationsCollectionId, payload.publicationId);
+            parentPublication = await databases.getDocument(databaseId, publicationsCollectionId, payload.publicationId);
         } catch (e) {
             if (e.code === 404) {
                 log(`Érvénytelen publicationId: ${payload.publicationId} → cikk törlése (${payload.$id})`);
@@ -100,16 +142,83 @@ module.exports = async function ({ req, res, log, error }) {
             throw e;
         }
 
+        // ── 2. Scope mezők jelenlét (B.8) ──
+        if (!payload.organizationId || !payload.editorialOfficeId) {
+            log(`[Scope] Hiányzó scope mezők a cikken ${payload.$id} → törlés`);
+            await databases.deleteDocument(databaseId, articlesCollectionId, payload.$id);
+            return res.json({ success: true, action: 'deleted', reason: 'Missing scope fields' });
+        }
+
+        // ── 3. Parent publication scope consistency (B.8) ──
+        // Legacy publication (null editorialOfficeId) esetén skip warning-gal —
+        // a B.9 wipe után ez nem fut.
+        // Az `organizationId` és `editorialOfficeId` egymástól függetlenül is
+        // ellenőrizve, hogy a denormalizált scope pár invariáns ne sérüljön
+        // akkor sem, ha a támadó csak az egyik mezőt próbálja elcsúsztatni.
+        if (parentPublication.editorialOfficeId) {
+            if (parentPublication.editorialOfficeId !== payload.editorialOfficeId) {
+                log(`[Scope] Cikk editorialOfficeId (${payload.editorialOfficeId}) ≠ publication editorialOfficeId (${parentPublication.editorialOfficeId}) → törlés`);
+                await databases.deleteDocument(databaseId, articlesCollectionId, payload.$id);
+                return res.json({ success: true, action: 'deleted', reason: 'Parent office mismatch' });
+            }
+            if (parentPublication.organizationId
+                && parentPublication.organizationId !== payload.organizationId) {
+                log(`[Scope] Cikk organizationId (${payload.organizationId}) ≠ publication organizationId (${parentPublication.organizationId}) → törlés`);
+                await databases.deleteDocument(databaseId, articlesCollectionId, payload.$id);
+                return res.json({ success: true, action: 'deleted', reason: 'Parent organization mismatch' });
+            }
+        } else {
+            log(`[Scope] Legacy publication ${parentPublication.$id} — nincs editorialOfficeId, parent check kihagyva`);
+        }
+
+        // ── 4. Caller office membership check (B.8) ──
+        // A cikk létrehozója csak akkor írhat az office-ba, ha tagja annak.
+        //
+        // Missing `x-appwrite-user-id` header: szerver-oldali írás (API kulcs,
+        // CF-by-CF call) nem hordoz user kontextust. Jelenleg egyetlen trusted
+        // CF sem hoz létre cikket (a Plugin a kizárólagos create útvonal), így
+        // ez az ág a gyakorlatban nem fut. Ha később trusted CF is ír ide,
+        // ennek elfogadhatóságát újra kell értékelni (fail-closed vs trusted
+        // service principal allowlist).
+        //
+        // **Lookup hiba kezelése**: átmeneti DB hiba (timeout, missing index,
+        // Appwrite outage) esetén 500-as hibával visszatérünk, NEM töröljük
+        // a cikket. Ha return false-ot adnánk a fenti try/catch mintából,
+        // egy transient issue destruktív módon kitörölné a frissen létrehozott
+        // legitim cikket. A 500 miatt a trigger retry-olja a CF-et, és
+        // amikor a DB visszajön, a check végre tud futni.
+        const callerId = req.headers['x-appwrite-user-id'];
+        if (callerId) {
+            let membership;
+            try {
+                membership = await findOfficeMembership(
+                    databases,
+                    databaseId,
+                    officeMembershipsCollectionId,
+                    callerId,
+                    payload.editorialOfficeId
+                );
+            } catch (e) {
+                error(`[Scope] Membership lookup hiba (${callerId}, ${payload.editorialOfficeId}): ${e.message} — fail-fast 500, cikk NEM törölhető`);
+                return res.json({ success: false, reason: 'membership_lookup_failed', error: e.message }, 500);
+            }
+            if (!membership) {
+                log(`[Scope] User ${callerId} nem tagja az office-nak ${payload.editorialOfficeId} → cikk törlése (${payload.$id})`);
+                await databases.deleteDocument(databaseId, articlesCollectionId, payload.$id);
+                return res.json({ success: true, action: 'deleted', reason: 'Caller not member of target office' });
+            }
+        }
+
         const corrections = {};
 
-        // ── 2. Állapot validáció ──
+        // ── 5. Állapot validáció ──
         const validStates = await loadValidStates(databases, databaseId, configCollectionId, log);
         if (!validStates.has(Number(payload.state))) {
             corrections.state = 0;
             log(`Érvénytelen állapot (${payload.state}) → 0`);
         }
 
-        // ── 3. Contributor mezők validáció ──
+        // ── 6. Contributor mezők validáció ──
         for (const field of CONTRIBUTOR_FIELDS) {
             const userId = payload[field];
             if (!userId) continue;
@@ -124,7 +233,7 @@ module.exports = async function ({ req, res, log, error }) {
             }
         }
 
-        // ── 4. filePath formátum validáció ──
+        // ── 7. filePath formátum validáció ──
         if (payload.filePath) {
             // A fájlnév részét ellenőrizzük (az utolsó path szegmens)
             const fileName = payload.filePath.split('/').pop();
@@ -134,7 +243,7 @@ module.exports = async function ({ req, res, log, error }) {
             }
         }
 
-        // ── 5. Korrekciók alkalmazása ──
+        // ── 8. Korrekciók alkalmazása ──
         if (Object.keys(corrections).length > 0) {
             corrections.modifiedByClientId = SERVER_GUARD_ID;
 

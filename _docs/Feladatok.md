@@ -31,7 +31,7 @@ tags: [feladatok]
 - [x] `appwriteIds.js` frissítés az új collection ID-kkal (a régi `TEAMS` enum egyelőre marad, `@deprecated` JSDoc-kal)
 - [x] Új Cloud Function: `invite-to-organization` — token generálás (e-mail küldés Fázis 6-ra halasztva), `bootstrap_organization` + `create` + `accept` action egy CF-ben, ACL-alapú védelem *(B.5 kész + biztonsági javítás)*
 - [x] ~~Új Cloud Function: `organization-membership-guard`~~ — **TÖRÖLVE** *(B.5 adversarial review után): a sentinel pattern kliens-forgeable volt, helyette ACL lockdown (5 tenant collection `read("users")` only) + `bootstrap_organization` action a `invite-to-organization` CF-ben.*
-- [ ] Meglévő CF-ek (article-update-guard, validate-article-creation, validate-publication-update) officeId scope átvétele
+- [x] Meglévő CF-ek (article-update-guard, validate-article-creation, validate-publication-update) officeId scope átvétele *(B.8 kész — `hasOfficeMembership` helper + `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID` env var mindhárom guardban; article-update-guard state revert, validate-article-creation delete cross-tenant esetén, validate-publication-update delete create-nél + log-only update-nél. Legacy null scope → skip + warning log.)*
 - [x] Dashboard: `react-router-dom` telepítés (v7.14.0)
 - [x] Dashboard route `/login` — bejelentkezés (LoginRoute.jsx, az AuthSplitLayout brand részével)
 - [x] Dashboard route `/register` — regisztráció (név, e-mail, jelszó) + `account.createVerification(DASHBOARD_URL/verify)` *(B.4 kész)*
@@ -45,7 +45,7 @@ tags: [feladatok]
 - [x] Proxy régi reset oldalának megszüntetése vagy Dashboard redirect *(B.6 kész — `GET /verify` + `GET /reset-password` 302 redirect Dashboardra, `POST /reset-password` 410 Gone, HTML helperek + `node-appwrite` dependency törölve)*
 - [x] Plugin `UserContext` + Dashboard `AuthContext` új state-ek: `organizations`, `editorialOffices`, `activeOrganizationId`, `activeEditorialOfficeId` *(B.4: Dashboard `AuthContext` kész; B.7 (2026-04-08): Plugin `UserContext` megkapta a `fetchMemberships` + `organizations`/`editorialOffices`/`membershipsError`/`reloadMemberships` state-et, új `ScopeContext.jsx` auto-pick + stale validációval, Main.jsx `ScopeProvider` wrap + `ScopedWorkspace` + `ScopeMissingPlaceholder`)*
 - [x] Plugin + Dashboard `DataContext`: minden lekérdezésbe `Query.equal('editorialOfficeId', activeOfficeId)` szűrés *(B.7 (2026-04-08) Plugin oldal: publications/articles/layouts/deadlines/uservalidations fetch scope-szűrt, Realtime payload-szűrés a `.delete` kivételével, write-through `withScope()` helper inject organizationId+editorialOfficeId a `createPublication/Article/Layout/Deadline/Validation` payloadba, office-váltás side effect nullázza az `activePublicationId`-t; Dashboard oldal a B.4-ben már készen volt)*
-- [ ] Teszt adat törlése, új user regisztrációval indulás
+- [x] Teszt adat törlése, új user regisztrációval indulás *(B.9 kész — 2026-04-08: 6 data collection wipe-olva MCP-vel (publications 4, articles 139, layouts 16, deadlines 10, uservalidations 13, validations 3 = 185 row), articlemessages üres volt, thumbnails bucket 147 → 0 (146 casc\u00e1d CF + 1 orphan manuális). Minden 0, friss regisztrációra kész.)*
 - [ ] **Verifikáció**: regisztráció → e-mail verifikáció → onboarding → org + office létrejön → üres workspace. Elfelejtett jelszó flow. Meghívó flow két user között. Plugin bejelentkezés.
 
 #### Fázis 2 — Dinamikus csoportok (groups, groupMemberships)
