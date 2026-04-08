@@ -112,7 +112,7 @@ function errorMessage(err) {
 }
 
 export default function OnboardingRoute() {
-    const { user, logout, createOrganization, acceptInvite } = useAuth();
+    const { user, organizations, logout, createOrganization, acceptInvite } = useAuth();
     const { setActiveOrganization, setActiveOffice } = useScope();
     const navigate = useNavigate();
 
@@ -120,6 +120,17 @@ export default function OnboardingRoute() {
     const [pendingToken, setPendingToken] = useState(() => {
         try { return localStorage.getItem(PENDING_INVITE_KEY); } catch { return null; }
     });
+
+    // Ha a user közben tag lett valamelyik orgnak (pl. másik tabon elfogadott
+    // meghívó, vagy a ProtectedRoute átmeneti memberships hibája után sikeres
+    // reload), és nincs pending token, akkor már semmi dolga itt — a create
+    // org form-ot elrejteni sem elég, mert a user egyszerűen félrekattinthatna.
+    // Visszairányítjuk a dashboardra.
+    useEffect(() => {
+        if (!pendingToken && organizations && organizations.length > 0) {
+            navigate('/', { replace: true });
+        }
+    }, [pendingToken, organizations, navigate]);
 
     // Form state
     const [orgName, setOrgName] = useState('');

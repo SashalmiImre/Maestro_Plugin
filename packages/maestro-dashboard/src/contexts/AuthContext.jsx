@@ -37,11 +37,9 @@ import {
     APPWRITE_PROJECT_ID,
     DATABASE_ID,
     COLLECTIONS,
+    FUNCTIONS,
     DASHBOARD_URL
 } from '../config.js';
-
-// Cloud Function ID — invite-to-organization (B.5)
-const INVITE_FUNCTION_ID = 'invite-to-organization';
 
 const AuthContext = createContext(null);
 
@@ -153,7 +151,7 @@ async function fetchMemberships(userId) {
  */
 async function callInviteFunction(action, payload, defaultReason) {
     const execution = await functions.createExecution({
-        functionId: INVITE_FUNCTION_ID,
+        functionId: FUNCTIONS.INVITE_TO_ORGANIZATION,
         body: JSON.stringify({ action, ...payload }),
         async: false,
         method: 'POST',
@@ -171,8 +169,22 @@ async function callInviteFunction(action, payload, defaultReason) {
 
     if (!response.success) {
         const reason = response.reason || defaultReason;
+        // A CF HTTP status code-ja (200/400/403/404/409/410/500) a CF execution
+        // objektumon áll — konzolra írjuk, hogy a felhasználó console-ból
+        // könnyebben tudjon hibát jelenteni és fejlesztői tudják gyorsan
+        // azonosítani, hogy pl. a CF 500 `misconfigured`-ot ad vagy 403
+        // `insufficient_role`-t. A wrapped error csak a reason stringet kapja.
+        console.warn(
+            `[invite-to-organization CF] action=${action} reason=${reason}`,
+            {
+                statusCode: execution.responseStatusCode,
+                executionId: execution.$id,
+                body: response
+            }
+        );
         const wrapped = new Error(reason);
         wrapped.code = reason;
+        wrapped.statusCode = execution.responseStatusCode;
         throw wrapped;
     }
 

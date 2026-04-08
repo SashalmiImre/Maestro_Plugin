@@ -34,11 +34,26 @@ export default function LoginRoute() {
             await login(email.trim(), password);
             // Bejelentkezés után visszanavigálunk az eredeti deep link-re
             // (pathname + search + hash mind megőrződik), vagy a `/`-ra ha
-            // nem onnan jött a user. A teljes location objektumot adjuk át
-            // a navigate-nek, hogy pl. a `/invite?token=...` query string
-            // ne vesszen el.
+            // nem onnan jött a user.
+            //
+            // A ProtectedRoute a teljes Location objektumot ad át a
+            // `state.from`-ban (useLocation() eredménye). A React Router
+            // `navigate()` ugyan elfogadja a Location-t is, de a biztonság
+            // kedvéért explicit stringgé normalizáljuk a pathname+search+hash
+            // összefűzésével — így a `/invite?token=...` query string és a
+            // hash fragmentek is megőrződnek, a Location.state pedig nem
+            // szivárog tovább véletlenül az új route state-jébe.
             const from = location.state?.from;
-            navigate(from || '/', { replace: true });
+            let redirectTo = '/';
+            if (typeof from === 'string') {
+                redirectTo = from || '/';
+            } else if (from && typeof from === 'object') {
+                const pathname = from.pathname || '/';
+                const search = from.search || '';
+                const hash = from.hash || '';
+                redirectTo = `${pathname}${search}${hash}`;
+            }
+            navigate(redirectTo, { replace: true });
         } catch (err) {
             const msg = err?.message || '';
             if (msg.includes('Invalid credentials') || msg.includes('Invalid email')) {

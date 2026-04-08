@@ -50,5 +50,21 @@ export const BUCKETS = {
     THUMBNAILS: 'thumbnails'
 };
 
-/** Cloud Function ID — csapattagok lekérése. */
-export const GET_TEAM_MEMBERS_FUNCTION_ID = '69599cf9000a865db98a';
+/**
+ * Cloud Function azonosítók.
+ *
+ * Egy helyen sorolva fel, hogy a hívó csomagok (plugin + dashboard) ne
+ * hardkódolják a string literal-eket külön-külön. A `GET_TEAM_MEMBERS`
+ * egyelőre Appwrite belső ID-t használ, az új CF-ek (B.5+) már a
+ * `functionId` slug-gal hívhatóak (pl. `invite-to-organization`).
+ * @enum {string}
+ */
+export const FUNCTIONS = {
+    GET_TEAM_MEMBERS: '69599cf9000a865db98a',
+    INVITE_TO_ORGANIZATION: 'invite-to-organization'
+};
+
+/**
+ * @deprecated Használd a `FUNCTIONS.GET_TEAM_MEMBERS`-t. Backward-compat export.
+ */
+export const GET_TEAM_MEMBERS_FUNCTION_ID = FUNCTIONS.GET_TEAM_MEMBERS;

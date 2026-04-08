@@ -13,6 +13,7 @@ export {
     COLLECTIONS,
     TEAMS,
     BUCKETS,
+    FUNCTIONS,
     GET_TEAM_MEMBERS_FUNCTION_ID
 } from '@shared/appwriteIds.js';
 

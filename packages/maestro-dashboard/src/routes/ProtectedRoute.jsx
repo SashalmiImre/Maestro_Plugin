@@ -16,6 +16,7 @@
 import React, { useState } from 'react';
 import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext.jsx';
+import BrandHero from './auth/BrandHero.jsx';
 
 export default function ProtectedRoute() {
     const {
@@ -60,31 +61,38 @@ export default function ProtectedRoute() {
     // Memberships fetch hiba — retry képernyő. NEM redirect onboarding-ra,
     // mert üres organizations lehet egy átmeneti hiba is, és a placeholder
     // onboarding kizárná a meglévő tenantot a dashboardból.
+    //
+    // A login/register/invite oldalakkal azonos `AuthSplitLayout` kerettel
+    // (BrandHero + glassmorphism kártya) jelenítjük meg, hogy a felhasználó
+    // ne egy csupasz kártyát lásson a semmi közepén.
     if (membershipsError) {
         return (
-            <div className="login-card auth-error-card">
-                <div className="form-heading">Hiba a tagságok betöltésekor</div>
-                <p className="auth-help">
-                    Nem sikerült lekérni a szervezeted adatait. Ez lehet átmeneti hálózati
-                    vagy szerveroldali hiba — próbáld újra. Ha tartósan fennáll, jelentkezz
-                    ki és próbálj újra belépni.
-                </p>
-                <button
-                    type="button"
-                    className="login-btn"
-                    onClick={handleRetry}
-                    disabled={isRetrying}
-                >
-                    {isRetrying ? 'Újrapróbálkozás...' : 'Újra'}
-                </button>
-                <div className="auth-bottom-link">
+            <div className="login-container">
+                <BrandHero />
+                <div className="login-card auth-error-card">
+                    <div className="form-heading">Hiba a tagságok betöltésekor</div>
+                    <p className="auth-help">
+                        Nem sikerült lekérni a szervezeted adatait. Ez lehet átmeneti hálózati
+                        vagy szerveroldali hiba — próbáld újra. Ha tartósan fennáll, jelentkezz
+                        ki és próbálj újra belépni.
+                    </p>
                     <button
                         type="button"
-                        className="auth-link auth-link-button"
-                        onClick={handleLogout}
+                        className="login-btn"
+                        onClick={handleRetry}
+                        disabled={isRetrying}
                     >
-                        Kijelentkezés
+                        {isRetrying ? 'Újrapróbálkozás...' : 'Újra'}
                     </button>
+                    <div className="auth-bottom-link">
+                        <button
+                            type="button"
+                            className="auth-link auth-link-button"
+                            onClick={handleLogout}
+                        >
+                            Kijelentkezés
+                        </button>
+                    </div>
                 </div>
             </div>
         );

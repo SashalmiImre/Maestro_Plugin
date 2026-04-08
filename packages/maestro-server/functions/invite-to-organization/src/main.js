@@ -129,6 +129,26 @@ module.exports = async function ({ req, res, log, error }) {
         const officeMembershipsCollectionId = process.env.EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID;
         const invitesCollectionId = process.env.ORGANIZATION_INVITES_COLLECTION_ID;
 
+        // ── Fail-fast env var guard ──
+        // Ha bármelyik kötelező collection ID hiányzik, a CF azonnal 500-at ad
+        // vissza értelmes hibakóddal. E nélkül a későbbi `listDocuments`/
+        // `createDocument` hívások cryptic „Missing required parameter" hibát
+        // dobnának, és csak a kimenet alapján lehetne rájönni, hogy a deploy
+        // során kimaradt egy env var. A header-rel átadott dynamic API key
+        // fallback-je miatt az APPWRITE_API_KEY-t nem kötelezővé tesszük.
+        const missingEnvVars = [];
+        if (!databaseId) missingEnvVars.push('DATABASE_ID');
+        if (!organizationsCollectionId) missingEnvVars.push('ORGANIZATIONS_COLLECTION_ID');
+        if (!membershipsCollectionId) missingEnvVars.push('ORGANIZATION_MEMBERSHIPS_COLLECTION_ID');
+        if (!officesCollectionId) missingEnvVars.push('EDITORIAL_OFFICES_COLLECTION_ID');
+        if (!officeMembershipsCollectionId) missingEnvVars.push('EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID');
+        if (!invitesCollectionId) missingEnvVars.push('ORGANIZATION_INVITES_COLLECTION_ID');
+        if (!apiKey) missingEnvVars.push('APPWRITE_API_KEY (vagy x-appwrite-key header)');
+        if (missingEnvVars.length > 0) {
+            error(`[Config] Hiányzó környezeti változók: ${missingEnvVars.join(', ')}`);
+            return fail(res, 500, 'misconfigured', { missing: missingEnvVars });
+        }
+
         // ════════════════════════════════════════════════════════
         // ACTION = 'bootstrap_organization'
         // ════════════════════════════════════════════════════════
@@ -409,20 +429,60 @@ module.exports = async function ({ req, res, log, error }) {
             const expiresAt = new Date(Date.now() + INVITE_VALIDITY_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
             // 4. Invite rekord létrehozása
-            const invite = await databases.createDocument(
-                databaseId,
-                invitesCollectionId,
-                sdk.ID.unique(),
-                {
-                    organizationId,
-                    email,
-                    token,
-                    role,
-                    status: 'pending',
-                    expiresAt,
-                    invitedByUserId: callerId
+            //
+            // Race condition védelem: a `organizationInvites` collectionön
+            // létezik egy composite unique index `(organizationId, email,
+            // status)` kulcson. Ha két admin párhuzamosan küld meghívót
+            // ugyanarra az email+org párra, mindkettő átmehet a fenti
+            // idempotencia check-en, de a DB insert ütközni fog. Ilyenkor
+            // a már létrejött rekordot újra lekérdezzük és idempotens
+            // success-szel visszaadjuk — a hívó szemszögéből nincs különbség
+            // „én hoztam létre" és „valaki más hozta létre velem egy időben"
+            // között.
+            let invite;
+            try {
+                invite = await databases.createDocument(
+                    databaseId,
+                    invitesCollectionId,
+                    sdk.ID.unique(),
+                    {
+                        organizationId,
+                        email,
+                        token,
+                        role,
+                        status: 'pending',
+                        expiresAt,
+                        invitedByUserId: callerId
+                    }
+                );
+            } catch (err) {
+                if (err?.type === 'document_already_exists' || /unique/i.test(err?.message || '')) {
+                    // Újraolvassuk — a másik kérés már létrehozta
+                    const raceWinner = await databases.listDocuments(
+                        databaseId,
+                        invitesCollectionId,
+                        [
+                            sdk.Query.equal('organizationId', organizationId),
+                            sdk.Query.equal('email', email),
+                            sdk.Query.equal('status', 'pending'),
+                            sdk.Query.limit(1)
+                        ]
+                    );
+                    if (raceWinner.documents.length > 0) {
+                        const existing = raceWinner.documents[0];
+                        log(`[Create] Race — meglévő pending invite ${existing.$id} visszaadva`);
+                        return res.json({
+                            success: true,
+                            action: 'existing',
+                            inviteId: existing.$id,
+                            token: existing.token,
+                            expiresAt: existing.expiresAt
+                        });
+                    }
+                    // Nem találtuk meg — a unique violation máshonnan jött, dobjuk tovább
                 }
-            );
+                throw err;
+            }
 
             log(`[Create] Új invite ${invite.$id} az org ${organizationId} → ${email} (role=${role})`);
 
@@ -521,17 +581,60 @@ module.exports = async function ({ req, res, log, error }) {
             // 6. Membership létrehozás API key-jel — a collection create ACL
             // üres, tehát csak a server SDK tud ide írni. Nincs szükség sentinel
             // mezőre.
-            const membership = await databases.createDocument(
-                databaseId,
-                membershipsCollectionId,
-                sdk.ID.unique(),
-                {
-                    organizationId: invite.organizationId,
-                    userId: callerId,
-                    role: invite.role || 'member',
-                    addedByUserId: invite.invitedByUserId
+            //
+            // Race condition védelem: az `organizationMemberships` collectionön
+            // létezik egy composite unique index `(organizationId, userId)`-n.
+            // Ha két elfogadás (pl. dupla klikk, retry) párhuzamosan fut, a
+            // fenti duplikátum check mindkét esetben 0-t adhat vissza, de a
+            // DB insert ütközni fog. Ilyenkor újraolvassuk a membershipet és
+            // idempotens `already_member` választ adunk vissza.
+            let membership;
+            try {
+                membership = await databases.createDocument(
+                    databaseId,
+                    membershipsCollectionId,
+                    sdk.ID.unique(),
+                    {
+                        organizationId: invite.organizationId,
+                        userId: callerId,
+                        role: invite.role || 'member',
+                        addedByUserId: invite.invitedByUserId
+                    }
+                );
+            } catch (err) {
+                if (err?.type === 'document_already_exists' || /unique/i.test(err?.message || '')) {
+                    const raceWinner = await databases.listDocuments(
+                        databaseId,
+                        membershipsCollectionId,
+                        [
+                            sdk.Query.equal('organizationId', invite.organizationId),
+                            sdk.Query.equal('userId', callerId),
+                            sdk.Query.limit(1)
+                        ]
+                    );
+                    if (raceWinner.documents.length > 0) {
+                        const existing = raceWinner.documents[0];
+                        // Még frissítjük az invite-ot is accepted-re, hogy a
+                        // status ne ragadjon pending-en.
+                        try {
+                            await databases.updateDocument(databaseId, invitesCollectionId, invite.$id, {
+                                status: 'accepted'
+                            });
+                        } catch (updateErr) {
+                            log(`[Accept] Race — invite status frissítés hiba: ${updateErr.message}`);
+                        }
+                        log(`[Accept] Race — user ${callerId} már tagja az org ${invite.organizationId}-nak`);
+                        return res.json({
+                            success: true,
+                            action: 'already_member',
+                            organizationId: invite.organizationId,
+                            membershipId: existing.$id,
+                            role: existing.role
+                        });
+                    }
                 }
-            );
+                throw err;
+            }
 
             // 7. Invite státusz frissítés
             await databases.updateDocument(databaseId, invitesCollectionId, invite.$id, {
