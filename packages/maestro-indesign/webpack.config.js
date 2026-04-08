@@ -16,6 +16,17 @@ const HtmlWebpackPlugin = require("html-webpack-plugin");
 const { aliases } = require("@swc-uxp-wrappers/utils");
 const webpack = require("webpack");
 
+// Legacy env var figyelmeztetés: a B.6 óta a VERIFICATION_URL és RECOVERY_URL
+// a DASHBOARD_URL-ből származik. Ha valaki még a régi env változókat állítja
+// (pl. CI script, lokális .env), figyelmeztetünk, hogy ezek némán ignorálódnak.
+if (process.env.VERIFICATION_URL || process.env.RECOVERY_URL) {
+  console.warn(
+    '[webpack] FIGYELEM: A VERIFICATION_URL / RECOVERY_URL env változók már nem használtak. ' +
+    'Használj DASHBOARD_URL-t helyette (pl. DASHBOARD_URL=http://localhost:5173). ' +
+    'A build a DASHBOARD_URL fallback-jére (https://maestro.emago.hu) fog esni.'
+  );
+}
+
 /**
  * === Copy static files configuration
  */
@@ -53,10 +64,10 @@ const shared = {
       maxChunks: 1,
     }),
     // Környezeti változók build-időben beégetve; ha nincs beállítva, undefined-ra értékelődik ki,
-    // az appwriteConfig.js fallback értékei érvényesülnek.
+    // és az appwriteConfig.js fallback értéke (https://maestro.emago.hu) érvényesül.
+    // A VERIFICATION_URL és RECOVERY_URL a DASHBOARD_URL-ből származtatva — nincs külön inject.
     new webpack.DefinePlugin({
-      'process.env.VERIFICATION_URL': JSON.stringify(process.env.VERIFICATION_URL),
-      'process.env.RECOVERY_URL': JSON.stringify(process.env.RECOVERY_URL),
+      'process.env.DASHBOARD_URL': JSON.stringify(process.env.DASHBOARD_URL),
     }),
   ],
   devServer: {

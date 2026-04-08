@@ -41,8 +41,8 @@ tags: [feladatok]
 - [x] Dashboard route `/forgot-password` — `account.createRecovery(email, DASHBOARD_URL/reset-password)` *(B.4 kész)*
 - [x] Dashboard route `/reset-password?userId=&secret=` — új jelszó form, `account.updateRecovery()` *(B.4 kész)*
 - [ ] Dashboard route `/settings/password` — bejelentkezett jelszó módosítás `account.updatePassword()`
-- [ ] Plugin `appwriteConfig.js` `VERIFICATION_URL` + `RECOVERY_URL` átállítása Dashboard domainre
-- [ ] Proxy régi reset oldalának megszüntetése vagy Dashboard redirect
+- [x] Plugin `appwriteConfig.js` `VERIFICATION_URL` + `RECOVERY_URL` átállítása Dashboard domainre *(B.6 kész — a két URL a `DASHBOARD_URL`-ből származik, Webpack DefinePlugin `process.env.DASHBOARD_URL` inject)*
+- [x] Proxy régi reset oldalának megszüntetése vagy Dashboard redirect *(B.6 kész — `GET /verify` + `GET /reset-password` 302 redirect Dashboardra, `POST /reset-password` 410 Gone, HTML helperek + `node-appwrite` dependency törölve)*
 - [ ] Plugin `UserContext` + Dashboard `AuthContext` új state-ek: `organizations`, `editorialOffices`, `activeOrganizationId`, `activeEditorialOfficeId` *(B.4: Dashboard `AuthContext` `organizations` + `editorialOffices` kész + `fetchMemberships`/`reloadMemberships`; `activeOrganizationId`/`activeEditorialOfficeId` a `ScopeContext`-ben él, Plugin oldal B.7-ben jön)*
 - [ ] Plugin + Dashboard `DataContext`: minden lekérdezésbe `Query.equal('editorialOfficeId', activeOfficeId)` szűrés
 - [ ] Teszt adat törlése, új user regisztrációval indulás

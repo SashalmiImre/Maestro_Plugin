@@ -1,7 +1,6 @@
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const cors = require('cors');
-const sdk = require('node-appwrite');
 const Groq = require('groq-sdk');
 
 /**
@@ -278,333 +277,40 @@ Válaszolj KIZÁRÓLAG érvényes JSON-nel, semmilyen más szöveggel:
 const layoutAIRouter = require('./routes/layoutAI');
 app.use(layoutAIRouter);
 
-// --- Közös HTML sablon ---
+// --- Legacy Auth Callback Redirects ---
+//
+// A korábbi Plugin verziókban az Appwrite `account.createVerification()` és
+// `account.createRecovery()` hívások ide, a proxy `/verify` és `/reset-password`
+// HTML form endpointjaira mutattak. A Fázis 1 / B.6 óta a Plugin a Dashboard
+// `/verify` és `/reset-password` route-jait használja. Ezek a redirectek a
+// user inboxokban levő régi email linkek backward-compat fedezetét adják —
+// ugyanazzal a `userId+secret` query string-gel átirányítanak a Dashboardra.
+//
+// A cél URL a `DASHBOARD_URL` env változóból származik (Railway / emago.hu
+// deployment-enként állítható) — staging vagy domain-migráció esetén így
+// nem kerülnek userId+secret token-ek rossz frontendre. Fallback a production
+// Dashboard domain, amely B.4 óta élesben működik.
 
-/** Alap stílusok az összes Maestro oldalhoz. */
-const BASE_STYLES = `
-    body {
-        font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-        background: #1a1a1a;
-        color: #e0e0e0;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        min-height: 100vh;
-        margin: 0;
-    }
-    .card {
-        background: #2a2a2a;
-        border-radius: 12px;
-        padding: 40px;
-        text-align: center;
-        max-width: 400px;
-        width: 100%;
-        box-shadow: 0 4px 24px rgba(0,0,0,0.3);
-    }
-    .icon {
-        font-size: 48px;
-        margin-bottom: 16px;
-    }
-    h1 { font-size: 20px; margin: 0 0 12px; }
-    p { font-size: 14px; color: #999; margin: 0; line-height: 1.5; }
-    .brand { font-size: 12px; color: #555; margin-top: 24px; }
-`;
+const DASHBOARD_URL = (process.env.DASHBOARD_URL || 'https://maestro.emago.hu').replace(/\/+$/, '');
 
-/**
- * Eredmény oldal HTML sablon (siker/hiba visszajelzés).
- */
-function resultHTML(title, message, isSuccess) {
-    const color = isSuccess ? '#2d7d46' : '#d7373f';
-    const icon = isSuccess ? '&#10003;' : '&#10007;';
-    return `<!DOCTYPE html>
-<html lang="hu">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Maestro — ${title}</title>
-    <style>${BASE_STYLES}
-        .icon { color: ${color}; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <div class="icon">${icon}</div>
-        <h1>${title}</h1>
-        <p>${message}</p>
-        <div class="brand">Maestro</div>
-    </div>
-</body>
-</html>`;
-}
-
-// --- Email Verification Endpoint ---
-
-/**
- * Email verificációs callback endpoint.
- *
- * Az Appwrite `account.createVerification()` által küldött emailben lévő link
- * ide irányít. A Server SDK-val közvetlenül megerősítjük a felhasználó email címét.
- *
- * Env vars: APPWRITE_PROJECT_ID, APPWRITE_API_KEY
- */
-app.get(['/verify', '/maestro-proxy/verify'], async (req, res) => {
-    const { userId, secret } = req.query;
-
-    if (!userId || !secret) {
-        return res.status(400).send(resultHTML(
-            'Hibás hivatkozás',
-            'A megerősítő link érvénytelen vagy hiányos. Próbálj újra regisztrálni.',
-            false
-        ));
-    }
-
-    try {
-        const client = new sdk.Client()
-            .setEndpoint('https://cloud.appwrite.io/v1')
-            .setProject(process.env.APPWRITE_PROJECT_ID)
-            .setKey(process.env.APPWRITE_API_KEY);
-
-        const users = new sdk.Users(client);
-        await users.updateEmailVerification({ userId, emailVerification: true });
-
-        console.log(`[Verify] Email megerősítve: userId=${userId}`);
-        res.send(resultHTML(
-            'Email sikeresen megerősítve!',
-            'Most már bejelentkezhetsz az InDesign pluginban. Ezt az oldalt bezárhatod.',
-            true
-        ));
-    } catch (error) {
-        console.error(`[Verify] Hiba: userId=${userId}`, error.message);
-        res.status(500).send(resultHTML(
-            'A megerősítés sikertelen',
-            'Hiba történt az email megerősítése során. Próbálj újra regisztrálni.',
-            false
-        ));
-    }
+app.get(['/verify', '/maestro-proxy/verify'], (req, res) => {
+    const qs = new URLSearchParams(req.query).toString();
+    res.redirect(302, `${DASHBOARD_URL}/verify${qs ? '?' + qs : ''}`);
 });
 
-// --- Password Recovery Endpoints ---
-
-/**
- * Jelszó-visszaállítás form megjelenítése.
- *
- * Az Appwrite `account.createRecovery()` által küldött emailben lévő link
- * ide irányít. HTML formot jelenítünk meg az új jelszó megadásához.
- */
 app.get(['/reset-password', '/maestro-proxy/reset-password'], (req, res) => {
-    const { userId, secret } = req.query;
-
-    if (!userId || !secret) {
-        return res.status(400).send(resultHTML(
-            'Hibás hivatkozás',
-            'A jelszó-visszaállító link érvénytelen vagy hiányos. Próbáld újra a pluginból.',
-            false
-        ));
-    }
-
-    res.send(resetPasswordFormHTML(userId, secret));
+    const qs = new URLSearchParams(req.query).toString();
+    res.redirect(302, `${DASHBOARD_URL}/reset-password${qs ? '?' + qs : ''}`);
 });
 
 /**
- * Jelszó-visszaállítás feldolgozása.
- *
- * A form POST-olja ide az új jelszót. Az Appwrite REST API-n keresztül
- * frissítjük a jelszót (a userId + secret kombináció az autentikáció).
+ * A régi HTML form POST-ja értelmetlen egy GET redirect után (a body nem
+ * továbbítható új GET-re). 410 Gone válasz tájékoztatja a usert, hogy
+ * kattintson újra a friss Dashboard linkre az emailben.
  */
-app.post(['/reset-password', '/maestro-proxy/reset-password'], async (req, res) => {
-    const { userId, secret, password, passwordConfirm } = req.body;
-
-    if (!userId || !secret || !password || !passwordConfirm) {
-        return res.status(400).send(resultHTML(
-            'Hiányos adatok',
-            'Minden mező kitöltése kötelező.',
-            false
-        ));
-    }
-
-    if (password.length < 8) {
-        return res.status(400).send(resultHTML(
-            'Túl rövid jelszó',
-            'A jelszónak legalább 8 karakter hosszúnak kell lennie.',
-            false
-        ));
-    }
-
-    if (password !== passwordConfirm) {
-        return res.status(400).send(resultHTML(
-            'A jelszavak nem egyeznek',
-            'A megadott jelszavak nem egyeznek. Próbáld újra.',
-            false
-        ));
-    }
-
-    try {
-        // Appwrite REST API — PUT /v1/account/recovery
-        // Nem igényel API key-t, a userId + secret kombináció az autentikáció
-        const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 10000);
-        let response;
-        try {
-            response = await fetch('https://cloud.appwrite.io/v1/account/recovery', {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'X-Appwrite-Project': process.env.APPWRITE_PROJECT_ID,
-                },
-                body: JSON.stringify({ userId, secret, password }),
-                signal: controller.signal,
-            });
-        } finally {
-            clearTimeout(timeoutId);
-        }
-
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.message || `HTTP ${response.status}`);
-        }
-
-        console.log(`[Recovery] Jelszó sikeresen módosítva: userId=${userId}`);
-        res.send(resultHTML(
-            'Jelszó sikeresen módosítva!',
-            'Most már bejelentkezhetsz az InDesign pluginban az új jelszóddal. Ezt az oldalt bezárhatod.',
-            true
-        ));
-    } catch (error) {
-        console.error(`[Recovery] Hiba: userId=${userId}`, error.message);
-        const isAbort = error.name === 'AbortError';
-        res.status(500).send(resultHTML(
-            'A jelszó módosítása sikertelen',
-            isAbort
-                ? 'A szerver nem válaszolt időben. Próbáld újra a pluginból.'
-                : 'Hiba történt a jelszó módosítása során. Próbáld újra a pluginból.',
-            false
-        ));
-    }
+app.post(['/reset-password', '/maestro-proxy/reset-password'], (req, res) => {
+    res.status(410).send('Ez a form elavult. Kérlek kattints újra a jelszó-visszaállító linkre az emailben.');
 });
-
-/**
- * Escapes special characters for safe embedding in HTML attribute values.
- * @param {string} str - The raw string to escape.
- * @returns {string} The escaped string.
- */
-function escapeAttr(str) {
-    return String(str)
-        .replace(/&/g, '&amp;')
-        .replace(/</g, '&lt;')
-        .replace(/>/g, '&gt;')
-        .replace(/"/g, '&quot;')
-        .replace(/'/g, '&#x27;');
-}
-
-/**
- * HTML sablon a jelszó-visszaállító formhoz.
- */
-function resetPasswordFormHTML(userId, secret) {
-    return `<!DOCTYPE html>
-<html lang="hu">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Maestro — Új jelszó beállítása</title>
-    <style>${BASE_STYLES}
-        .icon { color: #3b82f6; }
-        .form-group {
-            margin-bottom: 16px;
-            text-align: left;
-        }
-        label {
-            display: block;
-            font-size: 12px;
-            color: #999;
-            margin-bottom: 4px;
-        }
-        input[type="password"] {
-            width: 100%;
-            padding: 10px 12px;
-            background: #1a1a1a;
-            border: 1px solid #444;
-            border-radius: 6px;
-            color: #e0e0e0;
-            font-size: 14px;
-            box-sizing: border-box;
-            outline: none;
-            transition: border-color 0.2s;
-        }
-        input[type="password"]:focus {
-            border-color: #3b82f6;
-        }
-        button {
-            width: 100%;
-            padding: 12px;
-            background: #3b82f6;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            font-size: 14px;
-            font-weight: 600;
-            cursor: pointer;
-            margin-top: 8px;
-            transition: background 0.2s;
-        }
-        button:hover { background: #2563eb; }
-        button:disabled { background: #555; cursor: not-allowed; }
-        .error { color: #d7373f; font-size: 12px; margin-top: 8px; display: none; }
-    </style>
-</head>
-<body>
-    <div class="card">
-        <div class="icon">&#128274;</div>
-        <h1>Új jelszó beállítása</h1>
-        <p style="margin-bottom: 24px;">Add meg az új jelszavadat.</p>
-
-        <form method="POST" action="reset-password" id="resetForm">
-            <input type="hidden" name="userId" value="${escapeAttr(userId)}">
-            <input type="hidden" name="secret" value="${escapeAttr(secret)}">
-
-            <div class="form-group">
-                <label for="password">Új jelszó (min. 8 karakter)</label>
-                <input type="password" id="password" name="password" required minlength="8" autocomplete="new-password">
-            </div>
-
-            <div class="form-group">
-                <label for="passwordConfirm">Jelszó megerősítés</label>
-                <input type="password" id="passwordConfirm" name="passwordConfirm" required minlength="8" autocomplete="new-password">
-            </div>
-
-            <div class="error" id="errorMsg"></div>
-
-            <button type="submit">Jelszó módosítása</button>
-        </form>
-
-        <div class="brand">Maestro</div>
-    </div>
-
-    <script>
-        document.getElementById('resetForm').addEventListener('submit', function(e) {
-            var pw = document.getElementById('password').value;
-            var pwc = document.getElementById('passwordConfirm').value;
-            var err = document.getElementById('errorMsg');
-
-            if (pw.length < 8) {
-                e.preventDefault();
-                err.textContent = 'A jelszónak legalább 8 karakter hosszúnak kell lennie!';
-                err.style.display = 'block';
-                return;
-            }
-
-            if (pw !== pwc) {
-                e.preventDefault();
-                err.textContent = 'A jelszavak nem egyeznek!';
-                err.style.display = 'block';
-                return;
-            }
-
-            err.style.display = 'none';
-        });
-    </script>
-</body>
-</html>`;
-}
 
 // --- Authentication Injection Logic ---
 

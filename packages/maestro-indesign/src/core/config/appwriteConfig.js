@@ -14,16 +14,14 @@ export { APPWRITE_PROJECT_ID, DATABASE_ID, TEAMS, BUCKETS, GET_TEAM_MEMBERS_FUNC
 
 export const APPWRITE_LOCALE = "hu-HU";
 
-const RAILWAY_BASE = 'https://gallant-balance-production-b513.up.railway.app';
-
-/** Email verificációs callback URL — VERIFICATION_URL env változóból, vagy Railway fallback. */
-export const VERIFICATION_URL = process.env.VERIFICATION_URL || `${RAILWAY_BASE}/verify`;
-
-/** Jelszó-visszaállítási callback URL — RECOVERY_URL env változóból, vagy Railway fallback. */
-export const RECOVERY_URL = process.env.RECOVERY_URL || `${RAILWAY_BASE}/reset-password`;
-
 /** A Maestro Dashboard webes felület URL-je — DASHBOARD_URL env változóból, vagy production fallback. */
 export const DASHBOARD_URL = process.env.DASHBOARD_URL || 'https://maestro.emago.hu';
+
+/** Email verificációs callback URL — a Dashboard /verify route-ra mutat. */
+export const VERIFICATION_URL = `${DASHBOARD_URL}/verify`;
+
+/** Jelszó-visszaállítási callback URL — a Dashboard /reset-password route-ra mutat. */
+export const RECOVERY_URL = `${DASHBOARD_URL}/reset-password`;
 
 
 // =============================================================================
