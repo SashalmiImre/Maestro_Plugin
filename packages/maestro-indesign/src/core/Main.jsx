@@ -31,6 +31,8 @@ import { ToastProvider, useToast } from "../ui/common/Toast/ToastContext.jsx";
 import { ToastContainer } from "../ui/common/Toast/ToastContainer.jsx";
 import { DataProvider } from "./contexts/DataContext.jsx";
 import { ValidationProvider } from "./contexts/ValidationContext.jsx";
+import { ScopeProvider, useScope } from "./contexts/ScopeContext.jsx";
+import { ScopeMissingPlaceholder } from "../ui/features/workspace/ScopeMissingPlaceholder.jsx";
 
 /**
  * Endpoint váltás toast értesítő.
@@ -54,6 +56,49 @@ const EndpointSwitchNotifier = () => {
     }, [showToast]);
 
     return null;
+};
+
+/**
+ * A scope-tól függő workspace switch. A membership/scope állapot alapján dönt
+ * a Workspace és a különböző `ScopeMissingPlaceholder` variánsok között.
+ * Az auto-pick logika a `ScopeContext`-ben történik; itt csak olvassuk.
+ */
+const ScopedWorkspace = () => {
+    const { activeOrganizationId, activeEditorialOfficeId, isScopeValidated } = useScope();
+    const {
+        organizations,
+        editorialOffices,
+        loading: userLoading,
+        membershipsError,
+        reloadMemberships
+    } = useUser();
+
+    if (userLoading || !isScopeValidated) {
+        return <ScopeMissingPlaceholder variant="loading" />;
+    }
+    // Ha van működőképes scope-unk, a Workspace marad — egy tranziens
+    // memberships refresh hiba (membershipsError) nem téphet le mindent.
+    // Az error placeholder csak akkor jön, ha tényleg nincs mit megjeleníteni.
+    if (activeEditorialOfficeId) {
+        return <Workspace />;
+    }
+    if (membershipsError) {
+        return <ScopeMissingPlaceholder variant="error" onRetry={reloadMemberships} />;
+    }
+
+    // Nincs aktív office — variant szétválasztás: nincs szervezet, nincs office
+    // az aktív orgban (különben infinite spinner), vagy átmeneti auto-pick race.
+    const hasOrgs = organizations?.length > 0;
+    if (!hasOrgs) {
+        return <ScopeMissingPlaceholder variant="no-membership" onRetry={reloadMemberships} />;
+    }
+    const hasOfficeInActiveOrg = editorialOffices?.some(
+        (o) => o.organizationId === activeOrganizationId
+    );
+    if (!hasOfficeInActiveOrg) {
+        return <ScopeMissingPlaceholder variant="no-office-in-org" onRetry={reloadMemberships} />;
+    }
+    return <ScopeMissingPlaceholder variant="loading" />;
 };
 
 /**
@@ -337,11 +382,13 @@ export const Main = () => {
                 }}>
                     {!userLoading && (
                         user ? (
-                            <DataProvider>
-                                <ValidationProvider>
-                                    <Workspace />
-                                </ValidationProvider>
-                            </DataProvider>
+                            <ScopeProvider>
+                                <DataProvider>
+                                    <ValidationProvider>
+                                        <ScopedWorkspace />
+                                    </ValidationProvider>
+                                </DataProvider>
+                            </ScopeProvider>
                         ) : (
                             authView === 'login'
                                 ? <Login onSwitchToRegister={() => setAuthView('register')} />

@@ -458,11 +458,18 @@ Appwrite `memberships` Realtime csatorna → `DataContext` handler → `teamMemb
 index.jsx
   └─ UserProvider          ← Auth állapot, bejelentkezés/kijelentkezés, session megőrzés
        └─ ConnectionProvider  ← Online/offline/connecting UI állapot
-            └─ DataProvider       ← publications[], articles[], fetchData()
-                 └─ ValidationProvider  ← validationResults Map
-                      └─ ToastProvider       ← Toast értesítések
-                           └─ Main.jsx       ← Sleep detektálás, retry logika, routing
+            └─ Main.jsx       ← Sleep detektálás, retry logika, routing
+                 └─ ToastProvider       ← Toast értesítések
+                      └─ (user?) ScopeProvider  ← activeOrganizationId, activeEditorialOfficeId (Fázis 1 / B.7)
+                           └─ DataProvider       ← publications[], articles[], fetchData()
+                                └─ ValidationProvider  ← validationResults Map
+                                     └─ ScopedWorkspace  ← scope placeholder / Workspace switch
 ```
+
+A `ScopeProvider` csak a bejelentkezett ág belsejében jelenik meg — a `ScopedWorkspace`
+dönti el, hogy a valódi `<Workspace />` vagy a `<ScopeMissingPlaceholder />` (loading /
+no-membership / error) renderelődik, attól függően, hogy a `UserContext` memberships
+már betöltődött-e és a `ScopeContext` auto-pick adott-e aktív officeId-t.
 
 ### DataContext API
 - `publications`, `articles`, `validations` — az adat tömbök
@@ -475,6 +482,15 @@ index.jsx
 - **Write-Through — Validációk**: `createValidation(data)`, `updateValidation(id, data)`, `deleteValidation(id)`
 - **Apply-Optimistic**: `applyArticleUpdate(serverDocument)` — külső írók (WorkflowEngine hívók) számára. Tartalmaz `$updatedAt` elavulás-védelmet: frissebb helyi adat nem felülíródik régebbi szerveradattal. Ez kritikus az `syncLocks()` és `fetchData()` párhuzamos futásánál — megakadályozza, hogy egy korábbi lock műveleti válasz felülírja a frissebb (lock-mentes) DB állapotot.
 - **Realtime handler**: Automatikusan frissíti az állapotot WebSocket eseményekből `$updatedAt` elavulás-védelemmel. Ugyanez a minta mint az `applyArticleUpdate()`-ben — garantálja, hogy egy hosszabb hálózati késleltetésű update soha nem írja felül az optimista UI frissítéseket vagy közelmúltbeli szerver válaszokat.
+- **Scope-szűrt fetch (Fázis 1 / B.7)**: A `fetchData` minden lekérdezéséhez (`publications`, `articles`, `layouts`, `deadlines`, `uservalidations`) hozzáfűzi a `Query.equal("editorialOfficeId", activeEditorialOfficeIdRef.current)` feltételt — így a Plugin kizárólag az aktív szerkesztőség adatait látja. Ha nincs aktív officeId, a `fetchData` üres listákat állít be és `isInitialized=true`-ra vált, hogy a Realtime feliratkozás tudjon indulni. Office-váltáskor a `prevOfficeIdRef` alapján egy külön effect nullázza az `activePublicationId`-t és törli a derived state-et (`articles`, `layouts`, `deadlines`, `validations`).
+- **Realtime scope szűrés**: A `publications`, `articles`, `layouts`, `deadlines`, `uservalidations` ágak a meglévő `publicationId` szűrés MELLÉ `payload.editorialOfficeId === activeEditorialOfficeIdRef.current` ellenőrzést futtatnak (kivéve `.delete` eseményeknél, ahol a `filter()` amúgy is védett).
+- **Write-through scope injection**: A `createPublication`, `createArticle`, `createLayout`, `createDeadline`, `createValidation` közös `withScope(data)` helper-en keresztül automatikusan rácsapja az `organizationId` + `editorialOfficeId` mezőket a payload-ra, refből olvasva az aktív értékeket. Ha nincs aktív scope, a helper dob (`'Nincs aktív szerkesztőség — a művelet nem hajtható végre.'`) — ez a happy path-ban nem tüzelhet (a UI a `ScopeMissingPlaceholder` mögött zárolva), de védi a CF guard B.8 előtti köztes időszakot az accidentális hívásoktól. Az `updateX` metódusok NEM kapnak scope injection-t — a scope mezők immutable-ek a CF guard B.8 után.
+
+### ScopeContext API (Fázis 1 / B.7)
+- `activeOrganizationId`, `activeEditorialOfficeId` — az aktuálisan választott multi-tenant scope (localStorage-ban perzisztált, `maestro.activeOrganizationId` / `maestro.activeEditorialOfficeId` kulcsok; a Plugin és Dashboard localStorage izolált, nincs ütközés).
+- `setActiveOrganization(id)`, `setActiveOffice(id)` — írják az állapotot és a localStorage-ot.
+- **Stale ID védelem + auto-pick**: A `useEffect` a `UserContext` memberships betöltése után (`loading === false && !membershipsError`) ellenőrzi, hogy az aktuális ID-k még szerepelnek-e a listákban. Stale esetben az első elérhetőre vált, vagy nullázza. Ha nincs aktív scope, de van membership, automatikusan az elsőt választja (ez biztosítja a Dashboardon frissen onboardolt user első Plugin-belépésnél az azonnali scope-ot, külön UI interakció nélkül).
+- **Fázis 6** hozza a multi-org/office switch dropdown UI-t a `WorkspaceHeader`-be; B.7-ben csak az alap state management és a DataContext integráció kerül be.
 
 ### UserContext API
 - `user` — aktuális felhasználó objektum (vagy `null`)
@@ -487,6 +503,7 @@ index.jsx
 - **Realtime szinkron (labels/prefs)**: Az Appwrite Realtime `account` csatornára feliratkozva a `user` objektum (beleértve `labels`, `name`, `prefs`) automatikusan frissül, ha a szerveren módosítják (Console/Server SDK). A handler a `response.events[]` alapján szűri a session eseményeket (`.sessions.` stringet ignórálja) és validálja a payload `$id`-ját (csak `currentUserId` egyezésekor alkalmaz frissítéseket), megakadályozva, hogy session ID-k felülírják a user objektumot. A `name` és `email` mezők megőrződnek, ha a Realtime payload nem tartalmaz értéket (field preservation).
 - **Realtime szinkron (teamIds)**: Az `account` csatorna `response.events[]` tömbjét is figyeli — ha tartalmaz `.memberships.` stringet (szerver-oldali tagságváltozás), `teams.list()` hívással frissíti a `user.teamIds`-t. Fallback a `teams` csatorna → `teamMembershipChanged` MaestroEvent útvonal mellé. A `sameTeamIds()` helper Set-alapú duplikátum-mentes összehasonlítást végez, hogy a szinkron ne okozzon felesleges re-rendereket.
 - **Recovery szinkron**: A `dataRefreshRequested` MaestroEvent-re is feliratkozik — minden recovery-nél (sleep/wake, reconnect, focus) `account.get()`-tel frissíti a user adatokat. Ez biztosítja a labels/prefs szinkront akkor is, ha az Appwrite Realtime `account` csatorna nem tüzel proxy-n keresztül (pl. szerver-oldali label módosításnál).
+- **Memberships (Fázis 1 / B.7)**: `organizations`, `editorialOffices` — a user által elérhető teljes scope rekordok (az `organizationMemberships` és `editorialOfficeMemberships` collection-ökből húzva, majd a scope rekordok paralel lekérésével). `membershipsError` — a legutóbbi memberships fetch hibája (ha volt). `reloadMemberships()` — manuális újratöltő (a `ScopeMissingPlaceholder` „error" variánsának retry gombja hívja). A loading minden belépési pontnál (login, mount `checkUserStatus`, recovery) paralel fut a `enrichUserWithTeams` mellett `Promise.all`-lal — egy membership hiba nem blokkolja az auth happy path-ot (külön `.catch` → `membershipsError` state), a `ScopeContext` auto-pick effect pedig csak `!membershipsError` esetén fut, hogy egy átmeneti fetch hiba ne törölje a helyes scope-ot.
 
 ### ConnectionContext API
 - `isOnline`, `isConnecting` — UI indikátorokhoz (spinner, overlay)

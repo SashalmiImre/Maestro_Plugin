@@ -6,12 +6,78 @@
  * az alkalmazás számára. Kezeli a munkamenet-kéréseket és a kijelentkezést.
  */
 
-import React, { createContext, useContext, useEffect, useRef, useState } from "react";
+import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { Query } from "appwrite";
 import { useConnection } from "../contexts/ConnectionContext.jsx";
-import { account, teams, executeLogin, handleSignOut, clearLocalSession, ID, VERIFICATION_URL } from "../config/appwriteConfig.js";
+import { account, databases, teams, executeLogin, handleSignOut, clearLocalSession, ID, VERIFICATION_URL } from "../config/appwriteConfig.js";
+import { DATABASE_ID, COLLECTIONS } from "maestro-shared/appwriteIds.js";
 import { realtime } from "../config/realtimeClient.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../config/maestroEvents.js";
 import { log, logWarn, logError } from "../utils/logger.js";
+import { withRetry, withTimeout } from "../utils/promiseUtils.js";
+import { FETCH_TIMEOUT_CONFIG } from "../utils/constants.js";
+import { STORAGE_ORG_KEY, STORAGE_OFFICE_KEY } from "./ScopeContext.jsx";
+
+/**
+ * Retry + timeout wrapper az Appwrite list lekérdezésekhez. A `fetchMemberships`
+ * a ScopedWorkspace gate mögött fut, ezért ugyanolyan resilience szint kell
+ * neki, mint a DataContext kritikus fetch-einek — különben egy 502 a login
+ * közben azonnal error placeholderbe dobja a usert.
+ */
+const listWithResilience = (params, opName) =>
+    withRetry(
+        () => withTimeout(
+            databases.listDocuments(params),
+            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
+            opName
+        ),
+        { operationName: opName }
+    );
+
+/**
+ * A bejelentkezett felhasználó org/office tagságait és a hozzájuk tartozó
+ * scope rekordokat tölti le. Hibákat NEM nyel le — a hívó eldönti, hogy
+ * a `membershipsError` state-en keresztül jelzi-e a usernek.
+ */
+async function fetchMemberships(userId) {
+    const [orgMembershipsResult, officeMembershipsResult] = await Promise.all([
+        listWithResilience({
+            databaseId: DATABASE_ID,
+            collectionId: COLLECTIONS.ORGANIZATION_MEMBERSHIPS,
+            queries: [Query.equal('userId', userId), Query.limit(100)]
+        }, 'fetchOrgMemberships'),
+        listWithResilience({
+            databaseId: DATABASE_ID,
+            collectionId: COLLECTIONS.EDITORIAL_OFFICE_MEMBERSHIPS,
+            queries: [Query.equal('userId', userId), Query.limit(100)]
+        }, 'fetchOfficeMemberships')
+    ]);
+
+    const orgIds = [...new Set(orgMembershipsResult.documents.map(m => m.organizationId))];
+    const officeIds = [...new Set(officeMembershipsResult.documents.map(m => m.editorialOfficeId))];
+
+    const [orgsResult, officesResult] = await Promise.all([
+        orgIds.length > 0
+            ? listWithResilience({
+                databaseId: DATABASE_ID,
+                collectionId: COLLECTIONS.ORGANIZATIONS,
+                queries: [Query.equal('$id', orgIds), Query.limit(100)]
+            }, 'fetchOrganizations')
+            : Promise.resolve({ documents: [] }),
+        officeIds.length > 0
+            ? listWithResilience({
+                databaseId: DATABASE_ID,
+                collectionId: COLLECTIONS.EDITORIAL_OFFICES,
+                queries: [Query.equal('$id', officeIds), Query.limit(100)]
+            }, 'fetchEditorialOffices')
+            : Promise.resolve({ documents: [] })
+    ]);
+
+    return {
+        organizations: orgsResult.documents,
+        editorialOffices: officesResult.documents
+    };
+}
 
 /**
  * Context objektum a felhasználói adatok megosztásához.
@@ -69,6 +135,67 @@ export function AuthorizationProvider({ children }) {
     /** @type {[boolean, Function]} Betöltési állapot jelző */
     const [loading, setLoading] = useState(true);
 
+    /** @type {[Array, Function]} A user szervezetei (organizationMemberships-en keresztül) */
+    const [organizations, setOrganizations] = useState([]);
+
+    /** @type {[Array, Function]} A user szerkesztőségei (editorialOfficeMemberships-en keresztül) */
+    const [editorialOffices, setEditorialOffices] = useState([]);
+
+    /**
+     * Membership fetch hibaállapot. `null` ha nincs hiba (vagy még nem
+     * próbáltuk), `Error` ha a fetchMemberships elszállt. A ScopedWorkspace
+     * ezt használja az átmeneti backend hiba (→ retry képernyő) és a
+     * tényleges „nincs tagság" (→ onboarding link) megkülönböztetésére.
+     */
+    const [membershipsError, setMembershipsError] = useState(null);
+
+    /**
+     * Generáció-számláló a memberships hívások cancel-hez. Minden újabb hívás
+     * (vagy explicit invalidálás, pl. logout) inkrementálja, és a stale in-flight
+     * válaszok commitja ez alapján szűrődik — védi a cross-tenant leakage-et,
+     * amikor a user kijelentkezés/session-váltás közben fetch in flight van.
+     */
+    const membershipsGenRef = useRef(0);
+
+    /**
+     * Memberships betöltése + state frissítése egyetlen helyen. Stale guard:
+     * minden hívás egyedi generációt kap, és csak akkor commit-ol, ha időközben
+     * nem fut újabb hívás. Tranziens hibánál az előző sikeres state-et megtartjuk
+     * (csak `membershipsError`-t állítunk), hogy a ScopedWorkspace ne szedje le
+     * a `DataProvider`-t egy stale, de használható scope mellől.
+     */
+    const loadAndSetMemberships = useCallback(async (userId) => {
+        const gen = ++membershipsGenRef.current;
+        if (!userId) {
+            setOrganizations([]);
+            setEditorialOffices([]);
+            setMembershipsError(null);
+            return { organizations: [], editorialOffices: [] };
+        }
+        try {
+            const memberships = await fetchMemberships(userId);
+            if (gen !== membershipsGenRef.current) {
+                log(`[UserContext] Stale memberships válasz eldobva (userId: ${userId})`);
+                return memberships;
+            }
+            setOrganizations(memberships.organizations);
+            setEditorialOffices(memberships.editorialOffices);
+            setMembershipsError(null);
+            log(`[UserContext] Tagsági adatok betöltve (organizations: ${memberships.organizations.length}, editorialOffices: ${memberships.editorialOffices.length})`);
+            return memberships;
+        } catch (err) {
+            if (gen !== membershipsGenRef.current) {
+                log(`[UserContext] Stale memberships hiba eldobva (userId: ${userId})`);
+                throw err;
+            }
+            logWarn(`[UserContext] Tagsági adatok betöltése sikertelen: ${err?.message}`);
+            // A korábbi organizations/editorialOffices state-et szándékosan
+            // megtartjuk — egy tranziens 502 nem indokolja a workspace teardown-t.
+            setMembershipsError(err instanceof Error ? err : new Error(err?.message || 'memberships_load_failed'));
+            throw err;
+        }
+    }, []);
+
     /**
      * Ref a user aktuális értékéhez, hogy az eseménykezelők (pl. sessionExpired)
      * mindig az aktuális állapotot lássák stale closure nélkül.
@@ -120,6 +247,20 @@ export function AuthorizationProvider({ children }) {
             logWarn('[UserContext] Csapattagság lekérése sikertelen');
             return { ...userData, teamIds: userData.teamIds || [] };
         }
+    };
+
+    /**
+     * Paralel lefuttatja a `teamIds` enrichment-et és az org/office memberships
+     * betöltését. A memberships hibáját **nem** propagálja — a `membershipsError`
+     * state-en keresztül jelenik meg a `ScopedWorkspace`-nek. Így egy átmeneti
+     * memberships 502 nem akadályozza meg a login / recovery happy patht.
+     */
+    const hydrateUserWithMemberships = async (userData) => {
+        const [enrichedUser] = await Promise.all([
+            enrichUserWithTeams(userData),
+            loadAndSetMemberships(userData.$id).catch(() => null)
+        ]);
+        return enrichedUser;
     };
 
     /**
@@ -184,7 +325,7 @@ export function AuthorizationProvider({ children }) {
                 }
             }
             const currentUser = await account.get();
-            const enrichedUser = await enrichUserWithTeams(currentUser);
+            const enrichedUser = await hydrateUserWithMemberships(currentUser);
             setUser(enrichedUser);
             return enrichedUser;
         } catch (error) {
@@ -194,8 +335,11 @@ export function AuthorizationProvider({ children }) {
     };
 
     /**
-     * Kijelentkezés végrehajtása.
-     * Törli a helyi felhasználói állapotot és a szerver oldali munkamenetet.
+     * Kijelentkezés végrehajtása. Törli a helyi user állapotot, a membership
+     * state-eket, és a persistált scope localStorage kulcsokat — különben
+     * egy másik user belépésekor ott maradhatna egy idegen org/office ID,
+     * amit a DataContext tévesen használna (cross-tenant védelem, defense
+     * in depth a ScopeContext first-load takarítása mellett).
      */
     const logout = async () => {
         try {
@@ -203,7 +347,17 @@ export function AuthorizationProvider({ children }) {
         } catch (error) {
             logError("[UserContext] Kijelentkezés sikertelen:", error);
         } finally {
+            // Inkrementálás: egy még in-flight fetchMemberships(régi user) válasza
+            // ne tudja visszaírni a state-et a logout után.
+            membershipsGenRef.current += 1;
             setUser(null);
+            setOrganizations([]);
+            setEditorialOffices([]);
+            setMembershipsError(null);
+            try {
+                window.localStorage.removeItem(STORAGE_ORG_KEY);
+                window.localStorage.removeItem(STORAGE_OFFICE_KEY);
+            } catch (e) { /* UXP localStorage edge case — nem kritikus */ }
         }
     };
 
@@ -259,6 +413,12 @@ export function AuthorizationProvider({ children }) {
             // a session már érvénytelen a szerveren és az async hívás
             // race condition-t okozna az újbóli bejelentkezéssel.
             clearLocalSession();
+            // Invalidáljuk az esetleg in-flight memberships fetch-et is (a stale
+            // válasz nem írhatja felül a state-et).
+            membershipsGenRef.current += 1;
+            setOrganizations([]);
+            setEditorialOffices([]);
+            setMembershipsError(null);
             setUser(null);
         };
 
@@ -331,7 +491,7 @@ export function AuthorizationProvider({ children }) {
         const handleRefresh = async () => {
             try {
                 const updatedUser = await account.get();
-                const enrichedUser = await enrichUserWithTeams(updatedUser);
+                const enrichedUser = await hydrateUserWithMemberships(updatedUser);
                 // Csak akkor frissítünk, ha az adat tényleg változott.
                 // Enélkül az account.get() mindig új referenciát ad, ami felesleges
                 // re-rendereket okoz a teljes fában (LockManager useEffect[user] stb.)
@@ -371,12 +531,16 @@ export function AuthorizationProvider({ children }) {
             try {
                 startConnecting("Felhasználó betöltése...");
                 const accountDetails = await account.get();
-                const enrichedUser = await enrichUserWithTeams(accountDetails);
+                const enrichedUser = await hydrateUserWithMemberships(accountDetails);
                 setUser(enrichedUser);
                 setConnected();
             } catch (error) {
                 // Nincs bejelentkezve vagy hálózati hiba, de vendég/kijelentkezettként kezeljük a kontextus szempontjából
+                membershipsGenRef.current += 1;
                 setUser(null);
+                setOrganizations([]);
+                setEditorialOffices([]);
+                setMembershipsError(null);
                 setConnected();
             } finally {
                 setLoading(false);
@@ -384,10 +548,31 @@ export function AuthorizationProvider({ children }) {
         };
 
         checkUserStatus();
-    }, [startConnecting, setConnected]);
+    }, [startConnecting, setConnected, loadAndSetMemberships]);
+
+    /**
+     * A hívó saját döntése alapján újratölti a membership state-eket.
+     * Leggyakoribb használat: a ScopedWorkspace „Újrapróbálás" gombja
+     * egy átmeneti backend hiba után. A rejection-t itt elnyeljük — a hiba
+     * már a `membershipsError` state-en keresztül megjelenik, és az onClick
+     * handler nem await-eli a promise-t.
+     */
+    const reloadMemberships = useCallback(() => {
+        return loadAndSetMemberships(userRef.current?.$id).catch(() => null);
+    }, [loadAndSetMemberships]);
 
     return (
-        <UserContext.Provider value={{ user, login, logout, register, loading }}>
+        <UserContext.Provider value={{
+            user,
+            login,
+            logout,
+            register,
+            loading,
+            organizations,
+            editorialOffices,
+            membershipsError,
+            reloadMemberships
+        }}>
             {children}
         </UserContext.Provider>
     );
@@ -398,7 +583,17 @@ export { AuthorizationProvider as UserProvider };
 
 /**
  * Hook a UserContext használatához.
- * @returns {{ user: Object|null, login: Function, logout: Function, register: Function, loading: boolean }} A UserContext értékei.
+ * @returns {{
+ *   user: Object|null,
+ *   login: Function,
+ *   logout: Function,
+ *   register: Function,
+ *   loading: boolean,
+ *   organizations: Array,
+ *   editorialOffices: Array,
+ *   membershipsError: Error|null,
+ *   reloadMemberships: Function
+ * }} A UserContext értékei.
  */
 export function useUser() {
     return useContext(UserContext);

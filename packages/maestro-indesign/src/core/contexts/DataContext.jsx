@@ -19,6 +19,7 @@ import React, { createContext, useContext, useState, useEffect, useMemo, useCall
 import { tables, ID, DATABASE_ID, PUBLICATIONS_COLLECTION_ID, ARTICLES_COLLECTION_ID, USER_VALIDATIONS_COLLECTION_ID, LAYOUTS_COLLECTION_ID, DEADLINES_COLLECTION_ID, Query } from "../config/appwriteConfig.js";
 import { realtime } from "../config/realtimeClient.js";
 import { useConnection } from "./ConnectionContext.jsx";
+import { useScope } from "./ScopeContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 import { log, logWarn, logError } from "../utils/logger.js";
 import { withTimeout, withRetry } from "../utils/promiseUtils.js";
@@ -57,6 +58,8 @@ export const DataProvider = ({ children }) => {
     const { startConnecting, setConnected, setOffline, setConnectionStatus, incrementAttempts } = useConnection();
     // Értesítések (ToastContext)
     const { showToast } = useToast();
+    // Aktív scope (ScopeContext) — Fázis 1 / B.7
+    const { activeOrganizationId, activeEditorialOfficeId, isScopeValidated } = useScope();
 
     // --- State (Állapot) ---
     // 1. Globális adatok
@@ -91,6 +94,18 @@ export const DataProvider = ({ children }) => {
     useEffect(() => {
         activePublicationIdRef.current = activePublicationId;
     }, [activePublicationId]);
+
+    // Scope ref-ek: stabil closure-t adnak a fetchData, Realtime handler és
+    // write-through createX metódusoknak (elkerüli a deps-sprawlt).
+    const activeOrganizationIdRef = useRef(activeOrganizationId);
+    useEffect(() => {
+        activeOrganizationIdRef.current = activeOrganizationId;
+    }, [activeOrganizationId]);
+
+    const activeEditorialOfficeIdRef = useRef(activeEditorialOfficeId);
+    useEffect(() => {
+        activeEditorialOfficeIdRef.current = activeEditorialOfficeId;
+    }, [activeEditorialOfficeId]);
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Lazy migráció (régi formátumú útvonalak konvertálása)
@@ -247,6 +262,26 @@ export const DataProvider = ({ children }) => {
         // Ref-ből olvassuk — így a fetchData nem függ az activePublicationId-tól,
         // és nem generálódik újra pub-váltáskor (elkerüli a dupla fetch-et).
         const currentPubId = activePublicationIdRef.current;
+        const currentOfficeId = activeEditorialOfficeIdRef.current;
+
+        // Scope-guard: ha még nincs aktív szerkesztőség, üres state + initialized,
+        // hogy a Realtime feliratkozás indulhasson. A scope megjelenésekor az
+        // office effect újra meghívja ezt a függvényt.
+        if (!currentOfficeId) {
+            log('[DataContext] Nincs aktív editorialOfficeId — üres state + initialized');
+            setPublications([]);
+            setArticles([]);
+            setLayouts([]);
+            setDeadlines([]);
+            setValidations([]);
+            setIsInitialized(true);
+            if (!isBackground) {
+                setIsLoading(false);
+                setIsSwitchingPublication(false);
+            }
+            setConnected();
+            return;
+        }
 
         if (!isBackground) setIsLoading(true);
 
@@ -266,6 +301,7 @@ export const DataProvider = ({ children }) => {
                         databaseId: DATABASE_ID,
                         tableId: PUBLICATIONS_COLLECTION_ID,
                         queries: [
+                            Query.equal("editorialOfficeId", currentOfficeId),
                             Query.limit(100),
                             Query.notEqual("$id", cacheBustId)
                         ]
@@ -282,6 +318,8 @@ export const DataProvider = ({ children }) => {
             let deadlinesPromise = Promise.resolve({ documents: [] });
 
             if (currentPubId) {
+                // editorialOfficeId szűrés a publicationId mellé: a pub transzitíven
+                // scope-ol, de a kétszeres szűrés explicit enforcement (match a CF guard logikával).
                 articlesPromise = withRetry(
                     () => withTimeout(
                         tables.listRows({
@@ -289,6 +327,7 @@ export const DataProvider = ({ children }) => {
                             tableId: ARTICLES_COLLECTION_ID,
                             queries: [
                                 Query.equal("publicationId", currentPubId),
+                                Query.equal("editorialOfficeId", currentOfficeId),
                                 Query.limit(1000),
                                 Query.notEqual("$id", cacheBustId)
                             ]
@@ -306,6 +345,7 @@ export const DataProvider = ({ children }) => {
                             tableId: LAYOUTS_COLLECTION_ID,
                             queries: [
                                 Query.equal("publicationId", currentPubId),
+                                Query.equal("editorialOfficeId", currentOfficeId),
                                 Query.limit(100)
                             ]
                         }),
@@ -322,6 +362,7 @@ export const DataProvider = ({ children }) => {
                             tableId: DEADLINES_COLLECTION_ID,
                             queries: [
                                 Query.equal("publicationId", currentPubId),
+                                Query.equal("editorialOfficeId", currentOfficeId),
                                 Query.limit(100)
                             ]
                         }),
@@ -357,6 +398,13 @@ export const DataProvider = ({ children }) => {
             const publicationList = publicationsResponse.documents || publicationsResponse.rows || [];
             const sortedPublications = publicationList.sort(compareByName);
             setPublications(sortedPublications);
+
+            // Stale activePublicationId védelem: ha a scope-szűrt lista nem
+            // tartalmazza (pl. másik office-é volt), nullázzuk.
+            if (currentPubId && !sortedPublications.some(publication => publication.$id === currentPubId)) {
+                log(`[DataContext] Aktív kiadvány már nem elérhető az aktuális scope-ban (${currentPubId}), nullázás`);
+                setActivePublicationId(null);
+            }
 
             const articleList = articlesResponse.documents || articlesResponse.rows || [];
             const sortedArticles = articleList.sort(compareByName);
@@ -404,6 +452,7 @@ export const DataProvider = ({ children }) => {
                                 tableId: USER_VALIDATIONS_COLLECTION_ID,
                                 queries: [
                                     Query.equal('articleId', chunkIds),
+                                    Query.equal("editorialOfficeId", currentOfficeId),
                                     Query.limit(chunkIds.length * 5)
                                 ]
                             }),
@@ -486,11 +535,6 @@ export const DataProvider = ({ children }) => {
     // Inicializálás és Active Publication Váltás
     // ═══════════════════════════════════════════════════════════════════════════
 
-    // Initial fetch — egyszer fut, amikor a komponens mountol
-    useEffect(() => {
-        fetchData();
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
     // Workflow config szinkronizálás — egyszer fut, inicializálás után.
     // A Cloud Function-ök a config collection-ből olvassák a konstansokat.
     const configSyncedRef = useRef(false);
@@ -516,17 +560,62 @@ export const DataProvider = ({ children }) => {
         setIsSwitchingPublication(true);
     }, [activePublicationId]);
 
-    // Trigger fetch on publication change — a fetchData ref-ből olvassa a pubId-t.
-    // Az isInitialized is kell a deps-ben, mert:
-    //   1. PublicationList hamarabb állítja be az activePublicationId-t (localStorage restore),
-    //      mint ahogy az initial fetch befejeződne (isInitialized = false → skip).
-    //   2. Amikor az initial fetch kész és isInitialized = true, az activePublicationId
-    //      már nem változik → az effect nem futna újra nélküle.
+    // Egyesített fetch trigger: initial fetch a scope validáció után, office
+    // váltás detektálás (nullázza a régi pubId-t) és pub váltás fetch egy
+    // effectben. Külön effectekkel a pubId nullázás + re-trigger dupla fetch-et
+    // indított el office váltáskor.
+    const hasInitializedRef = useRef(false);
+    const prevOfficeIdRef = useRef(activeEditorialOfficeId);
     useEffect(() => {
-        if (isInitialized && activePublicationId !== null) {
-            fetchData(false);
+        if (!isScopeValidated) return;
+
+        if (!hasInitializedRef.current) {
+            hasInitializedRef.current = true;
+            prevOfficeIdRef.current = activeEditorialOfficeId;
+            fetchData();
+            return;
         }
-    }, [activePublicationId, isInitialized]); // eslint-disable-line react-hooks/exhaustive-deps
+
+        if (prevOfficeIdRef.current !== activeEditorialOfficeId) {
+            log(`[DataContext] Office váltás (${prevOfficeIdRef.current} → ${activeEditorialOfficeId})`);
+            prevOfficeIdRef.current = activeEditorialOfficeId;
+            if (activePublicationId !== null) {
+                // A setter re-triggereli ezt az effectet pubId=null-lal,
+                // ahol aztán a fetch tiszta állapotból indul.
+                setActivePublicationId(null);
+                setArticles([]);
+                setLayouts([]);
+                setDeadlines([]);
+                setValidations([]);
+                return;
+            }
+        }
+
+        fetchData(false);
+    }, [isScopeValidated, activePublicationId, activeEditorialOfficeId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Write-Through API — közös scope injection helper
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Hozzáfűzi a `createX` payloadhoz a scope mezőket (organizationId +
+     * editorialOfficeId), és dob, ha hiányzik. A happy path-ban nem tüzelhet
+     * (a UI a ScopeMissingPlaceholder mögött zárolva), de védi a recovery alatti
+     * race-t és a CF guard előtti köztes időszakot.
+     */
+    const withScope = useCallback((data) => {
+        const orgId = activeOrganizationIdRef.current;
+        const officeId = activeEditorialOfficeIdRef.current;
+        if (!orgId || !officeId) {
+            throw new Error('Nincs aktív szerkesztőség — a művelet nem hajtható végre.');
+        }
+        return {
+            ...data,
+            organizationId: orgId,
+            editorialOfficeId: officeId
+        };
+    }, []);
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Write-Through API — Publikációk
@@ -545,7 +634,7 @@ export const DataProvider = ({ children }) => {
                 databaseId: DATABASE_ID,
                 tableId: PUBLICATIONS_COLLECTION_ID,
                 rowId: ID.unique(),
-                data
+                data: withScope(data)
             }),
             FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: createPublication"
@@ -555,7 +644,7 @@ export const DataProvider = ({ children }) => {
             return [...prev, result].sort(compareByName);
         });
         return result;
-    }, []);
+    }, [withScope]);
 
     /**
      * Kiadvány frissítése az adatbázisban.
@@ -613,7 +702,7 @@ export const DataProvider = ({ children }) => {
                 databaseId: DATABASE_ID,
                 tableId: ARTICLES_COLLECTION_ID,
                 rowId: ID.unique(),
-                data
+                data: withScope(data)
             }),
             FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: createArticle"
@@ -623,7 +712,7 @@ export const DataProvider = ({ children }) => {
             return [...prev, result].sort(compareByName);
         });
         return result;
-    }, []);
+    }, [withScope]);
 
     /**
      * Cikk frissítése az adatbázisban.
@@ -701,7 +790,7 @@ export const DataProvider = ({ children }) => {
                 databaseId: DATABASE_ID,
                 tableId: USER_VALIDATIONS_COLLECTION_ID,
                 rowId: ID.unique(),
-                data
+                data: withScope(data)
             }),
             FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: createValidation"
@@ -712,7 +801,7 @@ export const DataProvider = ({ children }) => {
             return [normalized, ...prev];
         });
         return result;
-    }, []);
+    }, [withScope]);
 
     /**
      * Validációs bejegyzés frissítése.
@@ -771,7 +860,7 @@ export const DataProvider = ({ children }) => {
                 databaseId: DATABASE_ID,
                 tableId: LAYOUTS_COLLECTION_ID,
                 rowId: ID.unique(),
-                data
+                data: withScope(data)
             }),
             FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: createLayout"
@@ -781,7 +870,7 @@ export const DataProvider = ({ children }) => {
             return [...prev, result].sort(compareByOrder);
         });
         return result;
-    }, []);
+    }, [withScope]);
 
     /**
      * Layout frissítése az adatbázisban.
@@ -839,7 +928,7 @@ export const DataProvider = ({ children }) => {
                 databaseId: DATABASE_ID,
                 tableId: DEADLINES_COLLECTION_ID,
                 rowId: ID.unique(),
-                data
+                data: withScope(data)
             }),
             FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: createDeadline"
@@ -849,7 +938,7 @@ export const DataProvider = ({ children }) => {
             return [...prev, result].sort(compareByStartPage);
         });
         return result;
-    }, []);
+    }, [withScope]);
 
     /**
      * Határidő frissítése az adatbázisban.
@@ -913,8 +1002,20 @@ export const DataProvider = ({ children }) => {
             const { events, payload } = response;
             const event = events[0];
 
+            // Scope out-of-scope check. Delete eseményeknél NEM szűrünk — a
+            // payload jellemzően nincs scope mezővel, és a downstream filter()
+            // amúgy is csak a scope-on belüli prev listán dolgozik (idegen
+            // office delete-je no-op).
+            const isOutOfScope = (evt, pl) => {
+                if (evt.includes(".delete")) return false;
+                const currentOfficeId = activeEditorialOfficeIdRef.current;
+                return !currentOfficeId || pl.editorialOfficeId !== currentOfficeId;
+            };
+
             // --- Publikációk ---
             if (event.includes(PUBLICATIONS_COLLECTION_ID)) {
+                if (isOutOfScope(event, payload)) return;
+
                 setPublications(prev => {
                     if (event.includes(".update")) {
                         return prev.map(publication => {
@@ -937,6 +1038,7 @@ export const DataProvider = ({ children }) => {
 
             // --- Cikkek ---
             else if (event.includes(ARTICLES_COLLECTION_ID)) {
+                if (isOutOfScope(event, payload)) return;
                 const currentActivePublicationId = activePublicationIdRef.current;
 
                 if (currentActivePublicationId) {
@@ -968,6 +1070,7 @@ export const DataProvider = ({ children }) => {
 
             // --- Validációk ---
             else if (event.includes(USER_VALIDATIONS_COLLECTION_ID)) {
+                if (isOutOfScope(event, payload)) return;
                 const currentArticles = latestArticlesRef.current;
                 const isRelevant = currentArticles.some(article => article.$id === payload.articleId);
 
@@ -997,7 +1100,9 @@ export const DataProvider = ({ children }) => {
 
             // --- Layoutok ---
             else if (event.includes(LAYOUTS_COLLECTION_ID)) {
+                if (isOutOfScope(event, payload)) return;
                 const currentActivePublicationId = activePublicationIdRef.current;
+
                 if (payload.publicationId === currentActivePublicationId) {
                     setLayouts(prev => {
                         if (event.includes(".update")) {
@@ -1021,7 +1126,9 @@ export const DataProvider = ({ children }) => {
 
             // --- Határidők ---
             else if (event.includes(DEADLINES_COLLECTION_ID)) {
+                if (isOutOfScope(event, payload)) return;
                 const currentActivePublicationId = activePublicationIdRef.current;
+
                 if (payload.publicationId === currentActivePublicationId) {
                     setDeadlines(prev => {
                         if (event.includes(".update")) {
