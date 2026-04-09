@@ -11,8 +11,8 @@
 /**
  * Alapértelmezett csoportok — bootstrap_organization hozza létre mindegyiket
  * az új szerkesztőséghez. A slug-ok megegyeznek a régi Appwrite Team slug-okkal,
- * így a permission config-ok (STATE_PERMISSIONS, TEAM_ARTICLE_FIELD) változatlanul
- * működnek.
+ * így a permission config-ok (STATE_PERMISSIONS) változatlanul működnek.
+ * A contributors JSON kulcsai közvetlenül ezek a slug-ok.
  */
 export const DEFAULT_GROUPS = [
     { slug: 'editors',          name: 'Szerkesztők' },

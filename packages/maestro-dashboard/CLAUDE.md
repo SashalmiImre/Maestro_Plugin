@@ -168,7 +168,8 @@ A `@shared` Vite alias a `../maestro-shared` mappára mutat. Tartalom:
 | Fájl               | Export                                                                     |
 | ------------------ | -------------------------------------------------------------------------- |
 | `appwriteIds.js`   | `APPWRITE_PROJECT_ID`, `DATABASE_ID`, `COLLECTIONS`, `TEAMS`, `BUCKETS`    |
-| `workflowConfig.js`| `WORKFLOW_STATES`, `MARKERS`, `STATUS_LABELS`, `STATUS_COLORS`, `TEAM_ARTICLE_FIELD` |
+| `workflowConfig.js`| `WORKFLOW_STATES`, `MARKERS`, `STATUS_LABELS`, `STATUS_COLORS`                       |
+| `contributorHelpers.js` | `parseContributors`, `getContributor`, `setContributor`, `isContributor`        |
 | `constants.js`     | `LOCK_TYPE`, `VALIDATION_TYPES`                                            |
 | `urgency.js`       | `fetchHolidays`, `calculateUrgencyRatio`, `getUrgencyBackground`           |
 

@@ -5,7 +5,8 @@
  */
 
 import { useState, useCallback, useMemo } from 'react';
-import { WORKFLOW_CONFIG, MARKERS, TEAM_ARTICLE_FIELD, STORAGE_KEYS, resolveGrantedTeams } from '../config.js';
+import { WORKFLOW_CONFIG, MARKERS, STORAGE_KEYS, resolveGrantedTeams } from '../config.js';
+import { isContributor } from '@shared/contributorHelpers.js';
 
 // ─── localStorage segédfüggvények ───────────────────────────────────────────
 
@@ -96,9 +97,8 @@ export function useFilters() {
 
             // Csak saját cikkek
             if (showOnlyMine && user) {
-                const userFields = getUserContributorFields(user);
-                const isOwner = userFields.some(field => article[field] === user.$id);
-                if (!isOwner) return false;
+                const slugs = getUserGroupSlugs(user);
+                if (!isContributor(article.contributors, user.$id, slugs)) return false;
             }
 
             return true;
@@ -116,21 +116,19 @@ export function useFilters() {
 
 // ─── Segédfüggvény ──────────────────────────────────────────────────────────
 
-function getUserContributorFields(user) {
-    if (!user?.groupSlugs) return [];
-    const fields = [];
-    for (const slug of user.groupSlugs) {
-        const field = TEAM_ARTICLE_FIELD[slug];
-        if (field) fields.push(field);
-    }
-    // Capability label-ek feloldása csapat slug-okra
-    if (user.labels) {
-        const grantedTeams = resolveGrantedTeams(user.labels);
-        for (const [slug, field] of Object.entries(TEAM_ARTICLE_FIELD)) {
-            if (grantedTeams.has(slug) && !fields.includes(field)) {
-                fields.push(field);
-            }
+/**
+ * A felhasználó összes releváns csoport slug-ját összegyűjti
+ * (csoporttagságok + capability label-ekből feloldott slug-ok).
+ *
+ * @param {Object} user - Appwrite felhasználó objektum
+ * @returns {string[]}
+ */
+function getUserGroupSlugs(user) {
+    const slugs = new Set(user?.groupSlugs || []);
+    if (user?.labels) {
+        for (const slug of resolveGrantedTeams(user.labels)) {
+            slugs.add(slug);
         }
     }
-    return fields;
+    return [...slugs];
 }

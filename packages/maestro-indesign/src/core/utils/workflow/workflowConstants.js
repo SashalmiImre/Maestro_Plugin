@@ -4,7 +4,6 @@ import {
     WORKFLOW_STATES,
     MARKERS,
     STATE_DURATIONS,
-    TEAM_ARTICLE_FIELD,
     STATUS_LABELS,
     CONFIG_VERSION,
     CONFIG_DOCUMENT_ID,
@@ -14,7 +13,7 @@ import {
 import { resolveGrantedTeams, hasCapability, CAPABILITY_LABELS, VALID_LABELS, isValidLabel } from "maestro-shared/labelConfig.js";
 
 // Re-export a shared-ből — a fogyasztó fájlok változatlanul importálhatnak innen
-export { WORKFLOW_STATES, MARKERS, STATE_DURATIONS, TEAM_ARTICLE_FIELD, CONFIG_VERSION, CONFIG_DOCUMENT_ID, labelMatchesSlug };
+export { WORKFLOW_STATES, MARKERS, STATE_DURATIONS, CONFIG_VERSION, CONFIG_DOCUMENT_ID, labelMatchesSlug };
 export { resolveGrantedTeams, hasCapability, CAPABILITY_LABELS, VALID_LABELS, isValidLabel };
 
 /**
@@ -226,7 +225,6 @@ export function buildWorkflowConfigDocument() {
         configVersion: CONFIG_VERSION,
         statePermissions: JSON.stringify(STATE_PERMISSIONS),
         validTransitions: JSON.stringify(validTransitions),
-        teamArticleField: JSON.stringify(TEAM_ARTICLE_FIELD),
         capabilityLabels: JSON.stringify(capabilityLabels),
         validLabels: JSON.stringify([...VALID_LABELS]),
         validStates: JSON.stringify(Object.values(WORKFLOW_STATES))

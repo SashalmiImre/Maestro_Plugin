@@ -11,11 +11,13 @@ import { useUser } from "../../../../core/contexts/UserContext.jsx";
 import { useToast } from "../../../common/Toast/ToastContext.jsx";
 
 // Utils
-import { MARKERS, TEAM_ARTICLE_FIELD, labelMatchesSlug } from "../../../../core/utils/workflow/workflowConstants.js";
+import { MARKERS, labelMatchesSlug } from "../../../../core/utils/workflow/workflowConstants.js";
 import { log, logError } from "../../../../core/utils/logger.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../../core/config/maestroEvents.js";
 import { checkElementPermission, PUBLICATION_ELEMENT_PERMISSIONS } from "../../../../core/utils/workflow/elementPermissions.js";
 import { buildPlaceholderRows } from "../../../../core/utils/pageGapUtils.js";
+import { isContributor } from "maestro-shared/contributorHelpers.js";
+import { resolveGrantedTeams } from "maestro-shared/labelConfig.js";
 
 export const Publication = React.memo(({ publication, onDelete, onRename, onShowProperties, isExpanded, onToggle, isDriveAccessible, filterState }) => {
     const { user } = useUser();
@@ -35,24 +37,15 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
     // Szűrő állapot a központi filterState prop-ból
     const { statusFilters, showIgnored, showOnlyMine, showPlaceholders } = filterState;
 
-    /** A felhasználó csapattagságaihoz tartozó contributor mezőnevek */
-    const userContributorFields = useMemo(() => {
-        const fields = new Set();
-
-        // Csapattagságból
-        (user?.groupSlugs || []).forEach(slug => {
-            const field = TEAM_ARTICLE_FIELD[slug];
-            if (field) fields.add(field);
-        });
-
-        // Label override-ból (a csapatok slug normalizációjával)
+    /** A felhasználó csoporttagságai és label-jei alapján összegyűjtött slug-ok */
+    const userSlugs = useMemo(() => {
+        const slugs = new Set(user?.groupSlugs || []);
         if (user?.labels?.length) {
-            for (const [slug, field] of Object.entries(TEAM_ARTICLE_FIELD)) {
-                if (labelMatchesSlug(user.labels, slug)) fields.add(field);
+            for (const slug of resolveGrantedTeams(user.labels)) {
+                slugs.add(slug);
             }
         }
-
-        return Array.from(fields);
+        return [...slugs];
     }, [user?.groupSlugs, user?.labels]);
 
     const filteredArticles = React.useMemo(() => {
@@ -60,14 +53,14 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
             const statusMatch = statusFilters.includes(article.state || 0);
             const articleMarkers = typeof article.markers === 'number' ? article.markers : 0;
             const markerMatch = showIgnored || (articleMarkers & MARKERS.IGNORE) === 0;
-            const ownerMatch = !showOnlyMine || userContributorFields.some(field => article[field] === user?.$id);
+            const ownerMatch = !showOnlyMine || isContributor(article.contributors, user?.$id, userSlugs);
 
             return statusMatch && markerMatch && ownerMatch;
         });
 
         log(`[Publication] Articles stats: Total fetched: ${articles.length}, Shown: ${filtered.length}. Filtered out: ${articles.length - filtered.length}`);
         return filtered;
-    }, [articles, statusFilters, showIgnored, showOnlyMine, userContributorFields, user?.$id]);
+    }, [articles, statusFilters, showIgnored, showOnlyMine, userSlugs, user?.$id]);
 
     /** Helykitöltő sorok: a kiadvány terjedelmén belüli lefedetlen oldalcsoportok */
     const placeholderRows = useMemo(() => {

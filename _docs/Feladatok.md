@@ -66,15 +66,18 @@ tags: [feladatok]
 - [x] Harden pass: `.rows`/`.documents` fallback (`tables.listRows` kompatibilitás), generation guard (`useGroupMembers` stale response védelem), office scope szűrés (DataContext Realtime), bootstrap rollback officeMembership ID fix, target user office membership + aktív/verifikált check (`add_group_member`), `getUserGroupSlugs` null-return pattern
 - [x] Dokumentáció: Plugin + Server CLAUDE.md frissítve a group-alapú architektúrára
 
-#### Fázis 3 — Dinamikus contributor mezők
+#### Fázis 3 — Dinamikus contributor mezők ✅ (2026-04-09)
 
-- [ ] `articles` schema: új `contributors` longtext (JSON), a 7 régi `*Id` mező törlése
-- [ ] `publications` schema: új `defaultContributors` longtext (JSON), a 7 régi `default*Id` mező törlése
-- [ ] `TEAM_ARTICLE_FIELD` mapping törlése — a kulcs a csoport `slug`-ja
-- [ ] `ContributorsSection.jsx` (plugin és Dashboard): fix JSX helyett loop a `compiled.contributorGroups` alapján, dinamikus dropdown rendering
-- [ ] `canEditContributorDropdown`: `FIELD_TO_TEAM` lookup helyett közvetlen `groupSlug` paraméter
-- [ ] `validate-article-creation` és `article-update-guard`: `contributors` objektum kulcsait iterálja, minden kulcsra user létezés + csoporttagság lookup → nem-tag → mező nullázása + logolás (soft correction)
-- [ ] **Verifikáció**: cikk létrehozás → dinamikus dropdown render → DB-ben `contributors: {designers: "...", editors: "..."}` formátum
+- [x] `articles` schema: új `contributors` longtext (JSON), a 7 régi `*Id` mező törlése
+- [x] `publications` schema: új `defaultContributors` longtext (JSON), a 7 régi `default*Id` mező törlése
+- [x] `TEAM_ARTICLE_FIELD` mapping törlése — a kulcs a csoport `slug`-ja
+- [x] `ContributorsSection.jsx` (plugin): fix JSX helyett loop a `useContributorGroups()` hook alapján, dinamikus dropdown rendering
+- [x] `canEditContributorDropdown`: közvetlen `groupSlug` paraméter (változatlan — már Fázis 2-ben készen volt)
+- [x] `validate-article-creation` és `article-update-guard` és `validate-publication-update`: `contributors`/`defaultContributors` JSON parse → kulcs iterálás → userId validáció → nullázás/logolás
+- [x] Új shared modul: `maestro-shared/contributorHelpers.js` (parseContributors, getContributor, setContributor, isContributor)
+- [x] Dashboard `useFilters.js`: `isContributor()` + `getUserGroupSlugs()`
+- [x] Harden pass: 6 hibás relative import → bare specifier (`"maestro-shared/..."`), Dashboard `getUserGroupSlugs()` early return javítás (capability label-ek kihagyódtak `groupSlugs` falsy esetén)
+- [ ] **Verifikáció**: cikk létrehozás → dinamikus dropdown render → DB-ben `contributors: {"designers": "...", "editors": "..."}` formátum
 
 #### Fázis 4 — Workflow runtime (workflows collection, `compiled`)
 
@@ -132,7 +135,7 @@ tags: [feladatok]
 
 #### Fázis 7 — Cleanup
 
-- [ ] `grep` ellenőrzés: 0 találat a következőkre: `designerId`, `CAPABILITY_LABELS`, `STATE_PERMISSIONS`, `TEAM_ARTICLE_FIELD`, `ARTICLE_ELEMENT_PERMISSIONS`, `LEADER_TEAMS`, `workflow_config`, `workflowConstants`
+- [ ] `grep` ellenőrzés: 0 találat a következőkre: `designerId`, `CAPABILITY_LABELS`, `STATE_PERMISSIONS`, `ARTICLE_ELEMENT_PERMISSIONS`, `LEADER_TEAMS`, `workflow_config`, `workflowConstants` (megjegyzés: `TEAM_ARTICLE_FIELD` már Fázis 3-ban törölve)
 - [x] `appwriteIds.js`: `TEAMS` enum törlése *(Fázis 2-ben kész)*
 - [ ] `appwriteIds.js`: `CONFIG` collection ID törlése *(Fázis 4 hatáskör)*
 - [x] Appwrite Console: régi 7 Appwrite Team + `get-team-members` CF törlése *(Fázis 2-ben MCP-vel kész)*

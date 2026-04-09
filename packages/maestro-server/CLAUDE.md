@@ -163,18 +163,18 @@ maestro-server/
 5. **Parent scope sync (B.8)** — szülő publikáció `editorialOfficeId`/`organizationId` mezőkhöz igazítás (cross-tenant scope támadás scenario 1 védelem)
 6. **Scope ellenőrzés (B.8)** — caller user tagja-e a cikk `editorialOfficeId`-jának (`editorialOfficeMemberships` lookup); nem-tag → state revert. Legacy null scope → skip + warning log.
 7. **Jogosultság** — felhasználó csoporttagsága (`groupMemberships` + `groups` query → slug tömb) / label-jei engedélyezik-e az átmenetet
-8. **Contributor mezők** — létező felhasználókra mutatnak-e (log only)
+8. **Contributor mezők** — `contributors` JSON parse → slug-ok iterálása → userId létezés ellenőrzés (log only)
 9. **previousState karbantartás** — null esetén inicializálás, revert esetén frissítés
 
 ### validate-article-creation
 
-Új cikk létrehozásakor fut. Érvénytelen `publicationId` → cikk törlés. Ellenőrzi a state érvényességét, contributor user létezést, filePath formátumot.
+Új cikk létrehozásakor fut. Érvénytelen `publicationId` → cikk törlés. Ellenőrzi a state érvényességét, `contributors` JSON contributor user létezést (érvénytelen userId → nullázás), filePath formátumot.
 
 **Scope ellenőrzés (B.8):** hiányzó `organizationId`/`editorialOfficeId`, parent publication office mismatch, vagy nem-tag caller → cikk törlése (`editorialOfficeMemberships` lookup).
 
 ### validate-publication-update
 
-Kiadvány létrehozás/módosításkor fut. Nem létező default contributor → nullázás. Legacy rootPath → logolás.
+Kiadvány létrehozás/módosításkor fut. `defaultContributors` JSON parse → nem létező userId → nullázás. Legacy rootPath → logolás.
 
 **Scope ellenőrzés (B.8):** create eseménynél hiányzó scope mezők vagy nem-tag caller → publikáció törlése. Update path: nem-tag caller csak logolódik (teljes field-level revert Fázis 6 hatáskör).
 
@@ -267,11 +267,13 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 
 A guard function-ök a `config` collection `workflow_config` dokumentumából olvassák a workflow konstansokat. A plugin induláskor szinkronizálja (`maestro-indesign/src/core/utils/syncWorkflowConfig.js`).
 
-**Mezők:** `configVersion`, `statePermissions`, `validTransitions`, `teamArticleField`, `capabilityLabels`, `validLabels`, `validStates` (JSON string értékek).
+**Mezők:** `configVersion`, `statePermissions`, `validTransitions`, `capabilityLabels`, `validLabels`, `validStates` (JSON string értékek).
 
 **Verzió léptetés:** Ha bármely konstans változik → `CONFIG_VERSION` léptetése a `maestro-shared/workflowConfig.js`-ben.
 
 **Fallback**: Ha a config nem elérhető, minden guard function hardkódolt fallback értékeket használ. Ezeket szinkronban kell tartani a `maestro-shared` megfelelő fájljaival (`workflowConfig.js`, `labelConfig.js`).
+
+**Contributor mezők (Fázis 3)**: A 7+7 hardkódolt contributor ID mező (`designerId`, `editorId`, stb.) helyett egyetlen `contributors` (articles) és `defaultContributors` (publications) JSON longtext mező van. A JSON kulcsa a csoport `slug`-ja (pl. `{"designers":"userId1","editors":"userId2"}`). A CF-ek `JSON.parse()` → kulcs iterálás → userId validáció mintát használják.
 
 ---
 

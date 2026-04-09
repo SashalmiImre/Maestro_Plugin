@@ -144,7 +144,7 @@
       - `canEditContributorDropdown(user, teamSlug, articleState)` — per-dropdown contributor jogosultság: vezetők (`LEADER_TEAMS`) mindig, nem-vezetők csak a saját csoportjuknak megfelelő dropdown-ot, és csak a `STATE_PERMISSIONS` szerinti állapotaikban. Capability label-ek ugyanúgy kiterjesztik a hozzáférést.
       - `useElementPermission(key)` / `useElementPermissions(keys[])` / `useContributorPermissions(articleState)` hookok (`useElementPermission.js`) — React komponensekben.
       - **Kompozíció**: `disabled={isIgnored || isSyncing || !perm.allowed}` + tooltip a `reason`-nel.
-    - **Konfiguráció**: `labelConfig.js` (capability label-ek), `workflowConstants.js` (`STATE_PERMISSIONS`, `TEAM_ARTICLE_FIELD`), `workflowPermissions.js` (`canUserMoveArticle`), `elementPermissions.js` (UI elem jogosultságok).
+    - **Konfiguráció**: `labelConfig.js` (capability label-ek), `workflowConstants.js` (`STATE_PERMISSIONS`), `workflowPermissions.js` (`canUserMoveArticle`), `elementPermissions.js` (UI elem jogosultságok).
     - Ld. `docs/WORKFLOW_PERMISSIONS.md`
 
 6. **Kapcsolat-helyreállítás (RecoveryManager) & Dual-Proxy Failover**
@@ -205,9 +205,9 @@
 
 10. **Szerver-oldali Config Szinkronizáció**
     - **Cél**: A Cloud Function-ök nem hardkódolnak workflow konstansokat — a DB `config` collection-ből olvassák.
-    - **Config Collection**: Egyetlen `workflow_config` dokumentum (fix ID) a `config` collection-ben, JSON string mezőkkel: `statePermissions`, `validTransitions`, `teamArticleField`, `capabilityLabels`, `validLabels`, `validStates`, `configVersion`.
+    - **Config Collection**: Egyetlen `workflow_config` dokumentum (fix ID) a `config` collection-ben, JSON string mezőkkel: `statePermissions`, `validTransitions`, `capabilityLabels`, `validLabels`, `validStates`, `configVersion`.
     - **Plugin Writer** (`syncWorkflowConfig.js`): A `DataContext` inicializálása után fut. `CONFIG_VERSION` (maestro-shared) alapján ellenőrzi: ha a DB-ben eltérő verzió van → upsert. Normál induláskor: 1 olvasás, 0 írás.
-    - **Config Builder** (`buildWorkflowConfigDocument()`, workflowConstants.js): A `WORKFLOW_CONFIG` transitions tömbjéből kinyeri a `VALID_TRANSITIONS`-t, a `STATE_PERMISSIONS`-t, `TEAM_ARTICLE_FIELD`-et, `CAPABILITY_LABELS`-t JSON-ná szerializálja.
+    - **Config Builder** (`buildWorkflowConfigDocument()`, workflowConstants.js): A `WORKFLOW_CONFIG` transitions tömbjéből kinyeri a `VALID_TRANSITIONS`-t, a `STATE_PERMISSIONS`-t, `CAPABILITY_LABELS`-t JSON-ná szerializálja.
     - **Cloud Function Reader**: Minden guard function induláskor `getDocument('workflow_config')` → JSON.parse → validáció. Ha a config nem elérhető → hardkódolt fallback konstansok (fail-closed: mindig validál).
     - **Verzió léptetés**: Ha bármely szerver-oldali konstans változik, a `CONFIG_VERSION`-t kell léptetni a `maestro-shared/workflowConfig.js`-ben.
 
@@ -233,7 +233,8 @@ Maestro/
 │   ├── appwriteIds.js            ← Appwrite projekt/DB/gyűjtemény/bucket ID-k
 │   ├── constants.js              ← Platform-független enumerációk (LOCK_TYPE, VALIDATION_TYPES)
 │   ├── labelConfig.js            ← Capability-based label konfiguráció (CAPABILITY_LABELS, resolveGrantedTeams, hasCapability)
-│   ├── workflowConfig.js         ← Workflow állapotok, markerek, időtartamok, STATUS_LABELS, TEAM_ARTICLE_FIELD, labelMatchesSlug, CONFIG_VERSION
+│   ├── workflowConfig.js         ← Workflow állapotok, markerek, időtartamok, STATUS_LABELS, labelMatchesSlug, CONFIG_VERSION
+│   ├── contributorHelpers.js     ← Contributors JSON parse/serialize/query helperek (getContributor, setContributor, isContributor)
 │   ├── groups.js                 ← DEFAULT_GROUPS (7 alapértelmezett csoport), resolveGroupSlugs() helper
 │   └── urgency.js                ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színskála)
 │
@@ -323,6 +324,7 @@ Maestro/
 │   │       ├── useArticles.js                   ← CRUD + megnyitás/bezárás + szűrés kiadvány szerint
 │   │       ├── usePublications.js               ← CRUD + lefedettség kezelés
 │   │       ├── useGroupMembers.js                ← Csoporttagok listázása (scope-szűrt, Realtime szinkronnal)
+│   │       ├── useContributorGroups.js           ← Contributor csoportok + tagok (2 query, 5 perces cache, dinamikus ContributorsSection)
 │   │       ├── useUserValidations.js            ← Felhasználói validációs üzenetek CRUD
 │   │       ├── useUnifiedValidation.js          ← Rendszer + felhasználói validációk összefésülése
 │   │       ├── useWorkflowValidation.js         ← Preflight + workflow validáció (esemény-vezérelt)

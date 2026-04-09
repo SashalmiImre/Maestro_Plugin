@@ -19,7 +19,28 @@
 
 ## Aktuális fázis
 
-**Fázis 2 — Dinamikus csoportok (groups, groupMemberships)** (kész)
+**Fázis 3 — Dinamikus contributor mezők** (kész)
+
+### Fázis 3 checklist (kész, 2026-04-09)
+- [x] C.1 — Appwrite `articles.contributors` + `publications.defaultContributors` longtext mezők létrehozása (MCP)
+- [x] C.2 — `maestro-shared/contributorHelpers.js` létrehozása (parseContributors, getContributor, setContributor, isContributor)
+- [x] C.3 — `maestro-shared/workflowConfig.js`: `TEAM_ARTICLE_FIELD` törlése, `CONFIG_VERSION` bump `'1.0.0'` → `'2.0.0'`
+- [x] C.4 — Plugin `useContributorGroups.js` hook (2 query, 5 perces cache, Realtime invalidálás)
+- [x] C.5 — Plugin Article `ContributorsSection.jsx` újraírás (dinamikus loop, `getContributor`/`setContributor`)
+- [x] C.6 — Plugin Publication `ContributorsSection.jsx` újraírás (dinamikus loop, confirm dialog JSON-alapú)
+- [x] C.7 — Plugin `useArticles.js` `addArticle`: 7 mező → `contributors: pub?.defaultContributors ?? null`
+- [x] C.8 — Plugin `Publication.jsx`: `isContributor()` + `userSlugs` useMemo
+- [x] C.9 — Plugin `GeneralSection.jsx`: `getContributor()` a `hasRequiredContributor`-ban
+- [x] C.10 — Plugin `useElementPermission.js`: `useContributorPermissions(state, groupSlugs)` paraméter
+- [x] C.11 — Plugin `ArticleProperties.jsx`: `useContributorGroups` + `contributorGroupSlugs` átadás
+- [x] C.12 — Plugin `workflowConstants.js` + `workflow/index.js`: `TEAM_ARTICLE_FIELD` re-export törlés, `buildWorkflowConfigDocument` frissítés
+- [x] C.13 — Dashboard `config.js`: `TEAM_ARTICLE_FIELD` re-export törlés
+- [x] C.14 — Dashboard `useFilters.js`: `isContributor()` + `getUserGroupSlugs()`
+- [x] C.15 — CF `validate-article-creation`: JSON `contributors` validáció (parse → userId check → nullázás)
+- [x] C.16 — CF `article-update-guard`: JSON `contributors` validáció (parse → log-only), `teamArticleField` törlés
+- [x] C.17 — CF `validate-publication-update`: JSON `defaultContributors` validáció (parse → userId check → nullázás)
+- [x] C.18 — Appwrite régi 14 contributor mező törlése (7 articles + 7 publications) (MCP)
+- [x] C.19 — Dokumentáció frissítés (CLAUDE.md-k, PROGRESS.md, Feladatok.md)
 
 ### Fázis 2 checklist (kész, 2026-04-09)
 - [x] B.1 — Appwrite `groups` + `groupMemberships` collection létrehozás (MCP)
@@ -68,7 +89,7 @@
 | 0 | Dokumentációs alap + Stitch tervek | Tudás-megőrzés, első UI képek | **Kész** |
 | 1 | Scope bevezetés + teljes Dashboard auth flow | `organizationId` + `editorialOfficeId` mindenhol, saját tagság collectionök, login/regisztráció/elfelejtett jelszó | **Kész** |
 | 2 | Dinamikus csoportok | A 7 fix Appwrite Team helyett saját `groups` + `groupMemberships` | **Kész** |
-| 3 | Dinamikus contributor mezők | `articles.contributors: {slug: userId}` JSON a 7 hardkódolt oszlop helyett | Vár |
+| 3 | Dinamikus contributor mezők | `articles.contributors: {slug: userId}` JSON a 7 hardkódolt oszlop helyett | **Kész** |
 | 4 | Workflow runtime | `workflows` collection, `compiled` JSON, Realtime hot-reload, régi workflowConstants törlése | Vár |
 | 5 | Workflow Designer UI | ComfyUI-szerű vizuális designer a Dashboardon, export/import | Vár |
 | 6 | Org/Office Admin UI finomítás | Teljes org admin felület, user meghívás, csoport kezelés | Vár |
@@ -465,3 +486,33 @@ _(egyelőre nincs)_
 - **Érintett fájlok**:
   - **Módosítva**: [packages/maestro-dashboard/css/styles.css](../../packages/maestro-dashboard/css/styles.css) (`.auth-link-button` block layout fix), [_docs/Feladatok.md](../Feladatok.md) sor 49 (`[x]` B.10), ez a fájl.
 - **Következő feladat**: Fázis 2 — Dinamikus csoportok (`groups`, `groupMemberships` collection-ök, Dashboard admin UI, Plugin `UserContext` átalakítás).
+
+### 2026-04-09 — Fázis 2 kész (Dinamikus csoportok)
+
+- Részletek: Fázis 2 checklist feljebb. A 7 fix Appwrite Team lecserélve `groups` + `groupMemberships` collection-ökre. Dashboard `/settings/groups` admin UI.
+- **Következő feladat**: Fázis 3 — Dinamikus contributor mezők.
+
+### 2026-04-09 — Fázis 3 kész (Dinamikus contributor mezők)
+
+- **Cél**: a 7+7 hardkódolt contributor ID mező (`designerId`, `editorId`, `writerId`, `imageEditorId`, `artDirectorId`, `managingEditorId`, `proofwriterId` és `default*` megfelelőik) kiváltása egyetlen `contributors` (articles) és `defaultContributors` (publications) JSON longtext mezővel. A JSON kulcsa a csoport `slug`-ja (pl. `{"designers":"userId1","editors":"userId2"}`).
+- **TEAM_ARTICLE_FIELD eliminálva**: a korábbi mapping (slug → article mező név) feleslegessé vált, mert a JSON kulcs közvetlenül a slug. A `CONFIG_VERSION` `'1.0.0'` → `'2.0.0'`-ra lépett.
+- **Nincs adatmigráció**: a DB Fázis 1 B.9-ben wipe-olva volt (0 article, 0 publication).
+- **Új fájlok**:
+  - `maestro-shared/contributorHelpers.js` — pure utility: `parseContributors`, `getContributor`, `setContributor`, `isContributor` (plugin + dashboard + CF közös)
+  - `maestro-indesign/src/data/hooks/useContributorGroups.js` — egyetlen hook 2 párhuzamos Appwrite query-vel (groups + groupMemberships), kiváltja a 7× `useGroupMembers` hívást a ContributorsSection-ökben. 5 perces modul-szintű cache, Realtime invalidálás.
+- **Fő változások**:
+  - Article + Publication `ContributorsSection.jsx` újraírva: dinamikus loop a `groups` tömb felett, `getContributor`/`setContributor` a JSON olvasás/íráshoz
+  - `useArticles.js` `addArticle`: 7 soros default contributor másolás → egyetlen `contributors: pub?.defaultContributors ?? null`
+  - `Publication.jsx`: `isContributor()` + `userSlugs` useMemo a "Saját cikkeim" szűrőhöz
+  - `GeneralSection.jsx`: `getContributor()` a `hasRequiredContributor`-ban
+  - `useElementPermission.js`: `useContributorPermissions(state, groupSlugs)` — kapott slug tömb felett iterál
+  - Dashboard `useFilters.js`: `isContributor()` + `getUserGroupSlugs()`
+  - 3 CF frissítve: JSON parse → kulcs iterálás → userId validáció
+- **Appwrite séma**: `articles.contributors` + `publications.defaultContributors` hozzáadva, régi 14 mező törölve (MCP)
+- **CF redeployment**: a 3 módosított CF (validate-article-creation, article-update-guard, validate-publication-update) újratelepítése szükséges az Appwrite Console-on/CLI-vel
+- **Harden pass**:
+  - MUST FIX: 6 hibás relative import (`"../../../../../maestro-shared/..."`) → bare specifier (`"maestro-shared/..."`) — webpack alias nem oldja fel a relative path-okat
+  - SHOULD FIX: Dashboard `getUserGroupSlugs()` early return — capability label-ek kihagyódtak `user.groupSlugs` falsy esetén
+  - Elutasítva (noise): CF group membership validáció (Fázis 6/7), JSON blob race condition (elfogadott trade-off), cache coherency (recovery + TTL), performance (cache), value type validáció (parseContributors check)
+  - Verifikáció: clean (első körben), mindkét build (webpack + vite) sikeres
+- **Következő feladat**: Fázis 4 — Workflow runtime (`workflows` collection, `compiled` JSON, Realtime hot-reload).

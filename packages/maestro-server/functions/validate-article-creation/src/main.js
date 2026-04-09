@@ -36,12 +36,6 @@ const CONFIG_DOCUMENT_ID = 'workflow_config';
 // Tiltott karakterek a fájlnévben (Windows + InDesign kompatibilitás)
 const FORBIDDEN_CHARS = /[\\/:*?"<>|]/;
 
-// Contributor mezők
-const CONTRIBUTOR_FIELDS = [
-    'writerId', 'editorId', 'designerId',
-    'imageEditorId', 'artDirectorId',
-    'managingEditorId', 'proofwriterId'
-];
 
 /**
  * Érvényes állapotok betöltése a config-ból (vagy fallback).
@@ -218,18 +212,29 @@ module.exports = async function ({ req, res, log, error }) {
             log(`Érvénytelen állapot (${payload.state}) → 0`);
         }
 
-        // ── 6. Contributor mezők validáció ──
-        for (const field of CONTRIBUTOR_FIELDS) {
-            const userId = payload[field];
-            if (!userId) continue;
-
+        // ── 6. Contributors JSON validáció ──
+        if (payload.contributors) {
             try {
-                await usersApi.get(userId);
-            } catch (e) {
-                if (e.code === 404) {
-                    corrections[field] = null;
-                    log(`[Contributor] ${field}=${userId} — nem létező felhasználó → nullázva`);
+                const parsed = JSON.parse(payload.contributors);
+                let corrected = false;
+                for (const [slug, userId] of Object.entries(parsed)) {
+                    if (!userId) continue;
+                    try {
+                        await usersApi.get(userId);
+                    } catch (e) {
+                        if (e.code === 404) {
+                            parsed[slug] = null;
+                            corrected = true;
+                            log(`[Contributor] contributors.${slug}=${userId} — nem létező felhasználó → nullázva`);
+                        }
+                    }
                 }
+                if (corrected) {
+                    corrections.contributors = JSON.stringify(parsed);
+                }
+            } catch (e) {
+                corrections.contributors = '{}';
+                log(`[Contributor] contributors parse hiba: ${e.message} → üres objektum`);
             }
         }
 

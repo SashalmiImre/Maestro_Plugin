@@ -22,6 +22,7 @@ import { formatPagedFileName } from "../../../../core/utils/namingUtils.js";
 import { WorkflowEngine } from "../../../../core/utils/workflow/workflowEngine.js";
 import { canUserMoveArticle } from "../../../../core/utils/workflow/workflowPermissions.js";
 import { useElementPermissions, useContributorPermissions } from "../../../../data/hooks/useElementPermission.js";
+import { useContributorGroups } from "../../../../data/hooks/useContributorGroups.js";
 import { SCRIPT_LANGUAGE_JAVASCRIPT, TOAST_TYPES } from "../../../../core/utils/constants.js";
 import { WORKFLOW_CONFIG, MARKERS } from "../../../../core/utils/workflow/workflowConstants.js";
 import { log, logError, logWarn } from "../../../../core/utils/logger.js";
@@ -57,8 +58,15 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
         'validationForm', 'validationActions'
     ]);
 
+    // Csoportok a contributor dropdown jogosultság-számításhoz
+    const { groups: contributorGroupsList } = useContributorGroups();
+    const contributorGroupSlugs = React.useMemo(
+        () => contributorGroupsList.map(g => g.slug),
+        [contributorGroupsList]
+    );
+
     // Per-dropdown contributor jogosultságok (állapotfüggő)
-    const contributorPermissions = useContributorPermissions(article.state);
+    const contributorPermissions = useContributorPermissions(article.state, contributorGroupSlugs);
 
     // ── Mező frissítés ───────────────────────────────────────────────────────
 

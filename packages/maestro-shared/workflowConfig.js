@@ -9,10 +9,10 @@
 // A Cloud Function-ök a DB-ből olvassák a workflow konstansokat.
 // A plugin induláskor ellenőrzi: ha a DB-ben eltérő verzió van, upsert-eli.
 // Léptesd ezt az értéket, ha bármely szerver-oldali konstans változik
-// (STATE_PERMISSIONS, VALID_TRANSITIONS, TEAM_ARTICLE_FIELD, CAPABILITY_LABELS).
+// (STATE_PERMISSIONS, VALID_TRANSITIONS, CAPABILITY_LABELS).
 
 /** @type {string} */
-export const CONFIG_VERSION = '1.0.0';
+export const CONFIG_VERSION = '2.0.0';
 
 /** Fix dokumentum ID a config collection-ben. */
 export const CONFIG_DOCUMENT_ID = 'workflow_config';
@@ -94,22 +94,6 @@ export const STATE_DURATIONS = {
     [WORKFLOW_STATES.CONTENT_REVISION]:   { perPage: 30, fixed: 10 },
     [WORKFLOW_STATES.FINAL_APPROVAL]:     { perPage: 10, fixed: 15 },
     [WORKFLOW_STATES.PRINTABLE]:          { perPage: 10, fixed: 5 }
-};
-
-// ─── Csapat → cikk mező leképezés ──────────────────────────────────────────
-
-/**
- * Csapat slug → cikk contributor mezőnév.
- * @type {Object.<string, string>}
- */
-export const TEAM_ARTICLE_FIELD = {
-    'designers':        'designerId',
-    'art_directors':    'artDirectorId',
-    'editors':          'editorId',
-    'managing_editors': 'managingEditorId',
-    'proofwriters':     'proofwriterId',
-    'writers':          'writerId',
-    'image_editors':    'imageEditorId'
 };
 
 // ─── Label segédfüggvények ──────────────────────────────────────────────────

@@ -1,8 +1,8 @@
 // React
-import React, { useEffect } from "react";
+import React from "react";
 
 // Custom Hooks
-import { useGroupMembers, invalidateGroupMembersCache } from "../../../../data/hooks/useGroupMembers.js";
+import { useContributorGroups } from "../../../../data/hooks/useContributorGroups.js";
 
 // Components
 import { CollapsibleSection } from "../../../common/CollapsibleSection.jsx";
@@ -10,80 +10,49 @@ import { CustomDropdown } from "../../../common/CustomDropdown.jsx";
 
 // Utils
 import { STORAGE_KEYS } from "../../../../core/utils/constants.js";
+import { getContributor, setContributor } from "maestro-shared/contributorHelpers.js";
 
 /**
  * ContributorsSection Component
- * 
- * Displays and manages team member assignments for article roles.
- * Each role is represented by a dropdown that allows selecting a team member
- * from the appropriate group. The component fetches group member lists using
- * the useGroupMembers hook for each role.
- * 
- * Támogatott szerepkörök:
- * - **Szerző (Writer)**: Tartalomkészítő a Writers csapatból
- * - **Szerkesztő (Editor)**: Tartalomellenőr az Editors csapatból
- * - **Képszerkesztő (Image Editor)**: Képfeldolgozó az Image Editors csapatból
- * - **Tervező (Designer)**: Tördelő a Designers csapatból
- * - **Korrektor (Proofwriter)**: Korrektúrázó a Proofwriters csapatból
- * - **Művészeti vezető (Art Director)**: Vizuális jóváhagyó az Art Directors csapatból
- * - **Vezetőszerkesztő (Managing Editor)**: Szerkesztőségi jóváhagyó a Managing Editors csapatból
  *
- * @param {Object} props - Component props
- * @param {Object} props.article - The article object containing contributor assignments
- * @param {string} [props.article.writerId] - ID of the assigned writer
- * @param {string} [props.article.editorId] - ID of the assigned editor
- * @param {string} [props.article.imageEditorId] - ID of the assigned image editor
- * @param {string} [props.article.designerId] - ID of the assigned designer
- * @param {string} [props.article.proofwriterId] - ID of the assigned proofwriter
- * @param {string} [props.article.artDirectorId] - ID of the assigned art director
- * @param {string} [props.article.managingEditorId] - ID of the assigned managing editor
- * @param {Function} props.onFieldUpdate - Callback to update article field: (fieldName, userId) => void
- * @returns {JSX.Element} The ContributorsSection component
+ * Dinamikusan rendereli a contributor dropdown-okat a szerkesztőség csoportjai alapján.
+ * Minden csoport egy dropdown-t kap, ahol a csoport tagjai közül választható ki a contributor.
+ *
+ * A contributors JSON string formátumban tárolt: '{"designers":"userId","editors":"userId"}'
+ *
+ * @param {Object} props
+ * @param {Object} props.article - A cikk objektum (benne: contributors JSON string)
+ * @param {Function} props.onFieldUpdate - Callback: (fieldName, value) => void
+ * @param {boolean} props.disabled - Az összes dropdown tiltva
+ * @param {Object} props.contributorPermissions - {slug: {allowed, reason}} jogosultsági map
  */
-/**
- * Cikk contributor mező → csapat slug leképezés.
- * A contributorPermissions objektum kulcsa a teamSlug.
- */
-const FIELD_TO_TEAM = {
-    writerId:         "writers",
-    editorId:         "editors",
-    imageEditorId:    "image_editors",
-    designerId:       "designers",
-    proofwriterId:    "proofwriters",
-    artDirectorId:    "art_directors",
-    managingEditorId: "managing_editors"
-};
-
 export const ContributorsSection = ({ article, onFieldUpdate, disabled, contributorPermissions = {} }) => {
-    // Mount-kor a cache invalidálása, hogy friss csoporttaglistát kérjünk
-    useEffect(() => {
-        invalidateGroupMembersCache();
-    }, []);
+    const { groups, membersBySlug } = useContributorGroups();
 
     /** Meghatározza, hogy az adott contributor dropdown disabled-e. */
-    const isDropdownDisabled = (fieldName) => {
+    const isDropdownDisabled = (slug) => {
         if (disabled) return true;
-        const teamSlug = FIELD_TO_TEAM[fieldName];
-        const perm = contributorPermissions[teamSlug];
+        const perm = contributorPermissions[slug];
         return perm ? !perm.allowed : false;
     };
 
     /** Visszaadja a tooltip reason-t az adott dropdown-hoz. */
-    const getDropdownReason = (fieldName) => {
+    const getDropdownReason = (slug) => {
         if (disabled) return undefined;
-        const teamSlug = FIELD_TO_TEAM[fieldName];
-        return contributorPermissions[teamSlug]?.reason;
+        return contributorPermissions[slug]?.reason;
     };
 
-    // Csoporttagok lekérése szerepkörönként
-    const { members: editors } = useGroupMembers('editors');
-    const { members: designers } = useGroupMembers('designers');
-    const { members: writers } = useGroupMembers('writers');
-    const { members: imageEditors } = useGroupMembers('image_editors');
-    const { members: artDirectors } = useGroupMembers('art_directors');
-    const { members: managingEditors } = useGroupMembers('managing_editors');
-    const { members: proofwriters } = useGroupMembers('proofwriters');
+    /** Contributor változás kezelése. */
+    const handleChange = (slug, val) => {
+        const newJson = setContributor(article.contributors, slug, val || null);
+        onFieldUpdate('contributors', newJson);
+    };
 
+    // Csoportokat párokba rendezzük a 2 oszlopos elrendezéshez
+    const pairs = [];
+    for (let i = 0; i < groups.length; i += 2) {
+        pairs.push(groups.slice(i, i + 2));
+    }
 
     return (
         <CollapsibleSection
@@ -92,172 +61,47 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled, contribu
             storageKey={STORAGE_KEYS.SECTION_ARTICLE_CONTRIBUTORS_COLLAPSED}
         >
             <div style={{ display: "flex", flexDirection: "column" }}>
-
-                {/* Szerző & Képszerkesztő */}
-                <div style={{ display: "flex", marginBottom: "12px" }}>
-                    <div style={{ flex: 1, marginRight: "12px" }}>
-                        <sp-label>Szerző</sp-label>
-                        <CustomDropdown
-                            id="writer-dropdown"
-                            emptyLabel="Nincs hozzárendelve"
-                            value={article.writerId}
-                            onChange={(val) => onFieldUpdate('writerId', val || null)}
-                            disabled={isDropdownDisabled('writerId') || undefined}
-                            title={getDropdownReason('writerId')}
-                            style={{ width: "100%" }}
-                        >
-                            <sp-menu slot="options" size="m">
-                                <sp-menu-item value="">Nincs hozzárendelve</sp-menu-item>
-                                {writers.map(m => (
-                                    <sp-menu-item key={m.userId} value={m.userId}>
-                                        {m.userName || m.userEmail}
-                                    </sp-menu-item>
-                                ))}
-                            </sp-menu>
-                        </CustomDropdown>
+                {pairs.map((pair, pairIndex) => (
+                    <div
+                        key={pair.map(g => g.slug).join('-')}
+                        style={{
+                            display: "flex",
+                            marginBottom: pairIndex < pairs.length - 1 ? "12px" : undefined
+                        }}
+                    >
+                        {pair.map((group, colIndex) => (
+                            <div
+                                key={group.slug}
+                                style={{
+                                    flex: 1,
+                                    marginRight: colIndex === 0 && pair.length > 1 ? "12px" : undefined
+                                }}
+                            >
+                                <sp-label>{group.name}</sp-label>
+                                <CustomDropdown
+                                    id={`contributor-${group.slug}-dropdown`}
+                                    emptyLabel="Nincs hozzárendelve"
+                                    value={getContributor(article.contributors, group.slug)}
+                                    onChange={(val) => handleChange(group.slug, val)}
+                                    disabled={isDropdownDisabled(group.slug) || undefined}
+                                    title={getDropdownReason(group.slug)}
+                                    style={{ width: "100%" }}
+                                >
+                                    <sp-menu slot="options" size="m">
+                                        <sp-menu-item value="">Nincs hozzárendelve</sp-menu-item>
+                                        {(membersBySlug[group.slug] || []).map(m => (
+                                            <sp-menu-item key={m.userId} value={m.userId}>
+                                                {m.userName || m.userEmail}
+                                            </sp-menu-item>
+                                        ))}
+                                    </sp-menu>
+                                </CustomDropdown>
+                            </div>
+                        ))}
+                        {/* Üres placeholder ha páratlan az utolsó sor */}
+                        {pair.length === 1 && <div style={{ flex: 1 }} />}
                     </div>
-                    <div style={{ flex: 1 }}>
-                        <sp-label>Képszerkesztő</sp-label>
-                        <CustomDropdown
-                            id="image-editor-dropdown"
-                            emptyLabel="Nincs hozzárendelve"
-                            value={article.imageEditorId}
-                            onChange={(val) => onFieldUpdate('imageEditorId', val || null)}
-                            disabled={isDropdownDisabled('imageEditorId') || undefined}
-                            title={getDropdownReason('imageEditorId')}
-                            style={{ width: "100%" }}
-                        >
-                            <sp-menu slot="options" size="m">
-                                <sp-menu-item value="">Nincs hozzárendelve</sp-menu-item>
-                                {imageEditors.map(m => (
-                                    <sp-menu-item key={m.userId} value={m.userId}>
-                                        {m.userName || m.userEmail}
-                                    </sp-menu-item>
-                                ))}
-                            </sp-menu>
-                        </CustomDropdown>
-                    </div>
-                </div>
-
-                {/* Szerkesztő & Tervező */}
-                <div style={{ display: "flex", marginBottom: "12px" }}>
-                    <div style={{ flex: 1, marginRight: "12px" }}>
-                        <sp-label>Szerkesztő</sp-label>
-                        <CustomDropdown
-                            id="editor-dropdown"
-                            emptyLabel="Nincs hozzárendelve"
-                            value={article.editorId}
-                            onChange={(val) => onFieldUpdate('editorId', val || null)}
-                            disabled={isDropdownDisabled('editorId') || undefined}
-                            title={getDropdownReason('editorId')}
-                            style={{ width: "100%" }}
-                        >
-                            <sp-menu slot="options" size="m">
-                                <sp-menu-item value="">Nincs hozzárendelve</sp-menu-item>
-                                {editors.map(m => (
-                                    <sp-menu-item key={m.userId} value={m.userId}>
-                                        {m.userName || m.userEmail}
-                                    </sp-menu-item>
-                                ))}
-                            </sp-menu>
-                        </CustomDropdown>
-                    </div>
-                    <div style={{ flex: 1 }}>
-                        <sp-label>Tervező</sp-label>
-                        <CustomDropdown
-                            id="designer-dropdown"
-                            emptyLabel="Nincs hozzárendelve"
-                            value={article.designerId}
-                            onChange={(val) => onFieldUpdate('designerId', val || null)}
-                            disabled={isDropdownDisabled('designerId') || undefined}
-                            title={getDropdownReason('designerId')}
-                            style={{ width: "100%" }}
-                        >
-                            <sp-menu slot="options" size="m">
-                                <sp-menu-item value="">Nincs hozzárendelve</sp-menu-item>
-                                {designers.map(m => (
-                                    <sp-menu-item key={m.userId} value={m.userId}>
-                                        {m.userName || m.userEmail}
-                                    </sp-menu-item>
-                                ))}
-                            </sp-menu>
-                        </CustomDropdown>
-                    </div>
-                </div>
-
-                {/* Vezetőszerkesztő & Művészeti vezető */}
-                <div style={{ display: "flex", marginBottom: "12px" }}>
-                    <div style={{ flex: 1, marginRight: "12px" }}>
-                        <sp-label>Vezetőszerkesztő</sp-label>
-                        <CustomDropdown
-                            id="managing-editor-dropdown"
-                            emptyLabel="Nincs hozzárendelve"
-                            value={article.managingEditorId}
-                            onChange={(val) => onFieldUpdate('managingEditorId', val || null)}
-                            disabled={isDropdownDisabled('managingEditorId') || undefined}
-                            title={getDropdownReason('managingEditorId')}
-                            style={{ width: "100%" }}
-                        >
-                            <sp-menu slot="options" size="m">
-                                <sp-menu-item value="">Nincs hozzárendelve</sp-menu-item>
-                                {managingEditors.map(m => (
-                                    <sp-menu-item key={m.userId} value={m.userId}>
-                                        {m.userName || m.userEmail}
-                                    </sp-menu-item>
-                                ))}
-                            </sp-menu>
-                        </CustomDropdown>
-                    </div>
-                    <div style={{ flex: 1 }}>
-                        <sp-label>Művészeti vezető</sp-label>
-                        <CustomDropdown
-                            id="art-director-dropdown"
-                            emptyLabel="Nincs hozzárendelve"
-                            value={article.artDirectorId}
-                            onChange={(val) => onFieldUpdate('artDirectorId', val || null)}
-                            disabled={isDropdownDisabled('artDirectorId') || undefined}
-                            title={getDropdownReason('artDirectorId')}
-                            style={{ width: "100%" }}
-                        >
-                            <sp-menu slot="options" size="m">
-                                <sp-menu-item value="">Nincs hozzárendelve</sp-menu-item>
-                                {artDirectors.map(m => (
-                                    <sp-menu-item key={m.userId} value={m.userId}>
-                                        {m.userName || m.userEmail}
-                                    </sp-menu-item>
-                                ))}
-                            </sp-menu>
-                        </CustomDropdown>
-                    </div>
-                </div>
-
-                {/* Korrektor */}
-                <div style={{ display: "flex" }}>
-                    <div style={{ flex: 1, marginRight: "12px" }}>
-                        <sp-label>Korrektor</sp-label>
-                        <CustomDropdown
-                            id="proofwriter-dropdown"
-                            emptyLabel="Nincs hozzárendelve"
-                            value={article.proofwriterId}
-                            onChange={(val) => onFieldUpdate('proofwriterId', val || null)}
-                            disabled={isDropdownDisabled('proofwriterId') || undefined}
-                            title={getDropdownReason('proofwriterId')}
-                            style={{ width: "100%" }}
-                        >
-                            <sp-menu slot="options" size="m">
-                                <sp-menu-item value="">Nincs hozzárendelve</sp-menu-item>
-                                {proofwriters.map(m => (
-                                    <sp-menu-item key={m.userId} value={m.userId}>
-                                        {m.userName || m.userEmail}
-                                    </sp-menu-item>
-                                ))}
-                            </sp-menu>
-                        </CustomDropdown>
-                    </div>
-                    <div style={{ flex: 1 }}>
-                        {/* Üres placeholder a szimmetrikus elrendezéshez */}
-                    </div>
-                </div>
+                ))}
             </div>
         </CollapsibleSection>
     );

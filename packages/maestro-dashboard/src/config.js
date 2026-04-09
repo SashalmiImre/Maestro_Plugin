@@ -19,7 +19,6 @@ export {
     WORKFLOW_STATES,
     MARKERS,
     STATE_DURATIONS,
-    TEAM_ARTICLE_FIELD,
     STATUS_LABELS,
     STATUS_COLORS
 } from '@shared/workflowConfig.js';

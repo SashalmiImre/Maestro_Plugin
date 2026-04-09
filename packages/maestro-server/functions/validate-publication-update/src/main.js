@@ -30,16 +30,6 @@ const sdk = require("node-appwrite");
 
 const SERVER_GUARD_ID = 'server-guard';
 
-// Kiadvány default contributor mezők
-const DEFAULT_CONTRIBUTOR_FIELDS = [
-    'defaultWriterId',
-    'defaultEditorId',
-    'defaultDesignerId',
-    'defaultImageEditorId',
-    'defaultArtDirectorId',
-    'defaultManagingEditorId',
-    'defaultProofwriterId'
-];
 
 // Legacy útvonal felismerés
 const MOUNT_PREFIXES = ['/Volumes', 'C:/Volumes'];
@@ -236,18 +226,29 @@ module.exports = async function ({ req, res, log, error }) {
 
         const corrections = {};
 
-        // ── 3. Default contributor ID-k validáció ──
-        for (const field of DEFAULT_CONTRIBUTOR_FIELDS) {
-            const userId = freshDoc[field];
-            if (!userId) continue;
-
+        // ── 3. Default contributors JSON validáció ──
+        if (freshDoc.defaultContributors) {
             try {
-                await usersApi.get(userId);
-            } catch (e) {
-                if (e.code === 404) {
-                    corrections[field] = null;
-                    log(`[Contributor] ${field}=${userId} — nem létező felhasználó → nullázva`);
+                const parsed = JSON.parse(freshDoc.defaultContributors);
+                let corrected = false;
+                for (const [slug, userId] of Object.entries(parsed)) {
+                    if (!userId) continue;
+                    try {
+                        await usersApi.get(userId);
+                    } catch (e) {
+                        if (e.code === 404) {
+                            parsed[slug] = null;
+                            corrected = true;
+                            log(`[Contributor] defaultContributors.${slug}=${userId} — nem létező felhasználó → nullázva`);
+                        }
+                    }
                 }
+                if (corrected) {
+                    corrections.defaultContributors = JSON.stringify(parsed);
+                }
+            } catch (e) {
+                corrections.defaultContributors = '{}';
+                log(`[Contributor] defaultContributors parse hiba: ${e.message} → üres objektum`);
             }
         }
 

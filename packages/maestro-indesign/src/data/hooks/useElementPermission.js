@@ -18,7 +18,6 @@ import {
     checkElementPermission,
     canEditContributorDropdown
 } from "../../core/utils/workflow/elementPermissions.js";
-import { TEAM_ARTICLE_FIELD } from "../../core/utils/workflow/workflowConstants.js";
 
 /**
  * Egyetlen UI elem jogosultsági állapotát adja vissza.
@@ -71,17 +70,19 @@ export function useElementPermissions(elementKeys) {
  * a felhasználó csapattagsága/label-jei és a cikk állapota alapján.
  *
  * @param {number} articleState - A cikk aktuális workflow állapota.
+ * @param {string[]} groupSlugs - Az elérhető csoportok slug-jai
+ *   (a useContributorGroups().groups.map(g => g.slug) eredménye).
  * @returns {Object.<string, { allowed: boolean, reason?: string }>}
  *   Kulcs: teamSlug (pl. "designers"), Érték: jogosultsági eredmény.
  */
-export function useContributorPermissions(articleState) {
+export function useContributorPermissions(articleState, groupSlugs) {
     const { user } = useUser();
 
     return useMemo(() => {
         const result = {};
-        for (const teamSlug of Object.keys(TEAM_ARTICLE_FIELD)) {
-            result[teamSlug] = canEditContributorDropdown(user, teamSlug, articleState);
+        for (const slug of (groupSlugs || [])) {
+            result[slug] = canEditContributorDropdown(user, slug, articleState);
         }
         return result;
-    }, [user?.groupSlugs, user?.labels, articleState]);
+    }, [user?.groupSlugs, user?.labels, articleState, groupSlugs]);
 }

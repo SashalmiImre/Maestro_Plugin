@@ -279,13 +279,7 @@ export const useArticles = (publicationId, publicationRoot) => {
                 endPage: endPage,
                 pageRanges: pageRanges,
                 thumbnails: thumbnailsJson,
-                writerId: pub?.defaultWriterId ?? null,
-                editorId: pub?.defaultEditorId ?? null,
-                imageEditorId: pub?.defaultImageEditorId ?? null,
-                designerId: pub?.defaultDesignerId ?? null,
-                proofwriterId: pub?.defaultProofwriterId ?? null,
-                artDirectorId: pub?.defaultArtDirectorId ?? null,
-                managingEditorId: pub?.defaultManagingEditorId ?? null
+                contributors: pub?.defaultContributors ?? null
             });
             return { status: "success", fileName: file.name };
         } catch (error) {

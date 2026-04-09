@@ -39,13 +39,6 @@ const sdk = require("node-appwrite");
 const SERVER_GUARD_ID = 'server-guard';
 const CONFIG_DOCUMENT_ID = 'workflow_config';
 
-// Contributor mezők, amelyek user ID-t tartalmaznak
-const CONTRIBUTOR_FIELDS = [
-    'writerId', 'editorId', 'designerId',
-    'imageEditorId', 'artDirectorId',
-    'managingEditorId', 'proofwriterId'
-];
-
 // ─── Fallback konfiguráció ───────────────────────────────────────────────
 // Ha a DB config nem elérhető, ezek az értékek biztosítják a validáció működését.
 // Tartsd szinkronban: maestro-shared/workflowConfig.js + labelConfig.js
@@ -62,12 +55,6 @@ const FALLBACK_CONFIG = {
     validTransitions: {
         '0': [1], '1': [2, 0], '2': [3, 1], '3': [4, 0],
         '4': [5, 3], '5': [6, 1], '6': [7, 5], '7': []
-    },
-    teamArticleField: {
-        'designers': 'designerId', 'art_directors': 'artDirectorId',
-        'editors': 'editorId', 'managing_editors': 'managingEditorId',
-        'proofwriters': 'proofwriterId', 'writers': 'writerId',
-        'image_editors': 'imageEditorId'
     },
     capabilityLabels: {
         'canUseDesignerFeatures': ['designers'], 'canApproveDesigns': ['art_directors'],
@@ -102,7 +89,6 @@ async function loadWorkflowConfig(databases, databaseId, configCollectionId, log
         return {
             statePermissions: JSON.parse(doc.statePermissions || '{}'),
             validTransitions: JSON.parse(doc.validTransitions || '{}'),
-            teamArticleField: JSON.parse(doc.teamArticleField || '{}'),
             capabilityLabels: JSON.parse(doc.capabilityLabels || '{}'),
             validLabels: new Set(JSON.parse(doc.validLabels || '[]')),
             validStates: new Set(JSON.parse(doc.validStates || '[]'))
@@ -455,17 +441,22 @@ module.exports = async function ({ req, res, log, error }) {
             }
         }
 
-        // ── 9. Contributor mezők validáció (log only) ──
-        for (const field of CONTRIBUTOR_FIELDS) {
-            const value = freshDoc[field];
-            if (!value) continue;
-
+        // ── 9. Contributors JSON validáció (log only) ──
+        if (freshDoc.contributors) {
             try {
-                await usersApi.get(value);
-            } catch (e) {
-                if (e.code === 404) {
-                    log(`[Contributor] ${field}=${value} — felhasználó nem létezik (nem javítva, csak logolva)`);
+                const parsed = JSON.parse(freshDoc.contributors);
+                for (const [slug, userId] of Object.entries(parsed)) {
+                    if (!userId) continue;
+                    try {
+                        await usersApi.get(userId);
+                    } catch (e) {
+                        if (e.code === 404) {
+                            log(`[Contributor] contributors.${slug}=${userId} — felhasználó nem létezik (nem javítva, csak logolva)`);
+                        }
+                    }
                 }
+            } catch (e) {
+                log(`[Contributor] contributors parse hiba: ${e.message}`);
             }
         }
 

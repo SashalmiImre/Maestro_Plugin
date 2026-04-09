@@ -11,7 +11,8 @@ import { useData } from "../../../../core/contexts/DataContext.jsx";
 
 // Utils
 import { WorkflowEngine } from "../../../../core/utils/workflow/workflowEngine.js";
-import { WORKFLOW_STATES, WORKFLOW_CONFIG, MARKERS, TRANSITION_TYPES, STATE_PERMISSIONS, TEAM_ARTICLE_FIELD } from "../../../../core/utils/workflow/workflowConstants.js";
+import { WORKFLOW_STATES, WORKFLOW_CONFIG, MARKERS, TRANSITION_TYPES, STATE_PERMISSIONS } from "../../../../core/utils/workflow/workflowConstants.js";
+import { getContributor } from "maestro-shared/contributorHelpers.js";
 import { hasTransitionPermission } from "../../../../core/utils/workflow/workflowPermissions.js";
 import { STORAGE_KEYS } from "../../../../core/utils/constants.js";
 import { isValidFileName } from "../../../../core/utils/pathUtils.js";
@@ -88,10 +89,7 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
     const hasRequiredContributor = (() => {
         const teams = STATE_PERMISSIONS[currentState];
         if (!teams || teams.length === 0) return true;
-        return teams.some(slug => {
-            const field = TEAM_ARTICLE_FIELD[slug];
-            return field && article[field];
-        });
+        return teams.some(slug => getContributor(article.contributors, slug));
     })();
 
     // Local state for Name field to allow "Enter to save" behavior
