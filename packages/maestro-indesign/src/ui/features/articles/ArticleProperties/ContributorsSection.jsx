@@ -2,8 +2,7 @@
 import React, { useEffect } from "react";
 
 // Custom Hooks
-import { useTeamMembers, invalidateTeamMembersCache } from "../../../../data/hooks/useTeamMembers.js";
-import { TEAMS } from "../../../../core/config/appwriteConfig.js";
+import { useGroupMembers, invalidateGroupMembersCache } from "../../../../data/hooks/useGroupMembers.js";
 
 // Components
 import { CollapsibleSection } from "../../../common/CollapsibleSection.jsx";
@@ -17,8 +16,8 @@ import { STORAGE_KEYS } from "../../../../core/utils/constants.js";
  * 
  * Displays and manages team member assignments for article roles.
  * Each role is represented by a dropdown that allows selecting a team member
- * from the appropriate team. The component fetches team member lists using
- * the useTeamMembers hook for each role.
+ * from the appropriate group. The component fetches group member lists using
+ * the useGroupMembers hook for each role.
  * 
  * Támogatott szerepkörök:
  * - **Szerző (Writer)**: Tartalomkészítő a Writers csapatból
@@ -56,9 +55,9 @@ const FIELD_TO_TEAM = {
 };
 
 export const ContributorsSection = ({ article, onFieldUpdate, disabled, contributorPermissions = {} }) => {
-    // Mount-kor a cache invalidálása, hogy friss csapattaglistát kérjünk
+    // Mount-kor a cache invalidálása, hogy friss csoporttaglistát kérjünk
     useEffect(() => {
-        invalidateTeamMembersCache();
+        invalidateGroupMembersCache();
     }, []);
 
     /** Meghatározza, hogy az adott contributor dropdown disabled-e. */
@@ -76,14 +75,14 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled, contribu
         return contributorPermissions[teamSlug]?.reason;
     };
 
-    // Fetch team members for each role
-    const { members: editors } = useTeamMembers(TEAMS.EDITORS);
-    const { members: designers } = useTeamMembers(TEAMS.DESIGNERS);
-    const { members: writers } = useTeamMembers(TEAMS.WRITERS);
-    const { members: imageEditors } = useTeamMembers(TEAMS.IMAGE_EDITORS);
-    const { members: artDirectors } = useTeamMembers(TEAMS.ART_DIRECTORS);
-    const { members: managingEditors } = useTeamMembers(TEAMS.MANAGING_EDITORS);
-    const { members: proofwriters } = useTeamMembers(TEAMS.PROOFWRITERS);
+    // Csoporttagok lekérése szerepkörönként
+    const { members: editors } = useGroupMembers('editors');
+    const { members: designers } = useGroupMembers('designers');
+    const { members: writers } = useGroupMembers('writers');
+    const { members: imageEditors } = useGroupMembers('image_editors');
+    const { members: artDirectors } = useGroupMembers('art_directors');
+    const { members: managingEditors } = useGroupMembers('managing_editors');
+    const { members: proofwriters } = useGroupMembers('proofwriters');
 
 
     return (

@@ -39,7 +39,7 @@ export function useElementPermission(elementKey) {
         }
 
         return checkElementPermission(permission, user);
-    }, [elementKey, user?.teamIds, user?.labels]);
+    }, [elementKey, user?.groupSlugs, user?.labels]);
 }
 
 /**
@@ -63,7 +63,7 @@ export function useElementPermissions(elementKeys) {
                 : checkElementPermission(permission, user);
         }
         return result;
-    }, [elementKeys, user?.teamIds, user?.labels]);
+    }, [elementKeys, user?.groupSlugs, user?.labels]);
 }
 
 /**
@@ -83,5 +83,5 @@ export function useContributorPermissions(articleState) {
             result[teamSlug] = canEditContributorDropdown(user, teamSlug, articleState);
         }
         return result;
-    }, [user?.teamIds, user?.labels, articleState]);
+    }, [user?.groupSlugs, user?.labels, articleState]);
 }

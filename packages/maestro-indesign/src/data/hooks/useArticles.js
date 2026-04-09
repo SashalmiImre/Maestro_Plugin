@@ -5,7 +5,7 @@ import { useCallback, useMemo, useRef } from "react";
 import { useConnection } from "../../core/contexts/ConnectionContext.jsx";
 import { useData } from "../../core/contexts/DataContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
-import { useAllTeamMembers } from "./useAllTeamMembers.js";
+import { useAllGroupMembers } from "./useGroupMembers.js";
 
 // Segédprogramok (Utils)
 import { isNetworkError, isAuthError, getAPIErrorMessage } from "../../core/utils/errorUtils.js";
@@ -61,7 +61,7 @@ export const useArticles = (publicationId, publicationRoot) => {
     publicationsRef.current = publications;
 
     // Csapattagok listája — ghost lock detektáláshoz (törölt felhasználók lockjai)
-    const { members: allMembers } = useAllTeamMembers();
+    const { members: allMembers } = useAllGroupMembers();
     const allMembersRef = useRef(allMembers);
     allMembersRef.current = allMembers;
     

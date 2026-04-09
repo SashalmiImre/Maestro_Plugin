@@ -11,10 +11,8 @@ export {
     APPWRITE_PROJECT_ID,
     DATABASE_ID,
     COLLECTIONS,
-    TEAMS,
     BUCKETS,
-    FUNCTIONS,
-    GET_TEAM_MEMBERS_FUNCTION_ID
+    FUNCTIONS
 } from '@shared/appwriteIds.js';
 
 export {
@@ -76,7 +74,7 @@ export const STORAGE_KEYS = {
 /** Sürgősség újraszámítás gyakorisága (5 perc). */
 export const URGENCY_REFRESH_INTERVAL_MS = 300_000;
 
-/** Csapattag cache élettartama (5 perc). */
+/** Csoporttag cache élettartama (5 perc). */
 export const TEAM_CACHE_DURATION_MS = 300_000;
 
 /** Lapozás méret az Appwrite lekérdezésekhez. */

@@ -5,7 +5,7 @@
  *
  * Jogosultsági források (prioritás sorrendben):
  * 1. Hozzárendelt felhasználó (article contributor mező) — közvetlen jogosultság
- * 2. Csapattagság (user.teamIds) — alap jogosultság a munkahelyi pozíció alapján
+ * 2. Csoporttagság (user.groupSlugs) — alap jogosultság a munkahelyi pozíció alapján
  * 3. Label override (user.labels) — plusz jogosultságok adminisztrátori hozzárendeléssel
  *
  * @module utils/workflow/workflowPermissions
@@ -18,7 +18,7 @@ import { STATE_PERMISSIONS, labelMatchesSlug } from "./workflowConstants.js";
  *
  * Logika:
  * 1. Ha az állapotnak nincs jogosultsági bejegyzése → bárki mozgathatja.
- * 2. Csapattagság (teamIds) VAGY label override szükséges a releváns csapatok valamelyikéhez.
+ * 2. Csoporttagság (groupSlugs) VAGY label override szükséges a releváns csoportok valamelyikéhez.
  *
  * A közvetlen hozzárendelés (contributor mező) NEM ad önálló jogosultságot az állapotváltáshoz —
  * csapattagság vagy label mindig szükséges. Így elkerülhető, hogy egy véletlenül rossz mezőbe
@@ -27,7 +27,7 @@ import { STATE_PERMISSIONS, labelMatchesSlug } from "./workflowConstants.js";
  * @param {Object} article - A cikk objektum.
  * @param {number} currentState - A cikk jelenlegi állapota.
  * @param {Object} user - Az Appwrite felhasználó objektum.
- * @param {string[]} [user.teamIds] - A felhasználó csapattagságai (alap jogosultság).
+ * @param {string[]} [user.groupSlugs] - A felhasználó csoporttagságai (alap jogosultság).
  * @param {string[]} [user.labels] - A felhasználó címkéi (label override).
  * @returns {{ allowed: boolean, reason?: string }}
  */
@@ -39,10 +39,10 @@ export function canUserMoveArticle(article, currentState, user) {
     }
 
     // 2. Csapattagság VAGY label alapján van-e jogosultság
-    const userTeams = user.teamIds || [];
+    const userGroups = user.groupSlugs || [];
     const userLabels = user.labels || [];
     const hasTeamAccess = requiredTeams.some(slug =>
-        userTeams.includes(slug) || labelMatchesSlug(userLabels, slug)
+        userGroups.includes(slug) || labelMatchesSlug(userLabels, slug)
     );
 
     if (hasTeamAccess) {

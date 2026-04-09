@@ -34,7 +34,7 @@ export const ANY_TEAM = Symbol('ANY_TEAM');
  * Kulcs: logikai elemcsoport azonosító.
  * Érték: csapat-slug tömb VAGY ANY_TEAM szimbólum.
  *
- * A csapat-ellenőrzés: user.teamIds VAGY user.labels tartalmazza-e
+ * A csapat-ellenőrzés: user.groupSlugs VAGY user.labels tartalmazza-e
  * valamelyik slug-ot.
  *
  * Megjegyzés: openFile és commands NEM szerepelnek itt —
@@ -81,7 +81,7 @@ export const PUBLICATION_ELEMENT_PERMISSIONS = {
  *
  * @param {string[]|Symbol} permission - Az elem jogosultsági konfigurációja.
  * @param {Object} user - A felhasználó objektum.
- * @param {string[]} [user.teamIds] - A felhasználó csapattagságai.
+ * @param {string[]} [user.groupSlugs] - A felhasználó csapattagságai.
  * @param {string[]} [user.labels] - A felhasználó címkéi.
  * @returns {{ allowed: boolean, reason?: string }}
  */
@@ -90,14 +90,14 @@ export function checkElementPermission(permission, user) {
         return { allowed: false, reason: "Nincs bejelentkezett felhasználó." };
     }
 
-    const userTeams = user.teamIds || [];
+    const userGroups = user.groupSlugs || [];
     const userLabels = user.labels || [];
 
     // ANY_TEAM: legalább egy csapattagság VAGY csapat-ekvivalens capability label kell.
     // Az exkluzív capability label-ek (pl. canAddArticlePlan) NEM számítanak ide —
     // azok célzott jogosultságok, nem általános szerkesztési hozzáférés.
     if (permission === ANY_TEAM) {
-        if (userTeams.length > 0 || resolveGrantedTeams(userLabels).size > 0) {
+        if (userGroups.length > 0 || resolveGrantedTeams(userLabels).size > 0) {
             return { allowed: true };
         }
         return { allowed: false, reason: "Nincs jogosultságod az elem szerkesztéséhez." };
@@ -106,7 +106,7 @@ export function checkElementPermission(permission, user) {
     // Konkrét csapat-slug tömb
     if (Array.isArray(permission)) {
         const hasAccess = permission.some(slug =>
-            userTeams.includes(slug) || labelMatchesSlug(userLabels, slug)
+            userGroups.includes(slug) || labelMatchesSlug(userLabels, slug)
         );
         if (hasAccess) {
             return { allowed: true };
@@ -135,17 +135,17 @@ export function canUserAccessInState(user, articleState) {
     }
 
     const alwaysAllowed = ["designers", "art_directors"];
-    const userTeams = user.teamIds || [];
+    const userGroups = user.groupSlugs || [];
     const userLabels = user.labels || [];
 
     // Tervezők és művészeti vezetők mindig hozzáférhetnek
-    if (alwaysAllowed.some(slug => userTeams.includes(slug) || labelMatchesSlug(userLabels, slug))) {
+    if (alwaysAllowed.some(slug => userGroups.includes(slug) || labelMatchesSlug(userLabels, slug))) {
         return { allowed: true };
     }
 
     // Mások: van-e STATE_PERMISSIONS jogosultságuk ehhez az állapothoz?
     const stateTeams = STATE_PERMISSIONS[articleState];
-    if (stateTeams?.some(slug => userTeams.includes(slug) || labelMatchesSlug(userLabels, slug))) {
+    if (stateTeams?.some(slug => userGroups.includes(slug) || labelMatchesSlug(userLabels, slug))) {
         return { allowed: true };
     }
 
@@ -172,7 +172,7 @@ export const LEADER_TEAMS = ["managing_editors", "art_directors"];
  *    és csak ha a cikk állapota számukra aktív (STATE_PERMISSIONS).
  *
  * @param {Object} user - Felhasználó objektum.
- * @param {string[]} [user.teamIds] - Csapattagságok.
+ * @param {string[]} [user.groupSlugs] - Csapattagságok.
  * @param {string[]} [user.labels] - Címkék (label override).
  * @param {string} teamSlug - A dropdown-hoz tartozó csapat slug (pl. "designers").
  * @param {number} articleState - A cikk aktuális workflow állapota.
@@ -183,16 +183,16 @@ export function canEditContributorDropdown(user, teamSlug, articleState) {
         return { allowed: false, reason: "Nincs bejelentkezett felhasználó." };
     }
 
-    const userTeams = user.teamIds || [];
+    const userGroups = user.groupSlugs || [];
     const userLabels = user.labels || [];
 
     // Vezetők mindig szerkeszthetnek bármely dropdown-ot
-    if (LEADER_TEAMS.some(slug => userTeams.includes(slug) || labelMatchesSlug(userLabels, slug))) {
+    if (LEADER_TEAMS.some(slug => userGroups.includes(slug) || labelMatchesSlug(userLabels, slug))) {
         return { allowed: true };
     }
 
-    // Nem-vezető: a felhasználó tagja-e (teamIds/labels) ennek a csapatnak?
-    const isMemberOfTeam = userTeams.includes(teamSlug) || labelMatchesSlug(userLabels, teamSlug);
+    // Nem-vezető: a felhasználó tagja-e (groupSlugs/labels) ennek a csoportnak?
+    const isMemberOfTeam = userGroups.includes(teamSlug) || labelMatchesSlug(userLabels, teamSlug);
     if (!isMemberOfTeam) {
         return { allowed: false, reason: "Nincs jogosultságod ehhez a mezőhöz." };
     }

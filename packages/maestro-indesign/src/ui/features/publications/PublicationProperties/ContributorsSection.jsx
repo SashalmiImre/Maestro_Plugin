@@ -2,10 +2,9 @@
 import React, { useEffect, useState, useCallback } from "react";
 
 // Contexts & Custom Hooks
-import { useTeamMembers, invalidateTeamMembersCache } from "../../../../data/hooks/useTeamMembers.js";
+import { useGroupMembers, invalidateGroupMembersCache } from "../../../../data/hooks/useGroupMembers.js";
 import { useData } from "../../../../core/contexts/DataContext.jsx";
 import { useToast } from "../../../common/Toast/ToastContext.jsx";
-import { TEAMS } from "../../../../core/config/appwriteConfig.js";
 
 // Components
 import { CollapsibleSection } from "../../../common/CollapsibleSection.jsx";
@@ -56,9 +55,9 @@ const ROLE_LABELS = {
  * @param {Function} props.onFieldUpdate - Mező frissítés callback: (fieldName, value) => void
  */
 export const ContributorsSection = ({ publication, onFieldUpdate, disabled, permissionReason }) => {
-    // Mount-kor a cache invalidálása, hogy friss csapattaglistát kérjünk
+    // Mount-kor a cache invalidálása, hogy friss csoporttaglistát kérjünk
     useEffect(() => {
-        invalidateTeamMembersCache();
+        invalidateGroupMembersCache();
     }, []);
 
     const { articles, updateArticle } = useData();
@@ -141,14 +140,14 @@ export const ContributorsSection = ({ publication, onFieldUpdate, disabled, perm
         setConfirmState(prev => ({ ...prev, isOpen: false }));
     }, []);
 
-    // Fetch team members for each role
-    const { members: editors } = useTeamMembers(TEAMS.EDITORS);
-    const { members: designers } = useTeamMembers(TEAMS.DESIGNERS);
-    const { members: writers } = useTeamMembers(TEAMS.WRITERS);
-    const { members: imageEditors } = useTeamMembers(TEAMS.IMAGE_EDITORS);
-    const { members: artDirectors } = useTeamMembers(TEAMS.ART_DIRECTORS);
-    const { members: managingEditors } = useTeamMembers(TEAMS.MANAGING_EDITORS);
-    const { members: proofwriters } = useTeamMembers(TEAMS.PROOFWRITERS);
+    // Csoporttagok lekérése szerepkörönként
+    const { members: editors } = useGroupMembers('editors');
+    const { members: designers } = useGroupMembers('designers');
+    const { members: writers } = useGroupMembers('writers');
+    const { members: imageEditors } = useGroupMembers('image_editors');
+    const { members: artDirectors } = useGroupMembers('art_directors');
+    const { members: managingEditors } = useGroupMembers('managing_editors');
+    const { members: proofwriters } = useGroupMembers('proofwriters');
 
     return (
         <CollapsibleSection

@@ -26,12 +26,14 @@ const sdk = require("node-appwrite");
  * Runtime: Node.js 18.0+
  *
  * Szükséges környezeti változók:
- * - APPWRITE_API_KEY: API kulcs (databases.*, users.*, teams.* jogosultságok)
+ * - APPWRITE_API_KEY: API kulcs (databases.*, users.* jogosultságok)
  * - DATABASE_ID: Adatbázis azonosító
  * - ARTICLES_COLLECTION_ID: Cikkek gyűjtemény azonosító
  * - PUBLICATIONS_COLLECTION_ID: Kiadvány gyűjtemény (parent scope sync, B.8)
  * - CONFIG_COLLECTION_ID: Config gyűjtemény azonosító
  * - EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID: Szerkesztőség tagság gyűjtemény (B.8)
+ * - GROUPS_COLLECTION_ID: Csoportok gyűjtemény (B.12)
+ * - GROUP_MEMBERSHIPS_COLLECTION_ID: Csoporttagság gyűjtemény (B.12)
  */
 
 const SERVER_GUARD_ID = 'server-guard';
@@ -135,18 +137,43 @@ function resolveGrantedTeams(userLabels, capabilityLabels) {
 }
 
 /**
- * Lekéri a felhasználó tényleges csapat slug-jait (membership alapján).
+ * Lekéri a felhasználó csoporttagságait a groupMemberships + groups
+ * collection-ökből. A slug-okat adja vissza (nem a group $id-kat).
  *
- * @param {sdk.Users} users
+ * @param {sdk.Databases} databases
+ * @param {string} databaseId
+ * @param {string} groupsCollectionId
+ * @param {string} groupMembershipsCollectionId
  * @param {string} userId
- * @returns {Promise<string[]>} A csapat ID-k tömbje
+ * @param {string} editorialOfficeId
+ * @returns {Promise<string[]>} Csoport slug-ok tömbje
  */
-async function getUserTeamIds(users, userId) {
+async function getUserGroupSlugs(databases, databaseId, groupsCollectionId, groupMembershipsCollectionId, userId, editorialOfficeId) {
     try {
-        const memberships = await users.listMemberships(userId);
-        return (memberships.memberships || []).map(m => m.teamId);
+        const membershipsResult = await databases.listDocuments(databaseId, groupMembershipsCollectionId, [
+            sdk.Query.equal('userId', userId),
+            sdk.Query.equal('editorialOfficeId', editorialOfficeId),
+            sdk.Query.limit(100)
+        ]);
+        if (membershipsResult.documents.length === 0) return [];
+
+        const groupIds = [...new Set(membershipsResult.documents.map(m => m.groupId))];
+        const groupsResult = await databases.listDocuments(databaseId, groupsCollectionId, [
+            sdk.Query.equal('$id', groupIds),
+            sdk.Query.limit(100)
+        ]);
+
+        const groupIdToSlug = new Map(groupsResult.documents.map(g => [g.$id, g.slug]));
+        const slugs = new Set();
+        for (const m of membershipsResult.documents) {
+            const slug = groupIdToSlug.get(m.groupId);
+            if (slug) slugs.add(slug);
+        }
+        return [...slugs];
     } catch (e) {
-        return [];
+        // Null jelzi a hívónak, hogy a lookup sikertelen — ne értelmezze üres jogosultságként.
+        // A hívó (handler scope-ban) logol, mert a modul-szintű függvényben nincs `log` referencia.
+        return null;
     }
 }
 
@@ -225,16 +252,15 @@ module.exports = async function ({ req, res, log, error }) {
         const publicationsCollectionId = process.env.PUBLICATIONS_COLLECTION_ID;
         const configCollectionId = process.env.CONFIG_COLLECTION_ID;
         const officeMembershipsCollectionId = process.env.EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID;
+        const groupsCollectionId = process.env.GROUPS_COLLECTION_ID;
+        const groupMembershipsCollectionId = process.env.GROUP_MEMBERSHIPS_COLLECTION_ID;
 
-        // ── Fail-fast env var guard (B.8) ──
-        // A scope check az `editorialOfficeMemberships` collection ID-jától függ,
-        // a parent publication sync pedig a `publications` collection ID-jától.
-        // Hiányzó env var esetén cryptic „Missing required parameter" jönne a
-        // listDocuments / getDocument hívásokból — inkább itt korán 500-zal
-        // elbuktatunk és explicit hibaüzenetet adunk vissza.
+        // ── Fail-fast env var guard (B.8 + B.12) ──
         const missingEnvVars = [];
         if (!officeMembershipsCollectionId) missingEnvVars.push('EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID');
         if (!publicationsCollectionId) missingEnvVars.push('PUBLICATIONS_COLLECTION_ID');
+        if (!groupsCollectionId) missingEnvVars.push('GROUPS_COLLECTION_ID');
+        if (!groupMembershipsCollectionId) missingEnvVars.push('GROUP_MEMBERSHIPS_COLLECTION_ID');
         if (missingEnvVars.length > 0) {
             error(`[Config] Hiányzó környezeti változó(k): ${missingEnvVars.join(', ')}`);
             return res.json({ success: false, reason: 'misconfigured', missing: missingEnvVars }, 500);
@@ -398,26 +424,33 @@ module.exports = async function ({ req, res, log, error }) {
             const requiredTeams = config.statePermissions[String(prevStateNum)];
 
             if (requiredTeams && requiredTeams.length > 0) {
-                // Felhasználó csapattagságai
-                const userTeamIds = await getUserTeamIds(usersApi, userId);
+                // Felhasználó csoporttagságai (groupMemberships → slug feloldás)
+                const userGroupSlugs = freshDoc.editorialOfficeId
+                    ? await getUserGroupSlugs(databases, databaseId, groupsCollectionId, groupMembershipsCollectionId, userId, freshDoc.editorialOfficeId)
+                    : [];
 
-                // Felhasználó label-jei → virtuális csapatok
-                let grantedTeams = new Set();
-                try {
-                    const userDoc = await usersApi.get(userId);
-                    grantedTeams = resolveGrantedTeams(userDoc.labels || [], config.capabilityLabels);
-                } catch (e) {
-                    log(`Felhasználó lekérése sikertelen (${userId}): ${e.message}`);
-                }
+                if (userGroupSlugs === null) {
+                    // DB lookup hiba — nem tudjuk eldönteni a jogosultságot, kihagyjuk a check-et
+                    error(`Jogosultság check kihagyva (getUserGroupSlugs hiba): userId=${userId}, state=${prevStateNum}, officeId=${freshDoc.editorialOfficeId}`);
+                } else {
+                    // Felhasználó label-jei → virtuális csoportok
+                    let grantedTeams = new Set();
+                    try {
+                        const userDoc = await usersApi.get(userId);
+                        grantedTeams = resolveGrantedTeams(userDoc.labels || [], config.capabilityLabels);
+                    } catch (e) {
+                        log(`Felhasználó lekérése sikertelen (${userId}): ${e.message}`);
+                    }
 
-                // Ellenőrzés: a felhasználó benne van-e valamelyik szükséges csapatban
-                const hasPermission = requiredTeams.some(slug =>
-                    userTeamIds.includes(slug) || grantedTeams.has(slug)
-                );
+                    // Ellenőrzés: a felhasználó benne van-e valamelyik szükséges csoportban
+                    const hasPermission = requiredTeams.some(slug =>
+                        userGroupSlugs.includes(slug) || grantedTeams.has(slug)
+                    );
 
-                if (!hasPermission) {
-                    corrections.state = prevStateNum;
-                    log(`Jogosultsági hiba: felhasználó ${userId} nem mozgathatja a cikket állapotból ${prevStateNum} (szükséges: [${requiredTeams.join(', ')}])`);
+                    if (!hasPermission) {
+                        corrections.state = prevStateNum;
+                        log(`Jogosultsági hiba: felhasználó ${userId} nem mozgathatja a cikket állapotból ${prevStateNum} (szükséges: [${requiredTeams.join(', ')}])`);
+                    }
                 }
             }
         }

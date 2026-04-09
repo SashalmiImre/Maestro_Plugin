@@ -31,7 +31,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
-import { Client, Account, Teams, Databases, Functions, Query, ID } from 'appwrite';
+import { Client, Account, Databases, Functions, Query, ID } from 'appwrite';
 import {
     APPWRITE_ENDPOINT,
     APPWRITE_PROJECT_ID,
@@ -40,6 +40,7 @@ import {
     FUNCTIONS,
     DASHBOARD_URL
 } from '../config.js';
+import { resolveGroupSlugs } from '@shared/groups.js';
 
 const AuthContext = createContext(null);
 
@@ -53,7 +54,6 @@ const client = new Client()
     .setProject(APPWRITE_PROJECT_ID);
 
 const account = new Account(client);
-const teams = new Teams(client);
 const databases = new Databases(client);
 const functions = new Functions(client);
 
@@ -61,13 +61,37 @@ export function getClient() { return client; }
 export function getAccount() { return account; }
 
 /**
- * Lekéri a bejelentkezett felhasználó csapattagságait.
- * @returns {Promise<string[]>}
+ * Lekéri a bejelentkezett felhasználó csoporttagságait a groupMemberships +
+ * groups collection-ökből. Az editorialOfficeId-t localStorage-ból olvassa
+ * (ScopeContext még nem elérhető ezen a ponton a provider hierarchiában).
+ *
+ * @param {string} userId - Az Appwrite user $id.
+ * @returns {Promise<string[]>} Csoport slug-ok tömbje.
  */
-async function fetchTeamIds() {
+async function fetchGroupSlugs(userId) {
     try {
-        const result = await teams.list();
-        return result.teams.map(t => t.$id);
+        const editorialOfficeId = localStorage.getItem('maestro.activeEditorialOfficeId');
+        if (!editorialOfficeId) return [];
+
+        const membershipsResult = await databases.listDocuments({
+            databaseId: DATABASE_ID,
+            collectionId: COLLECTIONS.GROUP_MEMBERSHIPS,
+            queries: [
+                Query.equal('userId', userId),
+                Query.equal('editorialOfficeId', editorialOfficeId),
+                Query.limit(100)
+            ]
+        });
+        if (membershipsResult.documents.length === 0) return [];
+
+        const groupIds = [...new Set(membershipsResult.documents.map(m => m.groupId))];
+        const groupsResult = await databases.listDocuments({
+            databaseId: DATABASE_ID,
+            collectionId: COLLECTIONS.GROUPS,
+            queries: [Query.equal('$id', groupIds), Query.limit(100)]
+        });
+
+        return resolveGroupSlugs(membershipsResult.documents, groupsResult.documents);
     } catch {
         return [];
     }
@@ -254,14 +278,14 @@ export function AuthProvider({ children }) {
                 }
 
                 const userData = await account.get();
-                // teamIds és memberships paralel — a memberships hibája NEM
+                // groupSlugs és memberships paralel — a memberships hibája NEM
                 // dobja meg a user setet (a user érvényes, csak a tagság-lookup
                 // hibázott; a ProtectedRoute az error state-ből tudja).
-                const [teamIds] = await Promise.all([
-                    fetchTeamIds(),
+                const [groupSlugs] = await Promise.all([
+                    fetchGroupSlugs(userData.$id),
                     loadAndSetMemberships(userData.$id).catch(() => null)
                 ]);
-                setUser({ ...userData, teamIds });
+                setUser({ ...userData, groupSlugs });
             } catch {
                 setUser(null);
                 setOrganizations([]);
@@ -282,14 +306,14 @@ export function AuthProvider({ children }) {
         }
         await account.createEmailPasswordSession({ email, password });
         const userData = await account.get();
-        // teamIds és memberships paralel. A memberships hiba a state-ben él
+        // groupSlugs és memberships paralel. A memberships hiba a state-ben él
         // tovább (membershipsError) — a login művelet sikeres marad, mert a
         // user be van jelentkezve; a ProtectedRoute fogja az error UI-t mutatni.
-        const [teamIds] = await Promise.all([
-            fetchTeamIds(),
+        const [groupSlugs] = await Promise.all([
+            fetchGroupSlugs(userData.$id),
             loadAndSetMemberships(userData.$id).catch(() => null)
         ]);
-        const fullUser = { ...userData, teamIds };
+        const fullUser = { ...userData, groupSlugs };
         setUser(fullUser);
         return fullUser;
     }, [loadAndSetMemberships]);

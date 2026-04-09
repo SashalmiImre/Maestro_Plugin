@@ -53,9 +53,12 @@ export const MaestroEvent = Object.freeze({
     /** Felhasználó bejelentkezett vagy kijelentkezett. Detail: { isLoggedIn } */
     authStateChanged: 'maestro:auth-state-changed',
 
-    // --- Csapat ---
-    /** Csapattagság megváltozott (tag hozzáadva/eltávolítva). Detail: { teamId } */
-    teamMembershipChanged: 'maestro:team-membership-changed',
+    // --- Csoport ---
+    /** Csoporttagság megváltozott (tag hozzáadva/eltávolítva). Detail: { groupId } */
+    groupMembershipChanged: 'maestro:group-membership-changed',
+
+    /** Scope (szerkesztőség) megváltozott. Detail: { editorialOfficeId } */
+    scopeChanged: 'maestro:scope-changed',
 
     // --- Adat / Frissítés ---
     /** Adatfrissítés szükséges (pl. alvásból ébredés, realtime reconnect). Nincs detail. */

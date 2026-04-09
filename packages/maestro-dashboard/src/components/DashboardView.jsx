@@ -25,7 +25,7 @@ export default function DashboardView() {
     const {
         publications, articles, activePublicationId,
         isLoading, fetchPublications, switchPublication,
-        fetchAllTeamMembers
+        fetchAllGroupMembers
     } = useData();
     const { showToast } = useToast();
 
@@ -41,8 +41,8 @@ export default function DashboardView() {
             try {
                 const pubs = await fetchPublications();
 
-                // Csapattagok lekérése háttérben (lock nevek feloldásához)
-                fetchAllTeamMembers().catch(() => {});
+                // Csoporttagok lekérése háttérben (lock nevek feloldásához)
+                fetchAllGroupMembers().catch(() => {});
 
                 // Kiadvány visszaállítása: URL paraméter (plugin-ből) > localStorage > első kiadvány
                 const params = new URLSearchParams(window.location.search);

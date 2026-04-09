@@ -10,12 +10,13 @@ const crypto = require("crypto");
  * a kliens NEM rendelkezik direkt írási joggal — minden írás ezen a
  * CF-en keresztül történik API key-jel.
  *
- * Három action:
+ * Action-ök:
  *
  *   ACTION='bootstrap_organization' — új org + első office + owner/admin
- *     membership atomikus létrehozása. Az OnboardingRoute hívja első
- *     belépéskor. A CF létrehozza mind a 4 rekordot az API key-jel.
- *     Ha bármelyik lépés elszáll, a már létrehozott rekordokat visszatörli.
+ *     membership + 7 alapértelmezett csoport + csoporttagságok atomikus
+ *     létrehozása. Az OnboardingRoute hívja első belépéskor. A CF létrehozza
+ *     az összes rekordot az API key-jel. Ha bármelyik lépés elszáll, a már
+ *     létrehozott rekordokat visszatörli (best-effort).
  *
  *   ACTION='create' — admin meghívót küld egy e-mail címre.
  *     - Caller jogosultság: csak `owner` vagy `admin` role az adott orgban.
@@ -36,6 +37,16 @@ const crypto = require("crypto");
  *     - Idempotens: ha a user már tagja az orgnak, csak az invite státusz
  *       frissül és sikeres választ adunk vissza.
  *
+ *   ACTION='add_group_member' — admin hozzáad egy usert egy csoporthoz.
+ *     - Caller jogosultság: org owner/admin.
+ *     - Payload: { groupId, userId }
+ *     - Idempotens: ha már létezik a membership, success-t ad vissza.
+ *
+ *   ACTION='remove_group_member' — admin eltávolít egy usert egy csoportból.
+ *     - Caller jogosultság: org owner/admin.
+ *     - Payload: { groupId, userId }
+ *     - Idempotens: ha nem létezik, success `already_removed`.
+ *
  * Trigger: nincs (HTTP, `execute: ["users"]`)
  * Runtime: Node.js 18.0+
  *
@@ -47,6 +58,8 @@ const crypto = require("crypto");
  * - EDITORIAL_OFFICES_COLLECTION_ID
  * - EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID
  * - ORGANIZATION_INVITES_COLLECTION_ID
+ * - GROUPS_COLLECTION_ID
+ * - GROUP_MEMBERSHIPS_COLLECTION_ID
  */
 
 const INVITE_VALIDITY_DAYS = 7;
@@ -54,6 +67,27 @@ const TOKEN_BYTES = 32;
 
 // Egyszerű e-mail formátum-ellenőrzés (a részletes validáció B.10-ben kézzel)
 const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+// Érvényes action-ök halmaza
+const VALID_ACTIONS = new Set([
+    'bootstrap_organization', 'create', 'accept',
+    'add_group_member', 'remove_group_member'
+]);
+
+/**
+ * Alapértelmezett csoportok — bootstrap_organization hozza létre mindegyiket
+ * az új szerkesztőséghez. A slug-ok megegyeznek a régi Appwrite Team slug-okkal.
+ * Inline másolat a maestro-shared/groups.js-ből (a CF CommonJS, nem tud ES importot).
+ */
+const DEFAULT_GROUPS = [
+    { slug: 'editors',          name: 'Szerkesztők' },
+    { slug: 'designers',        name: 'Tervezők' },
+    { slug: 'writers',          name: 'Szerzők' },
+    { slug: 'image_editors',    name: 'Képszerkesztők' },
+    { slug: 'art_directors',    name: 'Művészeti vezetők' },
+    { slug: 'managing_editors', name: 'Vezetőszerkesztők' },
+    { slug: 'proofwriters',     name: 'Korrektorok' }
+];
 
 // Slug formátum: kisbetű, szám, kötőjel. A frontend is ugyanezt alkalmazza.
 const SLUG_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -92,9 +126,9 @@ module.exports = async function ({ req, res, log, error }) {
         }
 
         const action = payload.action;
-        if (action !== 'create' && action !== 'accept' && action !== 'bootstrap_organization') {
+        if (!VALID_ACTIONS.has(action)) {
             return fail(res, 400, 'invalid_action', {
-                hint: "expected 'bootstrap_organization', 'create' or 'accept'"
+                hint: `expected one of: ${[...VALID_ACTIONS].join(', ')}`
             });
         }
 
@@ -128,14 +162,10 @@ module.exports = async function ({ req, res, log, error }) {
         const officesCollectionId = process.env.EDITORIAL_OFFICES_COLLECTION_ID;
         const officeMembershipsCollectionId = process.env.EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID;
         const invitesCollectionId = process.env.ORGANIZATION_INVITES_COLLECTION_ID;
+        const groupsCollectionId = process.env.GROUPS_COLLECTION_ID;
+        const groupMembershipsCollectionId = process.env.GROUP_MEMBERSHIPS_COLLECTION_ID;
 
         // ── Fail-fast env var guard ──
-        // Ha bármelyik kötelező collection ID hiányzik, a CF azonnal 500-at ad
-        // vissza értelmes hibakóddal. E nélkül a későbbi `listDocuments`/
-        // `createDocument` hívások cryptic „Missing required parameter" hibát
-        // dobnának, és csak a kimenet alapján lehetne rájönni, hogy a deploy
-        // során kimaradt egy env var. A header-rel átadott dynamic API key
-        // fallback-je miatt az APPWRITE_API_KEY-t nem kötelezővé tesszük.
         const missingEnvVars = [];
         if (!databaseId) missingEnvVars.push('DATABASE_ID');
         if (!organizationsCollectionId) missingEnvVars.push('ORGANIZATIONS_COLLECTION_ID');
@@ -143,6 +173,8 @@ module.exports = async function ({ req, res, log, error }) {
         if (!officesCollectionId) missingEnvVars.push('EDITORIAL_OFFICES_COLLECTION_ID');
         if (!officeMembershipsCollectionId) missingEnvVars.push('EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID');
         if (!invitesCollectionId) missingEnvVars.push('ORGANIZATION_INVITES_COLLECTION_ID');
+        if (!groupsCollectionId) missingEnvVars.push('GROUPS_COLLECTION_ID');
+        if (!groupMembershipsCollectionId) missingEnvVars.push('GROUP_MEMBERSHIPS_COLLECTION_ID');
         if (!apiKey) missingEnvVars.push('APPWRITE_API_KEY (vagy x-appwrite-key header)');
         if (missingEnvVars.length > 0) {
             error(`[Config] Hiányzó környezeti változók: ${missingEnvVars.join(', ')}`);
@@ -308,8 +340,9 @@ module.exports = async function ({ req, res, log, error }) {
             }
 
             // 4. editorialOfficeMemberships — admin role
+            let newOfficeMembershipId;
             try {
-                await databases.createDocument(
+                const officeMembershipDoc = await databases.createDocument(
                     databaseId,
                     officeMembershipsCollectionId,
                     sdk.ID.unique(),
@@ -320,6 +353,7 @@ module.exports = async function ({ req, res, log, error }) {
                         role: 'admin'
                     }
                 );
+                newOfficeMembershipId = officeMembershipDoc.$id;
             } catch (err) {
                 error(`[Bootstrap] editorialOfficeMemberships create hiba: ${err.message}`);
                 // Rollback: office + membership + org törlés
@@ -341,13 +375,105 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 500, 'office_membership_create_failed');
             }
 
-            log(`[Bootstrap] User ${callerId} új szervezetet hozott létre: org=${newOrgId}, office=${newOfficeId}`);
+            // 5. groups — 7 alapértelmezett csoport az új szerkesztőséghez
+            const createdGroupIds = [];
+            try {
+                for (const groupDef of DEFAULT_GROUPS) {
+                    const groupDoc = await databases.createDocument(
+                        databaseId,
+                        groupsCollectionId,
+                        sdk.ID.unique(),
+                        {
+                            slug: groupDef.slug,
+                            name: groupDef.name,
+                            editorialOfficeId: newOfficeId,
+                            organizationId: newOrgId,
+                            createdByUserId: callerId
+                        }
+                    );
+                    createdGroupIds.push(groupDoc.$id);
+                }
+            } catch (err) {
+                error(`[Bootstrap] groups create hiba (${createdGroupIds.length}/${DEFAULT_GROUPS.length} kész): ${err.message}`);
+                // Rollback: groups + officeMembership + office + membership + org
+                for (const gId of createdGroupIds) {
+                    try { await databases.deleteDocument(databaseId, groupsCollectionId, gId); }
+                    catch (e) { error(`[Bootstrap] group rollback sikertelen (${gId}): ${e.message}`); }
+                }
+                if (newOfficeMembershipId) {
+                    try { await databases.deleteDocument(databaseId, officeMembershipsCollectionId, newOfficeMembershipId); }
+                    catch (e) { error(`[Bootstrap] officeMembership rollback sikertelen (${newOfficeMembershipId}): ${e.message}`); }
+                }
+                try { await databases.deleteDocument(databaseId, officesCollectionId, newOfficeId); }
+                catch (e) { error(`[Bootstrap] office rollback sikertelen: ${e.message}`); }
+                try { await databases.deleteDocument(databaseId, membershipsCollectionId, newMembershipId); }
+                catch (e) { error(`[Bootstrap] membership rollback sikertelen: ${e.message}`); }
+                try { await databases.deleteDocument(databaseId, organizationsCollectionId, newOrgId); }
+                catch (e) { error(`[Bootstrap] org rollback sikertelen: ${e.message}`); }
+                return fail(res, 500, 'groups_create_failed');
+            }
+
+            // 6. groupMemberships — a bootstrapping user tagja lesz minden csoportnak
+            let callerUser;
+            try {
+                callerUser = await usersApi.get(callerId);
+            } catch (e) {
+                log(`[Bootstrap] Caller user lookup hiba (groupMemberships userName/userEmail): ${e.message}`);
+                callerUser = { name: '', email: '' };
+            }
+
+            const createdGroupMembershipIds = [];
+            try {
+                for (const gId of createdGroupIds) {
+                    const gmDoc = await databases.createDocument(
+                        databaseId,
+                        groupMembershipsCollectionId,
+                        sdk.ID.unique(),
+                        {
+                            groupId: gId,
+                            userId: callerId,
+                            editorialOfficeId: newOfficeId,
+                            organizationId: newOrgId,
+                            role: 'member',
+                            addedByUserId: callerId,
+                            userName: callerUser.name || '',
+                            userEmail: callerUser.email || ''
+                        }
+                    );
+                    createdGroupMembershipIds.push(gmDoc.$id);
+                }
+            } catch (err) {
+                error(`[Bootstrap] groupMemberships create hiba (${createdGroupMembershipIds.length}/${createdGroupIds.length} kész): ${err.message}`);
+                // Rollback: groupMemberships + groups + előző lépések
+                for (const gmId of createdGroupMembershipIds) {
+                    try { await databases.deleteDocument(databaseId, groupMembershipsCollectionId, gmId); }
+                    catch (e) { error(`[Bootstrap] groupMembership rollback sikertelen (${gmId}): ${e.message}`); }
+                }
+                for (const gId of createdGroupIds) {
+                    try { await databases.deleteDocument(databaseId, groupsCollectionId, gId); }
+                    catch (e) { error(`[Bootstrap] group rollback sikertelen (${gId}): ${e.message}`); }
+                }
+                if (newOfficeMembershipId) {
+                    try { await databases.deleteDocument(databaseId, officeMembershipsCollectionId, newOfficeMembershipId); }
+                    catch (e) { error(`[Bootstrap] officeMembership rollback sikertelen (${newOfficeMembershipId}): ${e.message}`); }
+                }
+                try { await databases.deleteDocument(databaseId, officesCollectionId, newOfficeId); }
+                catch (e) { error(`[Bootstrap] office rollback sikertelen: ${e.message}`); }
+                try { await databases.deleteDocument(databaseId, membershipsCollectionId, newMembershipId); }
+                catch (e) { error(`[Bootstrap] membership rollback sikertelen: ${e.message}`); }
+                try { await databases.deleteDocument(databaseId, organizationsCollectionId, newOrgId); }
+                catch (e) { error(`[Bootstrap] org rollback sikertelen: ${e.message}`); }
+                return fail(res, 500, 'group_memberships_create_failed');
+            }
+
+            log(`[Bootstrap] User ${callerId} új szervezetet hozott létre: org=${newOrgId}, office=${newOfficeId}, groups=${createdGroupIds.length}, memberships=${createdGroupMembershipIds.length}`);
 
             return res.json({
                 success: true,
                 action: 'bootstrapped',
                 organizationId: newOrgId,
-                editorialOfficeId: newOfficeId
+                editorialOfficeId: newOfficeId,
+                groupsSeeded: true
             });
         }
 
@@ -649,6 +775,179 @@ module.exports = async function ({ req, res, log, error }) {
                 organizationId: invite.organizationId,
                 membershipId: membership.$id,
                 role: membership.role
+            });
+        }
+
+        // ════════════════════════════════════════════════════════
+        // ACTION = 'add_group_member'
+        // ════════════════════════════════════════════════════════
+        if (action === 'add_group_member') {
+            const { groupId, userId } = payload;
+            if (!groupId || !userId) {
+                return fail(res, 400, 'missing_fields', { required: ['groupId', 'userId'] });
+            }
+
+            // 1. Group lookup — scope feloldás (orgId, officeId)
+            let group;
+            try {
+                group = await databases.getDocument(databaseId, groupsCollectionId, groupId);
+            } catch (err) {
+                return fail(res, 404, 'group_not_found');
+            }
+
+            // 2. Caller jogosultság: org owner/admin
+            const callerMembership = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', group.organizationId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (callerMembership.documents.length === 0) {
+                return fail(res, 403, 'not_a_member');
+            }
+            const callerRole = callerMembership.documents[0].role;
+            if (callerRole !== 'owner' && callerRole !== 'admin') {
+                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            }
+
+            // 3. Target user lookup — userName/userEmail denormalizálás + aktív/verifikált check
+            let targetUser;
+            try {
+                targetUser = await usersApi.get(userId);
+            } catch (err) {
+                return fail(res, 404, 'target_user_not_found');
+            }
+
+            if (targetUser.status === false) {
+                return fail(res, 403, 'target_user_inactive');
+            }
+            if (!targetUser.emailVerification) {
+                return fail(res, 403, 'target_user_not_verified');
+            }
+
+            // 4. Target user szerkesztőségi tagság ellenőrzés — csak a group
+            //    szerkesztőségéhez tartozó user adható a csoporthoz
+            const targetOfficeMembership = await databases.listDocuments(
+                databaseId,
+                officeMembershipsCollectionId,
+                [
+                    sdk.Query.equal('editorialOfficeId', group.editorialOfficeId),
+                    sdk.Query.equal('userId', userId),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (targetOfficeMembership.documents.length === 0) {
+                return fail(res, 403, 'target_user_not_office_member', {
+                    editorialOfficeId: group.editorialOfficeId
+                });
+            }
+
+            // 5. GroupMembership létrehozás (idempotens)
+            try {
+                const gmDoc = await databases.createDocument(
+                    databaseId,
+                    groupMembershipsCollectionId,
+                    sdk.ID.unique(),
+                    {
+                        groupId,
+                        userId,
+                        editorialOfficeId: group.editorialOfficeId,
+                        organizationId: group.organizationId,
+                        role: 'member',
+                        addedByUserId: callerId,
+                        userName: targetUser.name || '',
+                        userEmail: targetUser.email || ''
+                    }
+                );
+                log(`[AddGroupMember] User ${userId} hozzáadva a group ${groupId}-hoz (${group.slug})`);
+                return res.json({
+                    success: true,
+                    action: 'added',
+                    groupMembershipId: gmDoc.$id,
+                    groupId,
+                    userId
+                });
+            } catch (err) {
+                if (err?.type === 'document_already_exists' || /unique/i.test(err?.message || '')) {
+                    log(`[AddGroupMember] Idempotens — user ${userId} már tagja a group ${groupId}-nak`);
+                    return res.json({
+                        success: true,
+                        action: 'already_member',
+                        groupId,
+                        userId
+                    });
+                }
+                throw err;
+            }
+        }
+
+        // ════════════════════════════════════════════════════════
+        // ACTION = 'remove_group_member'
+        // ════════════════════════════════════════════════════════
+        if (action === 'remove_group_member') {
+            const { groupId, userId } = payload;
+            if (!groupId || !userId) {
+                return fail(res, 400, 'missing_fields', { required: ['groupId', 'userId'] });
+            }
+
+            // 1. Group lookup — scope feloldás
+            let group;
+            try {
+                group = await databases.getDocument(databaseId, groupsCollectionId, groupId);
+            } catch (err) {
+                return fail(res, 404, 'group_not_found');
+            }
+
+            // 2. Caller jogosultság: org owner/admin
+            const callerMembership = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', group.organizationId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (callerMembership.documents.length === 0) {
+                return fail(res, 403, 'not_a_member');
+            }
+            const callerRole = callerMembership.documents[0].role;
+            if (callerRole !== 'owner' && callerRole !== 'admin') {
+                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            }
+
+            // 3. GroupMembership keresés és törlés
+            const existing = await databases.listDocuments(
+                databaseId,
+                groupMembershipsCollectionId,
+                [
+                    sdk.Query.equal('groupId', groupId),
+                    sdk.Query.equal('userId', userId),
+                    sdk.Query.limit(1)
+                ]
+            );
+
+            if (existing.documents.length === 0) {
+                log(`[RemoveGroupMember] Idempotens — user ${userId} nem tagja a group ${groupId}-nak`);
+                return res.json({
+                    success: true,
+                    action: 'already_removed',
+                    groupId,
+                    userId
+                });
+            }
+
+            await databases.deleteDocument(databaseId, groupMembershipsCollectionId, existing.documents[0].$id);
+            log(`[RemoveGroupMember] User ${userId} eltávolítva a group ${groupId}-ból (${group.slug})`);
+
+            return res.json({
+                success: true,
+                action: 'removed',
+                groupId,
+                userId
             });
         }
 

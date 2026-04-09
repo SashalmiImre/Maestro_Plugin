@@ -117,10 +117,10 @@ export function useFilters() {
 // ─── Segédfüggvény ──────────────────────────────────────────────────────────
 
 function getUserContributorFields(user) {
-    if (!user?.teamIds) return [];
+    if (!user?.groupSlugs) return [];
     const fields = [];
-    for (const teamId of user.teamIds) {
-        const field = TEAM_ARTICLE_FIELD[teamId];
+    for (const slug of user.groupSlugs) {
+        const field = TEAM_ARTICLE_FIELD[slug];
         if (field) fields.push(field);
     }
     // Capability label-ek feloldása csapat slug-okra

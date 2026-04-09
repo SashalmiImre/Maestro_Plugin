@@ -16,7 +16,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { tables, ID, DATABASE_ID, PUBLICATIONS_COLLECTION_ID, ARTICLES_COLLECTION_ID, USER_VALIDATIONS_COLLECTION_ID, LAYOUTS_COLLECTION_ID, DEADLINES_COLLECTION_ID, Query } from "../config/appwriteConfig.js";
+import { tables, ID, DATABASE_ID, PUBLICATIONS_COLLECTION_ID, ARTICLES_COLLECTION_ID, USER_VALIDATIONS_COLLECTION_ID, LAYOUTS_COLLECTION_ID, DEADLINES_COLLECTION_ID, GROUP_MEMBERSHIPS_COLLECTION_ID, Query } from "../config/appwriteConfig.js";
 import { realtime } from "../config/realtimeClient.js";
 import { useConnection } from "./ConnectionContext.jsx";
 import { useScope } from "./ScopeContext.jsx";
@@ -995,7 +995,7 @@ export const DataProvider = ({ children }) => {
             `databases.${DATABASE_ID}.collections.${USER_VALIDATIONS_COLLECTION_ID}.documents`,
             `databases.${DATABASE_ID}.collections.${LAYOUTS_COLLECTION_ID}.documents`,
             `databases.${DATABASE_ID}.collections.${DEADLINES_COLLECTION_ID}.documents`,
-            'teams'
+            `databases.${DATABASE_ID}.collections.${GROUP_MEMBERSHIPS_COLLECTION_ID}.documents`
         ];
 
         const unsubscribe = realtime.subscribe(channels, (response) => {
@@ -1150,12 +1150,15 @@ export const DataProvider = ({ children }) => {
                 }
             }
 
-            // --- Csapattagság ---
-            // A `teams` csatornáról jövő membership események (pl. teams.designers.memberships.*.create)
-            else if (event.includes('teams.') && event.includes('.memberships.')) {
-                const teamId = payload.teamId;
-                log(`[DataContext] Csapattagság változás (Realtime): team=${teamId}`);
-                dispatchMaestroEvent(MaestroEvent.teamMembershipChanged, { teamId });
+            // --- Csoporttagság ---
+            // A groupMemberships collection-ről jövő események — csak az aktív szerkesztőség
+            else if (event.includes(GROUP_MEMBERSHIPS_COLLECTION_ID)) {
+                if (payload.editorialOfficeId && payload.editorialOfficeId !== activeEditorialOfficeIdRef.current) {
+                    return; // Más szerkesztőség eseménye — ignoráljuk
+                }
+                const groupId = payload.groupId;
+                log(`[DataContext] Csoporttagság változás (Realtime): groupId=${groupId}`);
+                dispatchMaestroEvent(MaestroEvent.groupMembershipChanged, { groupId });
             }
         });
 

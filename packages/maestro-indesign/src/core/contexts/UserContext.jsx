@@ -9,8 +9,9 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
 import { Query } from "appwrite";
 import { useConnection } from "../contexts/ConnectionContext.jsx";
-import { account, databases, teams, executeLogin, handleSignOut, clearLocalSession, ID, VERIFICATION_URL } from "../config/appwriteConfig.js";
+import { account, databases, executeLogin, handleSignOut, clearLocalSession, ID, VERIFICATION_URL } from "../config/appwriteConfig.js";
 import { DATABASE_ID, COLLECTIONS } from "maestro-shared/appwriteIds.js";
+import { resolveGroupSlugs } from "maestro-shared/groups.js";
 import { realtime } from "../config/realtimeClient.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../config/maestroEvents.js";
 import { log, logWarn, logError } from "../utils/logger.js";
@@ -80,25 +81,57 @@ async function fetchMemberships(userId) {
 }
 
 /**
+ * A felhasználó csoporttagságait feloldja slug-okra a megadott szerkesztőségben.
+ * Két DB query: (1) groupMemberships where userId + editorialOfficeId,
+ * (2) groups where $id IN [groupIds] → resolveGroupSlugs.
+ *
+ * @param {string} userId - Appwrite user ID
+ * @param {string} editorialOfficeId - Az aktív szerkesztőség ID-ja
+ * @returns {Promise<string[]>} Csoport slug tömb (pl. ['designers', 'editors'])
+ */
+async function fetchGroupSlugsForUser(userId, editorialOfficeId) {
+    const membershipsResult = await listWithResilience({
+        databaseId: DATABASE_ID,
+        collectionId: COLLECTIONS.GROUP_MEMBERSHIPS,
+        queries: [
+            Query.equal('userId', userId),
+            Query.equal('editorialOfficeId', editorialOfficeId),
+            Query.limit(100)
+        ]
+    }, 'fetchGroupMemberships');
+
+    if (membershipsResult.documents.length === 0) return [];
+
+    const groupIds = [...new Set(membershipsResult.documents.map(m => m.groupId))];
+
+    const groupsResult = await listWithResilience({
+        databaseId: DATABASE_ID,
+        collectionId: COLLECTIONS.GROUPS,
+        queries: [Query.equal('$id', groupIds), Query.limit(100)]
+    }, 'fetchGroups');
+
+    return resolveGroupSlugs(membershipsResult.documents, groupsResult.documents);
+}
+
+/**
  * Context objektum a felhasználói adatok megosztásához.
  * @type {React.Context}
  */
 const UserContext = createContext();
 
 /**
- * Sorrend-független string[] egyenlőség ellenőrzés (teamIds összehasonlításához).
- * Compares unique elements using Sets to handle duplicates correctly.
+ * Sorrend-független string[] egyenlőség ellenőrzés (groupSlugs összehasonlításához).
  * @param {string[]|undefined} a
  * @param {string[]|undefined} b
  * @returns {boolean}
  */
-const sameTeamIds = (a, b) => {
+const sameGroupSlugs = (a, b) => {
     if (a === b) return true;
     if (!Array.isArray(a) || !Array.isArray(b)) return false;
-    
+
     const setA = new Set(a);
     const setB = new Set(b);
-    
+
     if (setA.size !== setB.size) return false;
     return Array.from(setA).every(id => setB.has(id));
 };
@@ -211,53 +244,67 @@ export function AuthorizationProvider({ children }) {
     const { startConnecting, setConnected } = useConnection();
 
     /**
-     * Csapattagságot frissít teams.list() alapján és setUser-rel alkalmazza.
-     * Ha az adat nem változott, nem okoz re-rendert.
+     * Csoporttagságot frissít groupMemberships + groups query alapján és
+     * setUser-rel alkalmazza. Ha az adat nem változott, nem okoz re-rendert.
+     * Az editorialOfficeId-t localStorage-ből olvassa (a ScopeContext is
+     * innen bootstrapel, és a UserProvider fölötte van a hierarchiában).
      *
      * @param {string} logLabel - Naplózásban megjelenő kontextus-azonosító.
      */
-    const refreshTeamIds = async (logLabel) => {
+    const refreshGroupSlugs = async (logLabel) => {
         try {
-            const result = await teams.list();
-            const teamIds = result.teams.map(t => t.$id);
+            const officeId = window.localStorage.getItem(STORAGE_OFFICE_KEY);
+            if (!officeId) {
+                setUser(prev => {
+                    if (!prev) return prev;
+                    if (sameGroupSlugs(prev.groupSlugs, [])) return prev;
+                    return { ...prev, groupSlugs: [] };
+                });
+                return;
+            }
+            const groupSlugs = await fetchGroupSlugsForUser(user?.$id, officeId);
             setUser(prev => {
                 if (!prev) return prev;
-                if (sameTeamIds(prev.teamIds, teamIds)) return prev;
-                log(`[UserContext] Csapattagság frissítve (${logLabel})`);
-                return { ...prev, teamIds };
+                if (sameGroupSlugs(prev.groupSlugs, groupSlugs)) return prev;
+                log(`[UserContext] Csoporttagság frissítve (${logLabel})`);
+                return { ...prev, groupSlugs };
             });
         } catch (error) {
-            logWarn(`[UserContext] Csapattagság frissítése sikertelen (${logLabel})`);
+            logWarn(`[UserContext] Csoporttagság frissítése sikertelen (${logLabel})`);
         }
     };
 
     /**
-     * User objektum gazdagítása csapattagsági adatokkal.
-     * A teams.list() visszaadja azokat a csapatokat, amelyeknek a felhasználó tagja.
-     * A teamIds mezőt a jogosultsági rendszer (canUserMoveArticle) használja.
+     * User objektum gazdagítása csoporttagsági adatokkal.
+     * A groupMemberships + groups collection-ökből feloldja a felhasználó
+     * csoportjainak slug-jait. A groupSlugs mezőt a jogosultsági rendszer
+     * (canUserMoveArticle, elementPermissions) használja.
      *
      * @param {Object} userData - Appwrite user objektum
-     * @returns {Promise<Object>} Gazdagított user objektum teamIds mezővel
+     * @returns {Promise<Object>} Gazdagított user objektum groupSlugs mezővel
      */
-    const enrichUserWithTeams = async (userData) => {
+    const enrichUserWithGroups = async (userData) => {
         try {
-            const result = await teams.list();
-            return { ...userData, teamIds: result.teams.map(t => t.$id) };
+            const officeId = window.localStorage.getItem(STORAGE_OFFICE_KEY);
+            if (!officeId) {
+                return { ...userData, groupSlugs: [] };
+            }
+            const groupSlugs = await fetchGroupSlugsForUser(userData.$id, officeId);
+            return { ...userData, groupSlugs };
         } catch (error) {
-            logWarn('[UserContext] Csapattagság lekérése sikertelen');
-            return { ...userData, teamIds: userData.teamIds || [] };
+            logWarn('[UserContext] Csoporttagság lekérése sikertelen');
+            return { ...userData, groupSlugs: userData.groupSlugs || [] };
         }
     };
 
     /**
-     * Paralel lefuttatja a `teamIds` enrichment-et és az org/office memberships
+     * Paralel lefuttatja a `groupSlugs` enrichment-et és az org/office memberships
      * betöltését. A memberships hibáját **nem** propagálja — a `membershipsError`
-     * state-en keresztül jelenik meg a `ScopedWorkspace`-nek. Így egy átmeneti
-     * memberships 502 nem akadályozza meg a login / recovery happy patht.
+     * state-en keresztül jelenik meg a `ScopedWorkspace`-nek.
      */
     const hydrateUserWithMemberships = async (userData) => {
         const [enrichedUser] = await Promise.all([
-            enrichUserWithTeams(userData),
+            enrichUserWithGroups(userData),
             loadAndSetMemberships(userData.$id).catch(() => null)
         ]);
         return enrichedUser;
@@ -438,12 +485,12 @@ export function AuthorizationProvider({ children }) {
         const unsubscribe = realtime.subscribe('account', async (response) => {
             const { events, payload } = response;
 
-            // Tagság-változás: az account payload nem tartalmaz teamIds-t,
+            // Tagság-változás: az account payload nem tartalmaz groupSlugs-t,
             // de az events tömbben megjelenik a memberships esemény
             // (pl. users.ID.memberships.ID.create / .delete)
             const hasMembershipEvent = events?.some(e => e.includes('.memberships.'));
             if (hasMembershipEvent) {
-                await refreshTeamIds('Realtime / account csatorna');
+                await refreshGroupSlugs('Realtime / account csatorna');
                 return;
             }
 
@@ -466,7 +513,7 @@ export function AuthorizationProvider({ children }) {
             }
 
             // Csak akkor frissítünk, ha az adat tényleg változott.
-            // A payload-ban nincs teamIds (az Appwrite nem küldi), ezért megőrizzük a meglévőt.
+            // A payload-ban nincs groupSlugs (az Appwrite nem küldi), ezért megőrizzük a meglévőt.
             setUser(prev => {
                 if (prev && prev.$updatedAt === payload.$updatedAt) return prev;
                 log('[UserContext] Felhasználói adat frissítve (Realtime)');
@@ -474,7 +521,7 @@ export function AuthorizationProvider({ children }) {
                     ...payload,
                     name: payload.name || prev?.name,
                     email: payload.email || prev?.email,
-                    teamIds: prev?.teamIds || []
+                    groupSlugs: prev?.groupSlugs || []
                 };
             });
         });
@@ -484,7 +531,7 @@ export function AuthorizationProvider({ children }) {
         };
     }, [user?.$id]);
 
-    // Felhasználói adatok frissítése recovery-nél (labels, prefs, teamIds stb.)
+    // Felhasználói adatok frissítése recovery-nél (labels, prefs, groupSlugs stb.)
     useEffect(() => {
         if (!user) return;
 
@@ -497,7 +544,7 @@ export function AuthorizationProvider({ children }) {
                 // re-rendereket okoz a teljes fában (LockManager useEffect[user] stb.)
                 setUser(prev => {
                     if (prev && prev.$updatedAt === enrichedUser.$updatedAt
-                        && sameTeamIds(prev.teamIds, enrichedUser.teamIds)) {
+                        && sameGroupSlugs(prev.groupSlugs, enrichedUser.groupSlugs)) {
                         return prev;
                     }
                     log('[UserContext] Felhasználói adatok frissítve (recovery)');
@@ -513,16 +560,22 @@ export function AuthorizationProvider({ children }) {
         return () => window.removeEventListener(MaestroEvent.dataRefreshRequested, handleRefresh);
     }, [user?.$id]);
 
-    // Csapattagság Realtime szinkronizálása
-    // A DataContext a `teams` csatornán figyeli a tagság-változásokat és dispatch-eli
-    // a teamMembershipChanged MaestroEvent-et. Itt frissítjük a user.teamIds-t.
+    // Csoporttagság Realtime szinkronizálása
+    // A DataContext a groupMemberships csatornán figyeli a tagság-változásokat és
+    // dispatch-eli a groupMembershipChanged MaestroEvent-et. Itt frissítjük a
+    // user.groupSlugs-t.
     useEffect(() => {
         if (!user) return;
 
-        const handleTeamChange = () => refreshTeamIds('Realtime');
+        const handleGroupChange = () => refreshGroupSlugs('Realtime');
+        const handleScopeChange = () => refreshGroupSlugs('scopeChanged');
 
-        window.addEventListener(MaestroEvent.teamMembershipChanged, handleTeamChange);
-        return () => window.removeEventListener(MaestroEvent.teamMembershipChanged, handleTeamChange);
+        window.addEventListener(MaestroEvent.groupMembershipChanged, handleGroupChange);
+        window.addEventListener(MaestroEvent.scopeChanged, handleScopeChange);
+        return () => {
+            window.removeEventListener(MaestroEvent.groupMembershipChanged, handleGroupChange);
+            window.removeEventListener(MaestroEvent.scopeChanged, handleScopeChange);
+        };
     }, [user?.$id]);
 
     // Kezdeti állapot ellenőrzése (pl. oldal újratöltés után)

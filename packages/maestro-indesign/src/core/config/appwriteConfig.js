@@ -1,16 +1,14 @@
-import { Client, Account, Databases, TablesDB, Storage, ID, Query, Realtime, Teams, Functions } from "appwrite";
+import { Client, Account, Databases, TablesDB, Storage, ID, Query, Realtime, Functions } from "appwrite";
 import { log, logWarn } from "../utils/logger.js";
 import { MaestroEvent, dispatchMaestroEvent } from "./maestroEvents.js";
 import {
     APPWRITE_PROJECT_ID,
     DATABASE_ID,
     COLLECTIONS,
-    TEAMS,
-    BUCKETS,
-    GET_TEAM_MEMBERS_FUNCTION_ID
+    BUCKETS
 } from "maestro-shared/appwriteIds.js";
 
-export { APPWRITE_PROJECT_ID, DATABASE_ID, TEAMS, BUCKETS, GET_TEAM_MEMBERS_FUNCTION_ID };
+export { APPWRITE_PROJECT_ID, DATABASE_ID, BUCKETS };
 
 export const APPWRITE_LOCALE = "hu-HU";
 
@@ -163,7 +161,6 @@ export const tables = new TablesDB(client);
 export const databases = new Databases(client);
 export const storage = new Storage(client);
 export const appwriteRealtime = new Realtime(client);
-export const teams = new Teams(client);
 export const functions = new Functions(client);
 
 // Bejelentkezés végrehajtása
@@ -214,6 +211,8 @@ export const VALIDATIONS_COLLECTION_ID = "validations"; // Plugin-only gyűjtem�
 export const LAYOUTS_COLLECTION_ID = COLLECTIONS.LAYOUTS;
 export const DEADLINES_COLLECTION_ID = COLLECTIONS.DEADLINES;
 export const CONFIG_COLLECTION_ID = COLLECTIONS.CONFIG;
+export const GROUPS_COLLECTION_ID = COLLECTIONS.GROUPS;
+export const GROUP_MEMBERSHIPS_COLLECTION_ID = COLLECTIONS.GROUP_MEMBERSHIPS;
 
 // =============================================================================
 // cookieFallback Diagnosztika — Session token eltűnés nyomkövetés

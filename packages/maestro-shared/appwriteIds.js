@@ -24,22 +24,9 @@ export const COLLECTIONS = {
     ORGANIZATION_MEMBERSHIPS: 'organizationMemberships',
     EDITORIAL_OFFICES: 'editorialOffices',
     EDITORIAL_OFFICE_MEMBERSHIPS: 'editorialOfficeMemberships',
-    ORGANIZATION_INVITES: 'organizationInvites'
-};
-
-/**
- * Csapat slug-ok.
- * @enum {string}
- * @deprecated Fázis 4 végén törlendő — a dinamikus `groups` collection váltja.
- */
-export const TEAMS = {
-    EDITORS: 'editors',
-    DESIGNERS: 'designers',
-    WRITERS: 'writers',
-    IMAGE_EDITORS: 'image_editors',
-    ART_DIRECTORS: 'art_directors',
-    MANAGING_EDITORS: 'managing_editors',
-    PROOFWRITERS: 'proofwriters'
+    ORGANIZATION_INVITES: 'organizationInvites',
+    GROUPS: 'groups',
+    GROUP_MEMBERSHIPS: 'groupMemberships'
 };
 
 /**
@@ -60,11 +47,5 @@ export const BUCKETS = {
  * @enum {string}
  */
 export const FUNCTIONS = {
-    GET_TEAM_MEMBERS: '69599cf9000a865db98a',
     INVITE_TO_ORGANIZATION: 'invite-to-organization'
 };
-
-/**
- * @deprecated Használd a `FUNCTIONS.GET_TEAM_MEMBERS`-t. Backward-compat export.
- */
-export const GET_TEAM_MEMBERS_FUNCTION_ID = FUNCTIONS.GET_TEAM_MEMBERS;

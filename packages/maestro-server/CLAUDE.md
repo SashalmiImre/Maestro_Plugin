@@ -84,9 +84,7 @@ maestro-server/
     ├── invite-to-organization/        ← Tenant management (bootstrap + create + accept egy CF-ben)
     │   ├── package.json
     │   └── src/main.js
-    └── team/                          ← Csapattagok lekérése (kliens hívás, API Key bypass)
-        ├── package.json
-        └── src/main.js
+    └── team/                          ← DEPRECATED (Fázis 2: groupMemberships collection váltotta ki)
 ```
 
 ---
@@ -104,7 +102,6 @@ maestro-server/
 | `cleanup-orphaned-thumbnails` | Cleanup Orphaned Thumbnails | node-18.0 | 120s | Schedule: `0 4 * * 0` |
 | `migrate-legacy-paths` | Migrate Legacy Paths | node-18.0 | 120s | Manuális (HTTP) |
 | `invite-to-organization` | Invite To Organization | node-18.0 | 15s | Kliens hívás (HTTP, `execute: ["users"]`) |
-| `69599cf9000a865db98a` | Get Team Members | node-22 | 15s | Kliens hívás |
 
 ---
 
@@ -114,7 +111,7 @@ maestro-server/
 
 | Változó | Érték | Leírás |
 |---|---|---|
-| `APPWRITE_API_KEY` | *(secret)* | API kulcs — `MaestroFunctionsKey` (databases.rw, users.rw, teams.r, files.rw) |
+| `APPWRITE_API_KEY` | *(secret)* | API kulcs — `MaestroFunctionsKey` (databases.rw, users.rw, files.rw) |
 | `APPWRITE_FUNCTION_ENDPOINT` | automatikus | Appwrite végpont (Appwrite beállítja) |
 | `APPWRITE_FUNCTION_PROJECT_ID` | automatikus | Projekt ID (Appwrite beállítja) |
 
@@ -122,7 +119,7 @@ maestro-server/
 
 | Function | Változók |
 |---|---|
-| `article-update-guard` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `CONFIG_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID` |
+| `article-update-guard` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `CONFIG_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `GROUPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID` |
 | `validate-article-creation` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `CONFIG_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID` |
 | `validate-publication-update` | `DATABASE_ID`, `PUBLICATIONS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID` |
 | `validate-labels` | `DATABASE_ID`, `CONFIG_COLLECTION_ID` |
@@ -130,7 +127,7 @@ maestro-server/
 | `cleanup-orphaned-locks` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID` |
 | `cleanup-orphaned-thumbnails` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `THUMBNAILS_BUCKET_ID` |
 | `migrate-legacy-paths` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `DRY_RUN` |
-| `invite-to-organization` | `DATABASE_ID`, `ORGANIZATIONS_COLLECTION_ID`, `ORGANIZATION_MEMBERSHIPS_COLLECTION_ID`, `EDITORIAL_OFFICES_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `ORGANIZATION_INVITES_COLLECTION_ID` |
+| `invite-to-organization` | `DATABASE_ID`, `ORGANIZATIONS_COLLECTION_ID`, `ORGANIZATION_MEMBERSHIPS_COLLECTION_ID`, `EDITORIAL_OFFICES_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `ORGANIZATION_INVITES_COLLECTION_ID`, `GROUPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID` |
 
 ---
 
@@ -138,7 +135,7 @@ maestro-server/
 
 | Function | Szükséges Scopes |
 |---|---|
-| `article-update-guard` | `databases.read`, `databases.write`, `users.read`, `teams.read` |
+| `article-update-guard` | `databases.read`, `databases.write`, `users.read` |
 | `validate-article-creation` | `databases.read`, `databases.write`, `users.read` |
 | `validate-publication-update` | `databases.read`, `databases.write`, `users.read` |
 | `validate-labels` | `users.read`, `users.write`, `databases.read` |
@@ -147,7 +144,6 @@ maestro-server/
 | `cleanup-orphaned-thumbnails` | `databases.read`, `files.read`, `files.write` |
 | `migrate-legacy-paths` | `databases.read`, `databases.write` |
 | `invite-to-organization` | `databases.read`, `databases.write`, `users.read` |
-| Get Team Members | `teams.read`, `users.read` |
 
 > **Megjegyzés**: Jelenleg minden function egyetlen közös API kulcsot használ (`MaestroFunctionsKey`), amely az összes szükséges jogosultsággal rendelkezik.
 
@@ -166,7 +162,7 @@ maestro-server/
 4. **Állapotátmenet** — `previousState → state` a `validTransitions` alapján
 5. **Parent scope sync (B.8)** — szülő publikáció `editorialOfficeId`/`organizationId` mezőkhöz igazítás (cross-tenant scope támadás scenario 1 védelem)
 6. **Scope ellenőrzés (B.8)** — caller user tagja-e a cikk `editorialOfficeId`-jának (`editorialOfficeMemberships` lookup); nem-tag → state revert. Legacy null scope → skip + warning log.
-7. **Jogosultság** — felhasználó csapattagsága/label-jei engedélyezik-e az átmenetet
+7. **Jogosultság** — felhasználó csoporttagsága (`groupMemberships` + `groups` query → slug tömb) / label-jei engedélyezik-e az átmenetet
 8. **Contributor mezők** — létező felhasználókra mutatnak-e (log only)
 9. **previousState karbantartás** — null esetén inicializálás, revert esetén frissítés
 
@@ -208,7 +204,7 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 
 **Bemeneti payload**:
 ```json
-{ "action": "bootstrap_organization" | "create" | "accept", ... }
+{ "action": "bootstrap_organization" | "create" | "accept" | "add_group_member" | "remove_group_member", ... }
 ```
 
 **Biztonsági megjegyzés**: Korábban létezett egy `organization-membership-guard` trigger CF, amely egy `modifiedByClientId === 'server-guard'` sentinellel engedélyezte az invite-eredetű membership-eket. Ez **kliens-forgeable** volt — bármely hitelesített user beállíthatta a payload-ban. A Codex adversarial review jelezte a kritikus sebezhetőséget, és a javítás ACL-alapú védelemre váltott (B.5 utolsó iteráció, 2026-04-07).
@@ -216,12 +212,13 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 **ACTION='bootstrap_organization'** (onboarding flow):
 1. Caller user kötelező (`x-appwrite-user-id` header).
 2. Bemeneti mezők: `orgName`, `orgSlug`, `officeName`, `officeSlug` (mind trim + length check + slug regex validáció).
-3. **Atomikus 4-collection write** API key-jel:
+3. **Atomikus 4+14 collection write** API key-jel:
    - `organizations` — `{ name, slug, ownerUserId: callerId }`
    - `organizationMemberships` — `{ organizationId, userId: callerId, role: 'owner', addedByUserId: callerId }`
    - `editorialOffices` — `{ organizationId, name, slug }` (workflowId nullként, Fázis 4 tölti)
    - `editorialOfficeMemberships` — `{ editorialOfficeId, organizationId, userId: callerId, role: 'admin' }`
-4. **Best-effort rollback**: ha a 2-3-4. lépésnél hiba van, a már létrehozott rekordokat visszatörli fordított sorrendben (try/catch minden cleanup lépésen).
+   - **Fázis 2 — Group seeding**: 7 `groups` dokumentum (`DEFAULT_GROUPS` alapján, scope: officeId + orgId) + 7 `groupMemberships` (a bootstrapping user-t minden csoportba felveszi, denormalizált `userName`/`userEmail`-lel).
+4. **Best-effort rollback**: ha a 2-3-4. lépésnél hiba van, a már létrehozott rekordokat visszatörli fordított sorrendben (try/catch minden cleanup lépésen). A group seeding hiba nem akadályozza meg az org bootstrap sikerét (`groupsSeeded: false` a response-ban).
 5. Slug ütközés: `org_slug_taken` / `office_slug_taken` (409).
 6. Response: `{ success: true, organizationId, editorialOfficeId }`.
 
@@ -246,12 +243,23 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 7. `createDocument(memberships, { organizationId, userId: callerId, role, addedByUserId })` — API key-jel írja, az ACL miatt csak így lehetséges.
 8. `updateDocument(invite, { status: 'accepted' })`.
 
+**ACTION='add_group_member'**:
+1. Caller user kötelező.
+2. Bemeneti mezők: `groupId`, `userId`.
+3. **Caller jogosultság check** — group lekérés → `organizationId` → org membership lookup → `owner` vagy `admin` role szükséges.
+4. Target user lekérés (`users.get()`) → `userName`, `userEmail` denormalizálás.
+5. `createDocument(groupMemberships, { groupId, userId, editorialOfficeId, organizationId, role: 'member', addedByUserId, userName, userEmail })`.
+6. **Idempotens**: `document_already_exists` → success `{ action: 'already_member' }`.
+
+**ACTION='remove_group_member'**:
+1. Caller user kötelező.
+2. Bemeneti mezők: `groupId`, `userId`.
+3. **Caller jogosultság check** — group lekérés → org membership lookup → `owner` vagy `admin`.
+4. `listDocuments(groupMemberships, [eq(groupId), eq(userId)])` → delete.
+5. **Idempotens**: ha nem létezik → success `{ action: 'already_removed' }`.
+
 **Hibakódok** (mind a `fail()` wrapperen keresztül `{ success: false, reason, ...extra }` formátumban):
-`invalid_payload`, `invalid_action`, `unauthenticated`, `missing_fields`, `invalid_slug`, `org_slug_taken`, `org_create_failed`, `membership_create_failed`, `office_slug_taken`, `office_create_failed`, `office_membership_create_failed`, `invalid_email`, `invalid_role`, `not_a_member`, `insufficient_role`, `invite_not_found`, `invite_not_pending`, `invite_expired`, `email_mismatch`, `caller_lookup_failed`.
-
-### Get Team Members (team)
-
-Kliens hívás. Csapattagok listázása (név, email, ID) API Key-jel — megkerüli a kliens-oldali privacy korlátozásokat.
+`invalid_payload`, `invalid_action`, `unauthenticated`, `missing_fields`, `invalid_slug`, `org_slug_taken`, `org_create_failed`, `membership_create_failed`, `office_slug_taken`, `office_create_failed`, `office_membership_create_failed`, `invalid_email`, `invalid_role`, `not_a_member`, `insufficient_role`, `invite_not_found`, `invite_not_pending`, `invite_expired`, `email_mismatch`, `caller_lookup_failed`, `group_not_found`, `target_user_not_found`, `group_member_create_failed`.
 
 ---
 

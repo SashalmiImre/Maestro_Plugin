@@ -12,6 +12,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';
 import { useUser } from './UserContext.jsx';
 import { log } from '../utils/logger.js';
+import { MaestroEvent, dispatchMaestroEvent } from '../config/maestroEvents.js';
 
 const ScopeContext = createContext(null);
 
@@ -77,6 +78,7 @@ export function ScopeProvider({ children }) {
             if (id) window.localStorage.setItem(STORAGE_OFFICE_KEY, id);
             else window.localStorage.removeItem(STORAGE_OFFICE_KEY);
         } catch (e) { /* UXP localStorage edge case — nem kritikus */ }
+        dispatchMaestroEvent(MaestroEvent.scopeChanged, { editorialOfficeId: id });
     }, []);
 
     // Stale ID validáció + auto-pick. A futás sorrendje kritikus: előbb org,

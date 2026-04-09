@@ -25,7 +25,7 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
     const perm = useElementPermissions(['ignoreToggle']);
     const stateAccess = useMemo(
         () => type === 'article' ? canUserAccessInState(user, selectedItem?.state) : { allowed: true },
-        [type, user?.teamIds, user?.labels, selectedItem?.state]
+        [type, user?.groupSlugs, user?.labels, selectedItem?.state]
     );
 
     // Defensive guard

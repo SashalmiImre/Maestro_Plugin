@@ -6,7 +6,7 @@ import { useToast } from "../../../common/Toast/ToastContext.jsx";
 
 // Hooks
 import { useUnifiedValidation } from "../../../../data/hooks/useUnifiedValidation.js";
-import { useTeamMembers } from "../../../../data/hooks/useTeamMembers.js";
+import { useGroupMembers } from "../../../../data/hooks/useGroupMembers.js";
 
 // Components
 import { CollapsibleSection } from "../../../common/CollapsibleSection.jsx";
@@ -26,7 +26,6 @@ import {
     formatMessageDate,
     formatExactDate
 } from "../../../../core/utils/messageConstants.js";
-import { TEAMS } from "../../../../core/config/appwriteConfig.js";
 
 // ── Icons & Styles ───────────────────────────────────────────────────────────
 
@@ -213,11 +212,11 @@ export const ValidationSection = ({ article, disabled, permissions }) => {
     const { unifiedList, isLoading, addValidation, resolveValidation, downgradeSystemError } = useUnifiedValidation(article);
     const { showToast } = useToast();
 
-    // Team members for recicipient helpers
-    const { members: editors } = useTeamMembers(TEAMS.EDITORS);
-    const { members: designers } = useTeamMembers(TEAMS.DESIGNERS);
-    const { members: imageEditors } = useTeamMembers(TEAMS.IMAGE_EDITORS);
-    const { members: writers } = useTeamMembers(TEAMS.WRITERS);
+    // Csoporttagok a címzett kiválasztáshoz
+    const { members: editors } = useGroupMembers('editors');
+    const { members: designers } = useGroupMembers('designers');
+    const { members: imageEditors } = useGroupMembers('image_editors');
+    const { members: writers } = useGroupMembers('writers');
     const teamMembers = useMemo(() => ({ editors, designers, imageEditors, writers }), [editors, designers, imageEditors, writers]);
 
     // UI States

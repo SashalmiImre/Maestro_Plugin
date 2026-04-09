@@ -6,11 +6,10 @@
  */
 
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
-import { Databases, Functions, Storage, Query } from 'appwrite';
+import { Databases, Storage, Query } from 'appwrite';
 import { getClient } from './AuthContext.jsx';
 import {
-    DATABASE_ID, COLLECTIONS, TEAMS, BUCKETS,
-    GET_TEAM_MEMBERS_FUNCTION_ID,
+    DATABASE_ID, COLLECTIONS, BUCKETS,
     PAGE_SIZE, TEAM_CACHE_DURATION_MS
 } from '../config.js';
 
@@ -40,11 +39,10 @@ export function DataProvider({ children }) {
         const client = getClient();
         servicesRef.current = {
             databases: new Databases(client),
-            functions: new Functions(client),
             storage: new Storage(client)
         };
     }
-    const { databases, functions, storage } = servicesRef.current;
+    const { databases, storage } = servicesRef.current;
 
     // Csapattag cache
     const memberCacheRef = useRef({ map: new Map(), time: 0 });
@@ -172,44 +170,41 @@ export function DataProvider({ children }) {
         }
     }, [databases]);
 
-    // ─── Csapattag feloldás ─────────────────────────────────────────────────
+    // ─── Csoporttag feloldás ────────────────────────────────────────────────
 
-    const fetchAllTeamMembers = useCallback(async () => {
+    const fetchAllGroupMembers = useCallback(async () => {
         const cache = memberCacheRef.current;
         const now = Date.now();
         if (cache.map.size > 0 && (now - cache.time) < TEAM_CACHE_DURATION_MS) {
             return cache.map;
         }
 
-        const allTeamIds = Object.values(TEAMS);
-        const results = await Promise.allSettled(
-            allTeamIds.map(teamId =>
-                functions.createExecution({
-                    functionId: GET_TEAM_MEMBERS_FUNCTION_ID,
-                    body: JSON.stringify({ teamId }),
-                    async: false
-                })
-            )
-        );
+        const editorialOfficeId = localStorage.getItem('maestro.activeEditorialOfficeId');
+        if (!editorialOfficeId) return new Map();
 
-        const map = new Map();
-        for (const result of results) {
-            if (result.status !== 'fulfilled') continue;
-            try {
-                const response = JSON.parse(result.value.responseBody);
-                if (response.success && response.members) {
-                    for (const m of response.members) {
-                        if (!map.has(m.userId)) {
-                            map.set(m.userId, m.name);
-                        }
-                    }
+        try {
+            const result = await databases.listDocuments({
+                databaseId: DATABASE_ID,
+                collectionId: COLLECTIONS.GROUP_MEMBERSHIPS,
+                queries: [
+                    Query.equal('editorialOfficeId', editorialOfficeId),
+                    Query.limit(500)
+                ]
+            });
+
+            const map = new Map();
+            for (const m of result.documents) {
+                if (!map.has(m.userId)) {
+                    map.set(m.userId, m.userName || '');
                 }
-            } catch { /* parse hiba — kihagyjuk */ }
-        }
+            }
 
-        memberCacheRef.current = { map, time: now };
-        return map;
-    }, [functions]);
+            memberCacheRef.current = { map, time: now };
+            return map;
+        } catch {
+            return new Map();
+        }
+    }, [databases]);
 
     const getMemberName = useCallback((userId) => {
         return memberCacheRef.current.map.get(userId) || null;
@@ -274,7 +269,7 @@ export function DataProvider({ children }) {
         publications, articles, layouts, deadlines, validations,
         activePublicationId, isLoading, storage,
         fetchPublications, switchPublication,
-        fetchAllTeamMembers, getMemberName
+        fetchAllGroupMembers, getMemberName
     };
 
     return (

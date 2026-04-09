@@ -40,7 +40,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
         const fields = new Set();
 
         // Csapattagságból
-        (user?.teamIds || []).forEach(slug => {
+        (user?.groupSlugs || []).forEach(slug => {
             const field = TEAM_ARTICLE_FIELD[slug];
             if (field) fields.add(field);
         });
@@ -53,7 +53,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
         }
 
         return Array.from(fields);
-    }, [user?.teamIds, user?.labels]);
+    }, [user?.groupSlugs, user?.labels]);
 
     const filteredArticles = React.useMemo(() => {
         const filtered = articles.filter(article => {

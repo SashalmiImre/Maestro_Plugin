@@ -36,7 +36,7 @@
 | ------------- | --------------------------------------------------------------------- |
 | **Platform**  | Adobe UXP (Unified Extensibility Platform) InDesign-hoz               |
 | **UI**        | React 18 + Adobe Spectrum Web Components (`@swc-uxp-wrappers/*`)      |
-| **Backend**   | Appwrite Cloud (Database, Realtime, Storage, Teams)                   |
+| **Backend**   | Appwrite Cloud (Database, Realtime, Storage, Groups)                  |
 | **Realtime**  | WebSocket proxy auth bridge-en keresztül (ld. `docs/REALTIME_ARCHITECTURE.md`) |
 | **Bundler**   | Webpack 5 + Babel                                                     |
 | **Stílusok**  | SCSS / CSS                                                            |
@@ -131,17 +131,17 @@
 
 5. **Jogosultsági Rendszer (Workflow Permissions)**
     - **Állapot-alapú átmenet**: Minden workflow állapothoz csapatok vannak rendelve (`STATE_PERMISSIONS`), amelyek mozgathatják a cikkeket onnan.
-    - **Kétszintű jogosultság**: (1) **Csapattagság** (`user.teamIds`) — alap jogosultság a munkahelyi pozíció alapján (`teams.list()` lekérés login/recovery/Realtime-kor). (2) **Capability label** (`user.labels`) — képesség-alapú jogosultság-kiterjesztés adminisztrátori hozzárendeléssel.
+    - **Kétszintű jogosultság**: (1) **Csoporttagság** (`user.groupSlugs`) — alap jogosultság a munkahelyi pozíció alapján (`groupMemberships` + `groups` collection query login/recovery/Realtime-kor). (2) **Capability label** (`user.labels`) — képesség-alapú jogosultság-kiterjesztés adminisztrátori hozzárendeléssel.
     - **Capability Label Rendszer** (`maestro-shared/labelConfig.js`): Központi konfiguráció (`CAPABILITY_LABELS`), ahol minden label egy képességet fejez ki (`can` + ige + tárgy, camelCase). Két típus: (a) **Csapat-ekvivalens** (`grantTeams`) — a megadott csapat(ok) jogait adja (pl. `canEditContent` → `['editors']`). (b) **Exkluzív** (`exclusive`) — egyedi képesség, amit csapattagsággal nem lehet megkapni (pl. `canAddArticlePlan`).
-    - **Label → csapat feloldás**: A `labelMatchesSlug()` (`workflowConfig.js`) a `resolveGrantedTeams()` segítségével oldja fel a capability label-eket csapat slug-okra. Az összes jogosultság-ellenőrző függvény transzparensen működik a capability mapping-gel.
-    - **Fallback**: Ha nincs senki hozzárendelve a releváns csapatok contributor mezőiből → csapattagság VAGY capability label szükséges.
+    - **Label → csoport feloldás**: A `labelMatchesSlug()` (`workflowConfig.js`) a `resolveGrantedTeams()` segítségével oldja fel a capability label-eket csoport slug-okra. Az összes jogosultság-ellenőrző függvény transzparensen működik a capability mapping-gel.
+    - **Fallback**: Ha nincs senki hozzárendelve a releváns csoportok contributor mezőiből → csoporttagság VAGY capability label szükséges.
     - **Háromszintű védelem**: UI gomb disabled → handler toast → engine guard.
-    - **Realtime szinkron**: A `teams` Realtime csatorna → `teamMembershipChanged` MaestroEvent → UserContext frissíti a `user.teamIds`-t → UI azonnal reagál.
-    - **UI Elem Jogosultságok**: Deklaratív, központi konfiguráció (`elementPermissions.js`) határozza meg, mely csapatok szerkeszthetik az egyes UI elemcsoportokat. Csapat/label nélküli felhasználó teljes read-only módot kap.
-      - `ARTICLE_ELEMENT_PERMISSIONS` / `PUBLICATION_ELEMENT_PERMISSIONS` — elemcsoport → csapat-slug tömb vagy `ANY_TEAM` szimbólum.
+    - **Realtime szinkron**: A `groupMemberships` collection Realtime csatorna → `groupMembershipChanged` MaestroEvent → UserContext frissíti a `user.groupSlugs`-t → UI azonnal reagál. Scope-váltáskor a `scopeChanged` MaestroEvent szintén triggereli a `refreshGroupSlugs()`-t.
+    - **UI Elem Jogosultságok**: Deklaratív, központi konfiguráció (`elementPermissions.js`) határozza meg, mely csoportok szerkeszthetik az egyes UI elemcsoportokat. Csoport/label nélküli felhasználó teljes read-only módot kap.
+      - `ARTICLE_ELEMENT_PERMISSIONS` / `PUBLICATION_ELEMENT_PERMISSIONS` — elemcsoport → csoport-slug tömb vagy `ANY_TEAM` szimbólum.
       - `checkElementPermission(permission, user)` — állapotfüggetlen ellenőrzés (cikk és kiadvány mezők).
       - `canUserAccessInState(user, articleState)` — állapotfüggő ellenőrzés (fájlmegnyitás + parancsok): designers/artDirectors mindig, mások csak `STATE_PERMISSIONS` szerinti állapotaikban.
-      - `canEditContributorDropdown(user, teamSlug, articleState)` — per-dropdown contributor jogosultság: vezetők (`LEADER_TEAMS`) mindig, nem-vezetők csak a saját csapatjuknak megfelelő dropdown-ot, és csak a `STATE_PERMISSIONS` szerinti állapotaikban. Capability label-ek ugyanúgy kiterjesztik a hozzáférést.
+      - `canEditContributorDropdown(user, teamSlug, articleState)` — per-dropdown contributor jogosultság: vezetők (`LEADER_TEAMS`) mindig, nem-vezetők csak a saját csoportjuknak megfelelő dropdown-ot, és csak a `STATE_PERMISSIONS` szerinti állapotaikban. Capability label-ek ugyanúgy kiterjesztik a hozzáférést.
       - `useElementPermission(key)` / `useElementPermissions(keys[])` / `useContributorPermissions(articleState)` hookok (`useElementPermission.js`) — React komponensekben.
       - **Kompozíció**: `disabled={isIgnored || isSyncing || !perm.allowed}` + tooltip a `reason`-nel.
     - **Konfiguráció**: `labelConfig.js` (capability label-ek), `workflowConstants.js` (`STATE_PERMISSIONS`, `TEAM_ARTICLE_FIELD`), `workflowPermissions.js` (`canUserMoveArticle`), `elementPermissions.js` (UI elem jogosultságok).
@@ -230,10 +230,11 @@ Maestro/
 │
 ├── ../maestro-server/             ← Szerver-oldali Appwrite Cloud Function-ök (ld. maestro-server/CLAUDE.md)
 ├── ../maestro-shared/            ← Közös csomag (plugin + dashboard által megosztott konstansok és logika)
-│   ├── appwriteIds.js            ← Appwrite projekt/DB/gyűjtemény/csapat/bucket ID-k
+│   ├── appwriteIds.js            ← Appwrite projekt/DB/gyűjtemény/bucket ID-k
 │   ├── constants.js              ← Platform-független enumerációk (LOCK_TYPE, VALIDATION_TYPES)
 │   ├── labelConfig.js            ← Capability-based label konfiguráció (CAPABILITY_LABELS, resolveGrantedTeams, hasCapability)
 │   ├── workflowConfig.js         ← Workflow állapotok, markerek, időtartamok, STATUS_LABELS, TEAM_ARTICLE_FIELD, labelMatchesSlug, CONFIG_VERSION
+│   ├── groups.js                 ← DEFAULT_GROUPS (7 alapértelmezett csoport), resolveGroupSlugs() helper
 │   └── urgency.js                ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színskála)
 │
 ├── docs/                         ← Architektúra dokumentáció (ld. §Dokumentáció Katalógus)
@@ -321,7 +322,7 @@ Maestro/
 │   │   └── hooks/
 │   │       ├── useArticles.js                   ← CRUD + megnyitás/bezárás + szűrés kiadvány szerint
 │   │       ├── usePublications.js               ← CRUD + lefedettség kezelés
-│   │       ├── useTeamMembers.js                ← Csapattagok listázása (Realtime szinkronnal)
+│   │       ├── useGroupMembers.js                ← Csoporttagok listázása (scope-szűrt, Realtime szinkronnal)
 │   │       ├── useUserValidations.js            ← Felhasználói validációs üzenetek CRUD
 │   │       ├── useUnifiedValidation.js          ← Rendszer + felhasználói validációk összefésülése
 │   │       ├── useWorkflowValidation.js         ← Preflight + workflow validáció (esemény-vezérelt)
@@ -330,7 +331,6 @@ Maestro/
 │   │       ├── useThumbnails.js                ← Thumbnail generálás hook (documentClosed event)
 │   │       ├── useDeadlines.js                  ← Határidők CRUD
 │   │       ├── useLayouts.js                    ← Layoutok CRUD + layoutChanged esemény
-│   │       ├── useAllTeamMembers.js              ← Összes csapat tagjainak lekérése (deduplikálva)
 │   │       ├── useUrgency.js                    ← Sürgősség-számítás hook (percenkénti frissítés)
 │   │       ├── useElementPermission.js          ← UI elem jogosultság hookok (useElementPermission, useElementPermissions)
 │   │       ├── useDriveAccessibility.js         ← Központi mappa-elérhetőség figyelő (batched ExtendScript)
@@ -417,8 +417,8 @@ Fájl kiválasztása → `useArticles.addArticle` → útvonal validáció (kiad
 ### Realtime Adatfolyam
 Appwrite DB változás → WebSocket esemény → `realtimeClient.js` → `DataContext` handler → `setArticles()`/`setPublications()` → React újra-renderelési kaszkád.
 
-### Csapattagság Szinkronizáció
-Appwrite `memberships` Realtime csatorna → `DataContext` handler → `teamMembershipChanged` MaestroEvent → `useTeamMembers` hook cache invalidálás + Cloud Function újralekérés. Recovery-nél (`dataRefreshRequested`) szintén frissül.
+### Csoporttagság Szinkronizáció
+Appwrite `groupMemberships` collection Realtime csatorna → `DataContext` handler → `groupMembershipChanged` MaestroEvent → `useGroupMembers` hook cache invalidálás + `groupMemberships` query újralekérés. Recovery-nél (`dataRefreshRequested`) szintén frissül. Scope-váltáskor (`scopeChanged` MaestroEvent) a UserContext `refreshGroupSlugs()`-t hív, a `useGroupMembers` hookok cache-t invalidálnak.
 
 > Részletes diagram: `docs/diagrams/data-flow-architecture.md`
 
@@ -488,7 +488,7 @@ már betöltődött-e és a `ScopeContext` auto-pick adott-e aktív officeId-t.
 
 ### ScopeContext API (Fázis 1 / B.7)
 - `activeOrganizationId`, `activeEditorialOfficeId` — az aktuálisan választott multi-tenant scope (localStorage-ban perzisztált, `maestro.activeOrganizationId` / `maestro.activeEditorialOfficeId` kulcsok; a Plugin és Dashboard localStorage izolált, nincs ütközés).
-- `setActiveOrganization(id)`, `setActiveOffice(id)` — írják az állapotot és a localStorage-ot.
+- `setActiveOrganization(id)`, `setActiveOffice(id)` — írják az állapotot és a localStorage-ot. A `setActiveOffice` dispatch-eli a `scopeChanged` MaestroEvent-et, amely triggereli a UserContext `refreshGroupSlugs()`-t és a `useGroupMembers` hookok cache invalidálását.
 - **Stale ID védelem + auto-pick**: A `useEffect` a `UserContext` memberships betöltése után (`loading === false && !membershipsError`) ellenőrzi, hogy az aktuális ID-k még szerepelnek-e a listákban. Stale esetben az első elérhetőre vált, vagy nullázza. Ha nincs aktív scope, de van membership, automatikusan az elsőt választja (ez biztosítja a Dashboardon frissen onboardolt user első Plugin-belépésnél az azonnali scope-ot, külön UI interakció nélkül).
 - **Fázis 6** hozza a multi-org/office switch dropdown UI-t a `WorkspaceHeader`-be; B.7-ben csak az alap state management és a DataContext integráció kerül be.
 
@@ -501,9 +501,9 @@ már betöltődött-e és a `ScopeContext` auto-pick adott-e aktív officeId-t.
   - **Jelszó módosítás**: InDesign natív dialog → `account.updatePassword()` — bejelentkezést igényel.
   - **Elfelejtett jelszó**: InDesign natív dialog (email) → `account.createRecovery(email, RECOVERY_URL)` → Dashboard `/reset-password` oldal a böngészőben (Dashboard `ResetPasswordRoute.jsx` hívja az `account.updateRecovery()`-t).
 - **Realtime szinkron (labels/prefs)**: Az Appwrite Realtime `account` csatornára feliratkozva a `user` objektum (beleértve `labels`, `name`, `prefs`) automatikusan frissül, ha a szerveren módosítják (Console/Server SDK). A handler a `response.events[]` alapján szűri a session eseményeket (`.sessions.` stringet ignórálja) és validálja a payload `$id`-ját (csak `currentUserId` egyezésekor alkalmaz frissítéseket), megakadályozva, hogy session ID-k felülírják a user objektumot. A `name` és `email` mezők megőrződnek, ha a Realtime payload nem tartalmaz értéket (field preservation).
-- **Realtime szinkron (teamIds)**: Az `account` csatorna `response.events[]` tömbjét is figyeli — ha tartalmaz `.memberships.` stringet (szerver-oldali tagságváltozás), `teams.list()` hívással frissíti a `user.teamIds`-t. Fallback a `teams` csatorna → `teamMembershipChanged` MaestroEvent útvonal mellé. A `sameTeamIds()` helper Set-alapú duplikátum-mentes összehasonlítást végez, hogy a szinkron ne okozzon felesleges re-rendereket.
+- **Realtime szinkron (groupSlugs)**: A `groupMemberships` collection Realtime csatorna → `groupMembershipChanged` MaestroEvent → UserContext `refreshGroupSlugs()` — `groupMemberships` + `groups` query az aktív szerkesztőségben. A `sameGroupSlugs()` helper Set-alapú duplikátum-mentes összehasonlítást végez, hogy a szinkron ne okozzon felesleges re-rendereket. Scope-váltáskor a `scopeChanged` MaestroEvent szintén triggereli a frissítést.
 - **Recovery szinkron**: A `dataRefreshRequested` MaestroEvent-re is feliratkozik — minden recovery-nél (sleep/wake, reconnect, focus) `account.get()`-tel frissíti a user adatokat. Ez biztosítja a labels/prefs szinkront akkor is, ha az Appwrite Realtime `account` csatorna nem tüzel proxy-n keresztül (pl. szerver-oldali label módosításnál).
-- **Memberships (Fázis 1 / B.7)**: `organizations`, `editorialOffices` — a user által elérhető teljes scope rekordok (az `organizationMemberships` és `editorialOfficeMemberships` collection-ökből húzva, majd a scope rekordok paralel lekérésével). `membershipsError` — a legutóbbi memberships fetch hibája (ha volt). `reloadMemberships()` — manuális újratöltő (a `ScopeMissingPlaceholder` „error" variánsának retry gombja hívja). A loading minden belépési pontnál (login, mount `checkUserStatus`, recovery) paralel fut a `enrichUserWithTeams` mellett `Promise.all`-lal — egy membership hiba nem blokkolja az auth happy path-ot (külön `.catch` → `membershipsError` state), a `ScopeContext` auto-pick effect pedig csak `!membershipsError` esetén fut, hogy egy átmeneti fetch hiba ne törölje a helyes scope-ot.
+- **Memberships (Fázis 1 / B.7)**: `organizations`, `editorialOffices` — a user által elérhető teljes scope rekordok (az `organizationMemberships` és `editorialOfficeMemberships` collection-ökből húzva, majd a scope rekordok paralel lekérésével). `membershipsError` — a legutóbbi memberships fetch hibája (ha volt). `reloadMemberships()` — manuális újratöltő (a `ScopeMissingPlaceholder` „error" variánsának retry gombja hívja). A loading minden belépési pontnál (login, mount `checkUserStatus`, recovery) paralel fut az `enrichUserWithGroups` mellett `Promise.all`-lal — egy membership hiba nem blokkolja az auth happy path-ot (külön `.catch` → `membershipsError` state), a `ScopeContext` auto-pick effect pedig csak `!membershipsError` esetén fut, hogy egy átmeneti fetch hiba ne törölje a helyes scope-ot.
 
 ### ConnectionContext API
 - `isOnline`, `isConnecting` — UI indikátorokhoz (spinner, overlay)
@@ -522,7 +522,7 @@ A konfigurációs konstansok: `src/core/config/appwriteConfig.js`
 
 - **Endpoint**: Dual-proxy failover-rel (`EndpointManager`): Railway (primary) → emago.hu (fallback). Mindig `endpointManager.getEndpoint()`-ot használj az aktuális endpoint lekéréséhez — a korábbi `APPWRITE_ENDPOINT` statikus export el lett távolítva. Az `endpointManager.getProxyBase()` a proxy gyökér URL-t adja vissza (a `/v1` suffix nélkül) — az AI clustering (`/api/cluster-article`) és egyéb proxy-szintű endpointokhoz.
 - **Project ID**, **Database ID**, **Collection ID-k** (Articles, Publications, Messages), **Bucket ID** (Storage).
-- **Team ID-k**: Team-alapú hozzáférés-kezelés és jogosultságkezelés. Csapatok: `editors`, `designers`, `writers`, `image_editors`, `art_directors`, `managing_editors`, `proofwriters`.
+- **Csoportok (Fázis 2)**: A korábbi fix Appwrite Team-eket (`editors`, `designers`, stb.) saját `groups` + `groupMemberships` collection-ök váltották ki. A csoportok szerkesztőség-szintűek (scope: `editorialOfficeId`). 7 alapértelmezett csoport: `editors`, `designers`, `writers`, `image_editors`, `art_directors`, `managing_editors`, `proofwriters`. Új csoportok a Dashboard `/settings/groups` UI-ról kezelhetők.
 
 ### Session Kezelés (UXP Sajátosság)
 A UXP nem kezeli normálisan a cookie-kat. A session a `localStorage`-ban van tárolva (`cookieFallback` kulcs), és kézzel injektáljuk a requestekbe. Ld. `docs/REALTIME_ARCHITECTURE.md`.

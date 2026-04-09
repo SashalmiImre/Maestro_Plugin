@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { WorkflowStatus } from "../publications/Publication/WorkflowStatus.jsx";
-import { useAllTeamMembers } from "../../../data/hooks/useAllTeamMembers.js";
+import { useAllGroupMembers } from "../../../data/hooks/useGroupMembers.js";
 import { useUrgency } from "../../../data/hooks/useUrgency.js";
 import { LOCK_TYPE, UI_TIMING, DATA_QUERY_CONFIG } from "../../../core/utils/constants.js";
 import { VALIDATION_SOURCES } from "../../../core/utils/validationConstants.js";
@@ -31,7 +31,7 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
         };
     }, []);
 
-    const { members: allMembers } = useAllTeamMembers();
+    const { members: allMembers } = useAllGroupMembers();
 
     const getUserName = useCallback((userId) => {
         if (!userId) return null;
