@@ -50,16 +50,21 @@ tags: [feladatok]
 
 #### Fázis 2 — Dinamikus csoportok (groups, groupMemberships)
 
-- [ ] Új collection: `groups` (editorialOfficeId, slug, label, color, isContributorGroup, isLeaderGroup, description)
-- [ ] Új collection: `groupMemberships` (groupId, userId, editorialOfficeId, organizationId)
-- [ ] Új Cloud Function: `group-membership-guard` — create/delete trigger, office admin jogkört ellenőriz
-- [ ] Új shared modul: [packages/maestro-shared/groups.js](../packages/maestro-shared/groups.js) — `getUserGroupSlugs(userId, officeId)`, helper lookupok
-- [ ] Dashboard view: minimális „Csoportok" form office-szinten (csoport CRUD, user hozzárendelés)
-- [ ] Plugin `UserContext` új állapota: `groupSlugsByOffice: Map<officeId, Set<slug>>` + Realtime feliratkozás saját `groupMemberships` rekordokra
-- [ ] `workflowPermissions.js`, `elementPermissions.js` helperek átalakítása: `user.teamIds` helyett `user.groupSlugsByOffice.get(activeOfficeId)`
-- [ ] CF-ek (article-update-guard, validate-article-creation): `teams.list()` + label resolve helyett `groupMemberships` lookup
-- [ ] `teamMembershipChanged` MaestroEvent átnevezve `groupMembershipChanged`-re, Realtime csatorna `groupMemberships`-re iratkozik fel
-- [ ] **Verifikáció**: admin létrehoz `designers` és `editors` csoportot → user2-t `designers`-be → user2 tud cikket létrehozni és state-et váltani
+- [x] Új collection-ök: `groups` (slug, name, editorialOfficeId, organizationId, description, createdByUserId) + `groupMemberships` (groupId, userId, editorialOfficeId, organizationId, role, addedByUserId, userName, userEmail denormalizált)
+- [x] Új shared modul: `packages/maestro-shared/groups.js` — `DEFAULT_GROUPS` (7 alapértelmezett csoport), `resolveGroupSlugs()` helper
+- [x] CF `invite-to-organization` bővítés: `bootstrap_organization` action 7 group + 7 groupMembership seeding, `add_group_member` action (office membership + aktív/verifikált user check), `remove_group_member` action — mindhárom idempotens
+- [x] Plugin `UserContext`: `enrichUserWithGroups()` + `refreshGroupSlugs()` — `groupMemberships` + `groups` query, `scopeChanged`/`groupMembershipChanged` MaestroEvent listener, `sameGroupSlugs()` Set-alapú összehasonlítás
+- [x] Plugin `DataContext`: `groupMemberships` collection Realtime csatorna (office scope szűréssel), `groupMembershipChanged` MaestroEvent dispatch
+- [x] Plugin `ScopeContext`: `setActiveOffice()` → `scopeChanged` MaestroEvent dispatch
+- [x] Új hook: `useGroupMembers(groupSlug)` + `useAllGroupMembers()` — scope-szűrt, 5 perces cache, generation guard, Realtime invalidálás. Kiváltja `useTeamMembers` + `useAllTeamMembers`-t (törölve).
+- [x] `user.teamIds` → `user.groupSlugs` átnevezés: `workflowPermissions.js`, `elementPermissions.js`, `useElementPermission.js`, `Publication.jsx`, `PropertiesPanel.jsx`, `ContributorsSection.jsx` (×2), `ValidationSection.jsx`, `ArticleTable.jsx`, `useArticles.js`, `useFilters.js`
+- [x] Dashboard `AuthContext`: `fetchGroupSlugs()` (`groupMemberships` query, `resolveGroupSlugs`)
+- [x] Dashboard `DataContext`: `fetchAllGroupMembers()` (közvetlen `groupMemberships` query, denormalizált userName)
+- [x] Dashboard `/settings/groups` admin UI: csoporttagok listázása, hozzáadás/eltávolítás CF action-ökön keresztül
+- [x] CF `article-update-guard`: `getUserGroupSlugs()` (groupMemberships → slug feloldás), `null`-return pattern transient DB hibákra (fail-open + error log a false denial elkerüléséért)
+- [x] Cleanup: `useTeamMembers.js` + `useAllTeamMembers.js` törölve, `teamMembershipChanged` event törölve, `TEAMS` enum + `GET_TEAM_MEMBERS_FUNCTION_ID` törölve, `teams` SDK import + instance törölve, Appwrite Console: 7 Team + `get-team-members` CF törölve MCP-vel
+- [x] Harden pass: `.rows`/`.documents` fallback (`tables.listRows` kompatibilitás), generation guard (`useGroupMembers` stale response védelem), office scope szűrés (DataContext Realtime), bootstrap rollback officeMembership ID fix, target user office membership + aktív/verifikált check (`add_group_member`), `getUserGroupSlugs` null-return pattern
+- [x] Dokumentáció: Plugin + Server CLAUDE.md frissítve a group-alapú architektúrára
 
 #### Fázis 3 — Dinamikus contributor mezők
 
@@ -128,9 +133,10 @@ tags: [feladatok]
 #### Fázis 7 — Cleanup
 
 - [ ] `grep` ellenőrzés: 0 találat a következőkre: `designerId`, `CAPABILITY_LABELS`, `STATE_PERMISSIONS`, `TEAM_ARTICLE_FIELD`, `ARTICLE_ELEMENT_PERMISSIONS`, `LEADER_TEAMS`, `workflow_config`, `workflowConstants`
-- [ ] `appwriteIds.js`: `TEAMS` enum és `CONFIG` collection ID törlése
-- [ ] Appwrite Console: régi 7 Appwrite Team és `config` collection manuális törlése
-- [ ] `getTeamMembers` Cloud Function átnevezése `get-group-members`-re vagy törlés
+- [x] `appwriteIds.js`: `TEAMS` enum törlése *(Fázis 2-ben kész)*
+- [ ] `appwriteIds.js`: `CONFIG` collection ID törlése *(Fázis 4 hatáskör)*
+- [x] Appwrite Console: régi 7 Appwrite Team + `get-team-members` CF törlése *(Fázis 2-ben MCP-vel kész)*
+- [ ] Appwrite Console: `config` collection manuális törlése *(Fázis 4 hatáskör)*
 - [ ] `packages/maestro-indesign/CLAUDE.md` teljes frissítése a végső architektúrával, „Átalakítás folyamatban" banner törlése
 - [ ] `_docs/workflow-designer/PROGRESS.md` lezárás, `MIGRATION_NOTES.md` véglegesítés
 - [ ] `_docs/Feladatok.md`: aktív feladatok átkerülnek `## Kész` szekcióba egy összefoglaló kommenttel

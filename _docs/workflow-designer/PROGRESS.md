@@ -19,9 +19,26 @@
 
 ## Aktuális fázis
 
-**Fázis 1 — Scope bevezetés + teljes Dashboard auth flow** (kész)
+**Fázis 2 — Dinamikus csoportok (groups, groupMemberships)** (kész)
 
-### Fázis 1 checklist (folyamatos)
+### Fázis 2 checklist (kész, 2026-04-09)
+- [x] B.1 — Appwrite `groups` + `groupMemberships` collection létrehozás (MCP)
+- [x] B.2 — `maestro-shared` frissítések: `COLLECTIONS` bővítés, `groups.js` (DEFAULT_GROUPS, resolveGroupSlugs)
+- [x] B.3 — CF `invite-to-organization` bootstrap group seeding (7 csoport + 7 membership)
+- [x] B.4 — CF `add_group_member` / `remove_group_member` action-ök (office membership + aktív/verifikált check)
+- [x] B.5 — Plugin `UserContext`: `enrichUserWithGroups()` + `refreshGroupSlugs()` (groupMemberships query)
+- [x] B.6 — Plugin `DataContext` + `MaestroEvents`: groupMemberships Realtime + `groupMembershipChanged`/`scopeChanged` event
+- [x] B.7 — Plugin `useGroupMembers` hook (scope-szűrt, cache, generation guard, Realtime invalidálás)
+- [x] B.8 — Plugin `user.teamIds` → `user.groupSlugs` átnevezés minden fogyasztóban
+- [x] B.9 — Dashboard `AuthContext`: `fetchGroupSlugs()` (groupMemberships query)
+- [x] B.10 — Dashboard `DataContext`: `fetchAllGroupMembers()` (közvetlen query)
+- [x] B.11 — Dashboard `useFilters`: `user.teamIds` → `user.groupSlugs`
+- [x] B.12 — CF `article-update-guard`: `getUserGroupSlugs()` (groupMemberships → slug, null-return pattern)
+- [x] B.13 — Dashboard `/settings/groups` admin UI
+- [x] B.14 — Cleanup: régi fájlok törlése, TEAMS enum, get-team-members CF, 7 Appwrite Team törlés (MCP)
+- [x] Harden pass: .rows/.documents fallback, generation guard, office scope szűrés, bootstrap rollback fix, target user check
+
+### Fázis 1 checklist (kész)
 - [x] B.1 — Appwrite collection setup (5 új + 6 meglévő scope mező)
 - [x] B.2 — `appwriteIds.js` frissítés az 5 új COLLECTIONS konstanssal + `TEAMS` `@deprecated` JSDoc
 - [x] B.3 — Dashboard `react-router-dom` + auth route skeleton (`ProtectedRoute`, `AuthSplitLayout`, `BrandHero`, 8 auth route, `ScopeContext`)
@@ -50,7 +67,7 @@
 |---|-------|-----|---------|
 | 0 | Dokumentációs alap + Stitch tervek | Tudás-megőrzés, első UI képek | **Kész** |
 | 1 | Scope bevezetés + teljes Dashboard auth flow | `organizationId` + `editorialOfficeId` mindenhol, saját tagság collectionök, login/regisztráció/elfelejtett jelszó | **Kész** |
-| 2 | Dinamikus csoportok | A 7 fix Appwrite Team helyett saját `groups` + `groupMemberships` | Vár |
+| 2 | Dinamikus csoportok | A 7 fix Appwrite Team helyett saját `groups` + `groupMemberships` | **Kész** |
 | 3 | Dinamikus contributor mezők | `articles.contributors: {slug: userId}` JSON a 7 hardkódolt oszlop helyett | Vár |
 | 4 | Workflow runtime | `workflows` collection, `compiled` JSON, Realtime hot-reload, régi workflowConstants törlése | Vár |
 | 5 | Workflow Designer UI | ComfyUI-szerű vizuális designer a Dashboardon, export/import | Vár |
