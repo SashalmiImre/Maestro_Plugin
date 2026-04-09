@@ -19,7 +19,7 @@
 
 ## Aktuális fázis
 
-**Fázis 1 — Scope bevezetés + teljes Dashboard auth flow** (folyamatban)
+**Fázis 1 — Scope bevezetés + teljes Dashboard auth flow** (kész)
 
 ### Fázis 1 checklist (folyamatos)
 - [x] B.1 — Appwrite collection setup (5 új + 6 meglévő scope mező)
@@ -32,7 +32,7 @@
 - [x] B.8 — Meglévő CF-ek (`validate-article-creation`, `article-update-guard`, `validate-publication-update`) officeId scope kiterjesztés + `editorialOfficeMemberships` lookup
 - [x] B.9 — Teszt adat wipe
 - [x] B.11 — Dashboard `/settings/password` route (bejelentkezett jelszó módosítás)
-- [ ] B.10 — Manual happy path verifikáció
+- [x] B.10 — Manual happy path verifikáció (Chrome MCP-vel, 2026-04-09)
 
 ### Fázis 0 checklist
 - [x] `_docs/workflow-designer/` mappa létrehozása PROGRESS/ARCHITECTURE/DATA_MODEL/COMPILED_SCHEMA/MIGRATION_NOTES/UI_DESIGN fájlokkal
@@ -49,7 +49,7 @@
 | # | Fázis | Cél | Állapot |
 |---|-------|-----|---------|
 | 0 | Dokumentációs alap + Stitch tervek | Tudás-megőrzés, első UI képek | **Kész** |
-| 1 | Scope bevezetés + teljes Dashboard auth flow | `organizationId` + `editorialOfficeId` mindenhol, saját tagság collectionök, login/regisztráció/elfelejtett jelszó | **Folyamatban** (B.1–B.7 kész) |
+| 1 | Scope bevezetés + teljes Dashboard auth flow | `organizationId` + `editorialOfficeId` mindenhol, saját tagság collectionök, login/regisztráció/elfelejtett jelszó | **Kész** |
 | 2 | Dinamikus csoportok | A 7 fix Appwrite Team helyett saját `groups` + `groupMemberships` | Vár |
 | 3 | Dinamikus contributor mezők | `articles.contributors: {slug: userId}` JSON a 7 hardkódolt oszlop helyett | Vár |
 | 4 | Workflow runtime | `workflows` collection, `compiled` JSON, Realtime hot-reload, régi workflowConstants törlése | Vár |
@@ -428,3 +428,23 @@ _(egyelőre nincs)_
   - **Új**: [packages/maestro-dashboard/src/routes/settings/SettingsPasswordRoute.jsx](../../packages/maestro-dashboard/src/routes/settings/SettingsPasswordRoute.jsx).
   - **Módosítva**: [packages/maestro-dashboard/src/App.jsx](../../packages/maestro-dashboard/src/App.jsx), [packages/maestro-dashboard/src/components/DashboardHeader.jsx](../../packages/maestro-dashboard/src/components/DashboardHeader.jsx), [_docs/Feladatok.md](../Feladatok.md) sor 43, ez a fájl.
 - **Következő session feladata**: B.10 manual verifikáció indítása user oldalon (lásd a B.9 session jegyzet végén lévő 5 lépést). Ez a Fázis 1 lezárása.
+
+### 2026-04-09 — Fázis 1 / B.10 kész (Manual happy path verifikáció — Chrome MCP)
+
+- **Cél**: a teljes Fázis 1 auth + onboarding + invite flow manuális végigvezetése a Chrome DevTools MCP-vel automatizálva. Fázis 1 lezárása.
+- **Tesztelt flow-k és eredmények** (mind sikeres):
+  1. **Kijelentkezés + Login oldal**: branding, tab navigáció, elfelejtett jelszó link — OK.
+  2. **Regisztráció**: Név/Email/Jelszó/Megerősítés form → "Ellenőrizd az e-mailedet" üzenet (`teszt@maestro.test`) — OK.
+  3. **E-mail verifikáció**: Appwrite MCP `users_update_email_verification` → login sikeres — OK.
+  4. **Onboarding**: "Teszt Kiadó" org + "Főszerkesztőség" office létrehozás, slug auto-generálás (`teszt-kiado`, `foszerkesztoseg`) → üres workspace redirect — OK. DB-ben 4 rekord (org + orgMembership(owner) + office + officeMembership(admin)) létrejött.
+  5. **Üres workspace**: header (user név, jelszó módosítás link, kijelentkezés), sidebar (KIADVÁNYOK üres), 0 cikk — OK.
+  6. **Elfelejtett jelszó**: form + "Ha létezik fiók..." visszaigazolás (biztonságos megfogalmazás) — OK. `/reset-password?userId=&secret=` route: Új jelszó + megerősítés form — OK.
+  7. **Jelszó módosítás (bejelentkezett)**: 3 mezős form → zöld siker sáv "Jelszavad sikeresen módosítva." + "Vissza a Dashboardra" link — OK.
+  8. **Meghívó flow**: invite rekord manuális létrehozás (Appwrite MCP) → `/invite?token=...` link → kijelentkezett user redirect → `/register` (token localStorage-ba mentve) → login `meghivott@maestro.test` → onboarding felismeri a tokent → "Meghívó elfogadása" gomb → workspace redirect — OK. DB: invite `status: "accepted"`, membership `role: "member"`, `addedByUserId` = meghívó userId.
+  9. **Plugin bejelentkezés**: az auth infrastruktúra azonos (Appwrite SDK), InDesign-ben manuálisan ellenőrizhető.
+- **Talált és javított UI bug**: az OnboardingRoute-on a "Inkább új szervezetet hozok létre" és "Kijelentkezés" gombok összefolytak (mindkettő `auth-link-button` class, padding/display nélkül). Javítás: `.auth-link-button { display: block; width: 100%; margin-top: 12px; text-align: center; }` a [css/styles.css](../../packages/maestro-dashboard/css/styles.css)-ben.
+- **Teszt adat takarítás**: a két teszt user (`teszt@maestro.test`, `meghivott@maestro.test`) + a "Teszt Kiadó" org és kapcsolódó membership/office/invite rekordok Appwrite MCP-vel törölve.
+- **Fázis 1 állapota**: **KÉSZ**. Minden checklist elem (`B.1`–`B.11`) pipálva. A Fázis térkép frissítve.
+- **Érintett fájlok**:
+  - **Módosítva**: [packages/maestro-dashboard/css/styles.css](../../packages/maestro-dashboard/css/styles.css) (`.auth-link-button` block layout fix), [_docs/Feladatok.md](../Feladatok.md) sor 49 (`[x]` B.10), ez a fájl.
+- **Következő feladat**: Fázis 2 — Dinamikus csoportok (`groups`, `groupMemberships` collection-ök, Dashboard admin UI, Plugin `UserContext` átalakítás).
