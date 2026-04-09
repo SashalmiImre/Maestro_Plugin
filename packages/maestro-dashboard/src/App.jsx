@@ -26,6 +26,7 @@ import ForgotPasswordRoute from './routes/auth/ForgotPasswordRoute.jsx';
 import ResetPasswordRoute from './routes/auth/ResetPasswordRoute.jsx';
 import OnboardingRoute from './routes/auth/OnboardingRoute.jsx';
 import InviteRoute from './routes/auth/InviteRoute.jsx';
+import SettingsPasswordRoute from './routes/settings/SettingsPasswordRoute.jsx';
 import DashboardLayout from './routes/dashboard/DashboardLayout.jsx';
 
 /**
@@ -67,9 +68,10 @@ export default function App() {
 
                     {/* Protected routes — auth gate */}
                     <Route element={<ProtectedRoute />}>
-                        {/* Védett auth-szerű route-ok (onboarding) */}
+                        {/* Védett auth-szerű route-ok (onboarding, settings) */}
                         <Route element={<AuthSplitLayout />}>
                             <Route path="/onboarding" element={<OnboardingRoute />} />
+                            <Route path="/settings/password" element={<SettingsPasswordRoute />} />
                         </Route>
                         {/* Tényleges dashboard */}
                         <Route path="/" element={<DashboardLayoutWithProviders />} />

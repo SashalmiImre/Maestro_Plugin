@@ -31,6 +31,7 @@
 - [x] B.7 — Plugin `UserContext` + `DataContext` scope bevezetés (`organizations`, `editorialOffices`, `activeOrganizationId`, `activeEditorialOfficeId`, scope-szűrt fetch)
 - [x] B.8 — Meglévő CF-ek (`validate-article-creation`, `article-update-guard`, `validate-publication-update`) officeId scope kiterjesztés + `editorialOfficeMemberships` lookup
 - [x] B.9 — Teszt adat wipe
+- [x] B.11 — Dashboard `/settings/password` route (bejelentkezett jelszó módosítás)
 - [ ] B.10 — Manual happy path verifikáció
 
 ### Fázis 0 checklist
@@ -406,3 +407,24 @@ _(egyelőre nincs)_
   - **Módosítva**: [_docs/Feladatok.md](../Feladatok.md) sor 48 (`[x]` + B.9 komment), [_docs/workflow-designer/PROGRESS.md](PROGRESS.md) B.9 checklist + ez a session jegyzet.
   - **Nem módosítva**: a B.8 kódváltozások már a korábbi session-ben commitolva + most élesítve.
 - **Következő session feladata**: B.10 — manual happy path verifikáció user oldalon. (1) Friss regisztráció a Dashboardon → email verifikáció → onboarding (új org + office) → Plugin bejelentkezés. (2) Publication létrehozás, article felvétel → CF guard-ok `validated` válasszal engedik. (3) Cross-tenant teszt: második user / office-ban levő cikk módosítása → `article-update-guard` state revert, publication módosítás → log-only, create mismatch → delete. (4) Scope leak ellenőrzés a Plugin UI-ban (csak az aktív office adatai látszanak). (5) Opcionális: második org + invite flow a `invite-to-organization` CF-en keresztül.
+
+### 2026-04-09 — Fázis 1 / B.11 kész (`/settings/password` route)
+
+- **Plan fájl**: [`~/.claude/plans/kind-painting-hummingbird.md`](../../../../.claude/plans/kind-painting-hummingbird.md). A user jóváhagyta.
+- **Cél**: Fázis 1 utolsó kódos feladata — bejelentkezett user a Dashboardon megnyithat egy jelszó módosító oldalt. Az `AuthContext.updatePassword(oldPassword, newPassword)` már B.4 óta létezik, csak UI belépési pont és route komponens hiányzott.
+- **Változások**:
+  - **Új**: [`packages/maestro-dashboard/src/routes/settings/SettingsPasswordRoute.jsx`](../../packages/maestro-dashboard/src/routes/settings/SettingsPasswordRoute.jsx) — 3 mezős form (régi + új + megerősítés), `phase` state (`'idle' | 'success'`), kliens-oldali validáció (üres régi, <8 karakter új, egyezés, régi≠új), Appwrite hibakód → magyar üzenet mapping (`user_invalid_credentials`, `password must be`, `general_rate_limit_exceeded`), sikeres mentés után success banner + "Vissza a Dashboardra" link. NEM redirect, a user explicit visszajelzést kap.
+  - **Módosítva**: [`packages/maestro-dashboard/src/App.jsx`](../../packages/maestro-dashboard/src/App.jsx) — új import + `<Route path="/settings/password" element={<SettingsPasswordRoute />} />` a védett + `AuthSplitLayout` ágba (az `/onboarding` mellé). Így a `ProtectedRoute` automatikusan védi, anonymous user → `/login` redirect.
+  - **Módosítva**: [`packages/maestro-dashboard/src/components/DashboardHeader.jsx`](../../packages/maestro-dashboard/src/components/DashboardHeader.jsx) — `react-router-dom` `Link` import + `<Link to="/settings/password" className="auth-link">Jelszó módosítása</Link>` a user név és Kijelentkezés gomb között. A `.auth-link` class már létezik (B.4 óta), új CSS nem kellett.
+- **Döntések**:
+  1. **Link, nem dropdown**: a user menü dropdown (avatar → Jelszó módosítása | Kijelentkezés) Fázis 6 hatáskör, a multi-org/office switch dropdown-nal együtt. B.11-ben minimális link, hogy a feladat pipálódjon.
+  2. **`AuthSplitLayout` wrapper** az OnboardingRoute-tal konzisztens, nem kell új layout komponens.
+  3. **Success után marad az oldalon** (nem redirect) — explicit visszajelzés a user-nek.
+  4. **CSS teljesen reuse** (`.login-card`, `.form-heading`, `.form-group`, `.login-btn`, `.auth-success`, `.login-error`, `.auth-bottom-link`, `.auth-link`).
+- **Build verifikáció**: `cd packages/maestro-dashboard && yarn build` — 506ms, 83 modul (+1 az új route miatt), 360.65 kB JS / 107.69 kB gzip, 21.09 kB CSS / 4.89 kB gzip. Hibamentes.
+- **Manuálisan ellenőrizendő (user oldalán)**: (1) DashboardHeader-ben látszik az új link. (2) `/settings/password` megnyitás → form. (3) Hibás régi jelszó → "A jelenlegi jelszó hibás." (4) Helyes adatok → success banner + "Vissza a Dashboardra" link. (5) Kijelentkezés + belépés új jelszóval → sikeres. (6) Anonymous `/settings/password` → `/login` redirect.
+- **Fázis 1 állapota**: minden kódos feladat kész. Utolsó nyitott elem: **B.10 manual happy path verifikáció** a user oldalán. Utána Fázis 1 lezárható, és jöhet Fázis 2 (dinamikus csoportok).
+- **Érintett fájlok**:
+  - **Új**: [packages/maestro-dashboard/src/routes/settings/SettingsPasswordRoute.jsx](../../packages/maestro-dashboard/src/routes/settings/SettingsPasswordRoute.jsx).
+  - **Módosítva**: [packages/maestro-dashboard/src/App.jsx](../../packages/maestro-dashboard/src/App.jsx), [packages/maestro-dashboard/src/components/DashboardHeader.jsx](../../packages/maestro-dashboard/src/components/DashboardHeader.jsx), [_docs/Feladatok.md](../Feladatok.md) sor 43, ez a fájl.
+- **Következő session feladata**: B.10 manual verifikáció indítása user oldalon (lásd a B.9 session jegyzet végén lévő 5 lépést). Ez a Fázis 1 lezárása.

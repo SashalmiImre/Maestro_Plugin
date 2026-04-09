@@ -40,7 +40,7 @@ tags: [feladatok]
 - [x] Dashboard route `/invite?token=` — meghívó elfogadás (token validáció, user bejelentkezve vagy regisztrációra redirect) *(B.5 kész — token tárolás InviteRoute, acceptInvite() OnboardingRoute-on)*
 - [x] Dashboard route `/forgot-password` — `account.createRecovery(email, DASHBOARD_URL/reset-password)` *(B.4 kész)*
 - [x] Dashboard route `/reset-password?userId=&secret=` — új jelszó form, `account.updateRecovery()` *(B.4 kész)*
-- [ ] Dashboard route `/settings/password` — bejelentkezett jelszó módosítás `account.updatePassword()`
+- [x] Dashboard route `/settings/password` — bejelentkezett jelszó módosítás `account.updatePassword()` *(2026-04-09 kész — `SettingsPasswordRoute.jsx` a védett + `AuthSplitLayout` ágban, `DashboardHeader` "Jelszó módosítása" link)*
 - [x] Plugin `appwriteConfig.js` `VERIFICATION_URL` + `RECOVERY_URL` átállítása Dashboard domainre *(B.6 kész — a két URL a `DASHBOARD_URL`-ből származik, Webpack DefinePlugin `process.env.DASHBOARD_URL` inject)*
 - [x] Proxy régi reset oldalának megszüntetése vagy Dashboard redirect *(B.6 kész — `GET /verify` + `GET /reset-password` 302 redirect Dashboardra, `POST /reset-password` 410 Gone, HTML helperek + `node-appwrite` dependency törölve)*
 - [x] Plugin `UserContext` + Dashboard `AuthContext` új state-ek: `organizations`, `editorialOffices`, `activeOrganizationId`, `activeEditorialOfficeId` *(B.4: Dashboard `AuthContext` kész; B.7 (2026-04-08): Plugin `UserContext` megkapta a `fetchMemberships` + `organizations`/`editorialOffices`/`membershipsError`/`reloadMemberships` state-et, új `ScopeContext.jsx` auto-pick + stale validációval, Main.jsx `ScopeProvider` wrap + `ScopedWorkspace` + `ScopeMissingPlaceholder`)*
@@ -121,6 +121,8 @@ tags: [feladatok]
 - [ ] `EditorialOfficeAdminView.jsx` — office áttekintés, csoport lista (link a `GroupsPanel`-re), user → csoport hozzárendelés dashboard, workflow designer link
 - [ ] `InviteUserModal.jsx` — e-mail, szerepkör választó, opcionális üzenet
 - [ ] Plugin `UserContext` több-org mode: ha a user több org-hoz tartozik, WorkspaceHeader kap egy org + office választó dropdown-t
+- [ ] `/settings/password` session hygiene: jelszócsere után lehetőség más eszközök kijelentkeztetésére (pl. "Más eszközök kijelentkeztetése" checkbox vagy gomb) *(harden pass Q1, 2026-04-09)*
+- [ ] `/settings/password` dirty form navigáció warning: ha a user kitöltötte a jelszómezőket és elnavigál, megerősítés kérés a véletlen kilépés ellen *(harden pass Q3, 2026-04-09)*
 - [ ] **Verifikáció**: teljes happy path a `ARCHITECTURE.md` Verifikáció szekció szerint
 
 #### Fázis 7 — Cleanup
