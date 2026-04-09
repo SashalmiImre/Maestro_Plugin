@@ -92,7 +92,7 @@ tags: [feladatok]
 - [x] Plugin + Dashboard UI fogyasztók átírás (~20 fájl)
 - [x] CLAUDE.md frissítés a dinamikus modellre
 - [x] Build verifikáció: plugin (webpack) + dashboard (vite) sikeres, 0 stale import
-- **Appwrite Console tennivalók** (MCP-vel): `WORKFLOWS_COLLECTION_ID` env var hozzáadás, `CONFIG_COLLECTION_ID` törlés, `config` collection törlés, `validate-labels` CF disable
+- [x] **Appwrite Console tennivalók** (MCP-vel): `WORKFLOWS_COLLECTION_ID` env var hozzáadás (3 CF), `config` collection + `validate-labels` CF + `Get Team Members` CF törlés, `appwrite.json` cleanup *(2026-04-09)*
 
 #### Fázis 5 — Workflow Designer UI (Dashboardon)
 
@@ -135,8 +135,8 @@ tags: [feladatok]
 - [x] `appwriteIds.js`: `TEAMS` enum törlése *(Fázis 2-ben kész)*
 - [x] `appwriteIds.js`: `CONFIG` collection ID törlése *(Fázis 4-ben kész)*
 - [x] Appwrite Console: régi 7 Appwrite Team + `get-team-members` CF törlése *(Fázis 2-ben MCP-vel kész)*
-- [ ] Appwrite Console: `config` collection manuális törlése *(MCP-vel)*
-- [ ] Appwrite Console: `validate-labels` CF disable/törlése *(MCP-vel)*
+- [x] Appwrite Console: `config` collection manuális törlése *(korábban törölve, 2026-04-09 verifikálva MCP-vel)*
+- [x] Appwrite Console: `validate-labels` CF disable/törlése *(korábban törölve, 2026-04-09 verifikálva MCP-vel; `appwrite.json` entry is törölve)*
 - [ ] `packages/maestro-indesign/CLAUDE.md` teljes frissítése a végső architektúrával, „Átalakítás folyamatban" banner törlése
 - [ ] `_docs/workflow-designer/PROGRESS.md` lezárás, `MIGRATION_NOTES.md` véglegesítés
 - [ ] `_docs/Feladatok.md`: aktív feladatok átkerülnek `## Kész` szekcióba egy összefoglaló kommenttel

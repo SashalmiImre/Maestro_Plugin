@@ -65,26 +65,6 @@
             "specification": "s-0.5vcpu-512mb"
         },
         {
-            "$id": "validate-labels",
-            "name": "Validate Labels",
-            "runtime": "node-18.0",
-            "entrypoint": "src/main.js",
-            "commands": "npm install",
-            "timeout": 15,
-            "enabled": true,
-            "logging": true,
-            "path": "functions/validate-labels",
-            "scopes": [
-                "users.read",
-                "users.write",
-                "databases.read"
-            ],
-            "events": [
-                "users.*.update"
-            ],
-            "specification": "s-0.5vcpu-512mb"
-        },
-        {
             "$id": "cascade-delete",
             "name": "Cascade Delete",
             "runtime": "node-18.0",
@@ -158,23 +138,6 @@
             "scopes": [
                 "databases.read",
                 "databases.write"
-            ],
-            "events": [],
-            "specification": "s-0.5vcpu-512mb"
-        },
-        {
-            "$id": "69599cf9000a865db98a",
-            "name": "Get Team Members",
-            "runtime": "node-22",
-            "entrypoint": "main.js",
-            "commands": "npm install",
-            "timeout": 15,
-            "enabled": true,
-            "logging": true,
-            "path": "functions/team",
-            "execute": ["users"],
-            "scopes": [
-                "users.read"
             ],
             "events": [],
             "specification": "s-0.5vcpu-512mb"

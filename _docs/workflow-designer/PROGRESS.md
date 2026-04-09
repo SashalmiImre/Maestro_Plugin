@@ -19,7 +19,22 @@
 
 ## Aktuális fázis
 
-**Fázis 3 — Dinamikus contributor mezők** (kész)
+**Fázis 5 — Workflow Designer UI** (következő)
+
+### Fázis 4 checklist (kész, 2026-04-09)
+- [x] D.1 — Új collection: `workflows` (editorialOfficeId, organizationId, compiled longtext, version int) — MCP
+- [x] D.2 — Új shared modul: `maestro-shared/workflowRuntime.js` — 16+ tiszta fogyasztói függvény a `compiled` JSON fölött
+- [x] D.3 — Új template: `maestro-shared/defaultWorkflow.json` — 8 állapotos magazin workflow `compiled` formátumban
+- [x] D.4 — Régi modulok törlése: `workflowConfig.js`, `labelConfig.js`, `workflowConstants.js`, `elementPermissions.js`, `syncWorkflowConfig.js`, `validate-labels/`
+- [x] D.5 — `workflowEngine.js` + `workflowPermissions.js` proxy átírás a `workflowRuntime.js`-re
+- [x] D.6 — Plugin `DataContext`: `workflow` state + fetch (office scope) + Realtime hot-reload (`setWorkflow(JSON.parse(payload.compiled))`)
+- [x] D.7 — CF-ek átírás: `workflows` collection olvasás, 60s TTL process cache (`getWorkflowForOffice()`), fail-closed
+- [x] D.8 — Label rendszer teljes eltávolítás — `user.groupSlugs` az egyetlen jogosultsági forrás
+- [x] D.9 — Plugin + Dashboard UI fogyasztók átírás (~20 fájl: `WORKFLOW_CONFIG` → `getStateConfig`/`getAllStates`/stb.)
+- [x] D.10 — CLAUDE.md frissítés a dinamikus workflow modellre
+- [x] D.11 — Build verifikáció: plugin (webpack) + dashboard (vite) sikeres, 0 stale import
+- [x] D.12 — Appwrite Console: `WORKFLOWS_COLLECTION_ID` env var (3 CF), `config` collection + `validate-labels` CF + `Get Team Members` CF törlés, `CONFIG_COLLECTION_ID` env var cleanup
+- [x] D.13 — `appwrite.json` cleanup: `validate-labels` + `Get Team Members` entry törlése
 
 ### Fázis 3 checklist (kész, 2026-04-09)
 - [x] C.1 — Appwrite `articles.contributors` + `publications.defaultContributors` longtext mezők létrehozása (MCP)
@@ -90,7 +105,7 @@
 | 1 | Scope bevezetés + teljes Dashboard auth flow | `organizationId` + `editorialOfficeId` mindenhol, saját tagság collectionök, login/regisztráció/elfelejtett jelszó | **Kész** |
 | 2 | Dinamikus csoportok | A 7 fix Appwrite Team helyett saját `groups` + `groupMemberships` | **Kész** |
 | 3 | Dinamikus contributor mezők | `articles.contributors: {slug: userId}` JSON a 7 hardkódolt oszlop helyett | **Kész** |
-| 4 | Workflow runtime | `workflows` collection, `compiled` JSON, Realtime hot-reload, régi workflowConstants törlése | Vár |
+| 4 | Workflow runtime | `workflows` collection, `compiled` JSON, Realtime hot-reload, régi workflowConstants törlése | **Kész** |
 | 5 | Workflow Designer UI | ComfyUI-szerű vizuális designer a Dashboardon, export/import | Vár |
 | 6 | Org/Office Admin UI finomítás | Teljes org admin felület, user meghívás, csoport kezelés | Vár |
 | 7 | Cleanup | Átmeneti kód törlése, dokumentáció lezárása | Vár |
