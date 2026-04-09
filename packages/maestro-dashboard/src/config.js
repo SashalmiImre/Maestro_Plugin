@@ -16,41 +16,15 @@ export {
 } from '@shared/appwriteIds.js';
 
 export {
-    WORKFLOW_STATES,
-    MARKERS,
-    STATE_DURATIONS,
-    STATUS_LABELS,
-    STATUS_COLORS
-} from '@shared/workflowConfig.js';
-
-export {
     LOCK_TYPE,
-    VALIDATION_TYPES
+    VALIDATION_TYPES,
+    MARKERS
 } from '@shared/constants.js';
-
-export {
-    resolveGrantedTeams,
-    hasCapability,
-    CAPABILITY_LABELS,
-    VALID_LABELS
-} from '@shared/labelConfig.js';
 
 // ─── Dashboard-specifikus ───────────────────────────────────────────────────
 
 /** Közvetlen Appwrite endpoint (nem proxy-n keresztül). */
 export const APPWRITE_ENDPOINT = 'https://cloud.appwrite.io/v1';
-
-/**
- * Workflow konfiguráció — label és szín állapotonként.
- * A komponensek WORKFLOW_CONFIG[state].label / .color-t használják.
- */
-import { STATUS_LABELS as _SL, STATUS_COLORS as _SC } from '@shared/workflowConfig.js';
-
-export const WORKFLOW_CONFIG = Object.fromEntries(
-    Object.entries(_SL).map(([state, label]) => [
-        state, { label, color: _SC[state] || '#999' }
-    ])
-);
 
 /**
  * A Dashboard saját origin URL-je az Appwrite verifikációs/recovery callback-ekhez.

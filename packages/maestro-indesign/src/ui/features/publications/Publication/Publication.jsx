@@ -8,19 +8,20 @@ import { ConfirmDialog } from "../../../common/ConfirmDialog.jsx";
 // Custom Hooks
 import { useArticles } from "../../../../data/hooks/useArticles.js";
 import { useUser } from "../../../../core/contexts/UserContext.jsx";
+import { useData } from "../../../../core/contexts/DataContext.jsx";
 import { useToast } from "../../../common/Toast/ToastContext.jsx";
 
 // Utils
-import { MARKERS, labelMatchesSlug } from "../../../../core/utils/workflow/workflowConstants.js";
-import { log, logError } from "../../../../core/utils/logger.js";
+import { MARKERS } from "maestro-shared/constants.js";
+import { logDebug, logError } from "../../../../core/utils/logger.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../../core/config/maestroEvents.js";
-import { checkElementPermission, PUBLICATION_ELEMENT_PERMISSIONS } from "../../../../core/utils/workflow/elementPermissions.js";
+import { useElementPermissions } from "../../../../data/hooks/useElementPermission.js";
 import { buildPlaceholderRows } from "../../../../core/utils/pageGapUtils.js";
 import { isContributor } from "maestro-shared/contributorHelpers.js";
-import { resolveGrantedTeams } from "maestro-shared/labelConfig.js";
 
 export const Publication = React.memo(({ publication, onDelete, onRename, onShowProperties, isExpanded, onToggle, isDriveAccessible, filterState }) => {
     const { user } = useUser();
+    const { workflow } = useData();
     const { showToast } = useToast();
     const {
         articles,
@@ -37,35 +38,29 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
     // Szűrő állapot a központi filterState prop-ból
     const { statusFilters, showIgnored, showOnlyMine, showPlaceholders } = filterState;
 
-    /** A felhasználó csoporttagságai és label-jei alapján összegyűjtött slug-ok */
-    const userSlugs = useMemo(() => {
-        const slugs = new Set(user?.groupSlugs || []);
-        if (user?.labels?.length) {
-            for (const slug of resolveGrantedTeams(user.labels)) {
-                slugs.add(slug);
-            }
-        }
-        return [...slugs];
-    }, [user?.groupSlugs, user?.labels]);
+    const userGroupSlugs = user?.groupSlugs || [];
+
+    // Kiadvány jogosultság hook-kal
+    const pubPermissions = useElementPermissions(['publicationProperties'], 'publication');
 
     const filteredArticles = React.useMemo(() => {
         const filtered = articles.filter(article => {
-            const statusMatch = statusFilters.includes(article.state || 0);
+            const statusMatch = statusFilters.includes(article.state || "");
             const articleMarkers = typeof article.markers === 'number' ? article.markers : 0;
             const markerMatch = showIgnored || (articleMarkers & MARKERS.IGNORE) === 0;
-            const ownerMatch = !showOnlyMine || isContributor(article.contributors, user?.$id, userSlugs);
+            const ownerMatch = !showOnlyMine || isContributor(article.contributors, user?.$id, userGroupSlugs);
 
             return statusMatch && markerMatch && ownerMatch;
         });
 
-        log(`[Publication] Articles stats: Total fetched: ${articles.length}, Shown: ${filtered.length}. Filtered out: ${articles.length - filtered.length}`);
+        logDebug(`[Publication] Articles stats: Total fetched: ${articles.length}, Shown: ${filtered.length}. Filtered out: ${articles.length - filtered.length}`);
         return filtered;
-    }, [articles, statusFilters, showIgnored, showOnlyMine, userSlugs, user?.$id]);
+    }, [articles, statusFilters, showIgnored, showOnlyMine, userGroupSlugs, user?.$id]);
 
     /** Helykitöltő sorok: a kiadvány terjedelmén belüli lefedetlen oldalcsoportok */
     const placeholderRows = useMemo(() => {
-        return buildPlaceholderRows(articles, publication);
-    }, [articles, publication]);
+        return buildPlaceholderRows(articles, publication, workflow);
+    }, [articles, publication, workflow]);
 
     /** Táblázat adatai: szűrt cikkek + opcionálisan helykitöltők */
     const tableData = useMemo(() => {
@@ -73,9 +68,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
         return [...filteredArticles, ...placeholderRows];
     }, [filteredArticles, placeholderRows, showPlaceholders, showOnlyMine]);
 
-    const canOpenPublicationProperties = useMemo(() => {
-        return checkElementPermission(PUBLICATION_ELEMENT_PERMISSIONS.publicationProperties, user).allowed;
-    }, [user]);
+    const canOpenPublicationProperties = pubPermissions.publicationProperties.allowed;
 
     const handlePublicationDoubleClick = useCallback((e) => {
         e.stopPropagation();

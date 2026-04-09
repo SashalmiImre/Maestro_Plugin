@@ -10,9 +10,13 @@
 // React
 import { useState, useEffect, useRef, useMemo } from "react";
 
+// Contexts
+import { useData } from "../../core/contexts/DataContext.jsx";
+
 // Utils
 import { fetchHolidays, calculateUrgencyRatio } from "../../core/utils/urgencyUtils.js";
 import { logWarn } from "../../core/utils/logger.js";
+
 // Konstansok
 import { DATA_QUERY_CONFIG } from "../../core/utils/constants.js";
 
@@ -25,6 +29,7 @@ import { DATA_QUERY_CONFIG } from "../../core/utils/constants.js";
  * @returns {Map<string, { ratio: number, background: string|null }>} Cikk ID → sürgősségi adatok
  */
 export const useUrgency = (articles, deadlines, publication) => {
+    const { workflow } = useData();
     const [urgencyMap, setUrgencyMap] = useState(() => new Map());
     const [holidays, setHolidays] = useState(() => new Set());
     const [currentYear, setCurrentYear] = useState(() => new Date().getFullYear());
@@ -71,7 +76,7 @@ export const useUrgency = (articles, deadlines, publication) => {
 
             const newMap = new Map();
             for (const article of articles) {
-                const result = calculateUrgencyRatio(article, deadlines, {
+                const result = calculateUrgencyRatio(article, deadlines, workflow, {
                     holidays,
                     excludeWeekends
                 });
@@ -94,7 +99,7 @@ export const useUrgency = (articles, deadlines, publication) => {
                 intervalRef.current = null;
             }
         };
-    }, [articles, deadlines, holidays, excludeWeekends]);
+    }, [articles, deadlines, holidays, excludeWeekends, workflow]);
 
     return urgencyMap;
 };

@@ -5,7 +5,8 @@
  * Figyelembe veszi a munkaidőt (9–17), hétvégéket és ünnepnapokat.
  */
 
-import { WORKFLOW_STATES, STATE_DURATIONS, MARKERS } from './workflowConfig.js';
+import { MARKERS } from './constants.js';
+import { getAllStates, isTerminalState, getStateDuration } from './workflowRuntime.js';
 
 // ─── Konstansok ─────────────────────────────────────────────────────────────
 
@@ -151,17 +152,25 @@ export function calculateWorkingMinutes(fromDate, toDate, { holidays, excludeWee
 // ─── Sürgősség-számítás ─────────────────────────────────────────────────────
 
 /**
- * Kiszámítja a jelenlegi státusztól a PRINTABLE-ig hátralévő munkaidőt.
+ * Kiszámítja a jelenlegi státusztól a terminális állapotig hátralévő munkaidőt.
  *
- * @param {number} currentState
+ * @param {Object} workflow - A compiled workflow JSON
+ * @param {string} currentState - Aktuális állapot string ID
  * @param {number} pageCount
  * @returns {number} Percben
  */
-export function calculateRemainingWorkMinutes(currentState, pageCount) {
+export function calculateRemainingWorkMinutes(workflow, currentState, pageCount) {
+    if (!workflow) return 0;
     const pages = Math.max(1, pageCount || 1);
+    const allStates = getAllStates(workflow);
+    const currentIndex = allStates.findIndex(s => s.id === currentState);
+    if (currentIndex === -1) return 0;
+
     let total = 0;
-    for (let state = currentState; state <= WORKFLOW_STATES.PRINTABLE; state++) {
-        const duration = STATE_DURATIONS[state];
+    for (let i = currentIndex; i < allStates.length; i++) {
+        const state = allStates[i];
+        if (isTerminalState(workflow, state.id)) break;
+        const duration = getStateDuration(workflow, state.id);
         if (duration) {
             total += duration.perPage * pages + duration.fixed;
         }
@@ -248,13 +257,15 @@ export function getUrgencyBackground(ratio) {
  *
  * @param {Object} article
  * @param {Array} deadlines
+ * @param {Object} workflow - A compiled workflow JSON
  * @param {Object} options
  * @param {Set<string>} options.holidays
  * @param {boolean} options.excludeWeekends
  * @returns {{ ratio: number, background: string|null }|null}
  */
-export function calculateUrgencyRatio(article, deadlines, { holidays, excludeWeekends }) {
-    if (article.state === WORKFLOW_STATES.ARCHIVABLE) return null;
+export function calculateUrgencyRatio(article, deadlines, workflow, { holidays, excludeWeekends }) {
+    if (!workflow) return null;
+    if (isTerminalState(workflow, article.state)) return null;
     if ((article.markers & MARKERS.IGNORE) !== 0) return null;
 
     const deadline = getArticleDeadline(article, deadlines);
@@ -264,7 +275,7 @@ export function calculateUrgencyRatio(article, deadlines, { holidays, excludeWee
         ? article.endPage - article.startPage + 1
         : 1;
 
-    const remainingMinutes = calculateRemainingWorkMinutes(article.state ?? 0, pageCount);
+    const remainingMinutes = calculateRemainingWorkMinutes(workflow, article.state, pageCount);
     if (remainingMinutes === 0) return null;
 
     const now = new Date();

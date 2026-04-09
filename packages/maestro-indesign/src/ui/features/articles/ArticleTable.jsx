@@ -226,8 +226,8 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
                     valB = getLockLabel(b) || "";
                     break;
                 case "state":
-                    valA = a.state || 0;
-                    valB = b.state || 0;
+                    valA = a.state || "";
+                    valB = b.state || "";
                     break;
                 case "validator":
                     valA = getValidationSeverity(a);

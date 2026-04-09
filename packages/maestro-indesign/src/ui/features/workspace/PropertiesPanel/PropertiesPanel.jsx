@@ -1,7 +1,9 @@
 import React, { useState, useMemo } from "react";
 import { ArticleProperties } from "../../articles/ArticleProperties/ArticleProperties.jsx";
 import { PublicationProperties } from "../../publications/PublicationProperties/PublicationProperties.jsx";
-import { WORKFLOW_CONFIG, MARKERS, COMMANDS } from "../../../../core/utils/workflow/workflowConstants.js";
+import { MARKERS } from "maestro-shared/constants.js";
+import { getStateCommands, canRunCommand, canUserAccessInState } from "maestro-shared/workflowRuntime.js";
+import { getCommandLabel } from "maestro-shared/commandRegistry.js";
 import { CustomCheckbox } from "../../../common/CustomCheckbox.jsx";
 import { WorkflowEngine } from "../../../../core/utils/workflow/workflowEngine.js";
 import { useUser } from "../../../../core/contexts/UserContext.jsx";
@@ -10,22 +12,22 @@ import { useToast } from "../../../common/Toast/ToastContext.jsx";
 import { TOAST_TYPES } from "../../../../core/utils/constants.js";
 import { executeCommand } from "../../../../core/commands/index.js";
 import { useElementPermissions } from "../../../../data/hooks/useElementPermission.js";
-import { canUserAccessInState, checkElementPermission } from "../../../../core/utils/workflow/elementPermissions.js";
 import { log, logError } from "../../../../core/utils/logger.js";
 
 export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onPublicationUpdate, onBack, onOpen, runAndPersistPreflight }) => {
     // Hooks
     const { user } = useUser();
-    const { layouts, applyArticleUpdate } = useData();
+    const { layouts, applyArticleUpdate, workflow } = useData();
     const { showToast } = useToast();
     const [isSyncing, setIsSyncing] = useState(false);
     const [hasDeadlineErrors, setHasDeadlineErrors] = useState(false);
 
     // Elem jogosultságok
     const perm = useElementPermissions(['ignoreToggle']);
+    const userGroups = user?.groupSlugs || [];
     const stateAccess = useMemo(
-        () => type === 'article' ? canUserAccessInState(user, selectedItem?.state) : { allowed: true },
-        [type, user?.groupSlugs, user?.labels, selectedItem?.state]
+        () => type === 'article' ? canUserAccessInState(workflow, userGroups, selectedItem?.state) : { allowed: true },
+        [type, workflow, userGroups, selectedItem?.state]
     );
 
     // Defensive guard
@@ -34,12 +36,15 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
     const canOpen = type === 'article' && item.filePath;
     const isIgnored = type === 'article' && (item.markers & MARKERS.IGNORE) !== 0;
 
-    // Az aktuális állapothoz tartozó parancsok feloldva a COMMANDS regiszterből
+    // Az aktuális állapothoz tartozó parancsok — a workflow compiled commands-ból
     const commands = useMemo(() => {
-        if (type !== 'article' || item.state === undefined) return [];
-        const stateCommandIds = WORKFLOW_CONFIG[item.state]?.commands ?? [];
-        return stateCommandIds.filter(id => COMMANDS[id]).map(id => ({ id, ...COMMANDS[id] }));
-    }, [type, item.state]);
+        if (type !== 'article' || !item.state || !workflow) return [];
+        return getStateCommands(workflow, item.state).map(cmd => ({
+            id: cmd.id,
+            label: getCommandLabel(cmd.id),
+            allowedGroups: cmd.allowedGroups
+        }));
+    }, [type, item.state, workflow]);
 
     const handleOpen = async () => {
         if (canOpen && onOpen) {
@@ -169,7 +174,7 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
                         flexWrap: "wrap"
                     }}>
                         {commands.map(cmd => {
-                            const cmdPerm = checkElementPermission(cmd.teams, user);
+                            const cmdPerm = canRunCommand(workflow, item.state, cmd.id, userGroups);
                             return (
                                 <sp-button
                                     quiet

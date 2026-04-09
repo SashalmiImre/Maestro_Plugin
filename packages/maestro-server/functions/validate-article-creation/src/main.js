@@ -26,27 +26,33 @@ const sdk = require("node-appwrite");
  * - DATABASE_ID
  * - ARTICLES_COLLECTION_ID
  * - PUBLICATIONS_COLLECTION_ID
- * - CONFIG_COLLECTION_ID
+ * - WORKFLOWS_COLLECTION_ID
  * - EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID (B.8)
  */
 
 const SERVER_GUARD_ID = 'server-guard';
-const CONFIG_DOCUMENT_ID = 'workflow_config';
 
 // Tiltott karakterek a fájlnévben (Windows + InDesign kompatibilitás)
 const FORBIDDEN_CHARS = /[\\/:*?"<>|]/;
 
-
 /**
- * Érvényes állapotok betöltése a config-ból (vagy fallback).
+ * Betölti a compiled workflow-ból az érvényes állapot ID-kat.
  */
-async function loadValidStates(databases, databaseId, configCollectionId, log) {
+async function loadValidStates(databases, databaseId, workflowsCollectionId, editorialOfficeId, log) {
+    if (!editorialOfficeId) return null;
     try {
-        const doc = await databases.getDocument(databaseId, configCollectionId, CONFIG_DOCUMENT_ID);
-        return new Set(JSON.parse(doc.validStates || '[]'));
+        const result = await databases.listDocuments(databaseId, workflowsCollectionId, [
+            sdk.Query.equal('editorialOfficeId', editorialOfficeId),
+            sdk.Query.limit(1)
+        ]);
+        if (result.documents.length === 0) return null;
+        const doc = result.documents[0];
+        const compiled = typeof doc.compiled === 'string' ? JSON.parse(doc.compiled) : doc.compiled;
+        const states = Array.isArray(compiled.states) ? compiled.states : [];
+        return new Set(states.map(s => s.id));
     } catch (e) {
-        log(`[Config] Fallback valid states használata: ${e.message}`);
-        return new Set([0, 1, 2, 3, 4, 5, 6, 7]);
+        log(`[Workflow] Workflow betöltés hiba: ${e.message}`);
+        return null;
     }
 }
 
@@ -106,7 +112,7 @@ module.exports = async function ({ req, res, log, error }) {
         const databaseId = process.env.DATABASE_ID;
         const articlesCollectionId = process.env.ARTICLES_COLLECTION_ID;
         const publicationsCollectionId = process.env.PUBLICATIONS_COLLECTION_ID;
-        const configCollectionId = process.env.CONFIG_COLLECTION_ID;
+        const workflowsCollectionId = process.env.WORKFLOWS_COLLECTION_ID;
         const officeMembershipsCollectionId = process.env.EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID;
 
         // ── Fail-fast env var guard (B.8) ──
@@ -206,10 +212,12 @@ module.exports = async function ({ req, res, log, error }) {
         const corrections = {};
 
         // ── 5. Állapot validáció ──
-        const validStates = await loadValidStates(databases, databaseId, configCollectionId, log);
-        if (!validStates.has(Number(payload.state))) {
-            corrections.state = 0;
-            log(`Érvénytelen állapot (${payload.state}) → 0`);
+        const validStates = await loadValidStates(databases, databaseId, workflowsCollectionId, payload.editorialOfficeId, log);
+        if (validStates && payload.state && !validStates.has(payload.state)) {
+            // Érvénytelen állapot → első állapot
+            const initialState = validStates.values().next().value || "designing";
+            corrections.state = initialState;
+            log(`Érvénytelen állapot (${payload.state}) → ${initialState}`);
         }
 
         // ── 6. Contributors JSON validáció ──

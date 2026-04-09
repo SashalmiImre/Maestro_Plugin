@@ -19,14 +19,14 @@ export const COLLECTIONS = {
     SYSTEM_VALIDATIONS: 'validations',
     LAYOUTS: 'layouts',
     DEADLINES: 'deadlines',
-    CONFIG: 'config',
     ORGANIZATIONS: 'organizations',
     ORGANIZATION_MEMBERSHIPS: 'organizationMemberships',
     EDITORIAL_OFFICES: 'editorialOffices',
     EDITORIAL_OFFICE_MEMBERSHIPS: 'editorialOfficeMemberships',
     ORGANIZATION_INVITES: 'organizationInvites',
     GROUPS: 'groups',
-    GROUP_MEMBERSHIPS: 'groupMemberships'
+    GROUP_MEMBERSHIPS: 'groupMemberships',
+    WORKFLOWS: 'workflows'
 };
 
 /**

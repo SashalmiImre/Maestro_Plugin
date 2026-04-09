@@ -16,7 +16,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { tables, ID, DATABASE_ID, PUBLICATIONS_COLLECTION_ID, ARTICLES_COLLECTION_ID, USER_VALIDATIONS_COLLECTION_ID, LAYOUTS_COLLECTION_ID, DEADLINES_COLLECTION_ID, GROUP_MEMBERSHIPS_COLLECTION_ID, Query } from "../config/appwriteConfig.js";
+import { tables, ID, DATABASE_ID, PUBLICATIONS_COLLECTION_ID, ARTICLES_COLLECTION_ID, USER_VALIDATIONS_COLLECTION_ID, LAYOUTS_COLLECTION_ID, DEADLINES_COLLECTION_ID, GROUP_MEMBERSHIPS_COLLECTION_ID, WORKFLOWS_COLLECTION_ID, Query } from "../config/appwriteConfig.js";
 import { realtime } from "../config/realtimeClient.js";
 import { useConnection } from "./ConnectionContext.jsx";
 import { useScope } from "./ScopeContext.jsx";
@@ -27,7 +27,6 @@ import { isNetworkError, isAuthError } from "../utils/errorUtils.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../config/maestroEvents.js";
 import { FETCH_TIMEOUT_CONFIG, TOAST_TYPES } from "../utils/constants.js";
 import { isLegacyRootPath, isAbsoluteFilePath, toCanonicalPath, toRelativeArticlePath } from "../utils/pathUtils.js";
-import { syncWorkflowConfig } from "../utils/syncWorkflowConfig.js";
 
 /** Név szerinti komparátor rendezéshez. */
 const compareByName = (a, b) => (a?.name ?? '').localeCompare(b?.name ?? '');
@@ -73,6 +72,9 @@ export const DataProvider = ({ children }) => {
     const [validations, setValidations] = useState([]); // User Validations
     const [layouts, setLayouts] = useState([]);
     const [deadlines, setDeadlines] = useState([]);
+
+    const [workflow, setWorkflow] = useState(null);
+    const workflowFetchedForOfficeRef = useRef(null);
 
     // 4. Loading indikátorok
     const [isLoading, setIsLoading] = useState(true); // Globális loading (initial)
@@ -274,6 +276,7 @@ export const DataProvider = ({ children }) => {
             setLayouts([]);
             setDeadlines([]);
             setValidations([]);
+            setWorkflow(null);
             setIsInitialized(true);
             if (!isBackground) {
                 setIsLoading(false);
@@ -293,6 +296,14 @@ export const DataProvider = ({ children }) => {
         try {
             log('[DataContext] Adatok lekérése...', { activePublicationId: currentPubId, generation });
             const cacheBustId = `cache-bust-${Date.now()}`;
+
+            // Workflow fetch — csak ha office változott vagy még nem töltöttük be
+            // (Realtime hot-reload frissíti, ha közben módosul)
+            if (workflowFetchedForOfficeRef.current !== currentOfficeId) {
+                fetchWorkflow(currentOfficeId).then(success => {
+                    if (success) workflowFetchedForOfficeRef.current = currentOfficeId;
+                });
+            }
 
             // 1. Publikációk lekérése (Mindig) — kritikus
             const publicationsPromise = withRetry(
@@ -535,15 +546,44 @@ export const DataProvider = ({ children }) => {
     // Inicializálás és Active Publication Váltás
     // ═══════════════════════════════════════════════════════════════════════════
 
-    // Workflow config szinkronizálás — egyszer fut, inicializálás után.
-    // A Cloud Function-ök a config collection-ből olvassák a konstansokat.
-    const configSyncedRef = useRef(false);
-    useEffect(() => {
-        if (isInitialized && !configSyncedRef.current) {
-            configSyncedRef.current = true;
-            syncWorkflowConfig();
+    // Workflow fetch — office-szintű, a fetchData-ban (és recovery-nél) fut.
+    // A compiled JSON-t parse-oljuk és a workflow state-be rakjuk.
+    const fetchWorkflow = useCallback(async (officeId) => {
+        if (!officeId) {
+            setWorkflow(null);
+            return true;
         }
-    }, [isInitialized]);
+        try {
+            const response = await withRetry(
+                () => withTimeout(
+                    tables.listRows({
+                        databaseId: DATABASE_ID,
+                        tableId: WORKFLOWS_COLLECTION_ID,
+                        queries: [
+                            Query.equal("editorialOfficeId", officeId),
+                            Query.limit(1)
+                        ]
+                    }),
+                    FETCH_TIMEOUT_CONFIG.NON_CRITICAL_DATA_MS, "fetchWorkflow"
+                ),
+                { operationName: "fetchWorkflow" }
+            );
+            const rows = response.documents || response.rows || [];
+            if (rows.length > 0) {
+                const doc = rows[0];
+                const compiled = typeof doc.compiled === 'string' ? JSON.parse(doc.compiled) : doc.compiled;
+                setWorkflow(compiled);
+                log(`[DataContext] Workflow betöltve (v${doc.version}, office=${officeId})`);
+            } else {
+                logWarn('[DataContext] Nincs workflow doc ehhez az office-hoz:', officeId);
+                setWorkflow(null);
+            }
+            return true;
+        } catch (err) {
+            logError('[DataContext] Workflow fetch hiba:', err);
+            return false;
+        }
+    }, []);
 
     // Active Publication váltás kezelése
     const updateActivePublicationId = useCallback((id) => {
@@ -995,7 +1035,8 @@ export const DataProvider = ({ children }) => {
             `databases.${DATABASE_ID}.collections.${USER_VALIDATIONS_COLLECTION_ID}.documents`,
             `databases.${DATABASE_ID}.collections.${LAYOUTS_COLLECTION_ID}.documents`,
             `databases.${DATABASE_ID}.collections.${DEADLINES_COLLECTION_ID}.documents`,
-            `databases.${DATABASE_ID}.collections.${GROUP_MEMBERSHIPS_COLLECTION_ID}.documents`
+            `databases.${DATABASE_ID}.collections.${GROUP_MEMBERSHIPS_COLLECTION_ID}.documents`,
+            `databases.${DATABASE_ID}.collections.${WORKFLOWS_COLLECTION_ID}.documents`
         ];
 
         const unsubscribe = realtime.subscribe(channels, (response) => {
@@ -1160,6 +1201,29 @@ export const DataProvider = ({ children }) => {
                 log(`[DataContext] Csoporttagság változás (Realtime): groupId=${groupId}`);
                 dispatchMaestroEvent(MaestroEvent.groupMembershipChanged, { groupId });
             }
+
+            // --- Workflow ---
+            // Office-szintű workflow doc változás → compiled JSON újra parse-olás
+            else if (event.includes(WORKFLOWS_COLLECTION_ID)) {
+                if (payload.editorialOfficeId && payload.editorialOfficeId !== activeEditorialOfficeIdRef.current) {
+                    return; // Más szerkesztőség workflow-ja — ignoráljuk
+                }
+                if (event.includes(".update") || event.includes(".create")) {
+                    try {
+                        const compiled = typeof payload.compiled === 'string'
+                            ? JSON.parse(payload.compiled)
+                            : payload.compiled;
+                        setWorkflow(compiled);
+                        log('[DataContext] Workflow frissítve (Realtime)');
+                        dispatchMaestroEvent(MaestroEvent.workflowChanged);
+                    } catch (err) {
+                        logError('[DataContext] Workflow compiled parse hiba (Realtime):', err);
+                    }
+                } else if (event.includes(".delete")) {
+                    logWarn('[DataContext] Workflow doc törölve (Realtime)');
+                    setWorkflow(null);
+                }
+            }
         });
 
         return () => {
@@ -1195,6 +1259,7 @@ export const DataProvider = ({ children }) => {
         validations,
         layouts,
         deadlines,
+        workflow,
         isLoading,
         isSwitchingPublication,
         activePublicationId,
@@ -1227,7 +1292,7 @@ export const DataProvider = ({ children }) => {
         updateDeadline,
         deleteDeadline
     }), [
-        publications, articles, validations, layouts, deadlines,
+        publications, articles, validations, layouts, deadlines, workflow,
         isLoading, isSwitchingPublication, activePublicationId,
         updateActivePublicationId, fetchData,
         createPublication, updatePublication, deletePublication,

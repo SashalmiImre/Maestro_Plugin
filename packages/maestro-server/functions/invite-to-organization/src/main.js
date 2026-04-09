@@ -60,7 +60,14 @@ const crypto = require("crypto");
  * - ORGANIZATION_INVITES_COLLECTION_ID
  * - GROUPS_COLLECTION_ID
  * - GROUP_MEMBERSHIPS_COLLECTION_ID
+ * - WORKFLOWS_COLLECTION_ID
  */
+
+/**
+ * Alapértelmezett workflow compiled JSON — új office bootstrap-nél seed-elődik.
+ * Inline másolat a maestro-shared/defaultWorkflow.json-ből.
+ */
+const DEFAULT_WORKFLOW = require('./defaultWorkflow.json');
 
 const INVITE_VALIDITY_DAYS = 7;
 const TOKEN_BYTES = 32;
@@ -164,6 +171,7 @@ module.exports = async function ({ req, res, log, error }) {
         const invitesCollectionId = process.env.ORGANIZATION_INVITES_COLLECTION_ID;
         const groupsCollectionId = process.env.GROUPS_COLLECTION_ID;
         const groupMembershipsCollectionId = process.env.GROUP_MEMBERSHIPS_COLLECTION_ID;
+        const workflowsCollectionId = process.env.WORKFLOWS_COLLECTION_ID;
 
         // ── Fail-fast env var guard ──
         const missingEnvVars = [];
@@ -175,6 +183,7 @@ module.exports = async function ({ req, res, log, error }) {
         if (!invitesCollectionId) missingEnvVars.push('ORGANIZATION_INVITES_COLLECTION_ID');
         if (!groupsCollectionId) missingEnvVars.push('GROUPS_COLLECTION_ID');
         if (!groupMembershipsCollectionId) missingEnvVars.push('GROUP_MEMBERSHIPS_COLLECTION_ID');
+        if (!workflowsCollectionId) missingEnvVars.push('WORKFLOWS_COLLECTION_ID');
         if (!apiKey) missingEnvVars.push('APPWRITE_API_KEY (vagy x-appwrite-key header)');
         if (missingEnvVars.length > 0) {
             error(`[Config] Hiányzó környezeti változók: ${missingEnvVars.join(', ')}`);
@@ -316,7 +325,7 @@ module.exports = async function ({ req, res, log, error }) {
                         organizationId: newOrgId,
                         name: officeName,
                         slug: officeSlug
-                        // workflowId: null — Fázis 4 tölti fel
+                        // workflowId: a 7. lépésben (workflow seeding) töltjük ki
                     }
                 );
                 newOfficeId = office.$id;
@@ -466,14 +475,47 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 500, 'group_memberships_create_failed');
             }
 
-            log(`[Bootstrap] User ${callerId} új szervezetet hozott létre: org=${newOrgId}, office=${newOfficeId}, groups=${createdGroupIds.length}, memberships=${createdGroupMembershipIds.length}`);
+            // 7. workflows — alapértelmezett workflow seed az új szerkesztőséghez
+            let newWorkflowId = null;
+            try {
+                const workflowDocId = `wf-${newOfficeId}`;
+                const workflowDoc = await databases.createDocument(
+                    databaseId,
+                    workflowsCollectionId,
+                    workflowDocId,
+                    {
+                        editorialOfficeId: newOfficeId,
+                        organizationId: newOrgId,
+                        name: 'Alapértelmezett workflow',
+                        version: 1,
+                        compiled: JSON.stringify(DEFAULT_WORKFLOW),
+                        updatedByUserId: callerId
+                    }
+                );
+                newWorkflowId = workflowDoc.$id;
+
+                // Office doc frissítése a workflowId-val
+                await databases.updateDocument(
+                    databaseId,
+                    officesCollectionId,
+                    newOfficeId,
+                    { workflowId: newWorkflowId }
+                );
+            } catch (err) {
+                // A workflow seeding nem kritikus — az office működik nélküle is,
+                // a Plugin/Dashboard fallback-et használ. Logolunk, de nem rollback-elünk.
+                error(`[Bootstrap] workflow seed hiba: ${err.message}`);
+            }
+
+            log(`[Bootstrap] User ${callerId} új szervezetet hozott létre: org=${newOrgId}, office=${newOfficeId}, groups=${createdGroupIds.length}, memberships=${createdGroupMembershipIds.length}, workflow=${newWorkflowId || 'FAILED'}`);
 
             return res.json({
                 success: true,
                 action: 'bootstrapped',
                 organizationId: newOrgId,
                 editorialOfficeId: newOfficeId,
-                groupsSeeded: true
+                groupsSeeded: true,
+                workflowSeeded: !!newWorkflowId
             });
         }
 

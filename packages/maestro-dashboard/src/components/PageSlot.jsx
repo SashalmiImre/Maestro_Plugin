@@ -6,7 +6,8 @@
  */
 
 import React from 'react';
-import { STATUS_COLORS } from '../config.js';
+import { useData } from '../contexts/DataContext.jsx';
+import { getStateColor } from '@shared/workflowRuntime.js';
 import ValidationIcons from './ValidationIcons.jsx';
 
 const PageSlot = React.memo(function PageSlot({ pageData, pageNum, validationItems }) {
@@ -30,8 +31,9 @@ const PageSlot = React.memo(function PageSlot({ pageData, pageNum, validationIte
     }
 
     // Állapot szín sáv
+    const { workflow } = useData();
     const stateColor = pageData.state != null
-        ? (STATUS_COLORS[pageData.state] || '#999')
+        ? (getStateColor(workflow, pageData.state) || '#999')
         : '#999';
     const ignoredClass = pageData.ignored ? ' ignored' : '';
     const fallbackClass = pageData.isFallback ? ' fallback' : '';

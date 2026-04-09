@@ -1,12 +1,12 @@
 /**
  * @fileoverview Ellenőrzi, hogy egy cikk megfelel-e a munkafolyamat-állapot követelményeinek.
  * Az állapotátmenethez szükséges összes validációt (fájl létezés, oldalszám, fájlnév, preflight)
- * ez az osztály koordinálja a WORKFLOW_CONFIG requiredToEnter/requiredToExit alapján.
+ * ez az osztály koordinálja a workflow.validations requiredToEnter/requiredToExit alapján.
  */
 
 import { ValidatorBase } from "./ValidatorBase.js";
 import { PreflightValidator } from "./PreflightValidator.js";
-import { WORKFLOW_CONFIG } from "../workflow/workflowConstants.js";
+import { getStateValidations } from "maestro-shared/workflowRuntime.js";
 import { VALIDATOR_TYPES } from "../validationConstants.js";
 import { isValidFileName, toAbsoluteArticlePath, escapePathForExtendScript } from "../pathUtils.js";
 
@@ -21,26 +21,31 @@ export class StateComplianceValidator extends ValidatorBase {
     /**
      * Állapot-specifikus validáció futtatása.
      *
-     * @param {Object} context - { article: Object, targetState: number }
+     * @param {Object} context - { article, workflow, targetState, publicationRootPath }
      * @param {Object} context.article - A validálandó cikk objektum
-     * @param {number} [context.targetState] - Célállapot (ha átmenet-validáció; hiánya statikus ellenőrzést jelent)
+     * @param {Object} [context.workflow] - A compiled workflow JSON (DataContext.workflow)
+     * @param {string} [context.targetState] - Célállapot string ID (ha átmenet-validáció)
+     * @param {string} [context.publicationRootPath] - Kiadvány gyökér útvonala
      * @returns {Promise<Object>} Validációs eredmény { isValid, errors[], warnings[], timestamp }
      */
     async validate(context) {
-        const { article, targetState } = context;
+        const { article, workflow, targetState } = context;
         if (!article) return this.failure("Nincs cikk megadva.");
 
         // requiredToEnter + requiredToExit összegyűjtése
         let requiredChecks = [];
 
-        if (targetState !== undefined) {
+        if (targetState !== undefined && workflow) {
             // Átmenet-validáció: kilépési + belépési feltételek
-            const exitReqs = WORKFLOW_CONFIG[article.state]?.validations?.requiredToExit || [];
-            const enterReqs = WORKFLOW_CONFIG[targetState]?.validations?.requiredToEnter || [];
+            const exitValidations = getStateValidations(workflow, article.state);
+            const enterValidations = getStateValidations(workflow, targetState);
+            const exitReqs = exitValidations?.requiredToExit || [];
+            const enterReqs = enterValidations?.requiredToEnter || [];
             requiredChecks = [...new Set([...exitReqs, ...enterReqs])];
-        } else {
+        } else if (workflow) {
             // Statikus validáció: belépési feltételek a jelenlegi állapothoz
-            requiredChecks = WORKFLOW_CONFIG[article.state]?.validations?.requiredToEnter || [];
+            const stateValidations = getStateValidations(workflow, article.state);
+            requiredChecks = stateValidations?.requiredToEnter || [];
         }
 
         const results = { isValid: true, errors: [], warnings: [] };
@@ -67,10 +72,10 @@ export class StateComplianceValidator extends ValidatorBase {
                     break;
 
                 case VALIDATOR_TYPES.PREFLIGHT_CHECK: {
-                    // Legacy fallback: ha nincs explicit options, onEntry config-ból keresi
-                    if (Object.keys(options).length === 0) {
-                        const entryConfig = WORKFLOW_CONFIG[targetState]
-                            ?.validations?.onEntry
+                    // Ha nincs explicit options, onEntry config-ból keresi
+                    if (Object.keys(options).length === 0 && workflow && targetState) {
+                        const enterValidations = getStateValidations(workflow, targetState);
+                        const entryConfig = enterValidations?.onEntry
                             ?.find(v => v.validator === VALIDATOR_TYPES.PREFLIGHT_CHECK);
                         if (entryConfig?.options) options = entryConfig.options;
                     }
@@ -97,9 +102,6 @@ export class StateComplianceValidator extends ValidatorBase {
 
     /**
      * Fájl létezés ellenőrzése InDesign ExtendScript-tel.
-     * @param {Object} article - A validálandó cikk
-     * @param {Object} results - Eredmény objektum
-     * @param {string} [publicationRootPath] - Kiadvány kanonikus rootPath (relatív filePath feloldásához)
      */
     async _checkFileAccessible(article, results, publicationRootPath) {
         const path = article.filePath || article.FilePath;

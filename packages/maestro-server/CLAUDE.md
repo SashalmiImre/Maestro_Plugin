@@ -65,9 +65,6 @@ maestro-server/
     ├── validate-publication-update/   ← Kiadvány módosítás validáció (default contributor-ok, rootPath)
     │   ├── package.json
     │   └── src/main.js
-    ├── validate-labels/               ← Felhasználói label validáció (érvénytelen label-ek eltávolítása)
-    │   ├── package.json
-    │   └── src/main.js
     ├── cascade-delete/                ← Kaszkád törlés (cikk: üzenetek, validációk, thumbnailek; kiadvány: cikkek, layoutok, deadline-ok)
     │   ├── appwrite.config.json
     │   ├── package.json
@@ -96,7 +93,6 @@ maestro-server/
 | `article-update-guard` | Article Update Guard | node-18.0 | 30s | `articles.*.update` |
 | `validate-article-creation` | Validate Article Creation | node-18.0 | 15s | `articles.*.create` |
 | `validate-publication-update` | Validate Publication Update | node-18.0 | 15s | `publications.*.create/update` |
-| `validate-labels` | Validate Labels | node-18.0 | 15s | `users.*.update` |
 | `cascade-delete` | Cascade Delete | node-18.0 | 15s | `articles/publications.*.delete` |
 | `cleanup-orphaned-locks` | Cleanup Orphaned Locks | node-18.0 | 30s | Schedule: `0 3 * * *` |
 | `cleanup-orphaned-thumbnails` | Cleanup Orphaned Thumbnails | node-18.0 | 120s | Schedule: `0 4 * * 0` |
@@ -119,10 +115,9 @@ maestro-server/
 
 | Function | Változók |
 |---|---|
-| `article-update-guard` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `CONFIG_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `GROUPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID` |
-| `validate-article-creation` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `CONFIG_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID` |
+| `article-update-guard` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `GROUPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID` |
+| `validate-article-creation` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID` |
 | `validate-publication-update` | `DATABASE_ID`, `PUBLICATIONS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID` |
-| `validate-labels` | `DATABASE_ID`, `CONFIG_COLLECTION_ID` |
 | `cascade-delete` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `ARTICLE_MESSAGES_COLLECTION_ID`, `USER_VALIDATIONS_COLLECTION_ID`, `VALIDATIONS_COLLECTION_ID`, `DEADLINES_COLLECTION_ID`, `LAYOUTS_COLLECTION_ID`, `THUMBNAILS_BUCKET_ID` |
 | `cleanup-orphaned-locks` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID` |
 | `cleanup-orphaned-thumbnails` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `THUMBNAILS_BUCKET_ID` |
@@ -138,7 +133,6 @@ maestro-server/
 | `article-update-guard` | `databases.read`, `databases.write`, `users.read` |
 | `validate-article-creation` | `databases.read`, `databases.write`, `users.read` |
 | `validate-publication-update` | `databases.read`, `databases.write`, `users.read` |
-| `validate-labels` | `users.read`, `users.write`, `databases.read` |
 | `cascade-delete` | `databases.read`, `databases.write`, `files.read`, `files.write` |
 | `cleanup-orphaned-locks` | `databases.read`, `databases.write`, `users.read` |
 | `cleanup-orphaned-thumbnails` | `databases.read`, `files.read`, `files.write` |
@@ -157,12 +151,12 @@ maestro-server/
 
 **Ellenőrzések:**
 1. **Sentinel guard** — `modifiedByClientId === 'server-guard'` → skip (végtelen ciklus védelem)
-2. **Config betöltés** — DB `workflow_config` dokumentumból, fallback hardkódolt értékekre (fail-closed)
-3. **Állapot érvényesség** — `validStates` halmazban van-e (érvénytelen → 0)
-4. **Állapotátmenet** — `previousState → state` a `validTransitions` alapján
-5. **Parent scope sync (B.8)** — szülő publikáció `editorialOfficeId`/`organizationId` mezőkhöz igazítás (cross-tenant scope támadás scenario 1 védelem)
-6. **Scope ellenőrzés (B.8)** — caller user tagja-e a cikk `editorialOfficeId`-jának (`editorialOfficeMemberships` lookup); nem-tag → state revert. Legacy null scope → skip + warning log.
-7. **Jogosultság** — felhasználó csoporttagsága (`groupMemberships` + `groups` query → slug tömb) / label-jei engedélyezik-e az átmenetet
+2. **Workflow betöltés** — `workflows` collection-ből az office `editorialOfficeId` alapján, 60s process cache (fail-closed: nincs workflow → state revert)
+3. **Parent scope sync (B.8)** — szülő publikáció `editorialOfficeId`/`organizationId` mezőkhöz igazítás
+4. **Állapot érvényesség** — `compiled.states` kulcsai között van-e (érvénytelen → első állapot order szerint)
+5. **Állapotátmenet** — `previousState → state` a `compiled.transitions` alapján
+6. **Scope ellenőrzés (B.8)** — caller user tagja-e a cikk `editorialOfficeId`-jának; nem-tag → state revert
+7. **Jogosultság** — felhasználó csoporttagsága (`groupMemberships` + `groups` → slug tömb) a `compiled.statePermissions` és `compiled.leaderGroups` alapján
 8. **Contributor mezők** — `contributors` JSON parse → slug-ok iterálása → userId létezés ellenőrzés (log only)
 9. **previousState karbantartás** — null esetén inicializálás, revert esetén frissítés
 
@@ -177,10 +171,6 @@ maestro-server/
 Kiadvány létrehozás/módosításkor fut. `defaultContributors` JSON parse → nem létező userId → nullázás. Legacy rootPath → logolás.
 
 **Scope ellenőrzés (B.8):** create eseménynél hiányzó scope mezők vagy nem-tag caller → publikáció törlése. Update path: nem-tag caller csak logolódik (teljes field-level revert Fázis 6 hatáskör).
-
-### validate-labels
-
-User frissítéskor fut. A `config` collection-ből olvassa az érvényes label-eket (fallback: hardcoded lista). Érvénytelen label → automatikus eltávolítás.
 
 ### cascade-delete
 
@@ -263,17 +253,17 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 
 ---
 
-## Config Collection
+## Workflows Collection (Fázis 4)
 
-A guard function-ök a `config` collection `workflow_config` dokumentumából olvassák a workflow konstansokat. A plugin induláskor szinkronizálja (`maestro-indesign/src/core/utils/syncWorkflowConfig.js`).
+A guard function-ök a `workflows` collection `compiled` JSON mezőjéből olvassák a workflow konfigurációt. Minden szerkesztőséghez (editorial office) tartozik egy workflow dokumentum.
 
-**Mezők:** `configVersion`, `statePermissions`, `validTransitions`, `capabilityLabels`, `validLabels`, `validStates` (JSON string értékek).
+**Betöltés**: `getWorkflowForOffice(databases, databaseId, workflowsCollectionId, editorialOfficeId)` — 60s TTL process-szintű cache-sel, hogy ne legyen per-request DB olvasás.
 
-**Verzió léptetés:** Ha bármely konstans változik → `CONFIG_VERSION` léptetése a `maestro-shared/workflowConfig.js`-ben.
+**Fail-closed**: Ha nincs workflow dokumentum (cache miss + DB üres) → state revert / reject. Nincs fallback konfiguráció.
 
-**Fallback**: Ha a config nem elérhető, minden guard function hardkódolt fallback értékeket használ. Ezeket szinkronban kell tartani a `maestro-shared` megfelelő fájljaival (`workflowConfig.js`, `labelConfig.js`).
+**Compiled JSON struktúra**: `states`, `transitions`, `validations`, `commands`, `elementPermissions`, `contributorGroups`, `leaderGroups`, `statePermissions`, `capabilities`.
 
-**Contributor mezők (Fázis 3)**: A 7+7 hardkódolt contributor ID mező (`designerId`, `editorId`, stb.) helyett egyetlen `contributors` (articles) és `defaultContributors` (publications) JSON longtext mező van. A JSON kulcsa a csoport `slug`-ja (pl. `{"designers":"userId1","editors":"userId2"}`). A CF-ek `JSON.parse()` → kulcs iterálás → userId validáció mintát használják.
+**Contributor mezők (Fázis 3)**: A `contributors` (articles) és `defaultContributors` (publications) JSON longtext mező, a kulcsa a csoport `slug`-ja (pl. `{"designers":"userId1","editors":"userId2"}`). A CF-ek `JSON.parse()` → kulcs iterálás → userId validáció mintát használják.
 
 ---
 
@@ -281,12 +271,13 @@ A guard function-ök a `config` collection `workflow_config` dokumentumából ol
 
 ```
 maestro-server (functions)
-    ↑ konfigurálja
-maestro-indesign (syncWorkflowConfig.js → config collection → functions olvassák)
-    ↑ konstansok
-maestro-shared (workflowConfig.js, labelConfig.js — fallback értékek forrása)
+    ↑ workflow config
+    workflows collection (compiled JSON — a Dashboard Workflow Designer írja, Fázis 5+)
+    ↑ olvassa
+maestro-indesign (Plugin, read-only a workflows-ra)
+maestro-dashboard (Dashboard, a designer UI fogja írni)
 ```
 
 - A function-ök **nem importálnak** a monorepo többi csomagjából — teljesen önállóak
-- A `maestro-shared` konstansok **manuálisan szinkronizálandók** a fallback értékekkel
-- A plugin-oldali `syncWorkflowConfig.js` írja a DB config-ot, amit a function-ök olvasnak
+- A workflow config a `workflows` collection `compiled` JSON-jából származik — nincs fallback, fail-closed
+- A Plugin és Dashboard a `workflowRuntime.js` (maestro-shared) helpereket használja, a CF-ek közvetlen JSON olvasást

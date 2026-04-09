@@ -24,7 +24,8 @@ import { canUserMoveArticle } from "../../../../core/utils/workflow/workflowPerm
 import { useElementPermissions, useContributorPermissions } from "../../../../data/hooks/useElementPermission.js";
 import { useContributorGroups } from "../../../../data/hooks/useContributorGroups.js";
 import { SCRIPT_LANGUAGE_JAVASCRIPT, TOAST_TYPES } from "../../../../core/utils/constants.js";
-import { WORKFLOW_CONFIG, MARKERS } from "../../../../core/utils/workflow/workflowConstants.js";
+import { MARKERS } from "maestro-shared/constants.js";
+import { getStateLabel } from "maestro-shared/workflowRuntime.js";
 import { log, logError, logWarn } from "../../../../core/utils/logger.js";
 import {
     generateRenumberDocumentScript,
@@ -45,7 +46,7 @@ import { uploadThumbnails, deleteOldThumbnails, cleanupTempFiles, getTempFolderP
 
 export const ArticleProperties = ({ article, publication, onUpdate }) => {
     const { user } = useUser();
-    const { updateArticle, applyArticleUpdate } = useData();
+    const { updateArticle, applyArticleUpdate, workflow } = useData();
     const { renameArticle } = useArticles(article?.publicationId, null, false);
     const { showToast } = useToast();
     const { hasErrors } = useUnifiedValidation(article);
@@ -338,7 +339,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
         }
 
         // Jogosultsági ellenőrzés (a validáció előtt — a drága preflight ne fusson feleslegesen)
-        const permission = canUserMoveArticle(article, article.state, user);
+        const permission = canUserMoveArticle(workflow, article.state, user?.groupSlugs || []);
         if (!permission.allowed) {
             showToast(
                 'Nincs jogosultságod az állapotváltáshoz',
@@ -357,7 +358,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
         }
 
         try {
-            const validation = await WorkflowEngine.validateTransition(article, targetState, publication?.rootPath);
+            const validation = await WorkflowEngine.validateTransition(workflow, article, targetState, publication?.rootPath);
             if (!validation.isValid) {
                 setIsSyncing(false);
                 // Csatolatlan meghajtó → specifikus toast, a validációs eredményeket nem bántjuk
@@ -379,12 +380,11 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
                 return;
             }
 
-            const result = await WorkflowEngine.executeTransition(article, targetState, user, publication?.rootPath);
+            const result = await WorkflowEngine.executeTransition(workflow, article, targetState, user, user?.groupSlugs || [], publication?.rootPath);
             if (result.success) {
                 if (result.document) applyArticleUpdate(result.document);
                 if (onUpdate && result.document) onUpdate(result.document);
-                const targetConfig = WORKFLOW_CONFIG[targetState]?.config;
-                showToast(`Állapot: ${targetConfig?.label || 'Frissítve'}`, TOAST_TYPES.SUCCESS);
+                showToast(`Állapot: ${getStateLabel(workflow, targetState)}`, TOAST_TYPES.SUCCESS);
             } else {
                 logError("[ArticleProperties] Transition error:", result.error);
                 showToast('Az állapotváltás sikertelen', TOAST_TYPES.ERROR, result.error || 'Ismeretlen hiba történt a végrehajtás során.');
@@ -439,6 +439,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
                 <GeneralSection
                     article={article}
                     user={user}
+                    workflow={workflow}
                     onFieldUpdate={handleFieldUpdate}
                     onPageNumberChange={handlePageNumberChange}
                     onStateTransition={handleStateTransition}

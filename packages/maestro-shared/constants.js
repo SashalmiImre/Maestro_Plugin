@@ -22,3 +22,13 @@ export const VALIDATION_TYPES = {
     WARNING: 'warning',
     INFO: 'info'
 };
+
+/**
+ * Jelölő (Marker) bitmaszkok.
+ * A cikk megjelenítési állapotát jelölik (pl. kimarad a kiadványból).
+ * @enum {number}
+ */
+export const MARKERS = {
+    NONE: 0,
+    IGNORE: 1
+};

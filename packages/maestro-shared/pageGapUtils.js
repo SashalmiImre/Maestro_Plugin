@@ -8,7 +8,7 @@
  * @module shared/pageGapUtils
  */
 
-import { WORKFLOW_STATES } from "./workflowConfig.js";
+import { getInitialState } from "./workflowRuntime.js";
 
 /**
  * Meghatározza a kiadvány oldalterjedelmén belüli lefedetlen (hozzárendeletlen) oldaltartományokat.
@@ -18,9 +18,10 @@ import { WORKFLOW_STATES } from "./workflowConfig.js";
  *
  * @param {Array} articles - A kiadvány ÖSSZES cikke (szűrés előtt)
  * @param {Object} publication - A kiadvány objektum (coverageStart, coverageEnd)
+ * @param {Object} [workflow] - A compiled workflow JSON (opcionális, a placeholder állapothoz)
  * @returns {Array<Object>} Helykitöltő objektumok tömbje
  */
-export function buildPlaceholderRows(articles, publication) {
+export function buildPlaceholderRows(articles, publication, workflow) {
     const coverageStart = publication?.coverageStart;
     const coverageEnd = publication?.coverageEnd;
 
@@ -72,7 +73,7 @@ export function buildPlaceholderRows(articles, publication) {
             if (gapStart === null) gapStart = page;
         } else {
             if (gapStart !== null) {
-                placeholders.push(createPlaceholder(gapStart, page - 1));
+                placeholders.push(createPlaceholder(gapStart, page - 1, workflow));
                 gapStart = null;
             }
         }
@@ -80,7 +81,7 @@ export function buildPlaceholderRows(articles, publication) {
 
     // Ha a terjedelem végén is rés volt
     if (gapStart !== null) {
-        placeholders.push(createPlaceholder(gapStart, coverageEnd));
+        placeholders.push(createPlaceholder(gapStart, coverageEnd, workflow));
     }
 
     return placeholders;
@@ -94,13 +95,13 @@ export function buildPlaceholderRows(articles, publication) {
  * @param {number} endPage
  * @returns {Object}
  */
-function createPlaceholder(startPage, endPage) {
+function createPlaceholder(startPage, endPage, workflow) {
     return {
         $id: `placeholder-${startPage}-${endPage}`,
         name: null,
         startPage,
         endPage,
-        state: WORKFLOW_STATES.DESIGNING,
+        state: getInitialState(workflow) || "designing",
         markers: 0,
         isPlaceholder: true
     };

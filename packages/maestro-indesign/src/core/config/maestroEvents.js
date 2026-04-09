@@ -77,6 +77,10 @@ export const MaestroEvent = Object.freeze({
     /** Verifikáció befejeződött — lockkezelés folytatása. Nincs detail. */
     verificationEnded: 'maestro:verification-ended',
 
+    // --- Workflow ---
+    /** Workflow konfiguráció megváltozott (Realtime hot-reload). Nincs detail. */
+    workflowChanged: 'maestro:workflow-changed',
+
     // --- Infrastruktúra ---
     /** Proxy endpoint váltás történt. Detail: { isPrimary, endpoint } */
     endpointSwitched: 'maestro:endpoint-switched',

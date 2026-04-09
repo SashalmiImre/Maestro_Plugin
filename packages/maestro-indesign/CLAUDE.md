@@ -122,7 +122,7 @@
     - **Egységes Architektúra**: Összefésüli a rendszer validációkat (Preflight, Overlap) és a felhasználói üzeneteket egyetlen listába.
     - **Felhasználói Validációk**: Közvetlenül a `DataContext` kezeli (DB-ből származnak), Realtime-on keresztül szinkronizálva.
     - **Rendszer Validációk**: A `ValidationContext` kezeli (memóriában, session-önként).
-    - **Állapotátmenet-validáció**: A `StateComplianceValidator` koordinálja az összes állapotváltási ellenőrzést (`file_accessible`, `page_number_check`, `filename_verification`, `preflight_check`) a `WORKFLOW_CONFIG` `requiredToEnter`/`requiredToExit` alapján. A `WorkflowEngine.validateTransition()` delegál a `validationRunner.validate()` → `StateComplianceValidator` láncon keresztül.
+    - **Állapotátmenet-validáció**: A `StateComplianceValidator` koordinálja az összes állapotváltási ellenőrzést (`file_accessible`, `page_number_check`, `filename_verification`, `preflight_check`) a `workflow.validations[state]` `requiredToEnter`/`requiredToExit` alapján. A `WorkflowEngine.validateTransition()` delegál a `validationRunner.validate()` → `StateComplianceValidator` láncon keresztül.
     - **Blokkolási Logika**: Bármely aktív `error` típusú elem blokkolja az állapotátmeneteket.
     - **Komponensek**: `ValidationSection.jsx` (UI), `useUnifiedValidation` (Logika), `ValidationContext` (Rendszeradatok).
     - **Mező-szintű Validáció**: `ValidatedTextField` `invalid` prop + validátor statikus metódusok (pl. `DeadlineValidator.isValidDate/isValidTime`, `isValidFileName`) — azonnali piros keret blur-kor, formátum-hibára. Fájlnév validáció: `\ / : * ? " < > |` tiltott karakterek + Windows fenntartott nevek (CON, PRN, AUX, NUL, COM1–9, LPT1–9) + pontra/szóközre végződő nevek tiltása.
@@ -130,21 +130,17 @@
     - Ld. `docs/diagrams/data-flow-architecture.md`
 
 5. **Jogosultsági Rendszer (Workflow Permissions)**
-    - **Állapot-alapú átmenet**: Minden workflow állapothoz csapatok vannak rendelve (`STATE_PERMISSIONS`), amelyek mozgathatják a cikkeket onnan.
-    - **Kétszintű jogosultság**: (1) **Csoporttagság** (`user.groupSlugs`) — alap jogosultság a munkahelyi pozíció alapján (`groupMemberships` + `groups` collection query login/recovery/Realtime-kor). (2) **Capability label** (`user.labels`) — képesség-alapú jogosultság-kiterjesztés adminisztrátori hozzárendeléssel.
-    - **Capability Label Rendszer** (`maestro-shared/labelConfig.js`): Központi konfiguráció (`CAPABILITY_LABELS`), ahol minden label egy képességet fejez ki (`can` + ige + tárgy, camelCase). Két típus: (a) **Csapat-ekvivalens** (`grantTeams`) — a megadott csapat(ok) jogait adja (pl. `canEditContent` → `['editors']`). (b) **Exkluzív** (`exclusive`) — egyedi képesség, amit csapattagsággal nem lehet megkapni (pl. `canAddArticlePlan`).
-    - **Label → csoport feloldás**: A `labelMatchesSlug()` (`workflowConfig.js`) a `resolveGrantedTeams()` segítségével oldja fel a capability label-eket csoport slug-okra. Az összes jogosultság-ellenőrző függvény transzparensen működik a capability mapping-gel.
-    - **Fallback**: Ha nincs senki hozzárendelve a releváns csoportok contributor mezőiből → csoporttagság VAGY capability label szükséges.
-    - **Háromszintű védelem**: UI gomb disabled → handler toast → engine guard.
-    - **Realtime szinkron**: A `groupMemberships` collection Realtime csatorna → `groupMembershipChanged` MaestroEvent → UserContext frissíti a `user.groupSlugs`-t → UI azonnal reagál. Scope-váltáskor a `scopeChanged` MaestroEvent szintén triggereli a `refreshGroupSlugs()`-t.
-    - **UI Elem Jogosultságok**: Deklaratív, központi konfiguráció (`elementPermissions.js`) határozza meg, mely csoportok szerkeszthetik az egyes UI elemcsoportokat. Csoport/label nélküli felhasználó teljes read-only módot kap.
-      - `ARTICLE_ELEMENT_PERMISSIONS` / `PUBLICATION_ELEMENT_PERMISSIONS` — elemcsoport → csoport-slug tömb vagy `ANY_TEAM` szimbólum.
-      - `checkElementPermission(permission, user)` — állapotfüggetlen ellenőrzés (cikk és kiadvány mezők).
-      - `canUserAccessInState(user, articleState)` — állapotfüggő ellenőrzés (fájlmegnyitás + parancsok): designers/artDirectors mindig, mások csak `STATE_PERMISSIONS` szerinti állapotaikban.
-      - `canEditContributorDropdown(user, teamSlug, articleState)` — per-dropdown contributor jogosultság: vezetők (`LEADER_TEAMS`) mindig, nem-vezetők csak a saját csoportjuknak megfelelő dropdown-ot, és csak a `STATE_PERMISSIONS` szerinti állapotaikban. Capability label-ek ugyanúgy kiterjesztik a hozzáférést.
-      - `useElementPermission(key)` / `useElementPermissions(keys[])` / `useContributorPermissions(articleState)` hookok (`useElementPermission.js`) — React komponensekben.
+    - **Dinamikus, DB-alapú konfiguráció**: A teljes workflow (állapotok, átmenetek, jogosultságok, elem-engedélyek) a `workflows` collection `compiled` JSON-jából származik, szerkesztőség-szinten (per editorial office). A `workflowRuntime.js` (maestro-shared) 16+ tiszta függvénye az egyetlen interfész a compiled adathoz.
+    - **Állapot-alapú átmenet**: Minden workflow állapothoz csoportok vannak rendelve (`compiled.statePermissions`), amelyek mozgathatják a cikkeket onnan. Az állapot ID-k stringek (pl. `"designing"`, `"editing"`).
+    - **Csoporttagság-alapú jogosultság**: A `user.groupSlugs` (a `groupMemberships` + `groups` collection query-ből) az egyetlen jogosultsági forrás. A korábbi `user.labels` / capability label rendszer megszűnt.
+    - **Vezető csoportok bypass**: A `compiled.leaderGroups` (pl. `["managing_editors", "art_directors"]`) minden ACL ellenőrzést megkerülnek — állapottól és hozzárendeléstől függetlenül mozgathatnak, szerkeszthetnek.
+    - **Háromszintű védelem**: UI gomb disabled → handler toast → engine guard → CF server-side guard.
+    - **Realtime szinkron**: A `groupMemberships` Realtime csatorna → `groupMembershipChanged` MaestroEvent → UserContext frissíti a `user.groupSlugs`-t → UI azonnal reagál. Scope-váltáskor a `scopeChanged` MaestroEvent szintén triggereli a `refreshGroupSlugs()`-t.
+    - **Workflow hot-reload**: A `workflows` collection Realtime csatorna → `DataContext` `setWorkflow()` → minden fogyasztó azonnal az új konfigurációt használja.
+    - **UI Elem Jogosultságok**: A `compiled.elementPermissions` határozza meg, mely csoportok szerkeszthetik az egyes UI elemcsoportokat. A `workflowRuntime.canEditElement()` és `canUserAccessInState()` függvények ellenőrzik.
+      - `useElementPermission(key)` / `useElementPermissions(keys[])` / `useContributorPermissions(articleState)` hookok (`useElementPermission.js`) — React komponensekben, változatlan publikus API.
       - **Kompozíció**: `disabled={isIgnored || isSyncing || !perm.allowed}` + tooltip a `reason`-nel.
-    - **Konfiguráció**: `labelConfig.js` (capability label-ek), `workflowConstants.js` (`STATE_PERMISSIONS`), `workflowPermissions.js` (`canUserMoveArticle`), `elementPermissions.js` (UI elem jogosultságok).
+    - **Konfiguráció**: `workflowRuntime.js` (fogyasztói API), `workflowPermissions.js` (plugin proxy), `workflowEngine.js` (átmenet végrehajtás).
     - Ld. `docs/WORKFLOW_PERMISSIONS.md`
 
 6. **Kapcsolat-helyreállítás (RecoveryManager) & Dual-Proxy Failover**
@@ -200,16 +196,16 @@
     - **Cél**: A kiadvány terjedelmén belüli (`coverageStart`–`coverageEnd`) hozzárendeletlen oldalak vizuális jelzése helykitöltő sorokkal az ArticleTable-ben.
     - **Logika**: `buildPlaceholderRows()` (`pageGapUtils.js`) — az összes cikk `pageRanges`/`pageStart`–`pageEnd` alapján összegyűjti a lefedett oldalakat, majd a hiányzó oldalszámokból összefüggő csoportokat épít.
     - **UI**: Szürke, nem szerkeszthető sorok az ArticleTable-ben. „Helykitöltők mutatása" toggle a FilterBar-ban (localStorage perzisztált, alapértelmezett: be).
-    - **Sürgősség**: Placeholder állapota `DESIGNING` → teljes hátralévő munkaidő jelenik meg.
+    - **Sürgősség**: Placeholder állapota az initial state (pl. `"designing"`) → teljes hátralévő munkaidő jelenik meg.
     - **Szűrés**: A placeholder generálás az **összes** (szűrés nélküli) cikket figyelembe veszi, hogy a lefedettség pontos legyen.
 
-10. **Szerver-oldali Config Szinkronizáció**
-    - **Cél**: A Cloud Function-ök nem hardkódolnak workflow konstansokat — a DB `config` collection-ből olvassák.
-    - **Config Collection**: Egyetlen `workflow_config` dokumentum (fix ID) a `config` collection-ben, JSON string mezőkkel: `statePermissions`, `validTransitions`, `capabilityLabels`, `validLabels`, `validStates`, `configVersion`.
-    - **Plugin Writer** (`syncWorkflowConfig.js`): A `DataContext` inicializálása után fut. `CONFIG_VERSION` (maestro-shared) alapján ellenőrzi: ha a DB-ben eltérő verzió van → upsert. Normál induláskor: 1 olvasás, 0 írás.
-    - **Config Builder** (`buildWorkflowConfigDocument()`, workflowConstants.js): A `WORKFLOW_CONFIG` transitions tömbjéből kinyeri a `VALID_TRANSITIONS`-t, a `STATE_PERMISSIONS`-t, `CAPABILITY_LABELS`-t JSON-ná szerializálja.
-    - **Cloud Function Reader**: Minden guard function induláskor `getDocument('workflow_config')` → JSON.parse → validáció. Ha a config nem elérhető → hardkódolt fallback konstansok (fail-closed: mindig validál).
-    - **Verzió léptetés**: Ha bármely szerver-oldali konstans változik, a `CONFIG_VERSION`-t kell léptetni a `maestro-shared/workflowConfig.js`-ben.
+10. **Dinamikus Workflow Rendszer (Fázis 4)**
+    - **Egyetlen igazságforrás**: A `workflows` collection `compiled` JSON mezője tartalmazza a teljes workflow konfigurációt (states, transitions, validations, commands, elementPermissions, contributorGroups, leaderGroups, statePermissions).
+    - **Szerkesztőség-szintű**: Minden editorial office saját workflow dokumentummal rendelkezik. Létrehozáskor a `defaultWorkflow.json` kerül seedingre.
+    - **Plugin read-only**: A Plugin NEM ír a `workflows` collection-be — csak olvassa. A Dashboard Workflow Designer fogja szerkeszteni (Fázis 5+).
+    - **DataContext integráció**: A `workflow` state a `DataContext`-ben él. Fetch az aktív `editorialOfficeId` alapján, Realtime feliratkozás a `workflows` collection-re. Hot-reload: `setWorkflow(JSON.parse(payload.compiled))` → minden fogyasztó azonnal frissül.
+    - **workflowRuntime.js** (maestro-shared): 16+ tiszta függvény (`getStateConfig`, `getAllStates`, `getAvailableTransitions`, `canUserMoveArticle`, `canEditElement`, `canRunCommand`, stb.) — minden `compiled` paramétert kap, nincsenek globális állapotok.
+    - **CF process cache**: A Cloud Function-ök 60s TTL-lel cache-elik a workflow dokumentumot (`getWorkflowForOffice()`). Ha nincs workflow doc → fail-closed (state revert / reject).
 
 11. **Szerver-oldali Guard Function-ök (Cloud Functions)**
     - A Cloud Function-ök külön csomagban élnek: `../maestro-server/`
@@ -231,12 +227,14 @@ Maestro/
 ├── ../maestro-server/             ← Szerver-oldali Appwrite Cloud Function-ök (ld. maestro-server/CLAUDE.md)
 ├── ../maestro-shared/            ← Közös csomag (plugin + dashboard által megosztott konstansok és logika)
 │   ├── appwriteIds.js            ← Appwrite projekt/DB/gyűjtemény/bucket ID-k
-│   ├── constants.js              ← Platform-független enumerációk (LOCK_TYPE, VALIDATION_TYPES)
-│   ├── labelConfig.js            ← Capability-based label konfiguráció (CAPABILITY_LABELS, resolveGrantedTeams, hasCapability)
-│   ├── workflowConfig.js         ← Workflow állapotok, markerek, időtartamok, STATUS_LABELS, labelMatchesSlug, CONFIG_VERSION
+│   ├── constants.js              ← Platform-független enumerációk (LOCK_TYPE, VALIDATION_TYPES, MARKERS)
+│   ├── defaultWorkflow.json      ← 8 állapotos default compiled workflow (seeding és fallback)
+│   ├── workflowRuntime.js        ← Workflow fogyasztói API (16+ tiszta függvény, compiled paramétert kap)
+│   ├── commandRegistry.js        ← Command ID → label mapping (Dashboard designer számára)
 │   ├── contributorHelpers.js     ← Contributors JSON parse/serialize/query helperek (getContributor, setContributor, isContributor)
 │   ├── groups.js                 ← DEFAULT_GROUPS (7 alapértelmezett csoport), resolveGroupSlugs() helper
-│   └── urgency.js                ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színskála)
+│   ├── urgency.js                ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színskála, workflow paramétert kap)
+│   └── pageGapUtils.js           ← Placeholder sorok generálása lefedetlen oldalakhoz (workflow paramétert kap)
 │
 ├── docs/                         ← Architektúra dokumentáció (ld. §Dokumentáció Katalógus)
 │   ├── NAMING_CONVENTIONS.md
@@ -290,7 +288,6 @@ Maestro/
 │   │       ├── archivingProcessor.js    ← Hibrid AI + szabály-alapú clustering (Union-Find, polygon clipping, TXT/XML output)
 │   │       ├── thumbnailUploader.js    ← Thumbnail JPEG feltöltés/törlés/takarítás (Appwrite Storage)
 │   │       ├── pageGapUtils.js         ← Placeholder sorok generálása lefedetlen oldalakhoz
-│   │       ├── syncWorkflowConfig.js    ← Workflow config szinkronizálás DB-be (Cloud Function-ök számára)
 │   │       ├── urgencyUtils.js         ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színek)
 │   │       ├── validationConstants.js  ← VALIDATOR_TYPES és VALIDATION_SOURCES enumerációk
 │   │       ├── validationRunner.js     ← Validátor futtatás orchestrálása + standalone fájl létezés ellenőrzés
@@ -312,11 +309,9 @@ Maestro/
 │   │       │   ├── thumbnailScripts.js ← Thumbnail JPEG export ExtendScript generátorok
 │   │       │   ├── scriptHelpers.js    ← Közös script építőelemek
 │   │       │   └── index.js
-│   │       └── workflow/                  ← Cikk állapotgép
-│   │           ├── workflowConstants.js   ← Állapotok, átmenetek, jogosultságok, STATE_PERMISSIONS
+│   │       └── workflow/                  ← Cikk állapotgép (a workflowRuntime.js delegál)
 │   │           ├── workflowEngine.js      ← executeTransition (→ StateComplianceValidator), lockDocument, unlockDocument
-│   │           ├── workflowPermissions.js ← canUserMoveArticle, hasTransitionPermission
-│   │           ├── elementPermissions.js  ← UI elem jogosultságok (konfig + checkElementPermission + canUserAccessInState)
+│   │           ├── workflowPermissions.js ← canUserMoveArticle, hasTransitionPermission (proxy a workflowRuntime-ra)
 │   │           └── index.js
 │   │
 │   ├── data/                     ← Adat hook-ok réteg (Context ↔ UI híd)
@@ -444,8 +439,7 @@ Appwrite `groupMemberships` collection Realtime csatorna → `DataContext` handl
 | `docs/diagrams/data-flow-architecture.md` | Teljes adatáramlás: Context + Event + komponens hierarchia          |
 | `docs/diagrams/open-file-flow.md`         | Fájl megnyitás lépésről lépésre (kattintástól a UI frissülésig)     |
 | `docs/diagrams/network-architecture.md`   | Hálózati kapcsolatkezelés, sleep recovery, auto-retry               |
-| `docs/WORKFLOW_CONFIGURATION.md`          | Munkafolyamat konfiguráció, állapotátmenetek és validációs szabályok |
-| `docs/WORKFLOW_PERMISSIONS.md`            | Jogosultsági rendszer: csapat-alapú állapotátmenet-védelem          |
+| `docs/WORKFLOW_PERMISSIONS.md`            | Jogosultsági rendszer: csoporttagság-alapú állapotátmenet-védelem   |
 | `docs/URGENCY_SYSTEM.md`                  | Sürgősség-számítás: munkaidő, ünnepnapok, ratio, progresszív sáv   |
 | `docs/VALIDATION_MECHANISM.md`            | Egységes validációs és üzenetküldő rendszer működése                |
 | `docs/ARCHIVING_TEXT_EXTRACTION.md`       | Archiválási szövegkinyerés: clustering, típusosztályozás, XML/TXT   |

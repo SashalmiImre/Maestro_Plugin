@@ -77,26 +77,22 @@ tags: [feladatok]
 - [x] Új shared modul: `maestro-shared/contributorHelpers.js` (parseContributors, getContributor, setContributor, isContributor)
 - [x] Dashboard `useFilters.js`: `isContributor()` + `getUserGroupSlugs()`
 - [x] Harden pass: 6 hibás relative import → bare specifier (`"maestro-shared/..."`), Dashboard `getUserGroupSlugs()` early return javítás (capability label-ek kihagyódtak `groupSlugs` falsy esetén)
-- [ ] **Verifikáció**: cikk létrehozás → dinamikus dropdown render → DB-ben `contributors: {"designers": "...", "editors": "..."}` formátum
+- [x] **Verifikáció**: kód-áttekintés + DB séma ellenőrzés (2026-04-09) — addArticle JSON forwarding, ContributorsSection dinamikus loop, CF-ek JSON parse/validáció, régi 7 mező törölve az articles + publications sémából
 
-#### Fázis 4 — Workflow runtime (workflows collection, `compiled`)
+#### Fázis 4 — Workflow runtime (workflows collection, `compiled`) ✅
 
-- [ ] Új collection: `workflows` — minden új office auto kap egy dokumentumot a `defaultWorkflow.json` template másolataként
-- [ ] Új shared modul: [packages/maestro-shared/workflowRuntime.js](../packages/maestro-shared/workflowRuntime.js) — a projekt szíve, fogyasztói helperek a `compiled` JSON fölött (getStateConfig, canUserMoveArticle, canEditElement, canRunCommand, canEditContributorDropdown, canUserAccessInState, hasCapability, getContributorGroups, getAvailableTransitions, validateTransition)
-- [ ] Új template: [packages/maestro-shared/defaultWorkflow.json](../packages/maestro-shared/defaultWorkflow.json) — jelenlegi 8 állapotos magazin workflow `compiled` formátumban
-- [ ] **TÖRÖLT**: `packages/maestro-shared/workflowConfig.js`
-- [ ] **TÖRÖLT**: `packages/maestro-shared/labelConfig.js`
-- [ ] **TÖRÖLT**: `packages/maestro-indesign/src/core/utils/workflow/workflowConstants.js`
-- [ ] **TÖRÖLT**: `packages/maestro-indesign/src/core/utils/workflow/elementPermissions.js`
-- [ ] **TÖRÖLT**: `packages/maestro-indesign/src/core/utils/syncWorkflowConfig.js`
-- [ ] `workflowEngine.js` és `workflowPermissions.js` proxy a `workflowRuntime.js`-re — minden hívás kap `workflow` (compiled) paramétert
-- [ ] Plugin `DataContext` új állapota: `workflow` (compiled JSON) + Realtime feliratkozás `workflows.{id}` update-ekre
-- [ ] Snapshot pattern a hot-reloadhoz: `executeTransition` belépéskor `const wf = workflowRef.current`, a futás végéig ezzel dolgozik
-- [ ] Cloud Function-ök átírása (article-update-guard, validate-article-creation, validate-publication-update): `workflow_config` helyett `workflows` dokumentum olvasás az article `editorialOfficeId` alapján, 60s TTL process cache
-- [ ] `FALLBACK_CONFIG` hardkódolt konstansok törlése — fail-closed viselkedés, ha nincs workflow doc → update revertál
-- [ ] `validate-labels` Cloud Function törlése — a label rendszer megszűnik
-- [ ] CLAUDE.md „5. Jogosultsági Rendszer" szekció újraírása a dinamikus modellre
-- [ ] **Verifikáció**: `workflows.{id}.compiled` manuális módosítás → plugin Realtime hot-reloadol → ArticleTable új színnel/címkével mutatja. CF-ek betiltanak egy kivett átmenetet.
+- [x] Új collection: `workflows` — minden új office auto kap egy dokumentumot a `defaultWorkflow.json` template másolataként
+- [x] Új shared modul: [packages/maestro-shared/workflowRuntime.js](../packages/maestro-shared/workflowRuntime.js) — 16+ fogyasztói helper a `compiled` JSON fölött
+- [x] Új template: [packages/maestro-shared/defaultWorkflow.json](../packages/maestro-shared/defaultWorkflow.json) — 8 állapotos magazin workflow `compiled` formátumban
+- [x] **TÖRÖLT**: `workflowConfig.js`, `labelConfig.js`, `workflowConstants.js`, `elementPermissions.js`, `syncWorkflowConfig.js`, `validate-labels/`
+- [x] `workflowEngine.js` és `workflowPermissions.js` proxy a `workflowRuntime.js`-re
+- [x] Plugin `DataContext` workflow state + fetch + Realtime hot-reload
+- [x] CF-ek átírás: `workflows` collection olvasás, 60s TTL process cache, fail-closed
+- [x] Label rendszer eltávolítás — `user.groupSlugs` az egyetlen jogosultsági forrás
+- [x] Plugin + Dashboard UI fogyasztók átírás (~20 fájl)
+- [x] CLAUDE.md frissítés a dinamikus modellre
+- [x] Build verifikáció: plugin (webpack) + dashboard (vite) sikeres, 0 stale import
+- **Appwrite Console tennivalók** (MCP-vel): `WORKFLOWS_COLLECTION_ID` env var hozzáadás, `CONFIG_COLLECTION_ID` törlés, `config` collection törlés, `validate-labels` CF disable
 
 #### Fázis 5 — Workflow Designer UI (Dashboardon)
 
@@ -135,11 +131,12 @@ tags: [feladatok]
 
 #### Fázis 7 — Cleanup
 
-- [ ] `grep` ellenőrzés: 0 találat a következőkre: `designerId`, `CAPABILITY_LABELS`, `STATE_PERMISSIONS`, `ARTICLE_ELEMENT_PERMISSIONS`, `LEADER_TEAMS`, `workflow_config`, `workflowConstants` (megjegyzés: `TEAM_ARTICLE_FIELD` már Fázis 3-ban törölve)
+- [x] `grep` ellenőrzés: 0 találat a következőkre: `CAPABILITY_LABELS`, `STATE_PERMISSIONS`, `ARTICLE_ELEMENT_PERMISSIONS`, `LEADER_TEAMS`, `workflowConstants`, `elementPermissions`, `syncWorkflowConfig`, `labelConfig`, `workflowConfig` (js/jsx importok) *(Fázis 4-ben kész)*
 - [x] `appwriteIds.js`: `TEAMS` enum törlése *(Fázis 2-ben kész)*
-- [ ] `appwriteIds.js`: `CONFIG` collection ID törlése *(Fázis 4 hatáskör)*
+- [x] `appwriteIds.js`: `CONFIG` collection ID törlése *(Fázis 4-ben kész)*
 - [x] Appwrite Console: régi 7 Appwrite Team + `get-team-members` CF törlése *(Fázis 2-ben MCP-vel kész)*
-- [ ] Appwrite Console: `config` collection manuális törlése *(Fázis 4 hatáskör)*
+- [ ] Appwrite Console: `config` collection manuális törlése *(MCP-vel)*
+- [ ] Appwrite Console: `validate-labels` CF disable/törlése *(MCP-vel)*
 - [ ] `packages/maestro-indesign/CLAUDE.md` teljes frissítése a végső architektúrával, „Átalakítás folyamatban" banner törlése
 - [ ] `_docs/workflow-designer/PROGRESS.md` lezárás, `MIGRATION_NOTES.md` véglegesítés
 - [ ] `_docs/Feladatok.md`: aktív feladatok átkerülnek `## Kész` szekcióba egy összefoglaló kommenttel

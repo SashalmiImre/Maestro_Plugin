@@ -3,68 +3,51 @@
  * Meghatározza, hogy egy adott felhasználó mozgathatja-e a cikket
  * a jelenlegi állapotából.
  *
- * Jogosultsági források (prioritás sorrendben):
- * 1. Hozzárendelt felhasználó (article contributor mező) — közvetlen jogosultság
- * 2. Csoporttagság (user.groupSlugs) — alap jogosultság a munkahelyi pozíció alapján
- * 3. Label override (user.labels) — plusz jogosultságok adminisztrátori hozzárendeléssel
+ * A tényleges logika a `workflowRuntime.js` helperekben van —
+ * ez a fájl plugin-szintű proxy, ami a compiled workflow-t
+ * és a userGroupSlugs-t fogadja.
  *
  * @module utils/workflow/workflowPermissions
  */
 
-import { STATE_PERMISSIONS, labelMatchesSlug } from "./workflowConstants.js";
+import {
+    canUserMoveArticle as rtCanUserMoveArticle,
+    hasTransitionPermission as rtHasTransitionPermission
+} from "maestro-shared/workflowRuntime.js";
 
 /**
  * Ellenőrzi, hogy a felhasználó mozgathatja-e a cikket az aktuális állapotából.
  *
- * Logika:
- * 1. Ha az állapotnak nincs jogosultsági bejegyzése → bárki mozgathatja.
- * 2. Csoporttagság (groupSlugs) VAGY label override szükséges a releváns csoportok valamelyikéhez.
- *
- * A közvetlen hozzárendelés (contributor mező) NEM ad önálló jogosultságot az állapotváltáshoz —
- * csapattagság vagy label mindig szükséges. Így elkerülhető, hogy egy véletlenül rossz mezőbe
- * beállított felhasználó (pl. editor a designerId-ban) a csapatától független jogot kapjon.
- *
- * @param {Object} article - A cikk objektum.
- * @param {number} currentState - A cikk jelenlegi állapota.
- * @param {Object} user - Az Appwrite felhasználó objektum.
- * @param {string[]} [user.groupSlugs] - A felhasználó csoporttagságai (alap jogosultság).
- * @param {string[]} [user.labels] - A felhasználó címkéi (label override).
+ * @param {Object} workflow - A compiled workflow JSON (DataContext.workflow).
+ * @param {string} currentState - A cikk jelenlegi állapota (string ID).
+ * @param {string[]} userGroupSlugs - A felhasználó csoporttagságai.
  * @returns {{ allowed: boolean, reason?: string }}
  */
-export function canUserMoveArticle(article, currentState, user) {
-    // 1. Ha nincs jogosultsági konfiguráció ehhez az állapothoz → bárki mozgathatja
-    const requiredTeams = STATE_PERMISSIONS[currentState];
-    if (!requiredTeams || requiredTeams.length === 0) {
-        return { allowed: true };
-    }
-
-    // 2. Csapattagság VAGY label alapján van-e jogosultság
-    const userGroups = user.groupSlugs || [];
-    const userLabels = user.labels || [];
-    const hasTeamAccess = requiredTeams.some(slug =>
-        userGroups.includes(slug) || labelMatchesSlug(userLabels, slug)
-    );
-
-    if (hasTeamAccess) {
-        return { allowed: true };
-    }
-
-    return {
-        allowed: false,
-        reason: "Nincs jogosultságod a cikk mozgatásához ebből az állapotból. " +
-                "Csak a releváns csapat tagjai végezhetik el az állapotváltást."
-    };
+export function canUserMoveArticle(workflow, currentState, userGroupSlugs) {
+    return rtCanUserMoveArticle(workflow, currentState, userGroupSlugs);
 }
 
 /**
  * Kényelmi függvény: ellenőrzi a jogosultságot és visszaadja a boolean eredményt.
- * Használható feltételes megjelenítéshez (pl. gomb disabled állapot).
  *
- * @param {Object} article - A cikk objektum.
- * @param {number} currentState - A cikk jelenlegi állapota.
- * @param {Object} user - Az Appwrite felhasználó objektum.
- * @returns {boolean} Igaz, ha a felhasználó mozgathatja a cikket.
+ * @param {Object} workflow - A compiled workflow JSON.
+ * @param {string} currentState - A cikk jelenlegi állapota.
+ * @param {string[]} userGroupSlugs - A felhasználó csoporttagságai.
+ * @returns {boolean}
  */
-export function hasTransitionPermission(article, currentState, user) {
-    return canUserMoveArticle(article, currentState, user).allowed;
+export function hasTransitionPermission(workflow, currentState, userGroupSlugs) {
+    return canUserMoveArticle(workflow, currentState, userGroupSlugs).allowed;
+}
+
+/**
+ * Ellenőrzi, hogy az adott átmenethez (from→to) van-e jogosultsága a felhasználónak.
+ *
+ * @param {Object} workflow - A compiled workflow JSON.
+ * @param {string} fromState - Kiindulási állapot.
+ * @param {string} toState - Célállapot.
+ * @param {string[]} userGroupSlugs - A felhasználó csoporttagságai.
+ * @returns {{ allowed: boolean, reason?: string }}
+ */
+export function hasSpecificTransitionPermission(workflow, fromState, toState, userGroupSlugs) {
+    return rtHasTransitionPermission(workflow, fromState, toState, userGroupSlugs);
 }

@@ -18,7 +18,7 @@ import { useData } from "../../core/contexts/DataContext.jsx";
 import { useValidation } from "../../core/contexts/ValidationContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 
-import { WORKFLOW_CONFIG } from "../../core/utils/workflow/workflowConstants.js";
+import { getStateValidations } from "maestro-shared/workflowRuntime.js";
 import { VALIDATOR_TYPES, VALIDATION_SOURCES } from "../../core/utils/validationConstants.js";
 import { VALIDATION_TYPES } from "../../core/utils/messageConstants.js";
 import { tables, DATABASE_ID, VALIDATIONS_COLLECTION_ID, ID, Query } from "../../core/config/appwriteConfig.js";
@@ -69,15 +69,17 @@ async function fetchAllPreflightRows(baseQueries) {
  * @returns {{ runAndPersistPreflight: (article: Object) => Promise<Object> }}
  */
 export const useWorkflowValidation = () => {
-    const { articles, publications } = useData();
+    const { articles, publications, workflow } = useData();
     const { updateArticleValidation, clearArticleValidation } = useValidation();
     const { showToast } = useToast();
 
     const articlesRef = useRef(articles);
     const publicationsRef = useRef(publications);
+    const workflowRef = useRef(workflow);
 
     useEffect(() => { articlesRef.current = articles; }, [articles]);
     useEffect(() => { publicationsRef.current = publications; }, [publications]);
+    useEffect(() => { workflowRef.current = workflow; }, [workflow]);
 
     /**
      * Betölti az összes meglévő validációt az Appwrite-ból
@@ -232,13 +234,10 @@ export const useWorkflowValidation = () => {
 
     // Legacy wrapper a kompatibilitásért (Workspace.jsx, preflightCheck.js)
     const runAndPersistPreflight = useCallback((article) => {
-        // Preflight profile feloldása az aktuális állapotból? 
-        // Vagy default? A gombnyomásos indításnál használhatjuk az aktuális állapot konfigurációját,
-        // VAGY egy alapértelmezett profilt.
-        // A WORKFLOW_CONFIG-ból kikeressük, van-e config erre az állapotra.
-        const stateConfig = WORKFLOW_CONFIG[article.state]?.validations;
-        const preflightConfig = stateConfig?.onEntry?.find(v => v.validator === VALIDATOR_TYPES.PREFLIGHT_CHECK);
-        const options = preflightConfig?.options || {}; // Default to empty if not configured (PreflightValidator defaults to Levil)
+        const wf = workflowRef.current;
+        const stateValidations = getStateValidations(wf, article.state);
+        const preflightConfig = stateValidations?.onEntry?.find(v => v.validator === VALIDATOR_TYPES.PREFLIGHT_CHECK);
+        const options = preflightConfig?.options || {};
 
         return runValidation(article, VALIDATOR_TYPES.PREFLIGHT_CHECK, options);
     }, [runValidation]);
@@ -257,10 +256,11 @@ export const useWorkflowValidation = () => {
          * Segédfüggvény: állapothoz tartozó auto-run validációk futtatása
          */
         const runAutoValidations = (article) => {
-            const stateConfig = WORKFLOW_CONFIG[article.state]?.validations;
-            if (!stateConfig || !stateConfig.onEntry) return;
+            const wf = workflowRef.current;
+            const stateValidations = getStateValidations(wf, article.state);
+            if (!stateValidations?.onEntry) return;
 
-            stateConfig.onEntry.forEach(config => {
+            stateValidations.onEntry.forEach(config => {
                 log(`[useWorkflowValidation] Auto-validáció futtatása: ${config.validator} (${article.name})`);
                 callbacksRef.current.runValidation(article, config.validator, config.options);
             });
@@ -273,10 +273,11 @@ export const useWorkflowValidation = () => {
 
         const handleDocumentClosed = (event) => {
             const { article, registerTask } = event.detail;
-            const stateConfig = WORKFLOW_CONFIG[article.state]?.validations;
-            if (!stateConfig || !stateConfig.onEntry) return;
+            const wf = workflowRef.current;
+            const stateValidations = getStateValidations(wf, article.state);
+            if (!stateValidations?.onEntry) return;
 
-            stateConfig.onEntry.forEach(config => {
+            stateValidations.onEntry.forEach(config => {
                 log(`[useWorkflowValidation] Auto-validáció (closed): ${config.validator} (${article.name})`);
                 registerTask(callbacksRef.current.runValidation(article, config.validator, config.options));
             });
@@ -284,18 +285,12 @@ export const useWorkflowValidation = () => {
 
         const handleStateChanged = (event) => {
             const { article, previousState, newState } = event.detail;
-            const prevConfig = WORKFLOW_CONFIG[previousState]?.validations;
-            const newConfig = WORKFLOW_CONFIG[newState]?.validations;
+            const wf = workflowRef.current;
+            const prevValidations = getStateValidations(wf, previousState);
+            const newValidations = getStateValidations(wf, newState);
 
-            // 1. Kilépés a régi állapotból: takarítás?
-            // Ha a régi állapotban volt 'preflight_check' auto-run, és az újban NINCS, akkor töröljük az eredményt?
-            // A logika: ha egy validáció "auto-run" egy állapotban, akkor az eredménye addig érvényes, amíg abban az állapotban vagyunk?
-            // Vagy amíg el nem avul?
-            // A régi implementáció törölte a preflight eredményt, ha kiléptünk a PREFLIGHT_STATES-ből.
-            
-            // Megnézzük, hogy a régi állapotban volt-e preflight, és az újban van-e.
-            const hadPreflight = prevConfig?.onEntry?.some(v => v.validator === VALIDATOR_TYPES.PREFLIGHT_CHECK);
-            const hasPreflight = newConfig?.onEntry?.some(v => v.validator === VALIDATOR_TYPES.PREFLIGHT_CHECK);
+            const hadPreflight = prevValidations?.onEntry?.some(v => v.validator === VALIDATOR_TYPES.PREFLIGHT_CHECK);
+            const hasPreflight = newValidations?.onEntry?.some(v => v.validator === VALIDATOR_TYPES.PREFLIGHT_CHECK);
 
             if (hadPreflight && !hasPreflight) {
                  log(`[useWorkflowValidation] Preflight eredmények törlése (kilépés): "${article.name}"`);
@@ -303,8 +298,8 @@ export const useWorkflowValidation = () => {
                  callbacksRef.current.persistToDatabase(article.$id, article.publicationId, VALIDATION_SOURCES.PREFLIGHT, { errors: [], warnings: [] });
             }
 
-            // 2. Belépés az új állapotba: futtatás
-            runAutoValidations(article); // Ez kezeli a hasPreflight esetet is
+            // Belépés az új állapotba: futtatás
+            runAutoValidations(article);
         };
 
         window.addEventListener(MaestroEvent.documentSaved, handleDocumentSaved);

@@ -17,14 +17,12 @@ import { useUser } from "../../core/contexts/UserContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 
 // Konfiguráció & Konstansok
-import { WORKFLOW_STATES } from "maestro-shared/workflowConfig.js";
-import { COMMANDS } from "../../core/utils/workflow/workflowConstants.js";
 import { TOAST_TYPES } from "../../core/utils/constants.js";
+import { isTerminalState, canRunCommand } from "maestro-shared/workflowRuntime.js";
 
 // Segédfüggvények
 import { executeCommand } from "../../core/commands/index.js";
 import { buildPlaceholderRows } from "../../core/utils/pageGapUtils.js";
-import { checkElementPermission } from "../../core/utils/workflow/elementPermissions.js";
 import { log, logError } from "../../core/utils/logger.js";
 
 /**
@@ -38,7 +36,7 @@ import { log, logError } from "../../core/utils/logger.js";
  * }}
  */
 export function usePublicationArchive() {
-    const { articles, publications, activePublicationId } = useData();
+    const { articles, publications, activePublicationId, workflow } = useData();
     const { user } = useUser();
     const { showToast } = useToast();
 
@@ -70,16 +68,19 @@ export function usePublicationArchive() {
      * 5. A felhasználó az archive parancs csapataiban van
      */
     const canArchivePublication = useMemo(() => {
-        if (!publication || articles.length === 0) return false;
+        if (!publication || articles.length === 0 || !workflow) return false;
         if (publication.coverageStart == null || publication.coverageEnd == null) return false;
 
-        const allArchivable = articles.every(a => a.state === WORKFLOW_STATES.ARCHIVABLE);
-        if (!allArchivable) return false;
+        const allTerminal = articles.every(a => isTerminalState(workflow, a.state));
+        if (!allTerminal) return false;
 
         if (buildPlaceholderRows(articles, publication).length > 0) return false;
 
-        return checkElementPermission(COMMANDS['archive'].teams, user).allowed;
-    }, [articles, publication, user]);
+        // A felhasználó futtathatja-e az archive parancsot a terminális állapotban
+        const terminalState = articles[0]?.state;
+        const userGroups = user?.groupSlugs || [];
+        return canRunCommand(workflow, terminalState, 'archive', userGroups).allowed;
+    }, [articles, publication, user, workflow]);
 
     /**
      * Szekvenciálisan archiválja az összes cikket (archive + PDF export).

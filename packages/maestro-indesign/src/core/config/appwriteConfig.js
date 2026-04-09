@@ -210,9 +210,9 @@ export const USER_VALIDATIONS_COLLECTION_ID = COLLECTIONS.USER_VALIDATIONS;
 export const VALIDATIONS_COLLECTION_ID = "validations"; // Plugin-only gyűjtemény (rendszer validációk)
 export const LAYOUTS_COLLECTION_ID = COLLECTIONS.LAYOUTS;
 export const DEADLINES_COLLECTION_ID = COLLECTIONS.DEADLINES;
-export const CONFIG_COLLECTION_ID = COLLECTIONS.CONFIG;
 export const GROUPS_COLLECTION_ID = COLLECTIONS.GROUPS;
 export const GROUP_MEMBERSHIPS_COLLECTION_ID = COLLECTIONS.GROUP_MEMBERSHIPS;
+export const WORKFLOWS_COLLECTION_ID = COLLECTIONS.WORKFLOWS;
 
 // =============================================================================
 // cookieFallback Diagnosztika — Session token eltűnés nyomkövetés

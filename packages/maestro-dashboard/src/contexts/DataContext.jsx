@@ -25,6 +25,7 @@ export function DataProvider({ children }) {
     const [layouts, setLayouts] = useState([]);
     const [deadlines, setDeadlines] = useState([]);
     const [validations, setValidations] = useState([]);
+    const [workflow, setWorkflow] = useState(null);
     const [activePublicationId, setActivePublicationIdState] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
 
@@ -210,6 +211,38 @@ export function DataProvider({ children }) {
         return memberCacheRef.current.map.get(userId) || null;
     }, []);
 
+    // ─── Workflow lekérés ────────────────────────────────────────────────────
+
+    const fetchWorkflow = useCallback(async () => {
+        const editorialOfficeId = localStorage.getItem('maestro.activeEditorialOfficeId');
+        if (!editorialOfficeId) { setWorkflow(null); return; }
+
+        try {
+            const result = await databases.listDocuments({
+                databaseId: DATABASE_ID,
+                collectionId: COLLECTIONS.WORKFLOWS,
+                queries: [
+                    Query.equal('editorialOfficeId', editorialOfficeId),
+                    Query.limit(1)
+                ]
+            });
+            if (result.documents.length > 0) {
+                const doc = result.documents[0];
+                const compiled = typeof doc.compiled === 'string' ? JSON.parse(doc.compiled) : doc.compiled;
+                setWorkflow(compiled);
+            } else {
+                setWorkflow(null);
+            }
+        } catch (err) {
+            console.error('[DataContext] Workflow fetch hiba:', err);
+        }
+    }, [databases]);
+
+    // Workflow betöltése induláskor
+    useEffect(() => {
+        fetchWorkflow();
+    }, [fetchWorkflow]);
+
     // ─── Realtime feliratkozás ──────────────────────────────────────────────
 
     useEffect(() => {
@@ -223,7 +256,8 @@ export function DataProvider({ children }) {
             channelName(COLLECTIONS.LAYOUTS),
             channelName(COLLECTIONS.DEADLINES),
             channelName(COLLECTIONS.USER_VALIDATIONS),
-            channelName(COLLECTIONS.SYSTEM_VALIDATIONS)
+            channelName(COLLECTIONS.SYSTEM_VALIDATIONS),
+            channelName(COLLECTIONS.WORKFLOWS)
         ], (response) => {
             const eventType = getEventType(response.events);
             if (!eventType) return;
@@ -253,6 +287,19 @@ export function DataProvider({ children }) {
                     case 'system_validations':
                         applySystemValidationEvent(eventType, payload, articleIdsRef, setValidations);
                         break;
+                    case 'workflows': {
+                        const activeOfficeId = localStorage.getItem('maestro.activeEditorialOfficeId');
+                        if (eventType === 'delete') {
+                            // Workflow doc törölve → újralekérés (fetchWorkflow kezeli a null esetet)
+                            fetchWorkflow();
+                        } else if (payload.compiled && payload.editorialOfficeId === activeOfficeId) {
+                            try {
+                                const compiled = typeof payload.compiled === 'string' ? JSON.parse(payload.compiled) : payload.compiled;
+                                setWorkflow(compiled);
+                            } catch { /* parse error */ }
+                        }
+                        break;
+                    }
                 }
             } catch (error) {
                 console.error('Realtime event handler error', {
@@ -266,9 +313,9 @@ export function DataProvider({ children }) {
     }, []);
 
     const value = {
-        publications, articles, layouts, deadlines, validations,
+        publications, articles, layouts, deadlines, validations, workflow,
         activePublicationId, isLoading, storage,
-        fetchPublications, switchPublication,
+        fetchPublications, switchPublication, fetchWorkflow,
         fetchAllGroupMembers, getMemberName
     };
 
@@ -300,6 +347,7 @@ function getCollection(channels) {
         // előtt, mert 'validations' substring of 'uservalidations'
         if (ch.includes(COLLECTIONS.USER_VALIDATIONS)) return 'validations';
         if (ch.includes(COLLECTIONS.SYSTEM_VALIDATIONS)) return 'system_validations';
+        if (ch.includes(COLLECTIONS.WORKFLOWS)) return 'workflows';
     }
     return null;
 }

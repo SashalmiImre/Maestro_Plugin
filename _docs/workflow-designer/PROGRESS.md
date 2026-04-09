@@ -516,3 +516,38 @@ _(egyelőre nincs)_
   - Elutasítva (noise): CF group membership validáció (Fázis 6/7), JSON blob race condition (elfogadott trade-off), cache coherency (recovery + TTL), performance (cache), value type validáció (parseContributors check)
   - Verifikáció: clean (első körben), mindkét build (webpack + vite) sikeres
 - **Következő feladat**: Fázis 4 — Workflow runtime (`workflows` collection, `compiled` JSON, Realtime hot-reload).
+
+---
+
+### Fázis 4 — Workflow Runtime (2026-04-09)
+**Cél**: A hardkódolt workflow konstansokat (`workflowConfig.js`, `labelConfig.js`, `workflowConstants.js`, `elementPermissions.js`) egy DB-alapú, szerkesztőség-szintű `workflows` collection + `compiled` JSON váltja ki. A `state` mező `integer (0–7)` → `string` (pl. `"designing"`). A label rendszer megszűnik — `user.groupSlugs` az egyetlen jogosultsági forrás.
+
+**Elvégzett feladatok:**
+- [x] D.1 — `defaultWorkflow.json` létrehozása (8 állapotos compiled workflow)
+- [x] D.2 — `workflowRuntime.js` létrehozása (16+ tiszta fogyasztói függvény)
+- [x] D.3 — `commandRegistry.js` létrehozása (command ID → label mapping)
+- [x] D.4 — `MARKERS` áthelyezése `maestro-shared/constants.js`-be
+- [x] D.5 — Appwrite `workflows` collection létrehozása (MCP)
+- [x] D.6 — CF `invite-to-organization` bővítés: workflow seeding
+- [x] D.7 — Meglévő office workflow doc seeding (MCP)
+- [x] D.8 — Article `state` migráció: integer → string (wipe + clean start, MCP)
+- [x] D.9 — Plugin `DataContext`: `workflow` state + fetch + Realtime hot-reload
+- [x] D.10 — Plugin `workflowEngine.js` átírás (workflow param proxy)
+- [x] D.11 — Plugin `workflowPermissions.js` átírás (workflow param proxy)
+- [x] D.12 — Plugin `useElementPermission.js` hook átírás (belső átírás, API megtartva)
+- [x] D.13 — Plugin UI fogyasztók átírása (~10 fájl: FilterBar, WorkflowStatus, GeneralSection, PropertiesPanel, ArticleProperties, Publication, ArticleTable, usePublicationArchive, useFilters, useWorkflowValidation, StateComplianceValidator)
+- [x] D.14 — Shared modul fogyasztók: urgency.js, pageGapUtils.js, useUrgency.js
+- [x] D.15 — Dashboard DataContext + UI (workflow state + fetch + Realtime, FilterBar, ArticleRow, PageSlot, useFilters, config.js)
+- [x] D.16 — CF-ek átírás (article-update-guard: teljes rewrite, validate-article-creation: loadValidStates átírás)
+- [x] D.17 — validate-labels CF törlés + label rendszer eltávolítás
+- [x] D.18 — Régi fájlok törlése: `workflowConfig.js`, `labelConfig.js`, `workflowConstants.js`, `elementPermissions.js`, `syncWorkflowConfig.js`, `validate-labels/`
+- [x] D.19 — Dokumentáció frissítés (CLAUDE.md-k, PROGRESS.md, maestro-server/CLAUDE.md)
+- [x] D.20 — Build verifikáció: mindkét build (webpack + vite) sikeres, 0 stale import (grep clean)
+
+**Technikai részletek:**
+- `workflowRuntime.js`: `getStateConfig`, `getAllStates`, `getAvailableTransitions`, `canUserMoveArticle`, `validateTransition`, `canEditElement`, `canRunCommand`, `canEditContributorDropdown`, `canUserAccessInState`, `hasCapability`, `getContributorGroups`, `isLeaderGroup`, `isInitialState`, `getInitialState`, `getStateLabel`, `getStateColor`, `getStateDuration`, `getStateValidations`, `isTerminalState`, `getStateCommands`
+- CF process cache: 60s TTL (`getWorkflowForOffice()`), fail-closed (nincs workflow → state revert)
+- Import konvenció: `"maestro-shared/..."` webpack alias (plugin), `@shared/...` vite alias (dashboard)
+- **Appwrite Console tennivalók** (MCP-vel): `WORKFLOWS_COLLECTION_ID` env var hozzáadás a CF-ekhez, `CONFIG_COLLECTION_ID` env var törlés, `config` collection törlés, `validate-labels` CF disable/törlés
+
+**Következő**: Fázis 5 — Dashboard Workflow Designer UI (ComfyUI-stílusú vizuális szerkesztő).

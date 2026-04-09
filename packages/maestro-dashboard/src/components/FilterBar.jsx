@@ -7,21 +7,22 @@
  */
 
 import React, { useMemo } from 'react';
-import { WORKFLOW_CONFIG } from '../config.js';
-
-/** Státusz opciók (egyszer számítva) */
-const statusOptions = Object.entries(WORKFLOW_CONFIG).map(([stateNum, config]) => ({
-    key: `status-${stateNum}`,
-    value: Number(stateNum),
-    label: config.label,
-    color: config.color || '#999'
-}));
+import { useData } from '../contexts/DataContext.jsx';
+import { getAllStates } from '@shared/workflowRuntime.js';
 
 export default function FilterBar({
     isOpen, statusFilter, showIgnored, showOnlyMine, showPlaceholders,
     onToggleStatus, onSetShowIgnored, onSetShowOnlyMine, onSetShowPlaceholders,
     isFilterActive, onReset
 }) {
+    const { workflow } = useData();
+    const statusOptions = useMemo(() => getAllStates(workflow).map(s => ({
+        key: `status-${s.id}`,
+        value: s.id,
+        label: s.label,
+        color: s.color || '#999'
+    })), [workflow]);
+
     /** Összes szűrő opció: státuszok + Kimarad */
     const allItems = useMemo(() => {
         const items = [
@@ -52,7 +53,7 @@ export default function FilterBar({
             }
         }
         return reordered;
-    }, [statusFilter, showIgnored, onSetShowIgnored, onToggleStatus]);
+    }, [statusFilter, showIgnored, onSetShowIgnored, onToggleStatus, statusOptions]);
 
     if (!isOpen) return null;
 
