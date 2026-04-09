@@ -85,7 +85,7 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VALID_ACTIONS = new Set([
     'bootstrap_organization', 'create', 'accept',
     'add_group_member', 'remove_group_member',
-    'update_workflow'
+    'update_workflow', 'update_organization'
 ]);
 
 /**
@@ -530,7 +530,10 @@ module.exports = async function ({ req, res, log, error }) {
         // ACTION = 'create'
         // ════════════════════════════════════════════════════════
         if (action === 'create') {
-            const { organizationId, email } = payload;
+            const { organizationId } = payload;
+            const email = typeof payload.email === 'string'
+                ? payload.email.trim().toLowerCase()
+                : payload.email;
             const role = payload.role || 'member';
 
             if (!organizationId || !email) {
@@ -1106,6 +1109,66 @@ module.exports = async function ({ req, res, log, error }) {
             return res.json({
                 success: true,
                 version: newVersion
+            });
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // ACTION = 'update_organization'
+        // ════════════════════════════════════════════════════════════════
+        if (action === 'update_organization') {
+            const { organizationId, name } = payload;
+
+            if (!organizationId || !name) {
+                return fail(res, 400, 'missing_fields', {
+                    required: ['organizationId', 'name']
+                });
+            }
+
+            const sanitizedName = sanitizeString(name, NAME_MAX_LENGTH);
+            if (!sanitizedName) {
+                return fail(res, 400, 'invalid_name');
+            }
+
+            // Caller jogosultság: org owner/admin
+            const callerMembership = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', organizationId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.limit(1)
+                ]
+            );
+
+            if (callerMembership.documents.length === 0) {
+                return fail(res, 403, 'not_a_member');
+            }
+
+            const callerRole = callerMembership.documents[0].role;
+            if (callerRole !== 'owner' && callerRole !== 'admin') {
+                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            }
+
+            // Org dokumentum frissítése
+            try {
+                await databases.updateDocument(
+                    databaseId,
+                    organizationsCollectionId,
+                    organizationId,
+                    { name: sanitizedName }
+                );
+            } catch (updateErr) {
+                error(`[UpdateOrg] updateDocument hiba: ${updateErr.message}`);
+                return fail(res, 500, 'update_failed');
+            }
+
+            log(`[UpdateOrg] User ${callerId} átnevezte org ${organizationId} → "${sanitizedName}"`);
+
+            return res.json({
+                success: true,
+                action: 'updated',
+                organizationId,
+                name: sanitizedName
             });
         }
 

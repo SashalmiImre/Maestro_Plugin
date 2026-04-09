@@ -19,7 +19,17 @@
 
 ## Aktuális fázis
 
-**Fázis 6 — Org/Office Admin UI finomítás** (következő)
+**Fázis 6 — Org/Office Admin UI finomítás** (aktív)
+
+### Fázis 6 checklist (folyamatban)
+- [x] F.1 — CF `update_organization` action (`invite-to-organization` CF bővítés): sanitizeString, owner/admin role check, updateDocument try/catch
+- [x] F.2 — CF `create` action email normalizálás: `trim().toLowerCase()` a duplikát invite megelőzéséhez
+- [x] F.3 — `OrganizationAdminRoute.jsx` (ÚJ): 5 szekciós admin oldal (org név szerkesztés, meghívó küldés, függő meghívók, tagok, szerkesztőségek)
+- [x] F.4 — `App.jsx` route bekötés: `/settings/organization` a védett AuthSplitLayout blokkban
+- [x] F.5 — `DashboardHeader.jsx` navigáció: „Szervezet" + „Csoportok" linkek
+- [x] F.6 — Harden pass: admin gate (isOrgAdmin), stale data védelem, targeted reloadInvites, simplify cleanup (derived org, roleLabel, React import)
+- [ ] F.7 — `EditorialOfficeAdminView.jsx` — office áttekintés, csoport lista, user→csoport hozzárendelés
+- [ ] F.8 — Plugin `UserContext` több-org mode: WorkspaceHeader org+office választó dropdown
 
 ### Fázis 5 checklist (kész, 2026-04-09)
 - [x] E.1 — Appwrite `graph` longtext mező a `workflows` collection-ben (MCP)
@@ -691,4 +701,19 @@ packages/maestro-shared/validatorRegistry.js
 - `invite-to-organization/main.js` — `update_workflow` action
 - `yarn.lock` — @xyflow/react + dependencies
 
-**Következő**: Fázis 6 — Org/Office Admin UI finomítás.
+### Fázis 6 session log
+
+#### F.1–F.6 — OrganizationAdminRoute (2026-04-10)
+
+**Érintett fájlok:**
+- `packages/maestro-server/functions/invite-to-organization/src/main.js` — `update_organization` action + email normalizálás
+- `packages/maestro-dashboard/src/routes/settings/OrganizationAdminRoute.jsx` — ÚJ, 5 szekciós admin oldal
+- `packages/maestro-dashboard/src/App.jsx` — route bekötés
+- `packages/maestro-dashboard/src/components/DashboardHeader.jsx` — navigációs linkek
+
+**Harden pass eredmény:**
+- 6 javítás (admin gate, CF email normalizálás, CF updateDocument try/catch, stale data védelem, reloadInvites fallback, simplify cleanup)
+- 5 noise elutasítva (pre-existing ACL, token hashing, lokális CF helper konvenció, shared errorMessage scope, useCallback)
+- 1 DESIGN QUESTION: legacy mixed-case email invite duplikáció (egyszeri migráció szükséges, ha van ilyen adat prodban)
+
+**Következő**: F.7 — EditorialOfficeAdminView.

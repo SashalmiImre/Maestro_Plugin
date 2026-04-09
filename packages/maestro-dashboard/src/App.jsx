@@ -28,6 +28,7 @@ import OnboardingRoute from './routes/auth/OnboardingRoute.jsx';
 import InviteRoute from './routes/auth/InviteRoute.jsx';
 import SettingsPasswordRoute from './routes/settings/SettingsPasswordRoute.jsx';
 import GroupsRoute from './routes/settings/GroupsRoute.jsx';
+import OrganizationAdminRoute from './routes/settings/OrganizationAdminRoute.jsx';
 import DashboardLayout from './routes/dashboard/DashboardLayout.jsx';
 import TableViewRoute from './routes/dashboard/TableViewRoute.jsx';
 import LayoutViewRoute from './routes/dashboard/LayoutViewRoute.jsx';
@@ -91,6 +92,7 @@ export default function App() {
                             <Route path="/onboarding" element={<OnboardingRoute />} />
                             <Route path="/settings/password" element={<SettingsPasswordRoute />} />
                             <Route path="/settings/groups" element={<GroupsRoute />} />
+                            <Route path="/settings/organization" element={<OrganizationAdminRoute />} />
                         </Route>
 
                         {/* Tényleges dashboard — child route-okkal (table/layout) */}

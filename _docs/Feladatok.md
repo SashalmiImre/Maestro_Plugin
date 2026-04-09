@@ -122,7 +122,7 @@ tags: [feladatok]
 
 #### Fázis 6 — Org/Office Admin UI finomítás
 
-- [ ] `OrganizationAdminView.jsx` — org név szerkesztés, meghívó flow, user lista, office lista
+- [x] `OrganizationAdminRoute.jsx` — org név szerkesztés, meghívó flow (token link + vágólap), függő meghívók lista, tagok lista (névfeloldás groupMemberships-ből), szerkesztőségek lista (workflow designer link). CF `update_organization` action + email normalizálás. Admin gate (owner/admin only: szerkesztés, meghívó, pending invites). Harden pass: 6 javítás + simplify cleanup. *(2026-04-10)*
 - [ ] `EditorialOfficeAdminView.jsx` — office áttekintés, csoport lista (link a `GroupsPanel`-re), user → csoport hozzárendelés dashboard, workflow designer link
 - [ ] `InviteUserModal.jsx` — e-mail, szerepkör választó, opcionális üzenet
 - [ ] Plugin `UserContext` több-org mode: ha a user több org-hoz tartozik, WorkspaceHeader kap egy org + office választó dropdown-t
