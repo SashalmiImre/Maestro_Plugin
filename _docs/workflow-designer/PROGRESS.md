@@ -19,7 +19,39 @@
 
 ## Aktuális fázis
 
-**Fázis 5 — Workflow Designer UI** (következő)
+**Fázis 6 — Org/Office Admin UI finomítás** (következő)
+
+### Fázis 5 checklist (kész, 2026-04-09)
+- [x] E.1 — Appwrite `graph` longtext mező a `workflows` collection-ben (MCP)
+- [x] E.2 — Új shared modul: `maestro-shared/validatorRegistry.js` (VALIDATOR_REGISTRY: 4 validátor típus)
+- [x] E.3 — Route refaktor: `DashboardLayout.jsx` shell + `<Outlet />`, `TableViewRoute.jsx` + `LayoutViewRoute.jsx` child route-ok, `DashboardView.jsx` törölve
+- [x] E.4 — `ContentHeader.jsx`: view toggle gombok `<Link>` / `<NavLink>` lett, URL-alapú aktív állapot
+- [x] E.5 — `DashboardHeader.jsx`: új "Workflow tervező" link az admin route-ra
+- [x] E.6 — `App.jsx`: új route struktúra (`/` → DashboardLayout + child routes, `/admin/office/:officeId/workflow` → WorkflowDesignerPage)
+- [x] E.7 — `@xyflow/react` dependency telepítés
+- [x] E.8 — `compiler.js`: `compiledToGraph()` + `graphToCompiled()` + `extractGraphData()` — kétirányú konverzió
+- [x] E.9 — `WorkflowCanvas.jsx`: @xyflow/react wrapper (ReactFlow + MiniMap + Controls + Background)
+- [x] E.10 — `nodes/StateNode.jsx`: custom xyflow node (szín sáv, címke, slug, duration, badge-ek, Handle-ek)
+- [x] E.11 — `edges/TransitionEdge.jsx`: custom xyflow edge (label + irány nyíl, szín kódolás direction szerint)
+- [x] E.12 — `PropertiesSidebar.jsx`: dinamikus editor (state/transition/workflow kiválasztás alapján)
+- [x] E.13 — `editors/StatePropertiesEditor.jsx`: állapot szerkesztő (label, id, color, duration, isInitial, isTerminal, validations, commands, statePermissions)
+- [x] E.14 — `editors/TransitionPropertiesEditor.jsx`: átmenet szerkesztő (label, direction, allowedGroups)
+- [x] E.15 — `editors/WorkflowPropertiesEditor.jsx`: workflow-szintű (verzió, leaderGroups, contributorGroups + placeholder tabok)
+- [x] E.16 — `fields/ColorPickerField.jsx` + `GroupMultiSelectField.jsx` + `ValidationListField.jsx` + `CommandListField.jsx`
+- [x] E.17 — `NodePalette.jsx`: HTML5 DnD drag source (6 szín, `application/maestro-node-type` + `application/maestro-node-color`)
+- [x] E.18 — `WorkflowDesignerPage.jsx` DnD handler-ek (`handleDragOver`, `handleDrop` → `screenToFlowPosition()`)
+- [x] E.19 — `validator.js`: pre-save validáció (7 szabály: 1 initial, unique ID, regex, valid refs, no forward from terminal, unique pairs, empty allowedGroups)
+- [x] E.20 — `api.js`: `saveWorkflow()` CF hívás wrapper (Functions.createExecution)
+- [x] E.21 — CF `invite-to-organization` bővítés: `update_workflow` action (auth + optimistic concurrency + version bump)
+- [x] E.22 — `DesignerToolbar` save flow: graphToCompiled → validateWorkflow → removedIds article check (fail-closed) → extractGraphData → saveWorkflow CF → version update
+- [x] E.23 — `exportImport.js`: JSON export/import logika (`maestro_workflow_export` sentinel, diff számítás metadata változásokkal)
+- [x] E.24 — `ImportDialog.jsx`: modal (fájl kiválasztás → validáció → diff megjelenítés + ACL/metadata figyelmeztetés → megerősítés)
+- [x] E.25 — Unsaved changes guard: `useBlocker` (react-router-dom v7) + `beforeunload` event + megerősítő dialógus (`blocker.proceed()` / `blocker.reset()`)
+- [x] E.26 — Realtime awareness: `workflows` document subscription, remote version változás → warning banner + reload gomb, save disabled
+- [x] E.27 — State ID rename védelem: mentés előtt `articles` query a törölt state ID-kre, találat → blokkolás (fail-closed)
+- [x] E.28 — `workflowDesigner.css`: teljes designer stíluslap (canvas, node-ok, sidebar, toolbar, palette, import dialog, warning banner)
+- [x] E.29 — Harden pass: 8 javítás (data.id compiler fix, useBlocker proceed/reset, edge dirty tracking, fail-closed error handling, save disabled remote warning, import metadata diff, DashboardLayout unmount guard, DIRTY_CHANGE_TYPES module scope)
+- [x] E.30 — Build verifikáció: dashboard vite build sikeres (267 modul, 0 hiba)
 
 ### Fázis 4 checklist (kész, 2026-04-09)
 - [x] D.1 — Új collection: `workflows` (editorialOfficeId, organizationId, compiled longtext, version int) — MCP
@@ -106,7 +138,7 @@
 | 2 | Dinamikus csoportok | A 7 fix Appwrite Team helyett saját `groups` + `groupMemberships` | **Kész** |
 | 3 | Dinamikus contributor mezők | `articles.contributors: {slug: userId}` JSON a 7 hardkódolt oszlop helyett | **Kész** |
 | 4 | Workflow runtime | `workflows` collection, `compiled` JSON, Realtime hot-reload, régi workflowConstants törlése | **Kész** |
-| 5 | Workflow Designer UI | ComfyUI-szerű vizuális designer a Dashboardon, export/import | Vár |
+| 5 | Workflow Designer UI | ComfyUI-szerű vizuális designer a Dashboardon, export/import | **Kész** |
 | 6 | Org/Office Admin UI finomítás | Teljes org admin felület, user meghívás, csoport kezelés | Vár |
 | 7 | Cleanup | Átmeneti kód törlése, dokumentáció lezárása | Vár |
 
@@ -128,7 +160,9 @@
 
 ## Nyitott kérdések
 
-_(egyelőre nincs)_
+1. **Transition `allowedGroups` end-to-end enforcement** — A designer UI-ban beállított `allowedGroups` a plugin oldalon érvényesül (`canUserMoveArticle`), de a CF `article-update-guard` jelenleg nem ellenőrzi az átmenet-szintű csoportkorlátozást. Fázis 6-ban vagy később szükséges a CF guard bővítése.
+2. **Hot-reload coordination with in-flight operations** — Ha admin ment a designerben, miközben a plugin épp tranzíciót hajt végre, a snapshot pattern véd, de az edge case-ek (pl. state törlés közben zajló átmenet) nincsenek tesztelve.
+3. **Import foreign group slugs validation** — Más office-ból importált workflow tartalmazhat ismeretlen csoport slug-okat. Jelenleg nincs figyelmeztetés vagy mapping UI — a Fázis 5 terv tartalmazza, de az első iterációból kimaradt.
 
 ---
 
@@ -566,3 +600,95 @@ _(egyelőre nincs)_
 - **Appwrite Console tennivalók** (MCP-vel): `WORKFLOWS_COLLECTION_ID` env var hozzáadás a CF-ekhez, `CONFIG_COLLECTION_ID` env var törlés, `config` collection törlés, `validate-labels` CF disable/törlés
 
 **Következő**: Fázis 5 — Dashboard Workflow Designer UI (ComfyUI-stílusú vizuális szerkesztő).
+
+### 2026-04-09 — Fázis 5 KÉSZ (Workflow Designer UI)
+
+**Plan fájl**: `~/.claude/plans/fuzzy-jingling-zebra.md` — 9 commit lépés, route refaktor → canvas → sidebar → DnD → validator → save → export/import → Realtime → CSS.
+
+**Elvégzett feladatok (30 checklist item, E.1–E.30):**
+
+**Infrastruktúra (E.1–E.7):**
+- Appwrite `graph` longtext mező a `workflows` collection-ben (MCP)
+- `maestro-shared/validatorRegistry.js` — 4 validátor típus (file_accessible, page_number_check, filename_verification, preflight_check)
+- Route refaktor: `DashboardView.jsx` törölve, `DashboardLayout.jsx` → shell + `<Outlet />`, `TableViewRoute.jsx` + `LayoutViewRoute.jsx` child route-ok
+- `ContentHeader.jsx` view toggle gombok → `<Link>` / `<NavLink>`, URL-alapú aktív állapot
+- `DashboardHeader.jsx` → "Workflow tervező" link
+- `App.jsx` → `/admin/office/:officeId/workflow` route
+- `@xyflow/react` dependency telepítés (React Flow v12, MIT)
+
+**Core Designer (E.8–E.18):**
+- `compiler.js`: kétirányú konverzió (`compiledToGraph` / `graphToCompiled` / `extractGraphData`), auto-layout topológiai sorrendben
+- `WorkflowCanvas.jsx`: ReactFlow + MiniMap + Controls + Background wrapper
+- `StateNode.jsx`: custom node (szín accent sáv, label, slug, duration, validátor/command badge-ek, initial/terminal ikonok, Handle-ek)
+- `TransitionEdge.jsx`: custom edge (label + irány nyíl, forward zöld / backward narancs / reset piros)
+- `PropertiesSidebar.jsx`: dinamikus editor kiválasztás alapján (state/transition/workflow)
+- 3 editor: `StatePropertiesEditor`, `TransitionPropertiesEditor`, `WorkflowPropertiesEditor`
+- 4 field komponens: `ColorPickerField`, `GroupMultiSelectField`, `ValidationListField`, `CommandListField`
+- `NodePalette.jsx`: HTML5 DnD drag source, 6 szín palette
+- DnD drop handler: `screenToFlowPosition()` → új node a canvas-on
+
+**Save + Validation (E.19–E.22):**
+- `validator.js`: 7 szabályos pre-save validáció
+- `api.js`: `saveWorkflow()` CF hívás wrapper
+- CF `update_workflow` action: auth (owner/admin) + optimistic concurrency (version check) + version bump
+- Save flow: compile → validate → removed state article check (fail-closed) → CF → version update
+
+**Export/Import + Guards (E.23–E.28):**
+- JSON export/import: `maestro_workflow_export` sentinel, diff számítás (structural + metadata/ACL changes)
+- `ImportDialog.jsx`: fájl feltöltés → validáció → diff → megerősítés
+- Unsaved changes guard: `useBlocker` + `beforeunload` + megerősítő dialógus
+- Realtime awareness: remote version change → warning banner + reload gomb, save disabled
+- State ID rename védelem: articles query → fail-closed blokkolás
+- `workflowDesigner.css`: teljes stíluslap (~500 sor)
+
+**Harden pass (E.29):**
+- 6 MUST FIX: `data.id` missing in StateNode, `useBlocker` return value ignored, edge dirty tracking incomplete, state deletion check fail-open, save enabled after remote warning, import diff silent on ACL changes
+- 2 SHOULD FIX: DashboardLayout unmount leak (cancelled flag), DIRTY_CHANGE_TYPES module scope
+- 5 NOISE elutasítva (indoklással)
+- 3 DESIGN QUESTION dokumentálva (backlog):
+  - D1: Transition `allowedGroups` end-to-end enforcement (plugin + CF guard scope)
+  - D2: Hot-reload coordination with in-flight plugin operations
+  - D3: Import foreign group slugs validation
+
+**Build**: dashboard vite build 267 modul, 0 hiba, ~800ms.
+
+**Új fájlok (20 db):**
+```
+packages/maestro-dashboard/src/features/workflowDesigner/
+├── WorkflowDesignerPage.jsx    (route komponens, ~600 sor)
+├── WorkflowCanvas.jsx          (@xyflow/react wrapper)
+├── DesignerToolbar.jsx         (a WorkflowDesignerPage-be integrálva)
+├── NodePalette.jsx             (DnD drag source)
+├── PropertiesSidebar.jsx       (dinamikus editor)
+├── ImportDialog.jsx            (import modal + diff)
+├── compiler.js                 (compiledToGraph + graphToCompiled)
+├── validator.js                (7 szabályos pre-save)
+├── exportImport.js             (JSON export/import)
+├── api.js                      (saveWorkflow CF wrapper)
+├── workflowDesigner.css        (~500 sor)
+├── nodes/StateNode.jsx         (custom xyflow node)
+├── edges/TransitionEdge.jsx    (custom xyflow edge)
+├── editors/StatePropertiesEditor.jsx
+├── editors/TransitionPropertiesEditor.jsx
+├── editors/WorkflowPropertiesEditor.jsx
+├── fields/ColorPickerField.jsx
+├── fields/GroupMultiSelectField.jsx
+├── fields/ValidationListField.jsx
+└── fields/CommandListField.jsx
+packages/maestro-dashboard/src/routes/dashboard/TableViewRoute.jsx
+packages/maestro-dashboard/src/routes/dashboard/LayoutViewRoute.jsx
+packages/maestro-shared/validatorRegistry.js
+```
+
+**Módosított fájlok (9 db):**
+- `App.jsx` — route struktúra átírás (designer route + child routes)
+- `DashboardLayout.jsx` — shell + Outlet + init cancellation guard
+- `ContentHeader.jsx` — Link-ek a view toggleben
+- `DashboardHeader.jsx` — Workflow tervező link
+- `DashboardView.jsx` — **TÖRÖLVE** (logika DashboardLayout-ba + child route-okba költözött)
+- `styles.css` — `@xyflow/react` stílusok import
+- `package.json` — `@xyflow/react` dependency
+- `invite-to-organization/main.js` — `update_workflow` action
+- `yarn.lock` — @xyflow/react + dependencies
+
+**Következő**: Fázis 6 — Org/Office Admin UI finomítás.

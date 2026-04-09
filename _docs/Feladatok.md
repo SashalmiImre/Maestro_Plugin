@@ -94,30 +94,31 @@ tags: [feladatok]
 - [x] Build verifikáció: plugin (webpack) + dashboard (vite) sikeres, 0 stale import
 - [x] **Appwrite Console tennivalók** (MCP-vel): `WORKFLOWS_COLLECTION_ID` env var hozzáadás (3 CF), `config` collection + `validate-labels` CF + `Get Team Members` CF törlés, `appwrite.json` cleanup *(2026-04-09)*
 
-#### Fázis 5 — Workflow Designer UI (Dashboardon)
+#### Fázis 5 — Workflow Designer UI (Dashboardon) ✅ (2026-04-09)
 
-- [ ] Függőségek: `@xyflow/react` (MIT, React Flow), `react-router-dom`
-- [ ] Új mappa: `packages/maestro-dashboard/src/features/workflowDesigner/`
-- [ ] `WorkflowDesigner.jsx` — konténer, betölt + ment `workflows` dokumentumot
-- [ ] `WorkflowCanvas.jsx` — xyflow-alapú canvas
-- [ ] `nodes/StateNode.jsx` — custom state node komponens (label, szín, duration, portok, validator badge, command lista)
-- [ ] `edges/TransitionEdge.jsx` — custom edge (label + allowedGroups chipek)
-- [ ] `NodePalette.jsx` — bal oldali palette drag-n-drop-pal
-- [ ] `PropertiesSidebar.jsx` — jobb oldali panel, kiválasztott elem tulajdonságai (state/transition/üres)
-- [ ] `GroupsPanel.jsx` — külön tab: csoport CRUD, tag-hozzárendelés
-- [ ] `ElementPermissionsEditor.jsx` — tab: UI elem × csoport rács, checkboxok
-- [ ] `CapabilitiesEditor.jsx` — tab: exkluzív capability-k (pl. `canAddArticlePlan`) csoportokhoz rendelése
-- [ ] `compiler.js` — graph → compiled normalizálás a mentéskor
-- [ ] `validator.js` — mentés előtti ellenőrzés (initial state, elárvult cikk state, körkörös forward-only path)
-- [ ] `exportImport.js` — workflow JSON export/import logika
-- [ ] `ImportDialog.jsx` — fájlfeltöltés, séma validáció, diff megjelenítés, megerősítés dialog
-- [ ] Export gomb: két változat — „Export aktuális" (DB-ben mentett) és „Export szerkesztett" (még-nem-mentett canvas állapot)
-- [ ] Export fájlnév formátum: `workflow-<office-slug>-v<version>-<YYYYMMDD>.json`
-- [ ] Import flow: JSON feltöltés → validator → diff megjelenítés → csoport-hivatkozás ellenőrzés (ismeretlen slug-ok figyelmeztetése + create/map opció) → megerősítés → `graph` + `compiled` mentés aktuális workflow dokumentumba + verzió auto-inkrement
-- [ ] `react-router-dom` route-ok: `/`, `/login`, `/register`, `/admin/organization`, `/admin/office/:officeId`, `/admin/office/:officeId/workflow`
-- [ ] Jelenlegi view-switch (`table`/`layout`) a `/` alatti gyerek route-okká konvertálva
-- [ ] Dashboard `DataContext` új `workflow` state + Realtime + kliens oldali `compiler.js` mentés előtt
-- [ ] **Verifikáció**: admin átnevez egy állapotot → ment → plugin pillanatok alatt az új címkét mutatja. Új csoport + transition → tagok azonnal használhatják. Export/import happy path.
+- [x] Függőségek: `@xyflow/react` (MIT, React Flow v12)
+- [x] Új mappa: `packages/maestro-dashboard/src/features/workflowDesigner/` (20 új fájl)
+- [x] `WorkflowDesignerPage.jsx` — konténer, betölt + ment `workflows` dokumentumot, DnD, save flow, Realtime awareness
+- [x] `WorkflowCanvas.jsx` — xyflow-alapú canvas (ReactFlow + MiniMap + Controls + Background)
+- [x] `nodes/StateNode.jsx` — custom state node komponens (szín sáv, label, slug, duration, validátor/command badge, initial/terminal ikonok)
+- [x] `edges/TransitionEdge.jsx` — custom edge (label + irány nyíl, szín kódolás direction szerint)
+- [x] `NodePalette.jsx` — bal oldali palette drag-n-drop-pal (HTML5 DnD, 6 szín)
+- [x] `PropertiesSidebar.jsx` — jobb oldali panel, kiválasztott elem tulajdonságai (state/transition/workflow)
+- [x] ~~`GroupsPanel.jsx`~~ — placeholder tab a `WorkflowPropertiesEditor`-ban (tényleges CRUD → Fázis 6)
+- [x] ~~`ElementPermissionsEditor.jsx`~~ — placeholder tab (tényleges grid → Fázis 6)
+- [x] ~~`CapabilitiesEditor.jsx`~~ — placeholder tab (tényleges szerkesztő → Fázis 6)
+- [x] `compiler.js` — `compiledToGraph()` + `graphToCompiled()` + `extractGraphData()` kétirányú konverzió, auto-layout
+- [x] `validator.js` — 7 szabályos pre-save validáció (1 initial, unique ID, regex, valid refs, no forward from terminal, unique pairs, empty allowedGroups)
+- [x] `exportImport.js` — workflow JSON export/import logika (`maestro_workflow_export` sentinel, metadata diff)
+- [x] `ImportDialog.jsx` — fájlfeltöltés, séma validáció, diff megjelenítés (structural + ACL/metadata), megerősítés dialog
+- [x] Export gomb: aktuális canvas állapot exportja JSON fájlba
+- [x] Import flow: JSON feltöltés → validator → diff megjelenítés → megerősítés → graph state felülírás → isDirty
+- [x] Route refaktor: `DashboardLayout.jsx` shell + `<Outlet />`, `TableViewRoute` + `LayoutViewRoute` child route-ok, `/admin/office/:officeId/workflow` designer route
+- [x] Jelenlegi view-switch (`table`/`layout`) a `/` alatti gyerek route-okká konvertálva (`ContentHeader` `<Link>` gombok)
+- [x] CF `invite-to-organization` bővítés: `update_workflow` action (auth + optimistic concurrency + version bump)
+- [x] Unsaved changes guard (`useBlocker` + `beforeunload`), Realtime awareness (remote version warning), state ID rename védelem
+- [x] Harden pass: 8 javítás (6 MUST FIX + 2 SHOULD FIX), 5 noise elutasítva, 3 DESIGN QUESTION dokumentálva
+- [x] **Verifikáció**: dashboard vite build 267 modul, 0 hiba. Fájlstruktúra, route-ok, canvas renderelés, DnD, szerkesztés, save/export/import flow, Realtime awareness kód-szinten kész.
 
 #### Fázis 6 — Org/Office Admin UI finomítás
 

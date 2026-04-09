@@ -47,6 +47,12 @@ const crypto = require("crypto");
  *     - Payload: { groupId, userId }
  *     - Idempotens: ha nem létezik, success `already_removed`.
  *
+ *   ACTION='update_workflow' — admin frissíti a workflow compiled + graph JSON-t.
+ *     - Caller jogosultság: org owner/admin (office → org lookup).
+ *     - Payload: { editorialOfficeId, compiled, graph, version }
+ *     - Optimistic concurrency: doc.version !== payload.version → version_conflict.
+ *     - Return: { success: true, version: newVersion }
+ *
  * Trigger: nincs (HTTP, `execute: ["users"]`)
  * Runtime: Node.js 18.0+
  *
@@ -78,7 +84,8 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Érvényes action-ök halmaza
 const VALID_ACTIONS = new Set([
     'bootstrap_organization', 'create', 'accept',
-    'add_group_member', 'remove_group_member'
+    'add_group_member', 'remove_group_member',
+    'update_workflow'
 ]);
 
 /**
@@ -990,6 +997,115 @@ module.exports = async function ({ req, res, log, error }) {
                 action: 'removed',
                 groupId,
                 userId
+            });
+        }
+
+        // ════════════════════════════════════════════════════════
+        // ACTION = 'update_workflow'
+        // ════════════════════════════════════════════════════════
+        //
+        // Workflow compiled + graph JSON frissítése optimistic concurrency-vel.
+        // A Dashboard Workflow Designer hívja mentéskor.
+        if (action === 'update_workflow') {
+            const { editorialOfficeId, compiled, graph, version } = payload;
+
+            if (!editorialOfficeId || !compiled || version == null) {
+                return fail(res, 400, 'missing_fields', {
+                    required: ['editorialOfficeId', 'compiled', 'version']
+                });
+            }
+
+            // 1. Office lookup → organizationId
+            let office;
+            try {
+                office = await databases.listDocuments(
+                    databaseId,
+                    officesCollectionId,
+                    [
+                        sdk.Query.equal('$id', editorialOfficeId),
+                        sdk.Query.limit(1)
+                    ]
+                );
+            } catch (err) {
+                return fail(res, 404, 'office_not_found');
+            }
+            if (office.documents.length === 0) {
+                return fail(res, 404, 'office_not_found');
+            }
+            const orgId = office.documents[0].organizationId;
+
+            // 2. Caller jogosultság: org owner/admin
+            const callerMembership = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', orgId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (callerMembership.documents.length === 0) {
+                return fail(res, 403, 'not_a_member');
+            }
+            const callerRole = callerMembership.documents[0].role;
+            if (callerRole !== 'owner' && callerRole !== 'admin') {
+                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            }
+
+            // 3. Workflow doc betöltés
+            const workflowResult = await databases.listDocuments(
+                databaseId,
+                workflowsCollectionId,
+                [
+                    sdk.Query.equal('editorialOfficeId', editorialOfficeId),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (workflowResult.documents.length === 0) {
+                return fail(res, 404, 'workflow_not_found');
+            }
+            const workflowDoc = workflowResult.documents[0];
+
+            // 4. Optimistic concurrency check
+            const currentCompiled = typeof workflowDoc.compiled === 'string'
+                ? JSON.parse(workflowDoc.compiled)
+                : workflowDoc.compiled;
+            const currentVersion = currentCompiled?.version ?? workflowDoc.version ?? 1;
+
+            if (currentVersion !== version) {
+                return fail(res, 409, 'version_conflict', {
+                    currentVersion,
+                    requestedVersion: version
+                });
+            }
+
+            // 5. Compiled JSON frissítése a verzióval
+            const newVersion = currentVersion + 1;
+            const updatedCompiled = typeof compiled === 'string'
+                ? JSON.parse(compiled)
+                : compiled;
+            updatedCompiled.version = newVersion;
+
+            const updateData = {
+                compiled: JSON.stringify(updatedCompiled),
+                updatedByUserId: callerId
+            };
+            if (graph !== undefined) {
+                updateData.graph = typeof graph === 'string' ? graph : JSON.stringify(graph);
+            }
+
+            await databases.updateDocument(
+                databaseId,
+                workflowsCollectionId,
+                workflowDoc.$id,
+                updateData
+            );
+
+            log(`[UpdateWorkflow] Office ${editorialOfficeId} workflow frissítve: v${currentVersion} → v${newVersion} (by ${callerId})`);
+
+            return res.json({
+                success: true,
+                version: newVersion
             });
         }
 

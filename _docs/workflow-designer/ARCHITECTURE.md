@@ -70,19 +70,50 @@ Részletes `compiled` JSON séma: [COMPILED_SCHEMA.md](COMPILED_SCHEMA.md).
 4. `leaderGroups` tagjai szuperjoggal rendelkeznek.
 5. Realtime: `workflows.{id}` update → hot reload; `groupMemberships` update → permission újraszámolás.
 
-### 7. Vizuális Workflow Designer
+### 7. Vizuális Workflow Designer (Fázis 5 — implementálva)
 
-Dashboard-oldali React feature a [@xyflow/react](https://reactflow.dev/) (MIT) könyvtárral. ComfyUI-szerű canvas, node-ok = állapotok, edge-ek = átmenetek. Jobb oldali sidebar a kiválasztott elem tulajdonságaival. Külön tabok a csoportokhoz, UI elem jogosultságokhoz, exkluzív capability-khez.
+Dashboard-oldali React feature a [@xyflow/react](https://reactflow.dev/) (React Flow v12, MIT) könyvtárral. Route: `/admin/office/:officeId/workflow`.
 
-A designer mentéskor futtatja a `compiler.js`-t (graph → compiled normalizálás) és a `validator.js`-t (initial state létezik, nincs elárvult cikk state, nincs körkörös forward-only path, stb.), majd `graph` + `compiled` együtt kerül a `workflows` dokumentumba. A többi kliens Realtime-on kapja.
+**Fájlstruktúra**: `packages/maestro-dashboard/src/features/workflowDesigner/` (20 fájl).
+
+**Komponens hierarchia**:
+- `WorkflowDesignerPage.jsx` — route komponens, workflow betöltés, graph state, save/export/import, Realtime awareness
+  - Toolbar sáv: vissza gomb, workflow név, verzió, hibajelzés, Export/Import/Mentés gombok
+  - `NodePalette.jsx` — bal oldali drag source (HTML5 DnD, 6 szín palette)
+  - `WorkflowCanvas.jsx` — @xyflow/react wrapper (ReactFlow + MiniMap + Controls + Background)
+    - `nodes/StateNode.jsx` — custom node (szín accent sáv, label, slug, duration, badge-ek, Handle-ek)
+    - `edges/TransitionEdge.jsx` — custom edge (label + irány nyíl, forward=zöld, backward=narancs, reset=piros)
+  - `PropertiesSidebar.jsx` — jobb oldali dinamikus editor
+    - `editors/StatePropertiesEditor.jsx` — állapot szerkesztő
+    - `editors/TransitionPropertiesEditor.jsx` — átmenet szerkesztő
+    - `editors/WorkflowPropertiesEditor.jsx` — workflow-szintű (verzió, leaderGroups, contributorGroups + placeholder tabok)
+  - `ImportDialog.jsx` — import modal (fájl kiválasztás → validáció → diff → megerősítés)
+
+**Field komponensek**: `ColorPickerField`, `GroupMultiSelectField`, `ValidationListField`, `CommandListField`.
+
+**Compiler** (`compiler.js`): Kétirányú konverzió.
+- `compiledToGraph(compiled, savedGraph?)` — betöltéskor: states → nodes, transitions → edges, egyéb → metadata. Auto-layout ha nincs mentett pozíció.
+- `graphToCompiled(nodes, edges, metadata)` — mentéskor: nodes → states + validations + commands + statePermissions, edges → transitions, metadata → leaderGroups stb.
+- `extractGraphData(nodes, viewport)` — node pozíciók + viewport kimentése.
+
+**Validator** (`validator.js`): 7 szabály: pontosan 1 initial, unique state ID-k, `[a-z0-9_]+` regex, valid state refs, no forward from terminal, unique (from,to), empty allowedGroups warning.
+
+**Save flow**: graphToCompiled → validateWorkflow → removedIds article check (fail-closed) → extractGraphData → `saveWorkflow()` CF hívás → `update_workflow` action (auth + optimistic concurrency + version bump) → version update + isDirty reset.
+
+**Védelmek**:
+- Unsaved changes: `useBlocker` (react-router-dom v7) + `beforeunload` + megerősítő dialógus
+- Realtime awareness: `workflows` document subscription → remote version change → warning banner + reload gomb, save disabled
+- State ID rename védelem: mentés előtt `articles` query a törölt state ID-kre → találat esetén blokkolás
 
 #### Workflow JSON export/import
 
 A designer toolbarból:
-- **Export**: `{version, graph, compiled}` letöltése helyi JSON fájlba. Fájlnév: `workflow-<office-slug>-v<version>-<YYYYMMDD>.json`.
-- **Import**: JSON feltöltés → séma validáció → **diff megjelenítés** (aktuális vs. importált) → figyelmeztetés ismeretlen csoport-hivatkozásokra → megerősítés → írás a jelenlegi office workflow dokumentumába (verzió auto-inkrement).
+- **Export**: `{ maestro_workflow_export: true, exportedAt, compiled, graph }` letöltése helyi JSON fájlba.
+- **Import**: JSON feltöltés → `parseImportFile` (sentinel + states validáció) → `computeImportDiff` (structural + metadata/ACL diff megjelenítés) → megerősítés → `compiledToGraph` → graph state felülírás → isDirty.
 
 Use case-ek: backup, office-ok közti workflow átvitel, template megosztás, fejlesztés közbeni gyors visszaállás.
+
+**Még nem implementált** (Fázis 6+): GroupsPanel tényleges CRUD, ElementPermissionsEditor grid, CapabilitiesEditor, undo/redo, real-time collaboration, import foreign group slug validation.
 
 ### 8. Auth flow a Dashboardon
 
@@ -132,8 +163,8 @@ A plugin [appwriteConfig.js](../../packages/maestro-indesign/src/core/config/app
 │     article-update-guard      (compiled-et olvas)               │
 │     validate-article-creation (compiled-et olvas)               │
 │     validate-publication-update                                 │
-│     group-membership-guard                                      │
-│     invite-to-organization (bootstrap + create + accept)        │
+│     invite-to-organization (bootstrap + create + accept         │
+│       + add/remove_group_member + update_workflow)              │
 │     cascade-delete, cleanup-orphaned-*                          │
 │                                                                 │
 │   Tenant collection védelem: ACL `read("users")` only —         │

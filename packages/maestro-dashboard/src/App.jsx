@@ -3,11 +3,11 @@
  *
  * react-router-dom alapú routing. A public auth route-ok (login, register,
  * verify, forgot/reset password) az AuthSplitLayout-ot használják, a védett
- * route-okat ProtectedRoute védi. A `/` route a DashboardLayout-on keresztül
- * rendereli a meglévő DashboardView-t.
+ * route-okat ProtectedRoute védi.
  *
- * Fázis 1 / B.3 — router skeleton. A B.4 fogja megírni a tényleges
- * register/verify/forgot/reset/onboarding/invite implementációt.
+ * A „/" route a DashboardLayout-on keresztül rendereli a child view-kat
+ * (táblázat: index, elrendezés: /layout). A /admin/office/:officeId/workflow
+ * route a Workflow Designer-t nyitja meg.
  */
 
 import React from 'react';
@@ -29,6 +29,9 @@ import InviteRoute from './routes/auth/InviteRoute.jsx';
 import SettingsPasswordRoute from './routes/settings/SettingsPasswordRoute.jsx';
 import GroupsRoute from './routes/settings/GroupsRoute.jsx';
 import DashboardLayout from './routes/dashboard/DashboardLayout.jsx';
+import TableViewRoute from './routes/dashboard/TableViewRoute.jsx';
+import LayoutViewRoute from './routes/dashboard/LayoutViewRoute.jsx';
+import WorkflowDesignerPage from './features/workflowDesigner/WorkflowDesignerPage.jsx';
 
 /**
  * A védett dashboard ágon DataProvider + ToastProvider szükséges. A v7
@@ -40,6 +43,20 @@ function DashboardLayoutWithProviders() {
         <ToastProvider>
             <DataProvider>
                 <DashboardLayout />
+            </DataProvider>
+        </ToastProvider>
+    );
+}
+
+/**
+ * A Workflow Designer-hez szintén szükséges a DataProvider (workflow fetch)
+ * és ToastProvider (toast értesítések).
+ */
+function WorkflowDesignerWithProviders() {
+    return (
+        <ToastProvider>
+            <DataProvider>
+                <WorkflowDesignerPage />
             </DataProvider>
         </ToastProvider>
     );
@@ -75,8 +92,18 @@ export default function App() {
                             <Route path="/settings/password" element={<SettingsPasswordRoute />} />
                             <Route path="/settings/groups" element={<GroupsRoute />} />
                         </Route>
-                        {/* Tényleges dashboard */}
-                        <Route path="/" element={<DashboardLayoutWithProviders />} />
+
+                        {/* Tényleges dashboard — child route-okkal (table/layout) */}
+                        <Route path="/" element={<DashboardLayoutWithProviders />}>
+                            <Route index element={<TableViewRoute />} />
+                            <Route path="layout" element={<LayoutViewRoute />} />
+                        </Route>
+
+                        {/* Workflow Designer */}
+                        <Route
+                            path="/admin/office/:officeId/workflow"
+                            element={<WorkflowDesignerWithProviders />}
+                        />
                     </Route>
 
                     {/* Fallback */}

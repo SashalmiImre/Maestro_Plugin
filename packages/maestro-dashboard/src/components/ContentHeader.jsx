@@ -1,13 +1,14 @@
 /**
  * Maestro Dashboard — Tartalom fejléc
  *
- * Cím, nézet váltó, cikkszám, szűrő gomb.
+ * Cím, nézet váltó (URL-alapú), cikkszám, szűrő gomb.
  */
 
 import React from 'react';
+import { Link } from 'react-router-dom';
 
 export default function ContentHeader({
-    title, articleCount, activeView, onViewChange,
+    title, articleCount, activeView,
     isFilterActive, onFilterToggle
 }) {
     return (
@@ -15,21 +16,21 @@ export default function ContentHeader({
             <h2>{title}</h2>
             <div className="content-header-actions">
                 <div className="view-toggle">
-                    <button
+                    <Link
+                        to="/"
                         className={`view-btn ${activeView === 'table' ? 'active' : ''}`}
                         title="Táblázat nézet"
-                        onClick={() => onViewChange('table')}
                     >
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                             <line x1="3" y1="6" x2="21" y2="6"/>
                             <line x1="3" y1="12" x2="21" y2="12"/>
                             <line x1="3" y1="18" x2="21" y2="18"/>
                         </svg>
-                    </button>
-                    <button
+                    </Link>
+                    <Link
+                        to="/layout"
                         className={`view-btn ${activeView === 'layout' ? 'active' : ''}`}
                         title="Elrendezés nézet"
-                        onClick={() => onViewChange('layout')}
                     >
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
                             <rect x="3" y="3" width="7" height="7" rx="1"/>
@@ -37,7 +38,7 @@ export default function ContentHeader({
                             <rect x="3" y="14" width="7" height="7" rx="1"/>
                             <rect x="14" y="14" width="7" height="7" rx="1"/>
                         </svg>
-                    </button>
+                    </Link>
                 </div>
                 <span className="article-count">{articleCount} cikk</span>
                 <button

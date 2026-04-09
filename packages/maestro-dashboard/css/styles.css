@@ -1052,6 +1052,7 @@ html, body {
     color: var(--text-secondary);
     cursor: pointer;
     line-height: 1;
+    text-decoration: none;
     transition: background 0.15s, color 0.15s, box-shadow 0.15s;
 }
 
