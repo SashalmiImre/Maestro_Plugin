@@ -28,7 +28,7 @@
 - [x] F.4 — `App.jsx` route bekötés: `/settings/organization` a védett AuthSplitLayout blokkban
 - [x] F.5 — `DashboardHeader.jsx` navigáció: „Szervezet" + „Csoportok" linkek
 - [x] F.6 — Harden pass: admin gate (isOrgAdmin), stale data védelem, targeted reloadInvites, simplify cleanup (derived org, roleLabel, React import)
-- [ ] F.7 — `EditorialOfficeAdminView.jsx` — office áttekintés, csoport lista, user→csoport hozzárendelés
+- [x] F.7 — `EditorialOfficeAdminRoute.jsx` (ÚJ): 5 szekciós office admin oldal (info, user×csoport toggle mátrix, csoportösszesítés, workflow link, navigáció). Route: `/settings/editorial-office`, `App.jsx` bekötés, `DashboardHeader.jsx` „Szerkesztőség" link. Harden pass: toggle race fix (globális badge tiltás), fetch generáció-számláló + scope guard, targeted org query (1 doc), `hasWorkflow` boolean, targeted `reloadGroupMemberships()` (1 query vs 5)
 - [ ] F.8 — Plugin `UserContext` több-org mode: WorkspaceHeader org+office választó dropdown
 
 ### Fázis 5 checklist (kész, 2026-04-09)

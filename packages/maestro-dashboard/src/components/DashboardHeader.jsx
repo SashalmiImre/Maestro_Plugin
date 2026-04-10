@@ -25,6 +25,7 @@ export default function DashboardHeader() {
                     </Link>
                 )}
                 <Link to="/settings/organization" className="auth-link">Szervezet</Link>
+                <Link to="/settings/editorial-office" className="auth-link">Szerkesztőség</Link>
                 <Link to="/settings/groups" className="auth-link">Csoportok</Link>
                 <Link to="/settings/password" className="auth-link">Jelszó módosítása</Link>
                 <button className="logout-btn" onClick={logout}>Kijelentkezés</button>
