@@ -14,8 +14,11 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext.jsx';
 import { useScope } from '../contexts/ScopeContext.jsx';
 import { useData } from '../contexts/DataContext.jsx';
+import { useModal } from '../contexts/ModalContext.jsx';
 import BreadcrumbDropdown from './BreadcrumbDropdown.jsx';
 import UserAvatar from './UserAvatar.jsx';
+import CreatePublicationModal from './publications/CreatePublicationModal.jsx';
+import PublicationSettingsModal from './publications/PublicationSettingsModal.jsx';
 
 /**
  * @param {Object} props
@@ -33,6 +36,7 @@ export default function BreadcrumbHeader({
     const { user, organizations, editorialOffices, logout } = useAuth();
     const { activeOrganizationId, activeEditorialOfficeId, setActiveOrganization, setActiveOffice } = useScope();
     const { publications, activePublicationId } = useData();
+    const { openModal } = useModal();
     const navigate = useNavigate();
     const location = useLocation();
 
@@ -78,6 +82,23 @@ export default function BreadcrumbHeader({
         }
     }
 
+    // ── Kiadvány modalok ──────────────────────────────────────────────────
+    function handleCreatePublication() {
+        openModal(<CreatePublicationModal />, {
+            size: 'md',
+            title: 'Új kiadvány'
+        });
+    }
+
+    function handlePublicationSettings() {
+        if (!activePublicationId) return;
+        const activePub = publications.find(p => p.$id === activePublicationId);
+        openModal(<PublicationSettingsModal publicationId={activePublicationId} />, {
+            size: 'lg',
+            title: activePub?.name || 'Kiadvány beállításai'
+        });
+    }
+
     return (
         <div className="breadcrumb-header">
             {/* ── Bal oldal: logó + breadcrumb dropdown-ok ── */}
@@ -113,6 +134,10 @@ export default function BreadcrumbHeader({
                     activeId={activePublicationId}
                     items={pubItems}
                     onSelect={onPublicationSelect}
+                    onSettings={activePublicationId ? handlePublicationSettings : undefined}
+                    settingsLabel="Kiadvány beállításai"
+                    onCreate={activeEditorialOfficeId ? handleCreatePublication : undefined}
+                    createLabel="Új kiadvány"
                 />
             </div>
 

@@ -12,6 +12,7 @@
     "./contributorHelpers": "./contributorHelpers.js",
     "./commandRegistry": "./commandRegistry.js",
     "./pageGapUtils": "./pageGapUtils.js",
-    "./groups": "./groups.js"
+    "./groups": "./groups.js",
+    "./deadlineValidator": "./deadlineValidator.js"
   }
 }

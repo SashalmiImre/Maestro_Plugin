@@ -267,6 +267,25 @@ A guard function-ök a `workflows` collection `compiled` JSON mezőjéből olvas
 
 ---
 
+## Publications Collection — Aktiválási mezők (Dashboard Redesign Fázis 3)
+
+A Dashboard Redesign Fázis 3 keretében a `publications` collection három új mezőt kapott, előkészítésként a Fázis 4-7 funkciókhoz (Dashboard-alapú kiadványkezelés, publikáció aktiválás, többszörös workflow támogatás).
+
+| Mező | Típus | Default | Célja |
+|------|-------|---------|-------|
+| `workflowId` | string (36) | null | A publikációhoz rendelt workflow `$id`-je (Fázis 7: több workflow/office). Ha `null` → az office egyetlen workflow-ja (fallback, Fázis 6 guard). |
+| `isActivated` | boolean | `false` | A plugin csak aktivált publikációkat lát (Fázis 5 szűrés). Új publikáció a Dashboard-on `false`-szal indul, aktiválás után a plugin számára is láthatóvá válik. |
+| `activatedAt` | datetime | null | Aktiválás időpontja (informatív). |
+
+**Indexek**: `workflowId` (ASC), `isActivated` (ASC) — a Fázis 5-7 query-khez szükségesek.
+
+**Guardok** (aktuális állapot, Fázis 3):
+- `validate-publication-update` CF még nem validálja az új mezőket — opcionálisak, `false`/`null` default-tal futnak.
+- Az `isActivated → true` átmenet validációja (deadline fedés, workflowId kitöltve) a Fázis 5-ben kerül be.
+- A `workflowId` immutability aktivált publikációra a Fázis 5-6-ban lesz enforced.
+
+---
+
 ## Kapcsolat a Többi Csomaggal
 
 ```

@@ -32,25 +32,26 @@ tags: [feladatok]
 - [x] `DashboardHeader.jsx` + `Sidebar.jsx` + `ContentHeader.jsx` törlése, CSS takarítás
 - [ ] Beállítás route-ok átalakítása modalokra: `OrganizationAdminRoute` → `OrganizationSettingsModal`, `EditorialOfficeAdminRoute` → `EditorialOfficeSettingsModal` (Fázis 4-ben)
 
-#### Fázis 3 — DB séma változások
+#### Fázis 3 — DB séma változások ✅ (2026-04-10)
 
-- [ ] `publications` collection: új `workflowId` string mező (opcionális) + index
-- [ ] `publications` collection: új `isActivated` boolean mező (default: `false`)
-- [ ] `publications` collection: új `activatedAt` datetime mező (opcionális)
-- [ ] `workflows` collection: `name` string mező hozzáadása (több workflow megkülönböztetéséhez)
-- [ ] Migráció: meglévő publikációkra `isActivated: true` + `workflowId` = az office workflow `$id`-je (egyszeri script)
+- [x] `publications` collection: új `workflowId` string mező (opcionális, size 36) + index
+- [x] `publications` collection: új `isActivated` boolean mező (default: `false`) + index
+- [x] `publications` collection: új `activatedAt` datetime mező (opcionális)
+- [x] `workflows` collection: `name` string mező — **már létezett** (required, size 255, a bootstrap CF seed-eli)
+- [x] ~~Migráció~~: fejlesztési fázis, adat dobható — nem szükséges
 
-#### Fázis 4 — Kiadványkezelés a Dashboardon
+#### Fázis 4 — Kiadványkezelés a Dashboardon ✅ (2026-04-10)
 
-- [ ] Dashboard `DataContext.jsx` bővítés: `createPublication`, `updatePublication`, `deletePublication` write-through metódusok (plugin DataContext mintájára)
-- [ ] Dashboard `DataContext.jsx` bővítés: `createLayout`, `updateLayout`, `deleteLayout` + `createDeadline`, `updateDeadline`, `deleteDeadline` write-through metódusok
-- [ ] `CreatePublicationModal.jsx`: név, rootPath (szöveg), fedés start/end, workflowId dropdown → mentés + auto „A" layout létrehozás
-- [ ] `PublicationSettingsModal.jsx` — **Általános** fül: név, fedés (start/end), rootPath (r/o), excludeWeekends, workflowId dropdown
-- [ ] `PublicationSettingsModal.jsx` — **Layoutok** fül: port a plugin `LayoutsSection.jsx`-ből (CRUD, auto A-Z elnevezés)
-- [ ] `PublicationSettingsModal.jsx` — **Határidők** fül: port a plugin `DeadlinesSection.jsx`-ből (oldalszám-tartomány + dátum/idő, validáció: átfedés, fedés, formátum)
-- [ ] `PublicationSettingsModal.jsx` — **Közreműködők** fül: port a plugin `ContributorsSection.jsx`-ből (csoport-alapú dropdown-ok, bulk update ajánlás)
-- [ ] Breadcrumb publikáció dropdown: „Új kiadvány" menüpont (→ `CreatePublicationModal`)
-- [ ] Deadline validációs logika áthelyezése `maestro-shared`-be (formátum, átfedés, fedés ellenőrzés) — vagy Dashboard saját hook
+- [x] Dashboard `DataContext.jsx` bővítés: `createPublication`, `updatePublication`, `deletePublication` write-through metódusok (plugin DataContext mintájára) *(2026-04-10 kész — `withScope()` helper + optimista update + `$updatedAt` staleness guard)*
+- [x] Dashboard `DataContext.jsx` bővítés: `createLayout`, `updateLayout`, `deleteLayout` + `createDeadline`, `updateDeadline`, `deleteDeadline` write-through metódusok *(2026-04-10 kész — `deleteLayout(id, reassignToId)` kaszkádol érintett cikkek `layoutId`-ját, `workflows[]` plural state + Realtime szinkron)*
+- [x] `CreatePublicationModal.jsx`: név, rootPath (szöveg), fedés start/end, workflowId dropdown → mentés + auto „A" layout létrehozás *(2026-04-10 kész — `isActivated: false` default, workflow dropdown 1-workflow esetén disabled, layout fail non-blocking warning)*
+- [x] `PublicationSettingsModal.jsx` — **Általános** fül: név, fedés (start/end), rootPath (r/o), excludeWeekends, workflowId dropdown *(2026-04-10 kész — blur-save minta, Realtime prop-sync useEffects, workflow váltás toast visszajelzéssel)*
+- [x] `PublicationSettingsModal.jsx` — **Layoutok** fül: port a plugin `LayoutsSection.jsx`-ből (CRUD, auto A-Z elnevezés) *(2026-04-10 kész — `getNextLayoutName`, 8 rotáló DEFAULT_COLORS, reassign dropdown törléskor, min 1 layout enforce)*
+- [x] `PublicationSettingsModal.jsx` — **Határidők** fül: port a plugin `DeadlinesSection.jsx`-ből (oldalszám-tartomány + dátum/idő, validáció: átfedés, fedés, formátum) *(2026-04-10 kész — `@shared/deadlineValidator.js` import, 300ms debounced full-list validáció, invalid field piros keret)*
+- [x] `PublicationSettingsModal.jsx` — **Közreműködők** fül: port a plugin `ContributorsSection.jsx`-ből (csoport-alapú dropdown-ok, bulk update ajánlás) *(2026-04-10 kész — Dashboard `useContributorGroups` hook, smart update ajánlat null-contributor cikkekre)*
+- [x] Breadcrumb publikáció dropdown: „Új kiadvány" menüpont (→ `CreatePublicationModal`) *(2026-04-10 kész — `BreadcrumbDropdown` bővült `onCreate` prop-pal + divider, `BreadcrumbHeader` wireing `openModal`-lal)*
+- [x] Deadline validációs logika áthelyezése `maestro-shared`-be (formátum, átfedés, fedés ellenőrzés) — vagy Dashboard saját hook *(2026-04-10 kész — `packages/maestro-shared/deadlineValidator.js` statikus helperek: `isValidDate`, `isValidTime`, `validateDeadlines`, `buildDatetime`, `getDateFromDatetime`, `getTimeFromDatetime`, plugin `DeadlineValidator.js` delegál rá)*
+- [x] Harden pass: 3 iterációs Codex review — publikációk/határidők `$updatedAt` staleness guard, `workflow` derived `useMemo` + fail-closed stale `workflowId`, `excludeWeekends ?? true` default, DeadlinesTab dead-code simplify, GeneralTab `invalid-input` osztályok, CreatePublicationModal auto-workflow-pick effect
 - [ ] **Verifikáció**: Dashboard-on publikáció létrehozás/szerkesztés/törlés, Realtime szinkron a pluginban
 
 #### Fázis 5 — Publikáció aktiválás

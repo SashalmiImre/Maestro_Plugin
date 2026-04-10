@@ -1893,3 +1893,386 @@ html, body {
     font-weight: 600;
     border-bottom-color: var(--accent-solid);
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* Publication modalok (CreatePublicationModal + PublicationSettingsModal)   */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+.publication-form {
+    display: flex;
+    flex-direction: column;
+}
+
+/* Kettős oszlopos sor a fedés startStart/endPage-hez */
+.form-row {
+    display: flex;
+    gap: 12px;
+}
+
+.form-row .form-col {
+    flex: 1;
+}
+
+/* Checkbox sor */
+.form-checkbox-group {
+    margin-bottom: 18px;
+}
+
+.form-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-transform: none;
+    letter-spacing: 0;
+    cursor: pointer;
+    margin-bottom: 0 !important;
+}
+
+.form-checkbox-label input[type="checkbox"] {
+    width: auto;
+    margin: 0;
+}
+
+/* Select elem a form-group-on belül */
+.form-select {
+    width: 100%;
+    padding: 10px 14px;
+    background: var(--bg-base);
+    border: 1px solid transparent;
+    border-radius: 8px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    cursor: pointer;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.form-select:hover:not(:focus):not(:disabled) {
+    border-color: rgba(66, 71, 84, 0.15);
+}
+
+.form-select:focus {
+    border-color: rgba(173, 198, 255, 0.5);
+    box-shadow: 0 0 0 3px rgba(173, 198, 255, 0.10);
+}
+
+.form-select:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+/* Csak olvasható input */
+.form-input-readonly {
+    background: rgba(0, 0, 0, 0.2) !important;
+    color: var(--text-muted) !important;
+    cursor: default;
+}
+
+/* Mező szintű hiba */
+.invalid-input {
+    border-color: #e53935 !important;
+    box-shadow: 0 0 0 3px rgba(229, 57, 53, 0.15) !important;
+}
+
+.form-error {
+    font-size: 11px;
+    color: #e57373;
+    margin-top: 4px;
+}
+
+.form-error-global {
+    margin-top: 12px;
+    padding: 10px 14px;
+    background: rgba(229, 57, 53, 0.1);
+    border: 1px solid rgba(229, 57, 53, 0.3);
+    border-radius: 8px;
+    font-size: 12px;
+    color: #ef9a9a;
+}
+
+/* Üres állapot */
+.form-empty-state {
+    padding: 20px 0;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+/* ─── Modal akció gombok ────────────────────────────────────────────────── */
+
+.modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+}
+
+.btn-primary,
+.btn-secondary,
+.btn-danger {
+    padding: 9px 18px;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: inherit;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: filter 0.15s, background 0.15s;
+}
+
+.btn-primary {
+    border: none;
+    background: linear-gradient(135deg, var(--accent-solid), var(--accent-hover));
+    color: #fff;
+}
+
+.btn-primary:hover:not(:disabled) {
+    filter: brightness(1.08);
+}
+
+.btn-primary:disabled {
+    background: var(--bg-elevated);
+    color: var(--text-disabled);
+    cursor: not-allowed;
+    filter: none;
+}
+
+.btn-secondary {
+    border: 1px solid var(--outline-variant);
+    background: transparent;
+    color: var(--text-secondary);
+}
+
+.btn-secondary:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.btn-secondary:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.btn-danger {
+    border: none;
+    background: #e53935;
+    color: #fff;
+}
+
+.btn-danger:hover:not(:disabled) {
+    filter: brightness(1.1);
+}
+
+.btn-add-row {
+    align-self: flex-start;
+    margin-top: 8px;
+}
+
+/* Ikon törlés gomb (✕) */
+.btn-danger-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    flex-shrink: 0;
+}
+
+.btn-danger-icon:hover:not(:disabled) {
+    background: rgba(229, 57, 53, 0.12);
+    color: #e57373;
+}
+
+.btn-danger-icon:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
+/* ─── Publication settings modal: tab content konténer ─────────────────── */
+
+.publication-settings-modal {
+    display: flex;
+    flex-direction: column;
+}
+
+.publication-tab-content {
+    min-height: 280px;
+}
+
+/* ─── Layout sor (LayoutsTab) ──────────────────────────────────────────── */
+
+.layout-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.layout-color-swatch {
+    position: relative;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    cursor: pointer;
+}
+
+.layout-color-circle {
+    display: block;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    border: 2px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+
+.layout-color-swatch:hover .layout-color-circle {
+    border-color: rgba(255, 255, 255, 0.3);
+}
+
+.color-picker-input {
+    position: absolute;
+    inset: 0;
+    opacity: 0;
+    cursor: pointer;
+    border: none;
+    padding: 0;
+    background: none;
+}
+
+.layout-name-input {
+    flex: 1;
+    padding: 8px 12px;
+    background: var(--bg-base);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.layout-name-input:focus {
+    border-color: rgba(173, 198, 255, 0.5);
+    box-shadow: 0 0 0 3px rgba(173, 198, 255, 0.10);
+}
+
+/* ─── Határidő sor (DeadlinesTab) ──────────────────────────────────────── */
+
+.deadline-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.deadline-page-input {
+    width: 64px;
+    padding: 8px 10px;
+    background: var(--bg-base);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    text-align: center;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.deadline-separator {
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.deadline-date-input {
+    flex: 1;
+    padding: 8px 12px;
+    background: var(--bg-base);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.deadline-time-input {
+    width: 80px;
+    padding: 8px 10px;
+    background: var(--bg-base);
+    border: 1px solid transparent;
+    border-radius: 6px;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    text-align: center;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.deadline-page-input:focus,
+.deadline-date-input:focus,
+.deadline-time-input:focus {
+    border-color: rgba(173, 198, 255, 0.5);
+    box-shadow: 0 0 0 3px rgba(173, 198, 255, 0.10);
+}
+
+/* Validációs kártyák (DeadlinesTab alján) */
+
+.validation-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 12px;
+}
+
+.validation-card {
+    padding: 8px 12px;
+    border-radius: 6px;
+    font-size: 12px;
+    color: #fff;
+}
+
+.validation-card-error {
+    background: #d7373f;
+}
+
+.validation-card-warning {
+    background: #e68619;
+}
+
+/* ─── Breadcrumb dropdown „+ Új" menüpont ──────────────────────────────── */
+
+.bc-dropdown-create {
+    color: var(--accent-solid);
+    font-weight: 500;
+}
+
+.bc-dropdown-create:hover {
+    background: var(--bg-hover);
+}
+
+.bc-dropdown-create-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    margin-right: 6px;
+    font-size: 14px;
+    font-weight: 700;
+}
+
