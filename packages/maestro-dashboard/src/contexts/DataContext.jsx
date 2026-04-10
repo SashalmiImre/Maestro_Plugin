@@ -343,8 +343,6 @@ function getCollection(channels) {
         if (ch.includes(COLLECTIONS.PUBLICATIONS)) return 'publications';
         if (ch.includes(COLLECTIONS.LAYOUTS)) return 'layouts';
         if (ch.includes(COLLECTIONS.DEADLINES)) return 'deadlines';
-        // USER_VALIDATIONS ('uservalidations') ellenőrzése a SYSTEM_VALIDATIONS ('validations')
-        // előtt, mert 'validations' substring of 'uservalidations'
         if (ch.includes(COLLECTIONS.USER_VALIDATIONS)) return 'validations';
         if (ch.includes(COLLECTIONS.SYSTEM_VALIDATIONS)) return 'system_validations';
         if (ch.includes(COLLECTIONS.WORKFLOWS)) return 'workflows';
@@ -434,7 +432,7 @@ function applyDeadlineEvent(eventType, payload, pubIdRef, setDeadlines) {
 }
 
 function applyValidationEvent(eventType, payload, articleIdsRef, setValidations) {
-    // uservalidations: csak az aktív kiadvány cikkeihez tartozó eseményeket kezeljük.
+    // userValidations: csak az aktív kiadvány cikkeihez tartozó eseményeket kezeljük.
     // Delete esetén $id alapján szűrünk (a cikk már törölve lehet az articleIdsRef-ből).
     if (eventType === 'delete') {
         setValidations(prev => prev.filter(v => v.$id !== payload.$id));

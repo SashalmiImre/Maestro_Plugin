@@ -15,8 +15,8 @@ export const DATABASE_ID = '6880850e000da87a3d55';
 export const COLLECTIONS = {
     PUBLICATIONS: 'publications',
     ARTICLES: 'articles',
-    USER_VALIDATIONS: 'uservalidations',
-    SYSTEM_VALIDATIONS: 'validations',
+    USER_VALIDATIONS: 'userValidations',
+    SYSTEM_VALIDATIONS: 'systemValidations',
     LAYOUTS: 'layouts',
     DEADLINES: 'deadlines',
     ORGANIZATIONS: 'organizations',

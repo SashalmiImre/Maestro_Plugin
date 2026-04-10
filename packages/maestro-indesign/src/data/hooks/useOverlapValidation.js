@@ -9,7 +9,7 @@
  *
  * Induláskor betölti a meglévő validációs eredményeket az adatbázisból.
  *
- * Realtime szinkronizáció: Feliratkozik a `VALIDATIONS_COLLECTION_ID` Realtime
+ * Realtime szinkronizáció: Feliratkozik a `SYSTEM_VALIDATIONS_COLLECTION_ID` Realtime
  * csatornára, így más felhasználók által írt validációs eredmények is azonnal
  * megjelennek a lokális ValidationContext-ben.
  */
@@ -20,7 +20,7 @@ import { useData } from "../../core/contexts/DataContext.jsx";
 import { useValidation } from "../../core/contexts/ValidationContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 import { PublicationStructureValidator } from "../../core/utils/validators/PublicationStructureValidator.js";
-import { tables, DATABASE_ID, VALIDATIONS_COLLECTION_ID, ID, Query } from "../../core/config/appwriteConfig.js";
+import { tables, DATABASE_ID, SYSTEM_VALIDATIONS_COLLECTION_ID, ID, Query } from "../../core/config/appwriteConfig.js";
 import { realtime } from "../../core/config/realtimeClient.js";
 import { VALIDATION_SOURCES } from "../../core/utils/validationConstants.js";
 import { VALIDATION_TYPES } from "../../core/utils/messageConstants.js";
@@ -43,7 +43,7 @@ async function fetchAllValidationRows(baseQueries) {
         const response = await withRetry(
             () => tables.listRows({
                 databaseId: DATABASE_ID,
-                tableId: VALIDATIONS_COLLECTION_ID,
+                tableId: SYSTEM_VALIDATIONS_COLLECTION_ID,
                 queries: [
                     ...baseQueries,
                     Query.limit(DATA_QUERY_CONFIG.PAGE_SIZE),
@@ -185,7 +185,7 @@ export const useOverlapValidation = () => {
                         run: () => withRetry(
                             () => tables.updateRow({
                                 databaseId: DATABASE_ID,
-                                tableId: VALIDATIONS_COLLECTION_ID,
+                                tableId: SYSTEM_VALIDATIONS_COLLECTION_ID,
                                 rowId,
                                 data
                             }),
@@ -201,7 +201,7 @@ export const useOverlapValidation = () => {
                         run: () => withRetry(
                             () => tables.createRow({
                                 databaseId: DATABASE_ID,
-                                tableId: VALIDATIONS_COLLECTION_ID,
+                                tableId: SYSTEM_VALIDATIONS_COLLECTION_ID,
                                 rowId: generatedRowId,
                                 data: {
                                     articleId,
@@ -223,7 +223,7 @@ export const useOverlapValidation = () => {
                     run: () => withRetry(
                         () => tables.deleteRow({
                             databaseId: DATABASE_ID,
-                            tableId: VALIDATIONS_COLLECTION_ID,
+                            tableId: SYSTEM_VALIDATIONS_COLLECTION_ID,
                             rowId: docId
                         }),
                         { operationName: `deleteValidation(${docId})` }
@@ -496,10 +496,10 @@ export const useOverlapValidation = () => {
     }, [handlePageRangesChanged, handlePublicationCoverageChanged, handleLayoutChanged, handleArticlesAdded, handleDocumentClosed]);
 
     // ── Realtime feliratkozás (más felhasználók validációs változásai) ──
-    // A VALIDATIONS_COLLECTION_ID csatornára iratkozunk fel, így ha egy másik kliens
+    // A SYSTEM_VALIDATIONS_COLLECTION_ID csatornára iratkozunk fel, így ha egy másik kliens
     // ír/frissít/töröl struktúra-validációt, az azonnal megjelenik a lokális UI-ban.
     useEffect(() => {
-        const channel = `databases.${DATABASE_ID}.collections.${VALIDATIONS_COLLECTION_ID}.documents`;
+        const channel = `databases.${DATABASE_ID}.collections.${SYSTEM_VALIDATIONS_COLLECTION_ID}.documents`;
 
         const unsubscribe = realtime.subscribe([channel], (response) => {
             const { events, payload } = response;
