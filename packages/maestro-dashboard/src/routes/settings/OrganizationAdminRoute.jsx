@@ -526,7 +526,9 @@ export default function OrganizationAdminRoute() {
                     <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
                         {members.map(m => {
                             const resolved = userNameMap.get(m.userId);
-                            const displayName = resolved?.name || resolved?.email || m.userId;
+                            // Fallback: ha a groupMemberships-ből nincs név, de ez az aktuális user, használjuk az auth adatokat
+                            const isSelf = m.userId === user?.$id;
+                            const displayName = resolved?.name || resolved?.email || (isSelf ? (user.name || user.email || m.userId) : m.userId);
                             const displayEmail = resolved?.name && resolved?.email ? resolved.email : null;
 
                             return (

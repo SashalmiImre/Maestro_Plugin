@@ -19,7 +19,14 @@
 
 ## Aktuális fázis
 
-**Fázis 6 — Org/Office Admin UI finomítás** (aktív)
+**Fázis 7 — Cleanup** (aktív, 2026-04-10)
+
+A teljes Workflow Designer + Multi-tenant átalakítás (Fázis 0–6) befejeződött.
+A Fázis 7 dokumentáció-lezárás és cleanup zajlik.
+
+---
+
+## Befejezett fázisok
 
 ### Fázis 6 checklist (kész, 2026-04-10)
 - [x] F.1 — CF `update_organization` action (`invite-to-organization` CF bővítés): sanitizeString, owner/admin role check, updateDocument try/catch
@@ -33,6 +40,7 @@
 - [x] F.9 — Meghívó form bővítés: opcionális üzenet textarea (`inviteMessage`), `AuthContext.createInvite` 4. param (`message`), CF payload forwarding
 - [x] F.10 — `/settings/password` dirty form guard: `useBlocker` + `beforeunload` + blocker dialog (inline style), `isDirty` derived state
 - [x] F.11 — `/settings/password` session hygiene: sikeres jelszócsere után `listSessions()` → non-current count → „Más eszközök kijelentkeztetése (N aktív)" gomb → szelektív `deleteSession()`
+- [x] F.12 — Verifikáció (Chrome MCP, 2026-04-10): OrganizationAdminRoute (org név szerkesztés, meghívó küldés üzenettel, pending invites, tagok, szerkesztőségek lista), EditorialOfficeAdminRoute (user×csoport mátrix toggle, csoportösszesítés, workflow link), SettingsPasswordRoute (form, dirty guard useBlocker), build (vite 269 modul + webpack 0 hiba). Bugfixek: Dashboard ScopeContext auto-pick (null org/office → első elérhető), `organizationInvites` collection `read("users")` ACL hiánypótlás, OrganizationAdminRoute aktuális user név fallback, `BrowserRouter` → `createBrowserRouter` data router (useBlocker kompatibilitás)
 
 ### Fázis 5 checklist (kész, 2026-04-09)
 - [x] E.1 — Appwrite `graph` longtext mező a `workflows` collection-ben (MCP)

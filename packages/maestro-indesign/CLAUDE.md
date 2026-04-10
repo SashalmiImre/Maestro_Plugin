@@ -1,14 +1,5 @@
 # CLAUDE.md — Maestro Plugin Projekt Útmutató
 
-> ⚠ **ÁTALAKÍTÁS FOLYAMATBAN — Workflow Designer + Multi-tenant**
->
-> A projekt jelenleg egy jelentős átalakuláson megy keresztül: **egybérlős, hardkódolt workflow → multi-tenant, dinamikus workflow** ComfyUI-stílusú vizuális designerrel a Dashboardon.
-> **Minden új session első olvasnivalója**: [../../_docs/workflow-designer/PROGRESS.md](../../_docs/workflow-designer/PROGRESS.md) — aktuális fázis, checklist, nyitott kérdések.
-> **Teljes terv**: [../../_docs/workflow-designer/ARCHITECTURE.md](../../_docs/workflow-designer/ARCHITECTURE.md)
-> **Feladatlista**: [../../_docs/Feladatok.md](../../_docs/Feladatok.md) `## Aktív` szekció
->
-> Az alábbi dokumentáció a **jelenlegi (még statikus)** állapotot írja le. Ahogy a fázisok haladnak, ez a fájl frissül — figyeld a banner eltűnését.
-
 > **Mindig olvasd el a `docs/` mappában lévő dokumentumokat is — részletes architektúrát és diagramokat tartalmaznak.**
 
 ---
@@ -199,10 +190,10 @@
     - **Sürgősség**: Placeholder állapota az initial state (pl. `"designing"`) → teljes hátralévő munkaidő jelenik meg.
     - **Szűrés**: A placeholder generálás az **összes** (szűrés nélküli) cikket figyelembe veszi, hogy a lefedettség pontos legyen.
 
-10. **Dinamikus Workflow Rendszer (Fázis 4)**
+10. **Dinamikus Workflow Rendszer**
     - **Egyetlen igazságforrás**: A `workflows` collection `compiled` JSON mezője tartalmazza a teljes workflow konfigurációt (states, transitions, validations, commands, elementPermissions, contributorGroups, leaderGroups, statePermissions).
     - **Szerkesztőség-szintű**: Minden editorial office saját workflow dokumentummal rendelkezik. Létrehozáskor a `defaultWorkflow.json` kerül seedingre.
-    - **Plugin read-only**: A Plugin NEM ír a `workflows` collection-be — csak olvassa. A Dashboard Workflow Designer fogja szerkeszteni (Fázis 5+).
+    - **Plugin read-only**: A Plugin NEM ír a `workflows` collection-be — csak olvassa. A Dashboard Workflow Designer szerkeszti.
     - **DataContext integráció**: A `workflow` state a `DataContext`-ben él. Fetch az aktív `editorialOfficeId` alapján, Realtime feliratkozás a `workflows` collection-re. Hot-reload: `setWorkflow(JSON.parse(payload.compiled))` → minden fogyasztó azonnal frissül.
     - **workflowRuntime.js** (maestro-shared): 16+ tiszta függvény (`getStateConfig`, `getAllStates`, `getAvailableTransitions`, `canUserMoveArticle`, `canEditElement`, `canRunCommand`, stb.) — minden `compiled` paramétert kap, nincsenek globális állapotok.
     - **CF process cache**: A Cloud Function-ök 60s TTL-lel cache-elik a workflow dokumentumot (`getWorkflowForOffice()`). Ha nincs workflow doc → fail-closed (state revert / reject).
@@ -456,7 +447,7 @@ index.jsx
        └─ ConnectionProvider  ← Online/offline/connecting UI állapot
             └─ Main.jsx       ← Sleep detektálás, retry logika, routing
                  └─ ToastProvider       ← Toast értesítések
-                      └─ (user?) ScopeProvider  ← activeOrganizationId, activeEditorialOfficeId (Fázis 1 / B.7)
+                      └─ (user?) ScopeProvider  ← activeOrganizationId, activeEditorialOfficeId
                            └─ DataProvider       ← publications[], articles[], fetchData()
                                 └─ ValidationProvider  ← validationResults Map
                                      └─ ScopedWorkspace  ← scope placeholder / Workspace switch
@@ -478,15 +469,15 @@ már betöltődött-e és a `ScopeContext` auto-pick adott-e aktív officeId-t.
 - **Write-Through — Validációk**: `createValidation(data)`, `updateValidation(id, data)`, `deleteValidation(id)`
 - **Apply-Optimistic**: `applyArticleUpdate(serverDocument)` — külső írók (WorkflowEngine hívók) számára. Tartalmaz `$updatedAt` elavulás-védelmet: frissebb helyi adat nem felülíródik régebbi szerveradattal. Ez kritikus az `syncLocks()` és `fetchData()` párhuzamos futásánál — megakadályozza, hogy egy korábbi lock műveleti válasz felülírja a frissebb (lock-mentes) DB állapotot.
 - **Realtime handler**: Automatikusan frissíti az állapotot WebSocket eseményekből `$updatedAt` elavulás-védelemmel. Ugyanez a minta mint az `applyArticleUpdate()`-ben — garantálja, hogy egy hosszabb hálózati késleltetésű update soha nem írja felül az optimista UI frissítéseket vagy közelmúltbeli szerver válaszokat.
-- **Scope-szűrt fetch (Fázis 1 / B.7)**: A `fetchData` minden lekérdezéséhez (`publications`, `articles`, `layouts`, `deadlines`, `uservalidations`) hozzáfűzi a `Query.equal("editorialOfficeId", activeEditorialOfficeIdRef.current)` feltételt — így a Plugin kizárólag az aktív szerkesztőség adatait látja. Ha nincs aktív officeId, a `fetchData` üres listákat állít be és `isInitialized=true`-ra vált, hogy a Realtime feliratkozás tudjon indulni. Office-váltáskor a `prevOfficeIdRef` alapján egy külön effect nullázza az `activePublicationId`-t és törli a derived state-et (`articles`, `layouts`, `deadlines`, `validations`).
+- **Scope-szűrt fetch**: A `fetchData` minden lekérdezéséhez (`publications`, `articles`, `layouts`, `deadlines`, `uservalidations`) hozzáfűzi a `Query.equal("editorialOfficeId", activeEditorialOfficeIdRef.current)` feltételt — így a Plugin kizárólag az aktív szerkesztőség adatait látja. Ha nincs aktív officeId, a `fetchData` üres listákat állít be és `isInitialized=true`-ra vált, hogy a Realtime feliratkozás tudjon indulni. Office-váltáskor a `prevOfficeIdRef` alapján egy külön effect nullázza az `activePublicationId`-t és törli a derived state-et (`articles`, `layouts`, `deadlines`, `validations`).
 - **Realtime scope szűrés**: A `publications`, `articles`, `layouts`, `deadlines`, `uservalidations` ágak a meglévő `publicationId` szűrés MELLÉ `payload.editorialOfficeId === activeEditorialOfficeIdRef.current` ellenőrzést futtatnak (kivéve `.delete` eseményeknél, ahol a `filter()` amúgy is védett).
-- **Write-through scope injection**: A `createPublication`, `createArticle`, `createLayout`, `createDeadline`, `createValidation` közös `withScope(data)` helper-en keresztül automatikusan rácsapja az `organizationId` + `editorialOfficeId` mezőket a payload-ra, refből olvasva az aktív értékeket. Ha nincs aktív scope, a helper dob (`'Nincs aktív szerkesztőség — a művelet nem hajtható végre.'`) — ez a happy path-ban nem tüzelhet (a UI a `ScopeMissingPlaceholder` mögött zárolva), de védi a CF guard B.8 előtti köztes időszakot az accidentális hívásoktól. Az `updateX` metódusok NEM kapnak scope injection-t — a scope mezők immutable-ek a CF guard B.8 után.
+- **Write-through scope injection**: A `createPublication`, `createArticle`, `createLayout`, `createDeadline`, `createValidation` közös `withScope(data)` helper-en keresztül automatikusan rácsapja az `organizationId` + `editorialOfficeId` mezőket a payload-ra, refből olvasva az aktív értékeket. Ha nincs aktív scope, a helper dob (`'Nincs aktív szerkesztőség — a művelet nem hajtható végre.'`) — ez a happy path-ban nem tüzelhet (a UI a `ScopeMissingPlaceholder` mögött zárolva). Az `updateX` metódusok NEM kapnak scope injection-t — a scope mezők immutable-ek a CF guard-ok által.
 
-### ScopeContext API (Fázis 1 / B.7)
+### ScopeContext API
 - `activeOrganizationId`, `activeEditorialOfficeId` — az aktuálisan választott multi-tenant scope (localStorage-ban perzisztált, `maestro.activeOrganizationId` / `maestro.activeEditorialOfficeId` kulcsok; a Plugin és Dashboard localStorage izolált, nincs ütközés).
 - `setActiveOrganization(id)`, `setActiveOffice(id)` — írják az állapotot és a localStorage-ot. A `setActiveOffice` dispatch-eli a `scopeChanged` MaestroEvent-et, amely triggereli a UserContext `refreshGroupSlugs()`-t és a `useGroupMembers` hookok cache invalidálását.
 - **Stale ID védelem + auto-pick**: A `useEffect` a `UserContext` memberships betöltése után (`loading === false && !membershipsError`) ellenőrzi, hogy az aktuális ID-k még szerepelnek-e a listákban. Stale esetben az első elérhetőre vált, vagy nullázza. Ha nincs aktív scope, de van membership, automatikusan az elsőt választja (ez biztosítja a Dashboardon frissen onboardolt user első Plugin-belépésnél az azonnali scope-ot, külön UI interakció nélkül).
-- **Fázis 6** hozza a multi-org/office switch dropdown UI-t a `WorkspaceHeader`-be; B.7-ben csak az alap state management és a DataContext integráció kerül be.
+- **WorkspaceHeader dropdown**: Ha a user több org-hoz vagy office-hoz tartozik, a `WorkspaceHeader` feltételes `CustomDropdown`-okat mutat a scope váltáshoz.
 
 ### UserContext API
 - `user` — aktuális felhasználó objektum (vagy `null`)
@@ -499,7 +490,7 @@ már betöltődött-e és a `ScopeContext` auto-pick adott-e aktív officeId-t.
 - **Realtime szinkron (labels/prefs)**: Az Appwrite Realtime `account` csatornára feliratkozva a `user` objektum (beleértve `labels`, `name`, `prefs`) automatikusan frissül, ha a szerveren módosítják (Console/Server SDK). A handler a `response.events[]` alapján szűri a session eseményeket (`.sessions.` stringet ignórálja) és validálja a payload `$id`-ját (csak `currentUserId` egyezésekor alkalmaz frissítéseket), megakadályozva, hogy session ID-k felülírják a user objektumot. A `name` és `email` mezők megőrződnek, ha a Realtime payload nem tartalmaz értéket (field preservation).
 - **Realtime szinkron (groupSlugs)**: A `groupMemberships` collection Realtime csatorna → `groupMembershipChanged` MaestroEvent → UserContext `refreshGroupSlugs()` — `groupMemberships` + `groups` query az aktív szerkesztőségben. A `sameGroupSlugs()` helper Set-alapú duplikátum-mentes összehasonlítást végez, hogy a szinkron ne okozzon felesleges re-rendereket. Scope-váltáskor a `scopeChanged` MaestroEvent szintén triggereli a frissítést.
 - **Recovery szinkron**: A `dataRefreshRequested` MaestroEvent-re is feliratkozik — minden recovery-nél (sleep/wake, reconnect, focus) `account.get()`-tel frissíti a user adatokat. Ez biztosítja a labels/prefs szinkront akkor is, ha az Appwrite Realtime `account` csatorna nem tüzel proxy-n keresztül (pl. szerver-oldali label módosításnál).
-- **Memberships (Fázis 1 / B.7)**: `organizations`, `editorialOffices` — a user által elérhető teljes scope rekordok (az `organizationMemberships` és `editorialOfficeMemberships` collection-ökből húzva, majd a scope rekordok paralel lekérésével). `membershipsError` — a legutóbbi memberships fetch hibája (ha volt). `reloadMemberships()` — manuális újratöltő (a `ScopeMissingPlaceholder` „error" variánsának retry gombja hívja). A loading minden belépési pontnál (login, mount `checkUserStatus`, recovery) paralel fut az `enrichUserWithGroups` mellett `Promise.all`-lal — egy membership hiba nem blokkolja az auth happy path-ot (külön `.catch` → `membershipsError` state), a `ScopeContext` auto-pick effect pedig csak `!membershipsError` esetén fut, hogy egy átmeneti fetch hiba ne törölje a helyes scope-ot.
+- **Memberships**: `organizations`, `editorialOffices` — a user által elérhető teljes scope rekordok (az `organizationMemberships` és `editorialOfficeMemberships` collection-ökből húzva, majd a scope rekordok paralel lekérésével). `membershipsError` — a legutóbbi memberships fetch hibája (ha volt). `reloadMemberships()` — manuális újratöltő (a `ScopeMissingPlaceholder` „error" variánsának retry gombja hívja). A loading minden belépési pontnál (login, mount `checkUserStatus`, recovery) paralel fut az `enrichUserWithGroups` mellett `Promise.all`-lal — egy membership hiba nem blokkolja az auth happy path-ot (külön `.catch` → `membershipsError` state), a `ScopeContext` auto-pick effect pedig csak `!membershipsError` esetén fut, hogy egy átmeneti fetch hiba ne törölje a helyes scope-ot.
 
 ### ConnectionContext API
 - `isOnline`, `isConnecting` — UI indikátorokhoz (spinner, overlay)
@@ -518,7 +509,7 @@ A konfigurációs konstansok: `src/core/config/appwriteConfig.js`
 
 - **Endpoint**: Dual-proxy failover-rel (`EndpointManager`): Railway (primary) → emago.hu (fallback). Mindig `endpointManager.getEndpoint()`-ot használj az aktuális endpoint lekéréséhez — a korábbi `APPWRITE_ENDPOINT` statikus export el lett távolítva. Az `endpointManager.getProxyBase()` a proxy gyökér URL-t adja vissza (a `/v1` suffix nélkül) — az AI clustering (`/api/cluster-article`) és egyéb proxy-szintű endpointokhoz.
 - **Project ID**, **Database ID**, **Collection ID-k** (Articles, Publications, Messages), **Bucket ID** (Storage).
-- **Csoportok (Fázis 2)**: A korábbi fix Appwrite Team-eket (`editors`, `designers`, stb.) saját `groups` + `groupMemberships` collection-ök váltották ki. A csoportok szerkesztőség-szintűek (scope: `editorialOfficeId`). 7 alapértelmezett csoport: `editors`, `designers`, `writers`, `image_editors`, `art_directors`, `managing_editors`, `proofwriters`. Új csoportok a Dashboard `/settings/groups` UI-ról kezelhetők.
+- **Csoportok**: Saját `groups` + `groupMemberships` collection-ök (szerkesztőség-szintű scope). A csoportok szerkesztőség-szintűek (scope: `editorialOfficeId`). 7 alapértelmezett csoport: `editors`, `designers`, `writers`, `image_editors`, `art_directors`, `managing_editors`, `proofwriters`. Új csoportok a Dashboard `/settings/groups` UI-ról kezelhetők.
 
 ### Session Kezelés (UXP Sajátosság)
 A UXP nem kezeli normálisan a cookie-kat. A session a `localStorage`-ban van tárolva (`cookieFallback` kulcs), és kézzel injektáljuk a requestekbe. Ld. `docs/REALTIME_ARCHITECTURE.md`.

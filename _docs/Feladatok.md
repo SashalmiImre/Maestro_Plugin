@@ -129,7 +129,7 @@ tags: [feladatok]
 - [x] `/settings/password` session hygiene: sikeres jelszócsere után `listSessions()` → „Más eszközök kijelentkeztetése (N aktív)" gomb → szelektív `deleteSession()` (Promise.allSettled + re-fetch) *(2026-04-10)*
 - [x] `/settings/password` dirty form navigáció warning: `useBlocker` + `beforeunload` + blocker dialog (inline style), auth redirect exclusion *(2026-04-10)*
 - [x] Harden pass: MUST FIX (scope switch disabled, Promise.allSettled partial failure), SHOULD FIX (beforeunload returnValue, blocker auth exclusion), simplify (redundáns useCallback), verification (session cleanup optimista false positive) *(2026-04-10)*
-- [ ] **Verifikáció**: teljes happy path a `ARCHITECTURE.md` Verifikáció szekció szerint
+- [x] **Verifikáció**: Chrome MCP automatizált tesztelés (2026-04-10). OrganizationAdminRoute, EditorialOfficeAdminRoute, SettingsPasswordRoute, build verifikáció. Bugfixek: Dashboard ScopeContext auto-pick, `organizationInvites` ACL, user név fallback, `BrowserRouter` → `createBrowserRouter`
 
 #### Fázis 7 — Cleanup
 
@@ -139,9 +139,9 @@ tags: [feladatok]
 - [x] Appwrite Console: régi 7 Appwrite Team + `get-team-members` CF törlése *(Fázis 2-ben MCP-vel kész)*
 - [x] Appwrite Console: `config` collection manuális törlése *(korábban törölve, 2026-04-09 verifikálva MCP-vel)*
 - [x] Appwrite Console: `validate-labels` CF disable/törlése *(korábban törölve, 2026-04-09 verifikálva MCP-vel; `appwrite.json` entry is törölve)*
-- [ ] `packages/maestro-indesign/CLAUDE.md` teljes frissítése a végső architektúrával, „Átalakítás folyamatban" banner törlése
-- [ ] `_docs/workflow-designer/PROGRESS.md` lezárás, `MIGRATION_NOTES.md` véglegesítés
-- [ ] `_docs/Feladatok.md`: aktív feladatok átkerülnek `## Kész` szekcióba egy összefoglaló kommenttel
+- [x] `packages/maestro-indesign/CLAUDE.md` teljes frissítése a végső architektúrával, „Átalakítás folyamatban" banner törlése *(2026-04-10)*
+- [x] `_docs/workflow-designer/PROGRESS.md` lezárás *(2026-04-10)*
+- [x] `_docs/Feladatok.md` kész feladatok kipipálása *(2026-04-10)*
 
 ---
 

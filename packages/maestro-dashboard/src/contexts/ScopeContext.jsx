@@ -75,6 +75,12 @@ export function ScopeProvider({ children }) {
             return;
         }
 
+        // Auto-pick: nincs aktív org, de van elérhető → az elsőt választjuk
+        if (!activeOrganizationId && (organizations || []).length > 0) {
+            setActiveOrganization(organizations[0].$id);
+            return;
+        }
+
         // Office validáció — csak az AKTÍV orghoz tartozó office-okat vesszük
         // figyelembe, különben egy idegen org office-át nem vennénk észre.
         const scopedOffices = (editorialOffices || []).filter(
@@ -88,6 +94,13 @@ export function ScopeProvider({ children }) {
             } else {
                 setActiveOffice(null);
             }
+            return;
+        }
+
+        // Auto-pick: nincs aktív office, de van elérhető → az elsőt választjuk
+        if (!activeEditorialOfficeId && scopedOffices.length > 0) {
+            setActiveOffice(scopedOffices[0].$id);
+            return;
         }
     }, [
         loading,

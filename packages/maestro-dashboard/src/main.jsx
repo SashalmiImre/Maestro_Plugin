@@ -1,11 +1,14 @@
 /**
  * Maestro Dashboard — React belépési pont
+ *
+ * Data router (`createBrowserRouter` + `RouterProvider`) — szükséges a
+ * `useBlocker` hook használatához (SettingsPasswordRoute, WorkflowDesignerPage).
  */
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
-import App from './App.jsx';
+import { RouterProvider } from 'react-router-dom';
+import { router } from './App.jsx';
 import '../css/styles.css';
 
 // Böngésző zoom tiltás — csak a LayoutView saját zoomja engedélyezett
@@ -21,8 +24,6 @@ document.addEventListener('keydown', (e) => {
 
 ReactDOM.createRoot(document.getElementById('root')).render(
     <React.StrictMode>
-        <BrowserRouter>
-            <App />
-        </BrowserRouter>
+        <RouterProvider router={router} />
     </React.StrictMode>
 );

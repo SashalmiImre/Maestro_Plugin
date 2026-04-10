@@ -1,17 +1,20 @@
 /**
- * Maestro Dashboard — Gyökér komponens
+ * Maestro Dashboard — Gyökér komponens + Router konfiguráció
  *
- * react-router-dom alapú routing. A public auth route-ok (login, register,
- * verify, forgot/reset password) az AuthSplitLayout-ot használják, a védett
- * route-okat ProtectedRoute védi.
+ * `createBrowserRouter` (data router) szükséges a `useBlocker` hook
+ * működéséhez (SettingsPasswordRoute, WorkflowDesignerPage).
  *
- * A „/" route a DashboardLayout-on keresztül rendereli a child view-kat
- * (táblázat: index, elrendezés: /layout). A /admin/office/:officeId/workflow
- * route a Workflow Designer-t nyitja meg.
+ * A route struktúra:
+ * - Public auth route-ok (login, register, verify, stb.) — AuthSplitLayout
+ * - Protected route-ok — ProtectedRoute gate
+ *   - Settings route-ok — AuthSplitLayout
+ *   - Dashboard — DashboardLayout + child route-ok (table/layout)
+ *   - Workflow Designer — külön full-screen layout
+ * - Fallback → /login
  */
 
 import React from 'react';
-import { Routes, Route, Navigate } from 'react-router-dom';
+import { createBrowserRouter, Navigate, Outlet } from 'react-router-dom';
 import { AuthProvider } from './contexts/AuthContext.jsx';
 import { ScopeProvider } from './contexts/ScopeContext.jsx';
 import { ToastProvider } from './contexts/ToastContext.jsx';
@@ -36,9 +39,7 @@ import LayoutViewRoute from './routes/dashboard/LayoutViewRoute.jsx';
 import WorkflowDesignerPage from './features/workflowDesigner/WorkflowDesignerPage.jsx';
 
 /**
- * A védett dashboard ágon DataProvider + ToastProvider szükséges. A v7
- * layout route element propjába tesszük, hogy ne wrapper-eljük a teljes
- * Routes fát az adat rétegbe (a publikus auth route-ok nem igényelnek adatot).
+ * A védett dashboard ágon DataProvider + ToastProvider szükséges.
  */
 function DashboardLayoutWithProviders() {
     return (
@@ -64,56 +65,79 @@ function WorkflowDesignerWithProviders() {
     );
 }
 
-export default function App() {
+/**
+ * Gyökér layout — AuthProvider + ScopeProvider wrappeli az egész alkalmazást.
+ */
+function RootLayout() {
     return (
         <AuthProvider>
             <ScopeProvider>
-                <Routes>
-                    {/* Public auth routes */}
-                    <Route element={<AuthSplitLayout />}>
-                        <Route path="/login" element={<LoginRoute />} />
-                        <Route path="/register" element={<RegisterRoute />} />
-                        <Route path="/verify" element={<VerifyRoute />} />
-                        <Route path="/forgot-password" element={<ForgotPasswordRoute />} />
-                        <Route path="/reset-password" element={<ResetPasswordRoute />} />
-                        {/*
-                         * Az /invite route szándékosan publikus: a B.4-es InviteRoute
-                         * mindkét ágat kezeli — bejelentkezett user esetén acceptInvite()
-                         * + redirect /, anonymous user esetén token mentés localStorage-ba
-                         * + redirect /register?invite=... Ha ProtectedRoute mögé tennénk,
-                         * az új user nem tudna a meghívó link mentén regisztrálni.
-                         */}
-                        <Route path="/invite" element={<InviteRoute />} />
-                    </Route>
-
-                    {/* Protected routes — auth gate */}
-                    <Route element={<ProtectedRoute />}>
-                        {/* Védett auth-szerű route-ok (onboarding, settings) */}
-                        <Route element={<AuthSplitLayout />}>
-                            <Route path="/onboarding" element={<OnboardingRoute />} />
-                            <Route path="/settings/password" element={<SettingsPasswordRoute />} />
-                            <Route path="/settings/groups" element={<GroupsRoute />} />
-                            <Route path="/settings/organization" element={<OrganizationAdminRoute />} />
-                            <Route path="/settings/editorial-office" element={<EditorialOfficeAdminRoute />} />
-                        </Route>
-
-                        {/* Tényleges dashboard — child route-okkal (table/layout) */}
-                        <Route path="/" element={<DashboardLayoutWithProviders />}>
-                            <Route index element={<TableViewRoute />} />
-                            <Route path="layout" element={<LayoutViewRoute />} />
-                        </Route>
-
-                        {/* Workflow Designer */}
-                        <Route
-                            path="/admin/office/:officeId/workflow"
-                            element={<WorkflowDesignerWithProviders />}
-                        />
-                    </Route>
-
-                    {/* Fallback */}
-                    <Route path="*" element={<Navigate to="/login" replace />} />
-                </Routes>
+                <Outlet />
             </ScopeProvider>
         </AuthProvider>
     );
 }
+
+export const router = createBrowserRouter([
+    {
+        element: <RootLayout />,
+        children: [
+            // Public auth routes
+            {
+                element: <AuthSplitLayout />,
+                children: [
+                    { path: '/login', element: <LoginRoute /> },
+                    { path: '/register', element: <RegisterRoute /> },
+                    { path: '/verify', element: <VerifyRoute /> },
+                    { path: '/forgot-password', element: <ForgotPasswordRoute /> },
+                    { path: '/reset-password', element: <ResetPasswordRoute /> },
+                    /*
+                     * Az /invite route szándékosan publikus: a B.4-es InviteRoute
+                     * mindkét ágat kezeli — bejelentkezett user esetén acceptInvite()
+                     * + redirect /, anonymous user esetén token mentés localStorage-ba
+                     * + redirect /register?invite=... Ha ProtectedRoute mögé tennénk,
+                     * az új user nem tudna a meghívó link mentén regisztrálni.
+                     */
+                    { path: '/invite', element: <InviteRoute /> }
+                ]
+            },
+
+            // Protected routes — auth gate
+            {
+                element: <ProtectedRoute />,
+                children: [
+                    // Védett auth-szerű route-ok (onboarding, settings)
+                    {
+                        element: <AuthSplitLayout />,
+                        children: [
+                            { path: '/onboarding', element: <OnboardingRoute /> },
+                            { path: '/settings/password', element: <SettingsPasswordRoute /> },
+                            { path: '/settings/groups', element: <GroupsRoute /> },
+                            { path: '/settings/organization', element: <OrganizationAdminRoute /> },
+                            { path: '/settings/editorial-office', element: <EditorialOfficeAdminRoute /> }
+                        ]
+                    },
+
+                    // Tényleges dashboard — child route-okkal (table/layout)
+                    {
+                        path: '/',
+                        element: <DashboardLayoutWithProviders />,
+                        children: [
+                            { index: true, element: <TableViewRoute /> },
+                            { path: 'layout', element: <LayoutViewRoute /> }
+                        ]
+                    },
+
+                    // Workflow Designer
+                    {
+                        path: '/admin/office/:officeId/workflow',
+                        element: <WorkflowDesignerWithProviders />
+                    }
+                ]
+            },
+
+            // Fallback
+            { path: '*', element: <Navigate to="/login" replace /> }
+        ]
+    }
+]);
