@@ -112,7 +112,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
 
             let skippedFiles = [];
             let errorFiles = [];
-            let addedCount = 0;
+            let addedArticles = [];
 
             for (const file of files) {
                 try {
@@ -120,7 +120,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                     if (result && result.status === "skipped") {
                         skippedFiles.push(result.fileName);
                     } else if (result && result.status === "success") {
-                        addedCount++;
+                        if (result.article) addedArticles.push(result.article);
                     }
                 } catch (addError) {
                     logError("Error adding file:", file.name, addError);
@@ -128,8 +128,11 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                 }
             }
 
-            if (addedCount > 0) {
-                dispatchMaestroEvent(MaestroEvent.articlesAdded, { publicationId: publication.$id });
+            if (addedArticles.length > 0) {
+                dispatchMaestroEvent(MaestroEvent.articlesAdded, {
+                    publicationId: publication.$id,
+                    articles: addedArticles
+                });
             }
 
             if (skippedFiles.length > 0 || errorFiles.length > 0) {

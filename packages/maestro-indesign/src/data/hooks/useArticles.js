@@ -29,6 +29,7 @@ import { log, logError, logWarn } from "../../core/utils/logger.js";
 import { withTimeout } from "../../core/utils/promiseUtils.js";
 import { SCRIPT_LANGUAGE_JAVASCRIPT, TOAST_TYPES } from "../../core/utils/constants.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../core/config/maestroEvents.js";
+import { getInitialState } from "maestro-shared/workflowRuntime.js";
 
 /**
  * React Hook a cikkek (Articles) kezelésére.
@@ -49,7 +50,7 @@ export const useArticles = (publicationId, publicationRoot) => {
     const { setOffline, incrementAttempts } = useConnection();
     
     // Globális adatok és write-through API a DataContext-ből
-    const { articles: allArticles, layouts, publications, createArticle, updateArticle, applyArticleUpdate } = useData();
+    const { articles: allArticles, layouts, publications, workflow, createArticle, updateArticle, applyArticleUpdate } = useData();
 
     // A kiadvány objektum az alapértelmezett munkatársak kiolvasásához
     const publication = useMemo(() => publications.find(p => p.$id === publicationId), [publications, publicationId]);
@@ -269,19 +270,24 @@ export const useArticles = (publicationId, publicationRoot) => {
             // Alapértelmezett munkatársak a kiadvány beállításaiból
             const pub = publicationRef.current;
 
-            await createArticle({
+            const initialState = getInitialState(workflow);
+            if (!initialState) {
+                logWarn('[useArticles] Workflow nem elérhető — "designing" fallback használata');
+            }
+
+            const createdArticle = await createArticle({
                 name: file.name.replace(/\.[^/.]+$/, ""), // Kiterjesztés levágása a névből
                 layout: layouts[0]?.$id ?? null,
                 filePath: relativeFilePath,
                 publicationId: publicationId,
-                state: 0,
+                state: initialState || "designing",
                 startPage: startPage,
                 endPage: endPage,
                 pageRanges: pageRanges,
                 thumbnails: thumbnailsJson,
                 contributors: pub?.defaultContributors ?? null
             });
-            return { status: "success", fileName: file.name };
+            return { status: "success", fileName: file.name, article: createdArticle };
         } catch (error) {
             logError('[useArticles] Cikk hozzáadása sikertelen:', error);
             
@@ -296,7 +302,7 @@ export const useArticles = (publicationId, publicationRoot) => {
             throw error;
         }
 
-    }, [publicationRoot, articles, layouts, createArticle, incrementAttempts, setOffline, showToast, publicationId]);
+    }, [publicationRoot, articles, layouts, workflow, createArticle, incrementAttempts, setOffline, showToast, publicationId]);
 
     /**
      * Cikk megnyitása InDesign-ban.

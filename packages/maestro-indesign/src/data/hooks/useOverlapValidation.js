@@ -412,22 +412,35 @@ export const useOverlapValidation = () => {
      * hogy az esetleges átfedések vagy határon kívüli oldalak azonnal láthatóak legyenek.
      */
     const handleArticlesAdded = useCallback((event) => {
-        const { publicationId } = event.detail;
+        const { publicationId, articles: addedArticles } = event.detail;
         if (!publicationId) return;
 
         const publication = publicationsRef.current.find(p => p.$id === publicationId);
         if (!publication) return;
 
-        const pubArticles = articlesRef.current.filter(a => a.publicationId === publicationId);
-        if (pubArticles.length === 0) return;
+        // Az event detail-ből kapott cikkeket becsatoljuk a meglévő testvérek közé,
+        // mert az articlesRef még nem feltétlenül tartalmazza őket (React state flush).
+        const addedMap = new Map();
+        if (addedArticles) addedArticles.forEach(a => addedMap.set(a.$id, a));
+
+        const existingArticles = articlesRef.current.filter(a => a.publicationId === publicationId);
+        // Meglévők frissítése + új cikkek hozzáfűzése
+        const mergedArticles = existingArticles.map(a => addedMap.get(a.$id) || a);
+        for (const [id, article] of addedMap) {
+            if (!existingArticles.some(a => a.$id === id)) {
+                mergedArticles.push(article);
+            }
+        }
+
+        if (mergedArticles.length === 0) return;
 
         const resultsMap = structureValidator.validatePerArticle({
             publication,
-            articles: pubArticles,
+            articles: mergedArticles,
             layouts: layoutsRef.current
         });
 
-        const allArticleIds = pubArticles.map(a => a.$id);
+        const allArticleIds = mergedArticles.map(a => a.$id);
         const itemsMap = transformResultsToItems(resultsMap);
         updatePublicationValidation(itemsMap, allArticleIds, VALIDATION_SOURCES.STRUCTURE);
         persistToDatabase(publicationId, resultsMap);

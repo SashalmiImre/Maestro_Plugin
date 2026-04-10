@@ -283,42 +283,32 @@ export const resolvePlatformPath = (path) => {
  */
 export const convertNativePathToUrl = (path) => {
     if (!path) return "";
-    
+
     let url = path;
-    const encodePath = (p) => p.split('/').map(encodeURIComponent).join('/');
+
+    // Az UXP getEntryWithUrl saját maga végzi az URL-kódolást,
+    // ezért NEM kódolunk encodeURIComponent-tel — az dupla kódolást okozna
+    // (szóköz → %20 → %2520).
 
     if (url.startsWith("file:")) {
-        // Már URL, biztosítjuk a kódolást
+        // Már URL — ha kódolt volt, decode-oljuk nyers útvonalra
         const match = url.match(/^(file:\/*)(.*)/);
         if (match) {
             try {
-                // Először decode, hogy elkerüljük a dupla kódolást
-                const decoded = decodeURI(match[2]);
-                url = match[1] + encodePath(decoded);
+                url = "file:///" + decodeURIComponent(match[2]);
             } catch (e) {
-                // Fallback: nyers szegmens kódolása
-                url = match[1] + encodePath(match[2]);
+                url = "file:///" + match[2];
             }
         }
+    } else if (url.startsWith("/")) {
+        // Mac/Unix: /Users/... -> file:///Users/...
+        url = "file://" + url;
     } else {
-        // Natív útvonal konvertálása
-        if (url.startsWith("/")) {
-            // Mac/Unix: /Users/... -> file:///Users/...
-            url = "file://" + encodePath(url);
-        } else {
-            // Windows: Z:/... -> file:///Z:/...
-            let normalizedPath = url.replace(/\\/g, "/");
-            // Ha drive letter (pl. C:/...), akkor a kettőspontot nem kódoljuk
-            const winDriveMatch = normalizedPath.match(/^([a-zA-Z]:)\/(.*)/);
-            if (winDriveMatch) {
-                // winDriveMatch[1] = "C:", winDriveMatch[2] = "Users/..."
-                url = "file:///" + winDriveMatch[1] + "/" + encodePath(winDriveMatch[2]);
-            } else {
-                url = "file:///" + encodePath(normalizedPath);
-            }
-        }
+        // Windows: Z:\... -> file:///Z:/...
+        let normalizedPath = url.replace(/\\/g, "/");
+        url = "file:///" + normalizedPath;
     }
-    
+
     return url;
 };
 

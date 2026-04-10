@@ -114,6 +114,7 @@
     - **Felhasználói Validációk**: Közvetlenül a `DataContext` kezeli (DB-ből származnak), Realtime-on keresztül szinkronizálva.
     - **Rendszer Validációk**: A `ValidationContext` kezeli (memóriában, session-önként).
     - **Állapotátmenet-validáció**: A `StateComplianceValidator` koordinálja az összes állapotváltási ellenőrzést (`file_accessible`, `page_number_check`, `filename_verification`, `preflight_check`) a `workflow.validations[state]` `requiredToEnter`/`requiredToExit` alapján. A `WorkflowEngine.validateTransition()` delegál a `validationRunner.validate()` → `StateComplianceValidator` láncon keresztül.
+    - **Struktúra Validáció (PublicationStructureValidator)**: Bounds check (`getEffectivePageRange()` — `startPage`/`endPage` + `pageRanges` JSON fallback) és overlap detektálás (`getOccupiedPages()` — layout-alapú csoportosítás). A `validatePerArticle()` per-cikk eredményeket ad vissza (deduplikált párok `reportedPairs` Set-tel). A `useOverlapValidation` hook az `articlesAdded` event payload-ból merge-öli az új cikkeket a ref-elt állapottal (React state batching megkerülése).
     - **Blokkolási Logika**: Bármely aktív `error` típusú elem blokkolja az állapotátmeneteket.
     - **Komponensek**: `ValidationSection.jsx` (UI), `useUnifiedValidation` (Logika), `ValidationContext` (Rendszeradatok).
     - **Mező-szintű Validáció**: `ValidatedTextField` `invalid` prop + validátor statikus metódusok (pl. `DeadlineValidator.isValidDate/isValidTime`, `isValidFileName`) — azonnali piros keret blur-kor, formátum-hibára. Fájlnév validáció: `\ / : * ? " < > |` tiltott karakterek + Windows fenntartott nevek (CON, PRN, AUX, NUL, COM1–9, LPT1–9) + pontra/szóközre végződő nevek tiltása.
@@ -167,6 +168,7 @@
     - **Konverziós függvények** (`pathUtils.js`): `toCanonicalPath()` (natív → DB), `toNativePath()` (DB → natív), `toRelativeArticlePath()` (abszolút → relatív), `toAbsoluteArticlePath()` (relatív → natív abszolút).
     - **Lazy migráció** (`DataContext.jsx`): `migratePathsIfNeeded()` automatikusan konvertálja a régi formátumú útvonalakat (abszolút natív) kanonikus/relatív formátumra az adatbázisban, fetch után futva.
     - **LockManager / DocumentMonitor**: Kanonikus útvonal-összehasonlítást használnak (`getArticleCanonicalPath()`) a cross-platform egyeztetéshez. A `nativePathToQueryVariants()` generálja a DB lekérdezéshez szükséges útvonal-variánsokat (relatív + legacy kanonikus).
+    - **`convertNativePathToUrl()`**: Natív útvonalat `file:///` URL-lé konvertál a UXP `getEntryWithUrl()` számára. **Nem kódol** `encodeURIComponent`-tel — a UXP API saját maga végzi az URL-kódolást. A kézi kódolás dupla kódolást okozna (szóköz → `%20` → `%2520`). Már kódolt URL-eket (`file:` prefix) `decodeURIComponent`-tel nyers útvonalra decode-ol.
     - **Edge case-ek**: Helyi (nem hálózati) fájlok nem kanonizálhatók — cross-platform nem működik velük. Ha a Windows symlink hiányzik, `checkPathAccessible()` false → piros fejléc.
 
 8. **Thumbnail Rendszer (Oldalkép generálás)**
@@ -385,10 +387,12 @@ InDesign `afterSave` → `DocumentMonitor` → `dispatch(documentSaved)` → Val
 > Részletes diagram: `docs/EVENT_ARCHITECTURE.md` (Validációs Hurok)
 
 ### Cikkfelvétel (addArticle)
-Fájl kiválasztása → `useArticles.addArticle` → útvonal validáció (kiadvány gyökérben van-e) → `.maestro/` mappa előkészítés → duplikátum ellenőrzés → eredeti fájl megnyitása InDesign-ban (ha még nincs nyitva) → `doc.saveACopy()` a `.maestro/` mappába (másolat mindig aktuális InDesign verzióban; újabb verzió → `app.open()` fail → cikk nem kerül felvételre) → **párhuzamosan**: oldalszám-kinyerés + thumbnail generálás az **eredeti** dokumentumból → dokumentum bezárás (ha mi nyitottuk) → thumbnail feltöltés (Appwrite Storage) → DB rekord létrehozás (alapértelmezett contributor-ökkel a kiadványból).
+Fájl kiválasztása → `useArticles.addArticle` → útvonal validáció (kiadvány gyökérben van-e) → `.maestro/` mappa előkészítés → duplikátum ellenőrzés → eredeti fájl megnyitása InDesign-ban (ha még nincs nyitva) → `doc.saveACopy()` a `.maestro/` mappába (másolat mindig aktuális InDesign verzióban; újabb verzió → `app.open()` fail → cikk nem kerül felvételre) → **párhuzamosan**: oldalszám-kinyerés + thumbnail generálás az **eredeti** dokumentumból → dokumentum bezárás (ha mi nyitottuk) → thumbnail feltöltés (Appwrite Storage) → DB rekord létrehozás (alapértelmezett contributor-ökkel a kiadványból) → `articlesAdded` MaestroEvent a létrehozott cikk objektumokkal.
 
+- **Dinamikus initial state**: A `state` mező értékét a `getInitialState(workflow)` adja (a compiled workflow első állapota). Fallback: `"designing"` + `logWarn` — ha a workflow még nem töltődött be.
 - **saveACopy stratégia**: A korábbi `file.copyTo()` bináris másolást váltja ki — megoldja a verziókonverziós problémákat és a „Save As" dialógus kérdést.
 - **Rollback**: Ha a DB létrehozás sikertelen, a `.maestro/` mappába másolt fájl árván marad (nem blokkoló).
+- **Esemény payload**: Az `articlesAdded` event a `{ publicationId, articles }` payload-ot kapja, ahol `articles` a `createArticle` DB válaszából származó objektumok tömbje. Ez megkerüli a React state batching okozta race condition-t (a ref-ek nem frissülnek szinkron az event dispatch-kor).
 
 ### Átpaginázás (oldalszám-módosítás)
 `ArticleProperties.handlePageNumberChange` → validáció (filePath, startPage, coverage bounds) → dokumentum megnyitása (ha szükséges) → oldalak átszámozása (offset) → új oldalszámok kinyerése → mentés `maestroSkipMonitor` flag-gel (DocumentMonitor ne reagáljon) → régi PDF-ek törlése (`__PDF__`, `__FINAL_PDF__` mappák, `generateDeleteOldPdfsScript`) → thumbnail újragenerálás (ha plugin nyitotta meg, `!wasAlreadyOpen`) → dokumentum bezárás (ha mi nyitottuk) → DB frissítés (startPage, endPage, pageRanges, thumbnails).

@@ -48,17 +48,47 @@ export class PublicationStructureValidator extends ValidatorBase {
     }
 
     /**
+     * Visszaadja a cikk tényleges min/max oldalszámait.
+     * Preferálja a startPage/endPage-t, de fallback-ként a pageRanges JSON-ból is kinyeri.
+     */
+    getEffectivePageRange(article) {
+        let min = article.startPage;
+        let max = article.endPage;
+
+        // Ha valamelyik null/undefined, próbáljuk pageRanges-ből kiegészíteni
+        if (min == null || max == null) {
+            try {
+                const ranges = typeof article.pageRanges === 'string'
+                    ? JSON.parse(article.pageRanges)
+                    : article.pageRanges;
+
+                if (Array.isArray(ranges)) {
+                    for (const range of ranges) {
+                        if (Array.isArray(range) && range.length === 2) {
+                            if (min == null || range[0] < min) min = range[0];
+                            if (max == null || range[1] > max) max = range[1];
+                        }
+                    }
+                }
+            } catch (e) {
+                // JSON parse hiba — min/max marad null
+            }
+        }
+
+        return { min, max };
+    }
+
+    /**
      * Ellenőrzi, hogy a cikkek a kiadvány határain belül vannak-e.
      */
     checkBounds(articles, pubStart, pubEnd, errors) {
         for (const article of articles) {
-            const start = article.startPage;
-            const end = article.endPage;
+            const { min, max } = this.getEffectivePageRange(article);
 
-            if (start !== null && start < pubStart) {
+            if (min != null && min < pubStart) {
                 errors.push(`"${article.name}" a kiadvány kezdete (${pubStart}) előtt kezdődik.`);
             }
-            if (end !== null && end > pubEnd) {
+            if (max != null && max > pubEnd) {
                 errors.push(`"${article.name}" a kiadvány vége (${pubEnd}) után végződik.`);
             }
         }
@@ -101,23 +131,8 @@ export class PublicationStructureValidator extends ValidatorBase {
                         const layoutDisplayName = this.resolveLayoutName(layout, layouts);
                         const layoutMsg = layout !== 'default' ? ` (Layout: ${layoutDisplayName})` : '';
                         errors.push(`Átfedés észlelve a(z) "${article.name}" és a(z) "${conflictingArticleName}" között a(z) ${page}. oldalon${layoutMsg}.`);
-                        
-                        // Ne spammeljük tele a hibákat ugyanazzal a párral, ha sok oldalon ütköznek
-                        // De a jelenlegi logikával minden ütköző oldalt jelez. 
-                        // Ez lehet sok, de pontos. Ha nem akarunk sokat, break-elhetünk a pages cikluson.
-                        // Egyelőre hagyjuk, hogy jelezze az elsőt minden cikk-párnál?
-                        // A fenti logika minden oldalra dob hibát.
-                        // Optimalizálás: Csak egyszer jelentsük két cikk között.
-                        // De a map csak EGY nevet tárol. Mi van ha 3 cikk ütközik?
-                        // Ez a map logika egyszerűsített. 
-                        // Robusztusabb lenne range metszeteket nézni, de a "szekciók" miatt ez bonyolultabb.
-                        // Maradjunk a Page Map-nél, de kezeljük a duplikált hibákat a végén, vagy szűrjük.
-                        // Vagy break-eljünk az adott cikkhez, ha már találtunk ütközést EZZEL a cikkel?
-                        // Nem, mert más cikkel is ütközhet.
-                        
-                        // Finomítás: Csak akkor adjuk hozzá, ha még nincs benne specifikus üzenet?
-                        // Inkább hagyjuk, max. pár sor hiba lesz.
-                        
+                        // Ismert limitáció: minden ütköző oldalra külön hibát generálunk.
+                        // A validatePerArticle() metódus reportedPairs-szel kezeli a deduplikálást.
                     } else {
                         occupiedPages.set(page, article.name);
                     }
@@ -189,15 +204,14 @@ export class PublicationStructureValidator extends ValidatorBase {
 
         // 1. Határok ellenőrzése — hiba az adott cikkre
         for (const article of articles) {
-            const start = article.startPage;
-            const end = article.endPage;
+            const { min, max } = this.getEffectivePageRange(article);
 
-            if (start !== null && start < pubStart) {
+            if (min != null && min < pubStart) {
                 ensureEntry(article.$id).errors.push(
                     `A kiadvány kezdete (${pubStart}) előtt kezdődik.`
                 );
             }
-            if (end !== null && end > pubEnd) {
+            if (max != null && max > pubEnd) {
                 ensureEntry(article.$id).errors.push(
                     `A kiadvány vége (${pubEnd}) után végződik.`
                 );
