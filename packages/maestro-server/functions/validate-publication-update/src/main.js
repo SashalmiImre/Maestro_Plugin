@@ -10,12 +10,16 @@ const sdk = require("node-appwrite");
  * 2. Caller membership — a user tagja-e a kiadvány editorialOfficeId-jának (B.8)
  * 3. Default contributor ID-k — létező felhasználókra mutatnak-e
  * 4. rootPath formátum — kanonikus-e (nem /Volumes-szal kezdődik, nincs drive letter)
+ * 5. Aktiválási előfeltételek (Fázis 5) — ha isActivated=true, szükséges a
+ *    workflowId + érvényes határidő-fedés. Invalid esetén a CF deaktiválja
+ *    a publikációt (isActivated=false, activatedAt=null).
  *
  * Érvénytelen contributor → nullázás.
  * rootPath probléma → csak logolás (nem javítjuk, lehet migráció folyamatban).
  * Scope hiány create esetén → törlés.
  * Cross-tenant caller: create → törlés, update → csak logolás (B.8 korlát, Fázis 6
  * fedi a teljes update field-level védelmét).
+ * Sikertelen aktiválás → deaktiválás korrekciós update-tel.
  *
  * Trigger: databases.*.collections.publications.documents.*.create
  *          databases.*.collections.publications.documents.*.update
@@ -26,6 +30,7 @@ const sdk = require("node-appwrite");
  * - DATABASE_ID
  * - PUBLICATIONS_COLLECTION_ID
  * - EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID (B.8)
+ * - DEADLINES_COLLECTION_ID (Fázis 5 — aktiválási határidő-lekérdezéshez)
  */
 
 const SERVER_GUARD_ID = 'server-guard';
@@ -75,6 +80,103 @@ function isLegacyRootPath(rootPath) {
     return /^[a-zA-Z]:\//.test(normalized);
 }
 
+/**
+ * Inline másolat a maestro-shared/deadlineValidator.js → validateDeadlines
+ * logikájából (a CF CommonJS, nem tud ES importot). Fázis 5 — aktiválási
+ * előfeltétel ellenőrzés.
+ *
+ * @param {Object} publication - { coverageStart, coverageEnd }
+ * @param {Array}  deadlines   - { startPage, endPage, datetime }
+ * @returns {{ isValid: boolean, errors: string[] }}
+ */
+function validateDeadlinesInline(publication, deadlines) {
+    const errors = [];
+    if (!deadlines || deadlines.length === 0) {
+        return { isValid: true, errors };
+    }
+
+    const coverageStart = publication?.coverageStart;
+    const coverageEnd = publication?.coverageEnd;
+
+    deadlines.forEach((deadline, index) => {
+        const label = `${index + 1}. határidő`;
+        if (deadline.startPage == null || deadline.endPage == null) {
+            errors.push(`${label}: Hiányzó kezdő- vagy végoldal.`);
+        } else {
+            if (deadline.startPage > deadline.endPage) {
+                errors.push(`${label}: A kezdőoldal nem lehet nagyobb, mint a végoldal.`);
+            }
+            if (coverageStart != null && deadline.startPage < coverageStart) {
+                errors.push(`${label}: A kezdőoldal kisebb, mint a kiadvány kezdőoldala.`);
+            }
+            if (coverageEnd != null && deadline.endPage > coverageEnd) {
+                errors.push(`${label}: A végoldal nagyobb, mint a kiadvány végoldala.`);
+            }
+        }
+        if (!deadline.datetime || isNaN(new Date(deadline.datetime).getTime())) {
+            errors.push(`${label}: Érvénytelen dátum/idő.`);
+        }
+    });
+
+    const validRanges = deadlines.filter(
+        (d) => d.startPage != null && d.endPage != null && d.startPage <= d.endPage
+    );
+
+    // Átfedés
+    for (let i = 0; i < validRanges.length; i++) {
+        for (let j = i + 1; j < validRanges.length; j++) {
+            const a = validRanges[i];
+            const b = validRanges[j];
+            if (a.startPage <= b.endPage && b.startPage <= a.endPage) {
+                errors.push(`Átfedés a ${a.startPage}–${a.endPage} és ${b.startPage}–${b.endPage} oldalak tartománya között.`);
+            }
+        }
+    }
+
+    // Teljes fedés
+    if (coverageStart != null && coverageEnd != null && validRanges.length > 0) {
+        const sorted = [...validRanges].sort((a, b) => a.startPage - b.startPage);
+        let expectedStart = coverageStart;
+        const uncovered = [];
+        for (const range of sorted) {
+            if (range.startPage > expectedStart) {
+                uncovered.push(`${expectedStart}–${range.startPage - 1}`);
+            }
+            expectedStart = Math.max(expectedStart, range.endPage + 1);
+        }
+        if (expectedStart <= coverageEnd) {
+            uncovered.push(`${expectedStart}–${coverageEnd}`);
+        }
+        if (uncovered.length > 0) {
+            errors.push(`Nem fedett oldalak: ${uncovered.join(', ')}.`);
+        }
+    }
+
+    return { isValid: errors.length === 0, errors };
+}
+
+/**
+ * Inline másolat a maestro-shared/publicationActivation.js → validatePublicationActivation
+ * logikájából.
+ *
+ * @param {Object} publication
+ * @param {Array}  deadlines
+ * @returns {{ isValid: boolean, errors: string[] }}
+ */
+function validatePublicationActivationInline(publication, deadlines) {
+    const errors = [];
+    if (!publication?.workflowId) {
+        errors.push('A kiadványhoz workflow-t kell választani.');
+    }
+    if (!deadlines || deadlines.length === 0) {
+        errors.push('Legalább egy határidőt meg kell adni.');
+    } else {
+        const result = validateDeadlinesInline(publication, deadlines);
+        if (!result.isValid) errors.push(...result.errors);
+    }
+    return { isValid: errors.length === 0, errors };
+}
+
 module.exports = async function ({ req, res, log, error }) {
     try {
         // Event payload feldolgozása
@@ -109,10 +211,16 @@ module.exports = async function ({ req, res, log, error }) {
         const databaseId = process.env.DATABASE_ID;
         const publicationsCollectionId = process.env.PUBLICATIONS_COLLECTION_ID;
         const officeMembershipsCollectionId = process.env.EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID;
+        const deadlinesCollectionId = process.env.DEADLINES_COLLECTION_ID;
 
         // ── Fail-fast env var guard (B.8) ──
+        // A DEADLINES_COLLECTION_ID csak az aktivációs ágban kötelező — ott
+        // fail-closed módon kezeljük (ld. 5. szekció). Itt csak a minden
+        // publikáció művelethez szükséges env var-okat ellenőrizzük, hogy
+        // egy részleges deploy (hiányzó DEADLINES_COLLECTION_ID) ne brikkelje
+        // az összes publikáció CRUD-ot.
         if (!officeMembershipsCollectionId) {
-            error('[Config] Hiányzó környezeti változó: EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID');
+            error(`[Config] Hiányzó környezeti változó: EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`);
             return res.json({ success: false, reason: 'misconfigured', missing: ['EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID'] }, 500);
         }
 
@@ -259,7 +367,54 @@ module.exports = async function ({ req, res, log, error }) {
             // migrate-legacy-paths function kezeli
         }
 
-        // ── 5. Korrekciók alkalmazása ──
+        // ── 5. Aktiválási előfeltétel ellenőrzés (Fázis 5) ──
+        // Ha a publikáció isActivated=true-ra került (akár első aktiválás, akár
+        // utólagos update, akár direkt API-val aktivált create), ellenőrizzük
+        // az előfeltételeket:
+        //   - workflowId nem null
+        //   - van legalább egy határidő, teljes fedéssel, átfedés nélkül
+        // Invalid esetén deaktiváljuk a publikációt (revert). A CreatePublicationModal
+        // mindig isActivated=false-szal hozza létre, de a guard create-re is kiterjed,
+        // hogy egy nem-standard kliens (pl. direkt API hívás) se kerülhesse meg.
+        //
+        // FAIL-CLOSED: ha a DEADLINES_COLLECTION_ID nincs beállítva, vagy a
+        // deadline lekérés bármilyen okból hibára fut, nem hagyhatjuk
+        // érvényesülni az aktiválást — azonnal revertelünk. Ez a funkció a
+        // kiadvány aktiválási invariáns egyetlen server-side védelme.
+        if (freshDoc.isActivated === true) {
+            let revertReason = null;
+            if (!deadlinesCollectionId) {
+                revertReason = 'DEADLINES_COLLECTION_ID nincs beállítva';
+            } else {
+                try {
+                    // Limit 500 — a gyakorlati felső korlát reálisan ~50-100 határidő
+                    // / publikáció (oldalanként egy is szélsőséges eset). Az 500-as
+                    // sapka így minden valós forgatókönyvet lefed; fail-closed, ha
+                    // a lekérés nem sikerül.
+                    const result = await databases.listDocuments(
+                        databaseId,
+                        deadlinesCollectionId,
+                        [
+                            sdk.Query.equal('publicationId', freshDoc.$id),
+                            sdk.Query.limit(500)
+                        ]
+                    );
+                    const activation = validatePublicationActivationInline(freshDoc, result.documents || []);
+                    if (!activation.isValid) {
+                        revertReason = `érvénytelen állapot: ${activation.errors.join('; ')}`;
+                    }
+                } catch (e) {
+                    revertReason = `deadline lekérés hiba: ${e.message}`;
+                }
+            }
+            if (revertReason) {
+                error(`[Activation] ${freshDoc.$id} revertelve — ${revertReason}`);
+                corrections.isActivated = false;
+                corrections.activatedAt = null;
+            }
+        }
+
+        // ── 6. Korrekciók alkalmazása ──
         if (Object.keys(corrections).length > 0) {
             corrections.modifiedByClientId = SERVER_GUARD_ID;
 

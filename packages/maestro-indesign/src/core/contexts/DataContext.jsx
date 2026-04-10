@@ -306,6 +306,7 @@ export const DataProvider = ({ children }) => {
             }
 
             // 1. Publikációk lekérése (Mindig) — kritikus
+            // isActivated szűrés: a plugin csak aktivált kiadványokat lát
             const publicationsPromise = withRetry(
                 () => withTimeout(
                     tables.listRows({
@@ -313,6 +314,7 @@ export const DataProvider = ({ children }) => {
                         tableId: PUBLICATIONS_COLLECTION_ID,
                         queries: [
                             Query.equal("editorialOfficeId", currentOfficeId),
+                            Query.equal("isActivated", true),
                             Query.limit(100),
                             Query.notEqual("$id", cacheBustId)
                         ]
@@ -1054,11 +1056,46 @@ export const DataProvider = ({ children }) => {
             };
 
             // --- Publikációk ---
+            // A plugin kizárólag aktivált kiadványokat lát. Nem aktivált create-et
+            // figyelmen kívül hagyunk; update esetén, ha a payload nem aktivált,
+            // eltávolítjuk (deaktiválás vagy még nem aktivált szerkesztés kezelése).
+            //
+            // Post-write CF korlát: a validate-publication-update CF az írás UTÁN
+            // fut, ezért egy érvénytelen aktiválás rövid ideig (~1-2s) látszhat
+            // a pluginban, mielőtt a server-side revert megérkezik egy második
+            // Realtime eseményen. A $updatedAt staleness guard és a Realtime
+            // sorrend garantálja, hogy a revert felülírja a kezdeti aktivációt
+            // (a revert $updatedAt-ja mindig frissebb). A cikkek szerkesztése
+            // addig is blokkolva van, mert a scope query-k (workflow, validations)
+            // nem találnak semmit a még nem létező DB állapothoz.
             if (event.includes(PUBLICATIONS_COLLECTION_ID)) {
                 if (isOutOfScope(event, payload)) return;
 
+                // Ha a deaktivált (vagy törölt) publikáció éppen az aktív,
+                // töröljük az aktív állapotot is — különben stale cikkek /
+                // határidők / layoutok maradnának a UI-ban. Ez szimmetrikus
+                // a .delete és az office-váltás kezelésével.
+                const deactivation = event.includes(".update") && !payload.isActivated;
+                const deletion = event.includes(".delete");
+                if ((deactivation || deletion) && activePublicationIdRef.current === payload.$id) {
+                    setActivePublicationId(null);
+                    setArticles([]);
+                    setLayouts([]);
+                    setDeadlines([]);
+                    setValidations([]);
+                }
+
                 setPublications(prev => {
                     if (event.includes(".update")) {
+                        const existing = prev.find(pub => pub.$id === payload.$id);
+                        if (!payload.isActivated) {
+                            // Nem aktivált: eltávolítjuk (ha eddig ott volt)
+                            return existing ? prev.filter(pub => pub.$id !== payload.$id) : prev;
+                        }
+                        if (!existing) {
+                            // Új aktivált publikáció (pl. first-time activation): hozzáadás
+                            return [...prev, payload].sort(compareByName);
+                        }
                         return prev.map(publication => {
                             if (publication.$id !== payload.$id) return publication;
                             // $updatedAt staleness guard
@@ -1068,6 +1105,7 @@ export const DataProvider = ({ children }) => {
                             return payload;
                         }).sort(compareByName);
                     } else if (event.includes(".create")) {
+                        if (!payload.isActivated) return prev;
                         if (prev.some(publication => publication.$id === payload.$id)) return prev;
                         return [...prev, payload].sort(compareByName);
                     } else if (event.includes(".delete")) {

@@ -117,7 +117,7 @@ maestro-server/
 |---|---|
 | `article-update-guard` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `GROUPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID` |
 | `validate-article-creation` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID` |
-| `validate-publication-update` | `DATABASE_ID`, `PUBLICATIONS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID` |
+| `validate-publication-update` | `DATABASE_ID`, `PUBLICATIONS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `DEADLINES_COLLECTION_ID` |
 | `cascade-delete` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `USER_VALIDATIONS_COLLECTION_ID`, `SYSTEM_VALIDATIONS_COLLECTION_ID`, `DEADLINES_COLLECTION_ID`, `LAYOUTS_COLLECTION_ID`, `THUMBNAILS_BUCKET_ID` |
 | `cleanup-orphaned-locks` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID` |
 | `cleanup-orphaned-thumbnails` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `THUMBNAILS_BUCKET_ID` |
@@ -171,6 +171,8 @@ maestro-server/
 Kiadvány létrehozás/módosításkor fut. `defaultContributors` JSON parse → nem létező userId → nullázás. Legacy rootPath → logolás.
 
 **Scope ellenőrzés (B.8):** create eseménynél hiányzó scope mezők vagy nem-tag caller → publikáció törlése. Update path: nem-tag caller csak logolódik (teljes field-level revert Fázis 6 hatáskör).
+
+**Aktiválás validáció (Dashboard Redesign Fázis 5):** Minden create és update eseménynél, ha a friss dokumentum `isActivated === true`, a CF lefuttatja a `validatePublicationActivationInline()`-t (inline másolat a `maestro-shared/publicationActivation.js`-ből). Ez ellenőrzi: (a) `workflowId` kitöltött, (b) legalább egy deadline létezik, (c) a deadline-ok a teljes `coverageStart..coverageEnd` tartományt átfedés nélkül lefedik és formátum-helyesek. A deadline-ok a `DEADLINES_COLLECTION_ID`-ból kerülnek lekérdezésre (`Query.equal('publicationId', $id)`, limit 500). **Fail-closed**: ha a `DEADLINES_COLLECTION_ID` env var hiányzik, vagy a deadline lekérés dob, vagy a validáció sikertelen → a CF revertel `{ isActivated: false, activatedAt: null }`-re. Ez garantálja, hogy érvénytelen állapot soha nem maradhat a DB-ben, még akkor sem, ha a Dashboard UI-t megkerülik direkt REST hívással.
 
 ### cascade-delete
 
@@ -267,22 +269,23 @@ A guard function-ök a `workflows` collection `compiled` JSON mezőjéből olvas
 
 ---
 
-## Publications Collection — Aktiválási mezők (Dashboard Redesign Fázis 3)
+## Publications Collection — Aktiválási mezők (Dashboard Redesign Fázis 3 + 5)
 
-A Dashboard Redesign Fázis 3 keretében a `publications` collection három új mezőt kapott, előkészítésként a Fázis 4-7 funkciókhoz (Dashboard-alapú kiadványkezelés, publikáció aktiválás, többszörös workflow támogatás).
+A Dashboard Redesign Fázis 3 keretében a `publications` collection három új mezőt kapott, amelyeket a Fázis 5 kötött be a teljes aktiválási rendszerbe.
 
 | Mező | Típus | Default | Célja |
 |------|-------|---------|-------|
-| `workflowId` | string (36) | null | A publikációhoz rendelt workflow `$id`-je (Fázis 7: több workflow/office). Ha `null` → az office egyetlen workflow-ja (fallback, Fázis 6 guard). |
-| `isActivated` | boolean | `false` | A plugin csak aktivált publikációkat lát (Fázis 5 szűrés). Új publikáció a Dashboard-on `false`-szal indul, aktiválás után a plugin számára is láthatóvá válik. |
+| `workflowId` | string (36) | null | A publikációhoz rendelt workflow `$id`-je. Aktiválás után nem módosítható (Dashboard UI-oldali lock; szerver-oldali enforcement Fázis 6). |
+| `isActivated` | boolean | `false` | A Plugin csak aktivált publikációkat lát (`DataContext.fetchData` + Realtime handler `Query.equal('isActivated', true)` szűrés). |
 | `activatedAt` | datetime | null | Aktiválás időpontja (informatív). |
 
 **Indexek**: `workflowId` (ASC), `isActivated` (ASC) — a Fázis 5-7 query-khez szükségesek.
 
-**Guardok** (aktuális állapot, Fázis 3):
-- `validate-publication-update` CF még nem validálja az új mezőket — opcionálisak, `false`/`null` default-tal futnak.
-- Az `isActivated → true` átmenet validációja (deadline fedés, workflowId kitöltve) a Fázis 5-ben kerül be.
-- A `workflowId` immutability aktivált publikációra a Fázis 5-6-ban lesz enforced.
+**Guardok** (Fázis 5 állapot):
+- **Aktiválás validáció**: `validate-publication-update` CF minden create/update eseménynél ellenőrzi, hogy az `isActivated === true` állapot konzisztens-e (workflowId kitöltve + deadline-ok teljes fedést adnak + nincs átfedés + formátum-helyes). Fail-closed: érvénytelen állapot → revert `isActivated: false, activatedAt: null`-re. Részletek a `validate-publication-update` leírásánál.
+- **Plugin szűrés**: A Plugin `DataContext` kizárólag `isActivated === true` publikációkat kér le és iratkozik fel rájuk Realtime-on. Deaktiválás vagy törlés az aktív publikáción → a Plugin azonnal nullázza az `activePublicationId`-t és törli a derived state-et (articles/layouts/deadlines/validations).
+- **Határidő szerkezet lock**: Aktivált publikáción a Dashboard `DeadlinesTab` letiltja az oldalszám input-okat, a törlés és „+ Új határidő" gombokat (a fedés-invariáns megőrzéséhez). A dátum és idő mezők továbbra is szerkeszthetők, mert nem bontják a fedést.
+- **Workflow lock**: Aktivált publikáción a Dashboard `GeneralTab` workflow dropdown `disabled` + tooltip. Szerver-oldali enforcement **Fázis 6** hatáskör (ott a cikkek létezése lesz a lock trigger — a valós threat model: futó workflow alatt ne lehessen workflow-t cserélni).
 
 ---
 

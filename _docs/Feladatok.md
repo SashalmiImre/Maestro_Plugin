@@ -54,13 +54,14 @@ tags: [feladatok]
 - [x] Harden pass: 3 iterációs Codex review — publikációk/határidők `$updatedAt` staleness guard, `workflow` derived `useMemo` + fail-closed stale `workflowId`, `excludeWeekends ?? true` default, DeadlinesTab dead-code simplify, GeneralTab `invalid-input` osztályok, CreatePublicationModal auto-workflow-pick effect
 - [ ] **Verifikáció**: Dashboard-on publikáció létrehozás/szerkesztés/törlés, Realtime szinkron a pluginban
 
-#### Fázis 5 — Publikáció aktiválás
+#### Fázis 5 — Publikáció aktiválás ✅ (2026-04-10)
 
-- [ ] `PublicationSettingsModal.jsx` „Aktiválás" gomb: validáció (deadline fedés teljes + nincs átfedés + workflowId kitöltve) → `isActivated: true`, `activatedAt: now()`
-- [ ] Aktiválás után: workflowId dropdown disabled (tooltip: „Workflow nem módosítható aktiválás után")
-- [ ] `maestro-shared/publicationActivation.js` (vagy inline): `validatePublicationActivation(publication, deadlines)` → `{ valid, errors[] }`
-- [ ] Plugin `DataContext.jsx`: `fetchPublications` query + `Query.equal('isActivated', true)`, Realtime handler `isActivated` szűrés
-- [ ] `validate-publication-update` CF bővítés: `isActivated: false→true` szerver-oldali validáció, `isActivated: true` esetén `workflowId` módosítás blokkolva
+- [x] `GeneralTab.jsx` „Aktiválás" szekció (Általános tab alján): validáció (deadline fedés teljes + nincs átfedés + workflowId kitöltve) → ConfirmDialog (részletes magyarázattal a nem módosítható paraméterekről) → `isActivated: true`, `activatedAt: now()`
+- [x] Aktiválás után: workflowId dropdown disabled (tooltip: „Workflow aktiválás után nem módosítható.")
+- [x] `maestro-shared/publicationActivation.js`: `validatePublicationActivation(publication, deadlines)` → `{ isValid, errors[] }` — thin wrapper a `validateDeadlines` köré + workflowId ellenőrzés
+- [x] Plugin `DataContext.jsx`: `fetchData` publications query + `Query.equal('isActivated', true)`, Realtime handler `isActivated` szűrés (nem aktivált pub eltávolítása, deaktiválás kezelése)
+- [x] `validate-publication-update` CF bővítés: `isActivated === true` esetén deadline lekérés + inline `validatePublicationActivation` → invalid esetén revert (`isActivated: false`, `activatedAt: null`). Inline helper (`validateDeadlinesInline`, `validatePublicationActivationInline`) a maestro-shared másolataként. Új env var: `DEADLINES_COLLECTION_ID` (Appwrite Console-on kézzel hozzáadandó).
+- Megjegyzés: A szerver-oldali `workflowId` immutability **Fázis 6** hatáskör — a post-event CF nem látja a pre-update állapotot, ezért a cikkek létezése alapján (`articles.length > 0 && isActivated`) fogjuk kikényszeríteni. Fázis 5-ben a Dashboard UI disabled dropdown + tooltip véd a normál használat ellen.
 
 #### Fázis 6 — Workflow zárolás cikkek mellett
 
@@ -88,7 +89,7 @@ tags: [feladatok]
 
 - [ ] Plugin `DataContext.jsx`: `createPublication`, `updatePublication`, `deletePublication` + layout/deadline write-through eltávolítás
 - [ ] `usePublications.js` hook: CRUD függvények eltávolítása (vagy hook törlés ha üressé válik)
-- [ ] `PublicationListToolbar.jsx` „+" gomb eltávolítása (vagy teljes törlés)
+- [x] `PublicationListToolbar.jsx` „+" gomb eltávolítása *(2026-04-10 — Fázis 5 harden pass keretében előrehozva: a plugin-oldali create gomb elvezetne egy nem aktivált, tehát a plugin számára láthatatlan rekordhoz; csak a belépési pont lett letiltva, a `createPublication` API Fázis 9-ben kerül törlésre)*
 - [ ] `PublicationProperties/` teljes mappa törlése (GeneralSection, LayoutsSection, DeadlinesSection, ContributorsSection)
 - [ ] `Publication.jsx`: csak olvasható mód (nincs rename, delete, properties dupla kattintás)
 - [ ] `Workspace.jsx`: properties nézet eltávolítás publikációkra (`selectedType: 'publication'` ág)

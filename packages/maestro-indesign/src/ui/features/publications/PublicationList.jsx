@@ -27,7 +27,6 @@ export const PublicationList = ({ onShowProperties, filterState }) => {
         loading,
         error,
         fetchPublications,
-        createPublication,
         deletePublication,
         renamePublication
     } = usePublications();
@@ -151,10 +150,7 @@ export const PublicationList = ({ onShowProperties, filterState }) => {
 
     return (
         <>
-            <PublicationListToolbar
-                createPublication={createPublication}
-                fetchPublications={fetchPublications}
-            />
+            <PublicationListToolbar />
 
             <div style={{
                 display: "flex",

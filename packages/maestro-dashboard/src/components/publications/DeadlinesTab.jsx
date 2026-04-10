@@ -31,6 +31,14 @@ export default function DeadlinesTab({ publication }) {
     const { showToast } = useToast();
     const confirm = useConfirm();
 
+    // Aktivált publikáción a határidők SZERKEZETE (oldalszám, darabszám) zárolt,
+    // hogy a fedés-invariáns ne romolhasson el szerver-oldali revalidálás nélkül.
+    // A dátum + idő továbbra is szerkeszthető, mert az nem bontja a fedést.
+    const isActivated = publication.isActivated === true;
+    const structureLockTitle = isActivated
+        ? 'Határidők szerkezete aktivált kiadványon nem módosítható. Deaktiváld előbb a fedés módosításához.'
+        : undefined;
+
     // Csak az aktív publikációhoz tartozó határidők, oldalsorrendben
     const pubDeadlines = useMemo(
         () =>
@@ -87,6 +95,12 @@ export default function DeadlinesTab({ publication }) {
     }
 
     async function handlePageBlur(deadline, field) {
+        // Defenzív guard: ha a publikáció közben aktivált lett (Realtime update
+        // a felhasználó gépelése alatt), eldobjuk a függő lokális módosítást.
+        if (isActivated) {
+            clearLocalField(`${deadline.$id}.${field}`);
+            return;
+        }
         const key = `${deadline.$id}.${field}`;
         const local = localFields[key];
         if (local === undefined) return;
@@ -148,6 +162,7 @@ export default function DeadlinesTab({ publication }) {
     }
 
     async function handleAdd() {
+        if (isActivated) return;
         const coverageStart = publication?.coverageStart ?? 1;
         const coverageEnd = publication?.coverageEnd ?? coverageStart;
 
@@ -188,6 +203,7 @@ export default function DeadlinesTab({ publication }) {
     }
 
     async function handleDelete(deadline) {
+        if (isActivated) return;
         const ok = await confirm({
             title: 'Határidő törlése',
             message: `Biztosan törlöd a(z) ${deadline.startPage}–${deadline.endPage}. oldalakhoz tartozó határidőt?`,
@@ -226,6 +242,8 @@ export default function DeadlinesTab({ publication }) {
                             value={getFieldValue(deadline.$id, 'startPage', deadline.startPage)}
                             onChange={(e) => setFieldValue(deadline.$id, 'startPage', e.target.value)}
                             onBlur={() => handlePageBlur(deadline, 'startPage')}
+                            disabled={isActivated}
+                            title={structureLockTitle}
                         />
                         <span className="deadline-separator">–</span>
                         <input
@@ -236,6 +254,8 @@ export default function DeadlinesTab({ publication }) {
                             value={getFieldValue(deadline.$id, 'endPage', deadline.endPage)}
                             onChange={(e) => setFieldValue(deadline.$id, 'endPage', e.target.value)}
                             onBlur={() => handlePageBlur(deadline, 'endPage')}
+                            disabled={isActivated}
+                            title={structureLockTitle}
                         />
                         <input
                             type="text"
@@ -257,8 +277,9 @@ export default function DeadlinesTab({ publication }) {
                             type="button"
                             className="btn-danger-icon"
                             onClick={() => handleDelete(deadline)}
-                            title="Határidő törlése"
+                            title={isActivated ? structureLockTitle : 'Határidő törlése'}
                             aria-label="Határidő törlése"
+                            disabled={isActivated}
                         >
                             ✕
                         </button>
@@ -270,6 +291,8 @@ export default function DeadlinesTab({ publication }) {
                 type="button"
                 className="btn-secondary btn-add-row"
                 onClick={handleAdd}
+                disabled={isActivated}
+                title={structureLockTitle}
             >
                 + Új határidő
             </button>

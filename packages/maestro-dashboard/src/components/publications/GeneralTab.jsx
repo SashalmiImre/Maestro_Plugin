@@ -9,16 +9,36 @@
  *   - Fedés kezdete / vége (blur mentés, number)
  *   - Gyökérmappa (csak olvasható — Dashboard-ról nem módosítjuk)
  *   - Hétvégék kihagyása (azonnali mentés)
- *   - Workflow (dropdown, change-re ment — csak egy workflow esetén letiltva)
+ *   - Workflow (dropdown, change-re ment — csak egy workflow esetén, vagy
+ *     aktivált kiadványnál letiltva)
+ *
+ * Aktiválás:
+ *   - A tab alján „Aktiválás" szekció: ha még nincs aktiválva, a gomb csak
+ *     akkor engedett, ha a workflow + határidők mind érvényesek. Megerősítés
+ *     ConfirmDialog-gal. Ha már aktivált, zöld státusz + időbélyeg.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
+import { validatePublicationActivation } from '@shared/publicationActivation.js';
 import { useData } from '../../contexts/DataContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
+import { useConfirm } from '../ConfirmDialog.jsx';
+
+function formatActivatedAt(iso) {
+    if (!iso) return '';
+    try {
+        const d = new Date(iso);
+        const pad = (n) => String(n).padStart(2, '0');
+        return `${d.getFullYear()}.${pad(d.getMonth() + 1)}.${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    } catch {
+        return iso;
+    }
+}
 
 export default function GeneralTab({ publication }) {
-    const { workflows, updatePublication } = useData();
+    const { workflows, deadlines, updatePublication } = useData();
     const { showToast } = useToast();
+    const confirm = useConfirm();
 
     // Lokális state a blur mentéshez
     const [name, setName] = useState(publication.name || '');
@@ -87,7 +107,53 @@ export default function GeneralTab({ publication }) {
         showToast('Workflow megváltozott — az új szabályok a következő átmeneteknél lépnek életbe.', 'info');
     }
 
-    const workflowDisabled = workflows.length <= 1;
+    const isActivated = publication.isActivated === true;
+    const workflowDisabled = workflows.length <= 1 || isActivated;
+
+    // Publikáció-hoz tartozó deadline-ok (scope-on belül, DataContext szűr)
+    const pubDeadlines = useMemo(
+        () => deadlines.filter((d) => d.publicationId === publication.$id),
+        [deadlines, publication.$id]
+    );
+
+    const activation = useMemo(
+        () => validatePublicationActivation(publication, pubDeadlines),
+        [publication, pubDeadlines]
+    );
+
+    async function handleActivateClick() {
+        if (!activation.isValid) return;
+        const confirmMessage = (
+            <>
+                <p>Az aktiválás után a kiadvány megjelenik a pluginban, és a szerkesztők elkezdhetnek cikkeket felvenni rá.</p>
+                <p><strong>A következő paraméterek aktiválás után nem módosíthatók:</strong></p>
+                <ul>
+                    <li>Workflow — a felhasználói jogosultságok ehhez kötődnek</li>
+                    <li>Határidők szerkezete (oldalszám tartományok, darabszám) — a teljes fedés invariáns megőrzéséhez</li>
+                </ul>
+                <p>A layoutok, a határidő-dátumok és a közreműködők továbbra is szerkeszthetők maradnak.</p>
+                <p>Biztosan aktiválod a(z) <strong>{publication.name}</strong> kiadványt?</p>
+            </>
+        );
+        const ok = await confirm({
+            title: 'Kiadvány aktiválása',
+            message: confirmMessage,
+            confirmLabel: 'Aktiválás',
+            cancelLabel: 'Mégse',
+            variant: 'normal'
+        });
+        if (!ok) return;
+        try {
+            await updatePublication(publication.$id, {
+                isActivated: true,
+                activatedAt: new Date().toISOString()
+            });
+            showToast('A kiadvány aktiválva.', 'success');
+        } catch (err) {
+            console.error('[GeneralTab] Aktiválás sikertelen:', err);
+            showToast(`Aktiválás sikertelen: ${err?.message || 'ismeretlen hiba'}`, 'error');
+        }
+    }
 
     return (
         <div className="publication-form">
@@ -169,6 +235,7 @@ export default function GeneralTab({ publication }) {
                     value={publication.workflowId || ''}
                     onChange={handleWorkflowChange}
                     disabled={workflowDisabled}
+                    title={isActivated ? 'Workflow aktiválás után nem módosítható.' : undefined}
                 >
                     {workflows.length === 0 && <option value="">— Nincs elérhető workflow —</option>}
                     {!publication.workflowId && workflows.length > 0 && (
@@ -178,6 +245,37 @@ export default function GeneralTab({ publication }) {
                         <option key={wf.$id} value={wf.$id}>{wf.name}</option>
                     ))}
                 </select>
+            </div>
+
+            {/* Aktiválás szekció */}
+            <div className="form-group publication-activation">
+                <label>Aktiválás</label>
+                {isActivated ? (
+                    <div className="activation-status activation-status-active">
+                        <span className="activation-badge">✓ Aktiválva</span>
+                        {publication.activatedAt && (
+                            <span className="activation-date">{formatActivatedAt(publication.activatedAt)}</span>
+                        )}
+                    </div>
+                ) : (
+                    <>
+                        {activation.errors.length > 0 && (
+                            <ul className="form-error activation-errors">
+                                {activation.errors.map((err, i) => (
+                                    <li key={i}>{err}</li>
+                                ))}
+                            </ul>
+                        )}
+                        <button
+                            type="button"
+                            className="btn-primary activation-button"
+                            disabled={!activation.isValid}
+                            onClick={handleActivateClick}
+                        >
+                            Aktiválás
+                        </button>
+                    </>
+                )}
             </div>
         </div>
     );
