@@ -19,14 +19,20 @@
 
 ## Aktuális fázis
 
-**Fázis 7 — Cleanup** (aktív, 2026-04-10)
+**A Workflow Designer + Multi-tenant átalakítás lezárult** (2026-04-10).
 
-A teljes Workflow Designer + Multi-tenant átalakítás (Fázis 0–6) befejeződött.
-A Fázis 7 dokumentáció-lezárás és cleanup zajlik.
+A következő aktív munka a **Dashboard Redesign** — ld. `_docs/Feladatok.md` → `## Aktív` → `Dashboard Redesign` szekció. A Fázis 1 (Modal rendszer) és Fázis 2 (Breadcrumb fejléc) kész.
 
 ---
 
 ## Befejezett fázisok
+
+### Fázis 7 checklist (kész, 2026-04-10)
+
+- [x] Stale import ellenőrzés: 0 találat a törölt modulokra
+- [x] Plugin CLAUDE.md teljes frissítése a végső architektúrával
+- [x] `_docs/Feladatok.md` kész feladatok kipipálása
+- [x] PROGRESS.md lezárás
 
 ### Fázis 6 checklist (kész, 2026-04-10)
 - [x] F.1 — CF `update_organization` action (`invite-to-organization` CF bővítés): sanitizeString, owner/admin role check, updateDocument try/catch

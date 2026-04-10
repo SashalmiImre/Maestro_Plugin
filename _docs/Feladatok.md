@@ -9,6 +9,94 @@ tags: [feladatok]
 
 ## Aktív
 
+### 🎨 Dashboard Redesign — Modal UI, Breadcrumb fejléc, Kiadványkezelés áthelyezés
+
+> A Dashboard teljes UI átalakítása: modal-alapú beállítási ablakok, breadcrumb navigáció a sidebar helyett, kiadványkezelés áthelyezése a pluginból a dashboardra, többszörös workflow támogatás, publikáció aktiválási rendszer.
+
+#### Fázis 1 — Modal rendszer infrastruktúra ✅ (2026-04-10)
+
+- [x] `Modal.jsx` komponens: portál-alapú (createPortal → body), lekerekített kártya, backdrop blur, `size` prop (sm/md/lg/xl), ESC (csak topmost modal) + focus trap + scroll lock (globális számláló), `requestAnimationFrame` fókusz
+- [x] `ModalContext.jsx`: modal stack kezelés — `openModal(element, props)` / `closeModal()` / `closeModalById()`, növekvő z-index (BASE=1000, +10/réteg), monoton ID számláló
+- [x] `ConfirmDialog.jsx` (dashboard): content-only megerősítő dialógus `verificationExpected` prop-pal (név begépelés), `useConfirm()` Promise-alapú hook (ModalContext-en keresztül nyit, nested modal safe)
+- [x] `Tabs.jsx` komponens: vízszintes fülsáv, controlled `activeTab`, ARIA role-ok — beállítás modalok belső navigációjához
+- [x] Modal + ConfirmDialog + Tabs CSS stílusok a `css/styles.css`-ben
+- [x] Harden pass: ESC cascade fix, scroll lock fix, ConfirmDialog double-wrap refaktor, focus trap edge case
+
+#### Fázis 2 — Fejléc átalakítás (Breadcrumb navigáció) ✅ (2026-04-10)
+
+- [x] `BreadcrumbDropdown.jsx`: újrafelhasználható dropdown — click-re nyílik, „Beállítások" menüpont tetején + divider + ABC rendezett opciók (memoizált), `usePopoverClose` hook
+- [x] `UserAvatar.jsx`: kör alakú 2 betűs monogram a `user.name`-ből, kattintásra dropdown menü, `popup-item/divider` közös CSS osztályok
+- [x] `BreadcrumbHeader.jsx`: **Bal**: logó → Szervezet dropdown → Szerkesztőség dropdown → Publikáció dropdown; **Jobb**: nézet váltó + cikkszám + szűrő gomb + UserAvatar
+- [x] `DashboardLayout.jsx` refaktor: `BreadcrumbHeader`, scope-váltás data refresh (cancellation guard + üres state reset), `switchPublication(null)` kezelés DataContext-ben
+- [x] `usePopoverClose.js` hook: közös outside-click + ESC bezáró logika (BreadcrumbDropdown + UserAvatar)
+- [x] `DashboardHeader.jsx` + `Sidebar.jsx` + `ContentHeader.jsx` törlése, CSS takarítás
+- [ ] Beállítás route-ok átalakítása modalokra: `OrganizationAdminRoute` → `OrganizationSettingsModal`, `EditorialOfficeAdminRoute` → `EditorialOfficeSettingsModal` (Fázis 4-ben)
+
+#### Fázis 3 — DB séma változások
+
+- [ ] `publications` collection: új `workflowId` string mező (opcionális) + index
+- [ ] `publications` collection: új `isActivated` boolean mező (default: `false`)
+- [ ] `publications` collection: új `activatedAt` datetime mező (opcionális)
+- [ ] `workflows` collection: `name` string mező hozzáadása (több workflow megkülönböztetéséhez)
+- [ ] Migráció: meglévő publikációkra `isActivated: true` + `workflowId` = az office workflow `$id`-je (egyszeri script)
+
+#### Fázis 4 — Kiadványkezelés a Dashboardon
+
+- [ ] Dashboard `DataContext.jsx` bővítés: `createPublication`, `updatePublication`, `deletePublication` write-through metódusok (plugin DataContext mintájára)
+- [ ] Dashboard `DataContext.jsx` bővítés: `createLayout`, `updateLayout`, `deleteLayout` + `createDeadline`, `updateDeadline`, `deleteDeadline` write-through metódusok
+- [ ] `CreatePublicationModal.jsx`: név, rootPath (szöveg), fedés start/end, workflowId dropdown → mentés + auto „A" layout létrehozás
+- [ ] `PublicationSettingsModal.jsx` — **Általános** fül: név, fedés (start/end), rootPath (r/o), excludeWeekends, workflowId dropdown
+- [ ] `PublicationSettingsModal.jsx` — **Layoutok** fül: port a plugin `LayoutsSection.jsx`-ből (CRUD, auto A-Z elnevezés)
+- [ ] `PublicationSettingsModal.jsx` — **Határidők** fül: port a plugin `DeadlinesSection.jsx`-ből (oldalszám-tartomány + dátum/idő, validáció: átfedés, fedés, formátum)
+- [ ] `PublicationSettingsModal.jsx` — **Közreműködők** fül: port a plugin `ContributorsSection.jsx`-ből (csoport-alapú dropdown-ok, bulk update ajánlás)
+- [ ] Breadcrumb publikáció dropdown: „Új kiadvány" menüpont (→ `CreatePublicationModal`)
+- [ ] Deadline validációs logika áthelyezése `maestro-shared`-be (formátum, átfedés, fedés ellenőrzés) — vagy Dashboard saját hook
+- [ ] **Verifikáció**: Dashboard-on publikáció létrehozás/szerkesztés/törlés, Realtime szinkron a pluginban
+
+#### Fázis 5 — Publikáció aktiválás
+
+- [ ] `PublicationSettingsModal.jsx` „Aktiválás" gomb: validáció (deadline fedés teljes + nincs átfedés + workflowId kitöltve) → `isActivated: true`, `activatedAt: now()`
+- [ ] Aktiválás után: workflowId dropdown disabled (tooltip: „Workflow nem módosítható aktiválás után")
+- [ ] `maestro-shared/publicationActivation.js` (vagy inline): `validatePublicationActivation(publication, deadlines)` → `{ valid, errors[] }`
+- [ ] Plugin `DataContext.jsx`: `fetchPublications` query + `Query.equal('isActivated', true)`, Realtime handler `isActivated` szűrés
+- [ ] `validate-publication-update` CF bővítés: `isActivated: false→true` szerver-oldali validáció, `isActivated: true` esetén `workflowId` módosítás blokkolva
+
+#### Fázis 6 — Workflow zárolás cikkek mellett
+
+- [ ] `PublicationSettingsModal.jsx`: ha a publikációban van cikk (`articles.length > 0`) → workflowId dropdown disabled + tooltip
+- [ ] `validate-publication-update` CF bővítés: `workflowId` változás esetén articles query → ha van cikk ÉS `isActivated`, revert
+- [ ] `article-update-guard` CF: workflow lekérés `publication.workflowId`-ből (fallback: office egyetlen workflow-ja ha null)
+
+#### Fázis 7 — Többszörös workflow támogatás
+
+- [ ] Workflow Designer route bővítés: workflow lista/választó az office-on belül, „Új workflow" gomb, route: `/admin/office/:officeId/workflow/:workflowId`
+- [ ] Dashboard `DataContext.jsx`: `workflows` (többes szám) state az office összes workflow-jával (publication settings dropdown-hoz), `fetchWorkflows()` metódus
+- [ ] Plugin `DataContext.jsx`: workflow feloldás `publication.workflowId` alapján (kiadvány-váltáskor vált), fallback office workflow-ra ha null
+- [ ] `invite-to-organization` CF: új `create_workflow` action (office-hoz új workflow, admin-only), `bootstrap_organization` továbbra is 1 default-ot seed-el
+
+#### Fázis 8 — Törlés névmegerősítéssel (kaszkád)
+
+- [ ] `OrganizationSettingsModal`: piros törlés gomb → `ConfirmDialog` (szervezet nevének pontos begépelése, kis- és nagybetű érzékeny)
+- [ ] `EditorialOfficeSettingsModal`: piros törlés gomb → `ConfirmDialog` (szerkesztőség nevének pontos begépelése)
+- [ ] `PublicationSettingsModal`: piros törlés gomb → `ConfirmDialog` (kiadvány nevének pontos begépelése)
+- [ ] CF `delete_organization` action (owner-only): kaszkád törlés — officeMemberships, orgMemberships, invites, offices (→ groups, groupMemberships, workflows, publications → cascade-delete), org doc
+- [ ] CF `delete_editorial_office` action (owner/admin-only): kaszkád törlés — officeMemberships, groups, groupMemberships, workflows, publications (→ cascade-delete), office doc
+- [ ] **Verifikáció**: minden szinten törlés → az alatta lévő összes adat eltűnik, plugin is tükrözi
+
+#### Fázis 9 — Plugin egyszerűsítés
+
+- [ ] Plugin `DataContext.jsx`: `createPublication`, `updatePublication`, `deletePublication` + layout/deadline write-through eltávolítás
+- [ ] `usePublications.js` hook: CRUD függvények eltávolítása (vagy hook törlés ha üressé válik)
+- [ ] `PublicationListToolbar.jsx` „+" gomb eltávolítása (vagy teljes törlés)
+- [ ] `PublicationProperties/` teljes mappa törlése (GeneralSection, LayoutsSection, DeadlinesSection, ContributorsSection)
+- [ ] `Publication.jsx`: csak olvasható mód (nincs rename, delete, properties dupla kattintás)
+- [ ] `Workspace.jsx`: properties nézet eltávolítás publikációkra (`selectedType: 'publication'` ág)
+- [ ] „Megnyitás a Dashboardon" link/gomb hozzáadása a plugin-ban ahol szükséges
+- [ ] **Verifikáció**: plugin-ban nincs pub CRUD, Realtime szinkron működik, dashboard link elérhető
+- [ ] CLAUDE.md + docs frissítés az új architektúrával
+
+## Kész
+
 ### 🎯 Workflow Designer + Multi-tenant átalakítás
 
 > A Maestro egybérlős, hardkódolt workflow-jának teljes átalakítása dinamikus, multi-tenant rendszerré ComfyUI-stílusú vizuális designerrel a Dashboardon. Teljes terv: [workflow-designer/ARCHITECTURE.md](workflow-designer/ARCHITECTURE.md). State tracker: [workflow-designer/PROGRESS.md](workflow-designer/PROGRESS.md).
@@ -145,7 +233,6 @@ tags: [feladatok]
 
 ---
 
-## Kész
 ### Appwrite Cloud Function-ök — Szerver-oldali üzleti logika
 
 > A kliens-oldali (InDesign plugin / Dashboard) kód jelenleg "becsületalapú" — a jogosultságokat, zárolást és adatintegritást csak a UI ellenőrzi. Közvetlen API hívással ezek megkerülhetők. Az alábbi Cloud Function-ök szerver-oldalon is kikényszerítik a szabályokat.

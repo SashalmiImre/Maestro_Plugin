@@ -78,6 +78,18 @@ export function DataProvider({ children }) {
     const switchPublication = useCallback(async (publicationId) => {
         activePublicationIdRef.current = publicationId;
         setActivePublicationIdState(publicationId);
+
+        // null = nincs aktív kiadvány (pl. üres scope) → derived state törlése
+        if (!publicationId) {
+            setArticles([]);
+            setLayouts([]);
+            setDeadlines([]);
+            setValidations([]);
+            articleIdsRef.current = new Set();
+            setIsLoading(false);
+            return;
+        }
+
         setLayouts([]);
         setIsLoading(true);
 

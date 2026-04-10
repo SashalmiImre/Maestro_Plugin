@@ -4,39 +4,38 @@
  * A védett „/" route layout-wrappere. Shell komponens: kezeli a kiadvány
  * váltást, szűrést, és Outlet kontextusban adja át a szűrt cikkeket
  * a child route-oknak (TableViewRoute, LayoutViewRoute).
+ *
+ * A BreadcrumbHeader az egyetlen fejléc: logó → szervezet → szerkesztőség →
+ * kiadvány breadcrumb, jobb oldalon nézet váltó + szűrő + avatar.
  */
 
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
-import { Outlet, useLocation } from 'react-router-dom';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { Outlet } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext.jsx';
 import { useData } from '../../contexts/DataContext.jsx';
+import { useScope } from '../../contexts/ScopeContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
 import { useFilters } from '../../hooks/useFilters.js';
 import { STORAGE_KEYS } from '../../config.js';
 import { buildPlaceholderRows } from '@shared/pageGapUtils.js';
 
-import DashboardHeader from '../../components/DashboardHeader.jsx';
-import Sidebar from '../../components/Sidebar.jsx';
-import ContentHeader from '../../components/ContentHeader.jsx';
+import BreadcrumbHeader from '../../components/BreadcrumbHeader.jsx';
 import FilterBar from '../../components/FilterBar.jsx';
 
 export default function DashboardLayout() {
     const { user } = useAuth();
+    const { activeEditorialOfficeId } = useScope();
     const {
         publications, articles, activePublicationId,
         isLoading, fetchPublications, switchPublication,
-        fetchAllGroupMembers
+        fetchAllGroupMembers, fetchWorkflow
     } = useData();
     const { showToast } = useToast();
-    const location = useLocation();
 
     const [isFilterOpen, setIsFilterOpen] = useState(false);
     const [isInitialized, setIsInitialized] = useState(false);
 
     const filters = useFilters();
-
-    // Aktív nézet az URL-ből (alapértelmezett: table)
-    const activeView = location.pathname === '/layout' ? 'layout' : 'table';
 
     // Inicializálás: kiadványok lekérése + utolsó kiadvány visszaállítása
     useEffect(() => {
@@ -54,7 +53,6 @@ export default function DashboardLayout() {
                 const params = new URLSearchParams(window.location.search);
                 const urlPubId = params.get('pub');
                 if (urlPubId) {
-                    // URL takarítás — pub paraméter eltávolítása a címsorból
                     const cleanUrl = new URL(window.location.href);
                     cleanUrl.searchParams.delete('pub');
                     window.history.replaceState({}, '', cleanUrl.toString());
@@ -78,6 +76,37 @@ export default function DashboardLayout() {
 
         return () => { cancelled = true; };
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Scope váltás (szervezet / szerkesztőség) → kiadványok és workflow újralekérése
+    const prevOfficeIdRef = useRef(activeEditorialOfficeId);
+    useEffect(() => {
+        if (!isInitialized) return;
+        if (activeEditorialOfficeId === prevOfficeIdRef.current) return;
+        prevOfficeIdRef.current = activeEditorialOfficeId;
+
+        if (!activeEditorialOfficeId) return;
+
+        let cancelled = false;
+
+        (async () => {
+            try {
+                const pubs = await fetchPublications();
+                if (cancelled) return;
+                fetchWorkflow().catch(() => {});
+                fetchAllGroupMembers().catch(() => {});
+                if (pubs.length > 0) {
+                    await switchPublication(pubs[0].$id);
+                } else {
+                    // Nincs kiadvány az új scope-ban — korábbi adat törlése
+                    await switchPublication(null);
+                }
+            } catch {
+                if (!cancelled) showToast('Adatok frissítése sikertelen', 'error');
+            }
+        })();
+
+        return () => { cancelled = true; };
+    }, [activeEditorialOfficeId, isInitialized]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Kiadvány váltás kezelő
     const handlePublicationSelect = useCallback(async (publicationId) => {
@@ -113,12 +142,6 @@ export default function DashboardLayout() {
         return [...filteredArticles, ...placeholderRows];
     }, [filteredArticles, placeholderRows, filters.showPlaceholders, filters.showOnlyMine]);
 
-    // Aktív kiadvány neve
-    const contentTitle = useMemo(() => {
-        if (!activePublicationId) return 'Válassz egy kiadványt';
-        return publication ? publication.name : 'Kiadvány';
-    }, [activePublicationId, publication]);
-
     // Outlet kontextus a child route-oknak
     const outletContext = useMemo(() => ({
         filteredArticles,
@@ -127,20 +150,15 @@ export default function DashboardLayout() {
 
     return (
         <div className="dashboard active">
-            <DashboardHeader />
+            <BreadcrumbHeader
+                onPublicationSelect={handlePublicationSelect}
+                articleCount={filteredArticles.length}
+                isFilterActive={filters.isFilterActive}
+                onFilterToggle={() => setIsFilterOpen(prev => !prev)}
+            />
 
             <div className="dashboard-body">
-                <Sidebar onSelect={handlePublicationSelect} />
-
                 <div className="main-content">
-                    <ContentHeader
-                        title={contentTitle}
-                        articleCount={filteredArticles.length}
-                        activeView={activeView}
-                        isFilterActive={filters.isFilterActive}
-                        onFilterToggle={() => setIsFilterOpen(prev => !prev)}
-                    />
-
                     <FilterBar
                         isOpen={isFilterOpen}
                         statusFilter={filters.statusFilter}
@@ -162,7 +180,7 @@ export default function DashboardLayout() {
                             <span>Betöltés...</span>
                         </div>
                     ) : !activePublicationId ? (
-                        <div className="empty-state">Válassz egy kiadványt a bal oldali listából</div>
+                        <div className="empty-state">Válassz egy kiadványt a fejléc dropdown-jából</div>
                     ) : isLoading ? (
                         <div className="loading-overlay">
                             <div className="spinner" />

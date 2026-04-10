@@ -37,15 +37,18 @@ import DashboardLayout from './routes/dashboard/DashboardLayout.jsx';
 import TableViewRoute from './routes/dashboard/TableViewRoute.jsx';
 import LayoutViewRoute from './routes/dashboard/LayoutViewRoute.jsx';
 import WorkflowDesignerPage from './features/workflowDesigner/WorkflowDesignerPage.jsx';
+import { ModalProvider } from './contexts/ModalContext.jsx';
 
 /**
- * A védett dashboard ágon DataProvider + ToastProvider szükséges.
+ * A védett dashboard ágon DataProvider + ToastProvider + ModalProvider szükséges.
  */
 function DashboardLayoutWithProviders() {
     return (
         <ToastProvider>
             <DataProvider>
-                <DashboardLayout />
+                <ModalProvider>
+                    <DashboardLayout />
+                </ModalProvider>
             </DataProvider>
         </ToastProvider>
     );
