@@ -24,7 +24,6 @@ import { useModal } from '../../contexts/ModalContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
 
 const DEFAULT_LAYOUT_NAME = 'A';
-const DEFAULT_LAYOUT_COLOR = '#2563eb';
 
 export default function CreatePublicationModal() {
     const { workflows, createPublication, createLayout } = useData();
@@ -118,7 +117,6 @@ export default function CreatePublicationModal() {
                 await createLayout({
                     publicationId: publication.$id,
                     name: DEFAULT_LAYOUT_NAME,
-                    color: DEFAULT_LAYOUT_COLOR,
                     order: 0
                 });
             } catch (layoutErr) {

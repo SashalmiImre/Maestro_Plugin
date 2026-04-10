@@ -2120,37 +2120,6 @@ html, body {
     margin-bottom: 8px;
 }
 
-.layout-color-swatch {
-    position: relative;
-    width: 24px;
-    height: 24px;
-    flex-shrink: 0;
-    cursor: pointer;
-}
-
-.layout-color-circle {
-    display: block;
-    width: 24px;
-    height: 24px;
-    border-radius: 50%;
-    border: 2px solid rgba(255, 255, 255, 0.12);
-    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
-}
-
-.layout-color-swatch:hover .layout-color-circle {
-    border-color: rgba(255, 255, 255, 0.3);
-}
-
-.color-picker-input {
-    position: absolute;
-    inset: 0;
-    opacity: 0;
-    cursor: pointer;
-    border: none;
-    padding: 0;
-    background: none;
-}
-
 .layout-name-input {
     flex: 1;
     padding: 8px 12px;

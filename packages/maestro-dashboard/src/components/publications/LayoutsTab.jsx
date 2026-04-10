@@ -4,7 +4,7 @@
  * A PublicationSettingsModal „Layoutok" füle. A plugin LayoutsSection portja.
  *
  * Funkciók:
- *   - Layout lista: név (blur mentés) + szín swatch (color picker) + törlés
+ *   - Layout lista: név (blur mentés) + törlés
  *   - Új layout hozzáadása auto A/B/C… névvel
  *   - Törlés cikk-átrendeléssel: ha vannak érintett cikkek, kérdez a cél layoutról
  *   - Utolsó layout törlése tiltva
@@ -15,8 +15,6 @@ import { useData } from '../../contexts/DataContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
 import { useConfirm } from '../ConfirmDialog.jsx';
 
-const DEFAULT_COLORS = ['#2563eb', '#059669', '#d97706', '#dc2626', '#7c3aed', '#db2777', '#0891b2', '#65a30d'];
-
 /** Következő szabad A–Z betű a meglévő nevek alapján. */
 function getNextLayoutName(existing) {
     const taken = new Set(existing.map((l) => (l.name || '').toUpperCase()));
@@ -25,11 +23,6 @@ function getNextLayoutName(existing) {
         if (!taken.has(letter)) return letter;
     }
     return `L${existing.length + 1}`;
-}
-
-/** A meglévő layoutok számához igazított szín a default palettából. */
-function getNextColor(existing) {
-    return DEFAULT_COLORS[existing.length % DEFAULT_COLORS.length];
 }
 
 export default function LayoutsTab({ publication }) {
@@ -78,16 +71,6 @@ export default function LayoutsTab({ publication }) {
         }
     }
 
-    async function handleColorChange(layout, color) {
-        if (color === layout.color) return;
-        try {
-            await updateLayout(layout.$id, { color });
-        } catch (err) {
-            console.error('[LayoutsTab] Color change failed:', err);
-            showToast(`Szín mentése sikertelen: ${err?.message || 'ismeretlen hiba'}`, 'error');
-        }
-    }
-
     async function handleAddLayout() {
         if (isBusy) return;
         setIsBusy(true);
@@ -95,7 +78,6 @@ export default function LayoutsTab({ publication }) {
             await createLayout({
                 publicationId: publication.$id,
                 name: getNextLayoutName(pubLayouts),
-                color: getNextColor(pubLayouts),
                 order: pubLayouts.length
             });
             showToast('Új layout létrehozva', 'success');
@@ -157,18 +139,6 @@ export default function LayoutsTab({ publication }) {
 
             {pubLayouts.map((layout) => (
                 <div key={layout.$id} className="layout-row">
-                    <label className="layout-color-swatch" title="Kattints a szín módosításához">
-                        <span
-                            className="layout-color-circle"
-                            style={{ background: layout.color || '#666' }}
-                        />
-                        <input
-                            type="color"
-                            value={layout.color || '#2563eb'}
-                            onChange={(e) => handleColorChange(layout, e.target.value)}
-                            className="color-picker-input"
-                        />
-                    </label>
                     <input
                         type="text"
                         className="layout-name-input"

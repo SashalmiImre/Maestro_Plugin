@@ -66,16 +66,20 @@ export default function Modal({
     }, [attemptClose]);
 
     // Focus trap + eredeti fókusz visszaállítás
+    // Figyelem: ha valamelyik belső mező `autoFocus`-t használ, azt nem szabad
+    // felülbírálni — különben a kierőltetett blur elindítaná a touched/invalid
+    // állapotot a mezőn még mielőtt a felhasználó bármit csinált volna.
     useEffect(() => {
         previousFocusRef.current = document.activeElement;
         let rafId = requestAnimationFrame(() => {
-            if (cardRef.current) {
-                const firstFocusable = cardRef.current.querySelector(
-                    'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-                );
-                if (firstFocusable) firstFocusable.focus();
-                else cardRef.current.focus();
-            }
+            if (!cardRef.current) return;
+            // Ha az autoFocus már a kártyán belülre állította a fókuszt, hagyjuk békén.
+            if (cardRef.current.contains(document.activeElement)) return;
+            const firstFocusable = cardRef.current.querySelector(
+                'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
+            );
+            if (firstFocusable) firstFocusable.focus();
+            else cardRef.current.focus();
         });
 
         return () => {
