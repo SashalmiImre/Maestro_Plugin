@@ -30,6 +30,7 @@ import { ConfirmDialog } from "../../common/ConfirmDialog.jsx";
 // Contexts & Custom Hooks
 import { useToast } from "../../common/Toast/ToastContext.jsx";
 import { useUser } from "../../../core/contexts/UserContext.jsx";
+import { useScope } from "../../../core/contexts/ScopeContext.jsx";
 import { usePublications } from "../../../data/hooks/usePublications.js";
 import { useData } from "../../../core/contexts/DataContext.jsx";
 import { useWorkflowValidation } from "../../../data/hooks/useWorkflowValidation.js";
@@ -63,7 +64,8 @@ const NO_FILE_PATH_ERROR = {
  * @returns {JSX.Element} A fő munkaterület komponens
  */
 export const Workspace = () => {
-    const { user } = useUser();
+    const { user, organizations, editorialOffices } = useUser();
+    const { activeOrganizationId, activeEditorialOfficeId, setActiveOrganization, setActiveOffice } = useScope();
     const { showToast } = useToast();
     const { updatePublication, publications } = usePublications();
     const { runAndPersistPreflight } = useWorkflowValidation();
@@ -71,6 +73,13 @@ export const Workspace = () => {
     const { canArchivePublication, isArchiving, archiveProgress, archivePublication } = usePublicationArchive();
     const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
     const handleOpenArchiveDialog = useCallback(() => setArchiveDialogOpen(true), []);
+
+    // Scope dropdown adatok — az aktív orghoz tartozó szerkesztőségek
+    const scopedOffices = useMemo(
+        () => (editorialOffices || []).filter(o => o.organizationId === activeOrganizationId),
+        [editorialOffices, activeOrganizationId]
+    );
+
 
     // Központi szűrő állapot (minden kiadványra egységesen alkalmazva)
     const {
@@ -304,6 +313,12 @@ export const Workspace = () => {
                 isArchiving={isArchiving}
                 archiveProgress={archiveProgress}
                 onArchivePublication={handleOpenArchiveDialog}
+                organizations={organizations}
+                activeOrganizationId={activeOrganizationId}
+                onOrganizationChange={setActiveOrganization}
+                scopedOffices={scopedOffices}
+                activeEditorialOfficeId={activeEditorialOfficeId}
+                onOfficeChange={setActiveOffice}
             />
 
             {/* Központi szűrősáv — a fejléc alatt, minden kiadványra érvényes */}

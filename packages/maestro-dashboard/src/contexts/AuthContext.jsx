@@ -534,14 +534,14 @@ export function AuthProvider({ children }) {
      *
      * @returns {Promise<{inviteId: string, token: string, expiresAt: string}>}
      */
-    const createInvite = useCallback(async (organizationId, email, role = 'member') => {
+    const createInvite = useCallback(async (organizationId, email, role = 'member', message) => {
         if (!user?.$id) {
             throw new Error('not_authenticated');
         }
 
         const response = await callInviteFunction(
             'create',
-            { organizationId, email, role },
+            { organizationId, email, role, ...(message ? { message } : {}) },
             'create_failed'
         );
 

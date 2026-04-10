@@ -11,9 +11,9 @@
  * success banner + "Vissza a Dashboardra" link ad visszajelzést.
  */
 
-import React, { useState } from 'react';
-import { Link } from 'react-router-dom';
-import { useAuth } from '../../contexts/AuthContext.jsx';
+import React, { useState, useEffect } from 'react';
+import { Link, useBlocker } from 'react-router-dom';
+import { useAuth, getAccount } from '../../contexts/AuthContext.jsx';
 
 export default function SettingsPasswordRoute() {
     const { updatePassword } = useAuth();
@@ -23,6 +23,69 @@ export default function SettingsPasswordRoute() {
     const [phase, setPhase] = useState('idle'); // 'idle' | 'success'
     const [error, setError] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
+
+    // Session hygiene — más eszközök kijelentkeztetése jelszócsere után
+    const [otherSessions, setOtherSessions] = useState(null); // null = még nem kérdezett
+    const [sessionCleanupDone, setSessionCleanupDone] = useState(false);
+    const [isCleaningUp, setIsCleaningUp] = useState(false);
+
+    // Dirty form guard — navigáció figyelmeztetés kitöltött mezőknél
+    const isDirty = oldPassword.length > 0 || newPassword.length > 0 || newPasswordConfirm.length > 0;
+
+    // beforeunload: böngésző bezárás / újratöltés
+    useEffect(() => {
+        if (!isDirty) return;
+        const handler = (e) => { e.preventDefault(); e.returnValue = ''; };
+        window.addEventListener('beforeunload', handler);
+        return () => window.removeEventListener('beforeunload', handler);
+    }, [isDirty]);
+
+    // Session lista lekérése sikeres jelszócsere után
+    useEffect(() => {
+        if (phase !== 'success') return;
+        let cancelled = false;
+        (async () => {
+            try {
+                const { sessions } = await getAccount().listSessions();
+                const others = sessions.filter(s => !s.current);
+                if (!cancelled) setOtherSessions(others);
+            } catch {
+                // Ha nem sikerül lekérdezni, nem mutatjuk a gombot
+                if (!cancelled) setOtherSessions([]);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [phase]);
+
+    async function handleLogoutOthers() {
+        if (!otherSessions || otherSessions.length === 0) return;
+        setIsCleaningUp(true);
+        try {
+            const account = getAccount();
+            await Promise.allSettled(otherSessions.map(s => account.deleteSession({ sessionId: s.$id })));
+            // Friss session lista lekérése — a már törölt sessionök nem jelennek meg
+            try {
+                const { sessions } = await account.listSessions();
+                const remaining = sessions.filter(s => !s.current);
+                setOtherSessions(remaining);
+                setSessionCleanupDone(remaining.length === 0);
+            } catch {
+                // Ha a friss lista nem kérhető le, a gomb marad — a user újra próbálhatja
+            }
+        } catch {
+            // Hálózati hiba — a gomb marad, a user újra próbálhatja
+        } finally {
+            setIsCleaningUp(false);
+        }
+    }
+
+    // react-router navigáció blokkolás (auth redirect-ek kiengedve)
+    const blocker = useBlocker(({ currentLocation, nextLocation }) =>
+        isDirty
+        && currentLocation.pathname !== nextLocation.pathname
+        && nextLocation.pathname !== '/login'
+        && nextLocation.pathname !== '/onboarding'
+    );
 
     async function handleSubmit(e) {
         e.preventDefault();
@@ -91,6 +154,31 @@ export default function SettingsPasswordRoute() {
             <div className="login-card">
                 <div className="form-heading">Jelszó módosítása</div>
                 <div className="auth-success">Jelszavad sikeresen módosítva.</div>
+
+                {/* Session hygiene: más eszközök kijelentkeztetése */}
+                {sessionCleanupDone ? (
+                    <p style={{ fontSize: 13, color: '#81c784', margin: '12px 0 0' }}>
+                        Minden más eszköz kijelentkeztetve.
+                    </p>
+                ) : otherSessions && otherSessions.length > 0 ? (
+                    <button
+                        type="button"
+                        onClick={handleLogoutOthers}
+                        disabled={isCleaningUp}
+                        style={{
+                            marginTop: 12, padding: '8px 16px', fontSize: 13,
+                            borderRadius: 4, border: '1px solid #555',
+                            background: 'transparent', color: '#ccc', cursor: 'pointer',
+                            opacity: isCleaningUp ? 0.6 : 1
+                        }}
+                    >
+                        {isCleaningUp
+                            ? 'Kijelentkeztetés...'
+                            : `Más eszközök kijelentkeztetése (${otherSessions.length} aktív)`
+                        }
+                    </button>
+                ) : null}
+
                 <div className="auth-bottom-link">
                     <Link to="/">Vissza a Dashboardra</Link>
                 </div>
@@ -143,6 +231,57 @@ export default function SettingsPasswordRoute() {
             <div className="auth-bottom-link">
                 <Link to="/">Mégse</Link>
             </div>
+
+            {/* Navigáció blokkoló dialógus */}
+            {blocker.state === 'blocked' && (
+                <div
+                    style={{
+                        position: 'fixed', inset: 0, zIndex: 9999,
+                        background: 'rgba(0,0,0,0.55)', display: 'flex',
+                        alignItems: 'center', justifyContent: 'center'
+                    }}
+                    onClick={() => blocker.reset()}
+                >
+                    <div
+                        style={{
+                            background: '#1e1e1e', borderRadius: 8, padding: '24px 28px',
+                            maxWidth: 420, width: '90%', border: '1px solid #444'
+                        }}
+                        onClick={e => e.stopPropagation()}
+                    >
+                        <h3 style={{ margin: '0 0 8px', fontSize: 15, fontWeight: 600, color: '#e0e0e0' }}>
+                            Nem mentett változások
+                        </h3>
+                        <p style={{ fontSize: 13, color: '#999', margin: '0 0 16px' }}>
+                            A jelszómezők ki vannak töltve. Biztosan elhagyod az oldalt?
+                        </p>
+                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
+                            <button
+                                type="button"
+                                onClick={() => blocker.reset()}
+                                style={{
+                                    padding: '6px 16px', fontSize: 13, borderRadius: 4,
+                                    border: '1px solid #555', background: 'transparent',
+                                    color: '#ccc', cursor: 'pointer'
+                                }}
+                            >
+                                Maradok
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => blocker.proceed()}
+                                style={{
+                                    padding: '6px 16px', fontSize: 13, borderRadius: 4,
+                                    border: 'none', background: '#e53935', color: '#fff',
+                                    cursor: 'pointer'
+                                }}
+                            >
+                                Elhagyom
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

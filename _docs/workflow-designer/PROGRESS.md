@@ -21,7 +21,7 @@
 
 **Fázis 6 — Org/Office Admin UI finomítás** (aktív)
 
-### Fázis 6 checklist (folyamatban)
+### Fázis 6 checklist (kész, 2026-04-10)
 - [x] F.1 — CF `update_organization` action (`invite-to-organization` CF bővítés): sanitizeString, owner/admin role check, updateDocument try/catch
 - [x] F.2 — CF `create` action email normalizálás: `trim().toLowerCase()` a duplikát invite megelőzéséhez
 - [x] F.3 — `OrganizationAdminRoute.jsx` (ÚJ): 5 szekciós admin oldal (org név szerkesztés, meghívó küldés, függő meghívók, tagok, szerkesztőségek)
@@ -29,7 +29,10 @@
 - [x] F.5 — `DashboardHeader.jsx` navigáció: „Szervezet" + „Csoportok" linkek
 - [x] F.6 — Harden pass: admin gate (isOrgAdmin), stale data védelem, targeted reloadInvites, simplify cleanup (derived org, roleLabel, React import)
 - [x] F.7 — `EditorialOfficeAdminRoute.jsx` (ÚJ): 5 szekciós office admin oldal (info, user×csoport toggle mátrix, csoportösszesítés, workflow link, navigáció). Route: `/settings/editorial-office`, `App.jsx` bekötés, `DashboardHeader.jsx` „Szerkesztőség" link. Harden pass: toggle race fix (globális badge tiltás), fetch generáció-számláló + scope guard, targeted org query (1 doc), `hasWorkflow` boolean, targeted `reloadGroupMemberships()` (1 query vs 5)
-- [ ] F.8 — Plugin `UserContext` több-org mode: WorkspaceHeader org+office választó dropdown
+- [x] F.8 — Plugin WorkspaceHeader org+office választó dropdown: `Workspace.jsx` scope prop-ok derive (`useScope` + `useUser`), `WorkspaceHeader.jsx` feltételes `CustomDropdown` (org >1, office >1), ScopeContext auto-pick kezeli a cascading váltást
+- [x] F.9 — Meghívó form bővítés: opcionális üzenet textarea (`inviteMessage`), `AuthContext.createInvite` 4. param (`message`), CF payload forwarding
+- [x] F.10 — `/settings/password` dirty form guard: `useBlocker` + `beforeunload` + blocker dialog (inline style), `isDirty` derived state
+- [x] F.11 — `/settings/password` session hygiene: sikeres jelszócsere után `listSessions()` → non-current count → „Más eszközök kijelentkeztetése (N aktív)" gomb → szelektív `deleteSession()`
 
 ### Fázis 5 checklist (kész, 2026-04-09)
 - [x] E.1 — Appwrite `graph` longtext mező a `workflows` collection-ben (MCP)
@@ -717,3 +720,30 @@ packages/maestro-shared/validatorRegistry.js
 - 1 DESIGN QUESTION: legacy mixed-case email invite duplikáció (egyszeri migráció szükséges, ha van ilyen adat prodban)
 
 **Következő**: F.7 — EditorialOfficeAdminView.
+
+#### F.7 — EditorialOfficeAdminRoute (2026-04-10)
+
+**Érintett fájlok:**
+- `packages/maestro-dashboard/src/routes/settings/EditorialOfficeAdminRoute.jsx` — ÚJ, user×csoport toggle mátrix
+- `packages/maestro-dashboard/src/App.jsx` — route bekötés
+- `packages/maestro-dashboard/src/components/DashboardHeader.jsx` — „Szerkesztőség" link
+
+**Harden pass eredmény:**
+- 6 javítás (toggle race fix, fetch generáció-számláló, targeted org query, hasWorkflow boolean, targeted reloadGroupMemberships, toggle scope guard)
+
+#### F.8–F.11 — Password guard, session hygiene, invite message, Plugin dropdown (2026-04-10)
+
+**Érintett fájlok:**
+- `packages/maestro-dashboard/src/routes/settings/SettingsPasswordRoute.jsx` — useBlocker + beforeunload dirty guard, session hygiene (listSessions/deleteSession)
+- `packages/maestro-dashboard/src/routes/settings/OrganizationAdminRoute.jsx` — invite message textarea
+- `packages/maestro-dashboard/src/contexts/AuthContext.jsx` — createInvite 4. param (message)
+- `packages/maestro-indesign/src/ui/features/workspace/Workspace.jsx` — scope prop-ok (useScope + useUser)
+- `packages/maestro-indesign/src/ui/features/workspace/WorkspaceHeader.jsx` — feltételes org/office CustomDropdown
+- `packages/maestro-indesign/src/core/contexts/ScopeContext.jsx` — komment frissítés
+
+**Harden pass eredmény:**
+- MUST FIX (2): scope switch disabled during properties view, Promise.allSettled session cleanup (partial failure state)
+- SHOULD FIX (2): beforeunload `e.returnValue = ''`, useBlocker auth redirect exclusion (`/login`, `/onboarding`)
+- Simplify: redundáns useCallback wrapperek eltávolítva (Workspace.jsx)
+- Verification: session cleanup optimista false positive javítva (catch ág nem állít sessionCleanupDone(true)-ra)
+- 1 noise elutasítva (invite message UI-only: by design, CF bővítés későbbi fázisban)

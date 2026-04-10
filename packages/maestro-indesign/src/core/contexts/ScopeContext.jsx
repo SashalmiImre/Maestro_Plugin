@@ -6,7 +6,8 @@
  * DataContext initial fetch-ét, hogy ne olvassunk egy másik user ott maradt
  * office ID-jével (cross-tenant védelem).
  *
- * Fázis 6-ban kap WorkspaceHeader dropdown UI-t a multi-org/office switch-hez.
+ * A WorkspaceHeader feltételes dropdown-okon keresztül (org >1, office >1) engedi
+ * a felhasználónak a scope váltást — az auto-pick kezeli a cascading logikát.
  */
 
 import React, { createContext, useContext, useState, useCallback, useEffect } from 'react';

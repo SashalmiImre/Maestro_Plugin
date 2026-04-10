@@ -99,6 +99,7 @@ export default function OrganizationAdminRoute() {
     // --- Meghívó form ---
     const [inviteEmail, setInviteEmail] = useState('');
     const [inviteRole, setInviteRole] = useState('member');
+    const [inviteMessage, setInviteMessage] = useState('');
     const [inviteSuccess, setInviteSuccess] = useState('');
 
     // --- Clipboard „Másolva!" visszajelzés ---
@@ -263,7 +264,7 @@ export default function OrganizationAdminRoute() {
         setInviteSuccess('');
 
         try {
-            const result = await createInvite(activeOrganizationId, trimmedEmail, inviteRole);
+            const result = await createInvite(activeOrganizationId, trimmedEmail, inviteRole, inviteMessage.trim() || undefined);
             const link = `${DASHBOARD_URL}/invite?token=${result.token}`;
 
             // Vágólapra másolás
@@ -276,6 +277,7 @@ export default function OrganizationAdminRoute() {
 
             setInviteEmail('');
             setInviteRole('member');
+            setInviteMessage('');
             await reloadInvites();
         } catch (err) {
             setActionError(errorMessage(err.message || err.code || ''));
@@ -438,6 +440,19 @@ export default function OrganizationAdminRoute() {
                             <option value="member">Tag</option>
                             <option value="admin">Admin</option>
                         </select>
+                        <textarea
+                            placeholder="Opcionális üzenet a meghívottnak"
+                            value={inviteMessage}
+                            onChange={e => setInviteMessage(e.target.value)}
+                            disabled={!!actionPending}
+                            maxLength={500}
+                            rows={2}
+                            style={{
+                                flex: '1 1 100%', fontSize: 12, padding: '6px 8px',
+                                background: '#222', color: '#ccc', border: '1px solid #555',
+                                borderRadius: 4, resize: 'vertical', fontFamily: 'inherit'
+                            }}
+                        />
                         <button
                             type="submit"
                             disabled={!!actionPending}

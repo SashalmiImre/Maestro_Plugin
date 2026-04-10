@@ -124,10 +124,11 @@ tags: [feladatok]
 
 - [x] `OrganizationAdminRoute.jsx` — org név szerkesztés, meghívó flow (token link + vágólap), függő meghívók lista, tagok lista (névfeloldás groupMemberships-ből), szerkesztőségek lista (workflow designer link). CF `update_organization` action + email normalizálás. Admin gate (owner/admin only: szerkesztés, meghívó, pending invites). Harden pass: 6 javítás + simplify cleanup. *(2026-04-10)*
 - [x] `EditorialOfficeAdminRoute.jsx` — office áttekintés (név, slug, szervezet), user×csoport toggle mátrix (GroupBadge), csoportösszesítés (tagszám, link GroupsRoute-ra), workflow designer link. Route: `/settings/editorial-office`. Harden pass: toggle race (globális badge tiltás), fetch generáció-számláló (scope-váltás race), targeted org-member query (1 doc), `hasWorkflow` boolean, targeted `reloadGroupMemberships()`, toggle scope guard. *(2026-04-10)*
-- [ ] `InviteUserModal.jsx` — e-mail, szerepkör választó, opcionális üzenet
-- [ ] Plugin `UserContext` több-org mode: ha a user több org-hoz tartozik, WorkspaceHeader kap egy org + office választó dropdown-t
-- [ ] `/settings/password` session hygiene: jelszócsere után lehetőség más eszközök kijelentkeztetésére (pl. "Más eszközök kijelentkeztetése" checkbox vagy gomb) *(harden pass Q1, 2026-04-09)*
-- [ ] `/settings/password` dirty form navigáció warning: ha a user kitöltötte a jelszómezőket és elnavigál, megerősítés kérés a véletlen kilépés ellen *(harden pass Q3, 2026-04-09)*
+- [x] Meghívó form bővítés: opcionális üzenet textarea (`inviteMessage` state + `AuthContext.createInvite` 4. param) — inline form enhancement, nem modal *(2026-04-10)*
+- [x] Plugin WorkspaceHeader org+office választó dropdown: `Workspace.jsx` scope prop-ok (`useScope` + `useUser`), `WorkspaceHeader.jsx` feltételes `CustomDropdown` (org >1 / office >1), ScopeContext auto-pick cascading, disabled during properties view *(2026-04-10)*
+- [x] `/settings/password` session hygiene: sikeres jelszócsere után `listSessions()` → „Más eszközök kijelentkeztetése (N aktív)" gomb → szelektív `deleteSession()` (Promise.allSettled + re-fetch) *(2026-04-10)*
+- [x] `/settings/password` dirty form navigáció warning: `useBlocker` + `beforeunload` + blocker dialog (inline style), auth redirect exclusion *(2026-04-10)*
+- [x] Harden pass: MUST FIX (scope switch disabled, Promise.allSettled partial failure), SHOULD FIX (beforeunload returnValue, blocker auth exclusion), simplify (redundáns useCallback), verification (session cleanup optimista false positive) *(2026-04-10)*
 - [ ] **Verifikáció**: teljes happy path a `ARCHITECTURE.md` Verifikáció szekció szerint
 
 #### Fázis 7 — Cleanup
