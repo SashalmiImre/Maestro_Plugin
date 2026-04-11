@@ -21,8 +21,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { validatePublicationActivation } from '@shared/publicationActivation.js';
 import { useData } from '../../contexts/DataContext.jsx';
+import { useAuth } from '../../contexts/AuthContext.jsx';
+import { useModal } from '../../contexts/ModalContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
 import { useConfirm } from '../ConfirmDialog.jsx';
+import DangerZone from '../DangerZone.jsx';
 
 function formatActivatedAt(iso) {
     if (!iso) return '';
@@ -36,7 +39,9 @@ function formatActivatedAt(iso) {
 }
 
 export default function GeneralTab({ publication }) {
-    const { workflows, deadlines, articles, updatePublication } = useData();
+    const { workflows, deadlines, articles, updatePublication, deletePublication } = useData();
+    const { user, orgMemberships } = useAuth();
+    const { closeModal } = useModal();
     const { showToast } = useToast();
     const confirm = useConfirm();
 
@@ -52,6 +57,9 @@ export default function GeneralTab({ publication }) {
 
     // Mező-szintű hibák (formátum / üresség)
     const [fieldErrors, setFieldErrors] = useState({});
+
+    // Fázis 8 — kiadvány törlés folyamatjelző
+    const [isDeleting, setIsDeleting] = useState(false);
 
     async function saveField(field, value) {
         try {
@@ -161,6 +169,54 @@ export default function GeneralTab({ publication }) {
         } catch (err) {
             console.error('[GeneralTab] Aktiválás sikertelen:', err);
             showToast(`Aktiválás sikertelen: ${err?.message || 'ismeretlen hiba'}`, 'error');
+        }
+    }
+
+    // Fázis 8 — Veszélyes zóna (publikáció törlés)
+    //
+    // Ideiglenes jogosultság-szűrés: csak a publikáció szervezetének
+    // owner/admin szerepkörű tagjai látják a „Kiadvány törlése" gombot.
+    // Ezt egy későbbi, részletes UI jog rendszer felülírja; a szerver-
+    // oldali védelmet a DB ACL + validate-publication-update CF adja.
+    const callerOrgRole = useMemo(() => {
+        if (!user?.$id || !publication.organizationId) return null;
+        const membership = (orgMemberships || []).find(
+            (m) => m.organizationId === publication.organizationId && m.userId === user.$id
+        );
+        return membership?.role || null;
+    }, [orgMemberships, user?.$id, publication.organizationId]);
+
+    const canDeletePublication = callerOrgRole === 'owner' || callerOrgRole === 'admin';
+
+    async function handleDeletePublication() {
+        const confirmMessage = (
+            <>
+                <p>
+                    A kiadvány <strong>véglegesen törlődik</strong> az összes cikkel, layouttal,
+                    határidővel és thumbnail fájllal együtt.
+                </p>
+                <p><strong>Ez a művelet nem visszavonható.</strong></p>
+            </>
+        );
+        const ok = await confirm({
+            title: 'Kiadvány törlése',
+            message: confirmMessage,
+            verificationExpected: publication.name,
+            confirmLabel: 'Végleges törlés',
+            cancelLabel: 'Mégse',
+            variant: 'danger'
+        });
+        if (!ok) return;
+
+        setIsDeleting(true);
+        try {
+            await deletePublication(publication.$id);
+            closeModal();
+            showToast(`A(z) „${publication.name}" kiadvány törölve lett.`, 'success');
+        } catch (err) {
+            console.error('[GeneralTab] Publikáció törlése sikertelen:', err);
+            showToast(`Törlés sikertelen: ${err?.message || 'ismeretlen hiba'}`, 'error');
+            setIsDeleting(false);
         }
     }
 
@@ -292,6 +348,15 @@ export default function GeneralTab({ publication }) {
                     </>
                 )}
             </div>
+
+            {canDeletePublication && (
+                <DangerZone
+                    description="A kiadvány véglegesen törlődik az összes cikkel, layouttal, határidővel és thumbnail fájllal együtt. Ez a művelet nem visszavonható."
+                    buttonLabel="Kiadvány törlése"
+                    isPending={isDeleting}
+                    onDelete={handleDeletePublication}
+                />
+            )}
         </div>
     );
 }

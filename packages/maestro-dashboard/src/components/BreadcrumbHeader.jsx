@@ -19,6 +19,8 @@ import BreadcrumbDropdown from './BreadcrumbDropdown.jsx';
 import UserAvatar from './UserAvatar.jsx';
 import CreatePublicationModal from './publications/CreatePublicationModal.jsx';
 import PublicationSettingsModal from './publications/PublicationSettingsModal.jsx';
+import OrganizationSettingsModal from './organization/OrganizationSettingsModal.jsx';
+import EditorialOfficeSettingsModal from './organization/EditorialOfficeSettingsModal.jsx';
 
 /**
  * @param {Object} props
@@ -99,6 +101,25 @@ export default function BreadcrumbHeader({
         });
     }
 
+    // ── Szervezet / Szerkesztőség modalok ─────────────────────────────────
+    function handleOrganizationSettings() {
+        if (!activeOrganizationId) return;
+        const activeOrg = (organizations || []).find(o => o.$id === activeOrganizationId);
+        openModal(<OrganizationSettingsModal organizationId={activeOrganizationId} />, {
+            size: 'lg',
+            title: activeOrg?.name || 'Szervezet beállításai'
+        });
+    }
+
+    function handleEditorialOfficeSettings() {
+        if (!activeEditorialOfficeId) return;
+        const activeOffice = (editorialOffices || []).find(o => o.$id === activeEditorialOfficeId);
+        openModal(<EditorialOfficeSettingsModal editorialOfficeId={activeEditorialOfficeId} />, {
+            size: 'lg',
+            title: activeOffice?.name || 'Szerkesztőség beállításai'
+        });
+    }
+
     return (
         <div className="breadcrumb-header">
             {/* ── Bal oldal: logó + breadcrumb dropdown-ok ── */}
@@ -114,7 +135,8 @@ export default function BreadcrumbHeader({
                     activeId={activeOrganizationId}
                     items={orgItems}
                     onSelect={handleOrgSelect}
-                    onSettings={() => navigate('/settings/organization')}
+                    onSettings={activeOrganizationId ? handleOrganizationSettings : undefined}
+                    settingsLabel="Szervezet beállításai"
                 />
 
                 <span className="breadcrumb-separator" aria-hidden="true">/</span>
@@ -124,7 +146,8 @@ export default function BreadcrumbHeader({
                     activeId={activeEditorialOfficeId}
                     items={officeItems}
                     onSelect={handleOfficeSelect}
-                    onSettings={() => navigate('/settings/editorial-office')}
+                    onSettings={activeEditorialOfficeId ? handleEditorialOfficeSettings : undefined}
+                    settingsLabel="Szerkesztőség beállításai"
                 />
 
                 <span className="breadcrumb-separator" aria-hidden="true">/</span>

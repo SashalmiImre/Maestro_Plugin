@@ -31,8 +31,6 @@ import OnboardingRoute from './routes/auth/OnboardingRoute.jsx';
 import InviteRoute from './routes/auth/InviteRoute.jsx';
 import SettingsPasswordRoute from './routes/settings/SettingsPasswordRoute.jsx';
 import GroupsRoute from './routes/settings/GroupsRoute.jsx';
-import OrganizationAdminRoute from './routes/settings/OrganizationAdminRoute.jsx';
-import EditorialOfficeAdminRoute from './routes/settings/EditorialOfficeAdminRoute.jsx';
 import DashboardLayout from './routes/dashboard/DashboardLayout.jsx';
 import TableViewRoute from './routes/dashboard/TableViewRoute.jsx';
 import LayoutViewRoute from './routes/dashboard/LayoutViewRoute.jsx';
@@ -119,9 +117,7 @@ export const router = createBrowserRouter([
                         children: [
                             { path: '/onboarding', element: <OnboardingRoute /> },
                             { path: '/settings/password', element: <SettingsPasswordRoute /> },
-                            { path: '/settings/groups', element: <GroupsRoute /> },
-                            { path: '/settings/organization', element: <OrganizationAdminRoute /> },
-                            { path: '/settings/editorial-office', element: <EditorialOfficeAdminRoute /> }
+                            { path: '/settings/groups', element: <GroupsRoute /> }
                         ]
                     },
 

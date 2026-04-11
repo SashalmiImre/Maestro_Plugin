@@ -353,6 +353,20 @@ export function DataProvider({ children }) {
             documentId: id
         });
         setPublications((prev) => prev.filter((p) => p.$id !== id));
+        // Ha a törölt publikáció az aktív, a derived state-et és az aktív
+        // ID-t is törölni kell — a Realtime handler ugyanezt végzi delete
+        // event-re, de Realtime disconnect alatt nem érkezne meg az event,
+        // így a UI árva doc-on ragadna. A direkt CRUD úton is szinkron
+        // tisztázzuk ugyanazt a state-et.
+        if (id === activePublicationIdRef.current) {
+            activePublicationIdRef.current = null;
+            setActivePublicationIdState(null);
+            setArticles([]);
+            setLayouts([]);
+            setDeadlines([]);
+            setValidations([]);
+            articleIdsRef.current = new Set();
+        }
     }, [databases]);
 
     // Layouts
@@ -501,6 +515,20 @@ export function DataProvider({ children }) {
                         break;
                     case 'publications':
                         applyPublicationEvent(eventType, payload, setPublications);
+                        // Ha a törölt publikáció éppen az aktív, a derived
+                        // state-et és az aktív ID-t is törölni kell, hogy a
+                        // UI ne maradjon árva doc-on ragadva. A Plugin
+                        // DataContext ugyanezt a mintát követi
+                        // (maestro-indesign CLAUDE.md § DataContext).
+                        if (eventType === 'delete' && payload.$id === activePublicationIdRef.current) {
+                            activePublicationIdRef.current = null;
+                            setActivePublicationIdState(null);
+                            setArticles([]);
+                            setLayouts([]);
+                            setDeadlines([]);
+                            setValidations([]);
+                            articleIdsRef.current = new Set();
+                        }
                         break;
                     case 'layouts':
                         applyLayoutEvent(eventType, payload, activePublicationIdRef, setLayouts);

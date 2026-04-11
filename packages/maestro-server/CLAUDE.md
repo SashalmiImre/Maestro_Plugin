@@ -122,7 +122,7 @@ maestro-server/
 | `cleanup-orphaned-locks` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID` |
 | `cleanup-orphaned-thumbnails` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `THUMBNAILS_BUCKET_ID` |
 | `migrate-legacy-paths` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `DRY_RUN` |
-| `invite-to-organization` | `DATABASE_ID`, `ORGANIZATIONS_COLLECTION_ID`, `ORGANIZATION_MEMBERSHIPS_COLLECTION_ID`, `EDITORIAL_OFFICES_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `ORGANIZATION_INVITES_COLLECTION_ID`, `GROUPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID` |
+| `invite-to-organization` | `DATABASE_ID`, `ORGANIZATIONS_COLLECTION_ID`, `ORGANIZATION_MEMBERSHIPS_COLLECTION_ID`, `EDITORIAL_OFFICES_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `ORGANIZATION_INVITES_COLLECTION_ID`, `GROUPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID` (csak a delete ágakhoz kell; hiánya esetén a `delete_organization` / `delete_editorial_office` action 500 `misconfigured`-et ad, a többi action nem érintett) |
 
 ---
 
@@ -196,7 +196,7 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 
 **Bemeneti payload**:
 ```json
-{ "action": "bootstrap_organization" | "create" | "accept" | "add_group_member" | "remove_group_member", ... }
+{ "action": "bootstrap_organization" | "create" | "accept" | "add_group_member" | "remove_group_member" | "create_workflow" | "update_workflow" | "delete_organization" | "delete_editorial_office", ... }
 ```
 
 **Biztonsági megjegyzés**: Korábban létezett egy `organization-membership-guard` trigger CF, amely egy `modifiedByClientId === 'server-guard'` sentinellel engedélyezte az invite-eredetű membership-eket. Ez **kliens-forgeable** volt — bármely hitelesített user beállíthatta a payload-ban. A Codex adversarial review jelezte a kritikus sebezhetőséget, és a javítás ACL-alapú védelemre váltott (B.5 utolsó iteráció, 2026-04-07).
@@ -250,8 +250,26 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 4. `listDocuments(groupMemberships, [eq(groupId), eq(userId)])` → delete.
 5. **Idempotens**: ha nem létezik → success `{ action: 'already_removed' }`.
 
+**ACTION='delete_editorial_office'** (Dashboard Redesign Fázis 8):
+1. Caller user kötelező + `editorialOfficeId` payload.
+2. **Env var guard** — `PUBLICATIONS_COLLECTION_ID` hiánya esetén 500 `misconfigured` (a többi action továbbra is fut).
+3. **Office létezés** (`getDocument`) — 404 → `office_not_found`.
+4. **Caller jogosultság** — az office `organizationId`-jában `owner` vagy `admin` role szükséges (`Query.select(['role'])` szűkítéssel).
+5. **Fail-closed kaszkád** (`cascadeDeleteOffice` helper): publications doc-onkénti `deleteDocument` → a meglévő `cascade-delete` CF kaszkádolja az articles/layouts/deadlines-t és az azokhoz kapcsolódó validációkat/thumbnaileket. Parallel `deleteByQuery`: workflows, groups, groupMemberships, editorialOfficeMemberships. Bármely lépés hibája → dob és az office doc érintetlen marad (`cascade_failed`, 500).
+6. **Office doc törlése** — csak akkor, ha minden gyerek cleanup sikeres.
+7. Response: `{ success: true, editorialOfficeId, deletedCollections }`.
+
+**ACTION='delete_organization'** (Dashboard Redesign Fázis 8):
+1. Caller user kötelező + `organizationId` payload.
+2. **Env var guard** — `PUBLICATIONS_COLLECTION_ID` hiánya esetén 500 `misconfigured`.
+3. **Org létezés** (`getDocument`) — 404 → `organization_not_found`.
+4. **Caller jogosultság** — kizárólag `owner` (admin NEM törölhet org-ot, szándékos magas blast radius miatt).
+5. **Lapozott, fail-closed office kaszkád**: `listDocuments(offices, [Query.equal('organizationId', …), limit=100])`, majd minden office-ra `cascadeDeleteOffice` + `deleteDocument(office)`. A soron következő batch-et frissen listázzuk (a már törölt office-ok nem szerepelnek). Az első office kaszkád hiba → azonnali leállás, a részleges `completedOffices` stats a response-ban.
+6. **Org-szintű cleanup sorrend (harden reorder)**: (a) `organizationInvites` `deleteByQuery`, (b) az **org doc törlése**, (c) `organizationMemberships` `deleteByQuery`. A memberships az org doc UTÁN, hogy a caller owner-sége megmaradjon a kritikus pontig — különben egy félúton elhasalt delete árva, újra-törölhetetlen (not_a_member) szervezetet hagyna. A memberships cleanup az org doc törlése után már csak kozmetikus; ha elbukik, a hiba a server log-ba kerül, de a user `success`-t kap (az org úgyis eltűnt).
+7. Response: `{ success: true, organizationId, deletedOffices, officeStats, orgCleanup }`.
+
 **Hibakódok** (mind a `fail()` wrapperen keresztül `{ success: false, reason, ...extra }` formátumban):
-`invalid_payload`, `invalid_action`, `unauthenticated`, `missing_fields`, `invalid_slug`, `org_slug_taken`, `org_create_failed`, `membership_create_failed`, `office_slug_taken`, `office_create_failed`, `office_membership_create_failed`, `invalid_email`, `invalid_role`, `not_a_member`, `insufficient_role`, `invite_not_found`, `invite_not_pending`, `invite_expired`, `email_mismatch`, `caller_lookup_failed`, `group_not_found`, `target_user_not_found`, `group_member_create_failed`.
+`invalid_payload`, `invalid_action`, `unauthenticated`, `missing_fields`, `invalid_slug`, `org_slug_taken`, `org_create_failed`, `membership_create_failed`, `office_slug_taken`, `office_create_failed`, `office_membership_create_failed`, `invalid_email`, `invalid_role`, `not_a_member`, `insufficient_role`, `invite_not_found`, `invite_not_pending`, `invite_expired`, `email_mismatch`, `caller_lookup_failed`, `group_not_found`, `target_user_not_found`, `group_member_create_failed`, `misconfigured`, `office_not_found`, `office_fetch_failed`, `cascade_failed`, `office_delete_failed`, `organization_not_found`, `organization_fetch_failed`, `office_list_failed`, `org_cleanup_failed`, `organization_delete_failed`.
 
 ---
 

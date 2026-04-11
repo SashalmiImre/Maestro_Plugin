@@ -30,7 +30,7 @@
  *   `membershipsError` state-ből fogja látni a hibát.
  */
 
-import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Client, Account, Databases, Functions, Query, ID } from 'appwrite';
 import {
     APPWRITE_ENDPOINT,
@@ -221,6 +221,13 @@ export function AuthProvider({ children }) {
     const [organizations, setOrganizations] = useState([]);
     const [editorialOffices, setEditorialOffices] = useState([]);
     /**
+     * A caller nyers `organizationMemberships` rekordjai. A GeneralTab
+     * „Kiadvány törlése" gomb (és más admin-only UI) ebből olvassa ki,
+     * hogy a user `owner`/`admin`-e a publikáció szervezetében. A
+     * fetchMemberships amúgy is lekéri ezeket — csak nem volt kitéve.
+     */
+    const [orgMemberships, setOrgMemberships] = useState([]);
+    /**
      * Membership fetch hibaállapot. `null` ha nincs hiba (vagy még nem
      * próbáltuk), `Error` ha a fetchMemberships elszállt. A ProtectedRoute
      * ezt használja a tényleges üres `organizations` tömb (→ onboarding)
@@ -242,12 +249,14 @@ export function AuthProvider({ children }) {
             const memberships = await fetchMemberships(userId);
             setOrganizations(memberships.organizations);
             setEditorialOffices(memberships.editorialOffices);
+            setOrgMemberships(memberships.orgMemberships);
             setMembershipsError(null);
             return memberships;
         } catch (err) {
             console.warn('[AuthContext] fetchMemberships sikertelen:', err?.message);
             setOrganizations([]);
             setEditorialOffices([]);
+            setOrgMemberships([]);
             setMembershipsError(err instanceof Error ? err : new Error(err?.message || 'memberships_load_failed'));
             throw err;
         }
@@ -290,6 +299,7 @@ export function AuthProvider({ children }) {
                 setUser(null);
                 setOrganizations([]);
                 setEditorialOffices([]);
+                setOrgMemberships([]);
                 setMembershipsError(null);
             } finally {
                 setLoading(false);
@@ -327,6 +337,7 @@ export function AuthProvider({ children }) {
         setUser(null);
         setOrganizations([]);
         setEditorialOffices([]);
+        setOrgMemberships([]);
         setMembershipsError(null);
     }, []);
 
@@ -555,11 +566,43 @@ export function AuthProvider({ children }) {
         };
     }, [user?.$id]);
 
-    const value = {
+    /**
+     * Fázis 8 — Szervezet kaszkád törlés.
+     *
+     * A CF `delete_organization` action-jét hívja (owner-only). A CF
+     * atomikusan töröl minden alárendelt rekordot: az összes szerkesztőség
+     * és azok publikációi/workflow-i/csoportjai, valamint az org-szintű
+     * invites/memberships. A publikáció-szintű kaszkádot a meglévő
+     * `cascade-delete` CF veszi át (articles/layouts/deadlines/thumbnails).
+     *
+     * A sikeres törlés után a hívó maga hívja a `reloadMemberships`-t,
+     * hogy a ScopeContext auto-pick effekt a következő org-ra ugorjon
+     * (vagy /onboarding-ra, ha nincs több).
+     */
+    const deleteOrganization = useCallback(async (organizationId) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction('delete_organization', { organizationId }, 'delete_organization_failed');
+    }, [user?.$id]);
+
+    /**
+     * Fázis 8 — Szerkesztőség kaszkád törlés.
+     *
+     * A CF `delete_editorial_office` action-jét hívja (owner/admin).
+     * A CF atomikusan töröl minden szerkesztőség-szintű rekordot
+     * (publications, workflows, groups, groupMemberships, officeMemberships);
+     * a publikáció-szintű kaszkádot a meglévő `cascade-delete` CF veszi át.
+     */
+    const deleteEditorialOffice = useCallback(async (editorialOfficeId) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction('delete_editorial_office', { editorialOfficeId }, 'delete_office_failed');
+    }, [user?.$id]);
+
+    const value = useMemo(() => ({
         user,
         loading,
         organizations,
         editorialOffices,
+        orgMemberships,
         membershipsError,
         login,
         logout,
@@ -572,8 +615,31 @@ export function AuthProvider({ children }) {
         reloadMemberships,
         createOrganization,
         acceptInvite,
-        createInvite
-    };
+        createInvite,
+        deleteOrganization,
+        deleteEditorialOffice
+    }), [
+        user,
+        loading,
+        organizations,
+        editorialOffices,
+        orgMemberships,
+        membershipsError,
+        login,
+        logout,
+        register,
+        resendVerification,
+        verifyEmail,
+        requestRecovery,
+        confirmRecovery,
+        updatePassword,
+        reloadMemberships,
+        createOrganization,
+        acceptInvite,
+        createInvite,
+        deleteOrganization,
+        deleteEditorialOffice
+    ]);
 
     return (
         <AuthContext.Provider value={value}>

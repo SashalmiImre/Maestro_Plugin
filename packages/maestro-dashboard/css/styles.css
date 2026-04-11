@@ -2270,6 +2270,46 @@ html, body {
     background: #e68619;
 }
 
+/* ─── Veszélyes zóna (destruktív műveletek) ────────────────────────────── */
+
+.danger-zone {
+    margin-top: 20px;
+    padding: 14px;
+    border: 1px solid #991b1b;
+    border-radius: 6px;
+    background: rgba(153, 27, 27, 0.08);
+}
+
+.danger-zone-title {
+    margin: 0 0 8px 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: #f87171;
+}
+
+.danger-zone-description {
+    margin: 0 0 12px 0;
+    font-size: 12px;
+    color: #d1d5db;
+    line-height: 1.5;
+}
+
+.danger-zone-button {
+    background: #991b1b;
+    color: #fff;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+.danger-zone-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.6;
+}
+
 /* ─── Breadcrumb dropdown „+ Új" menüpont ──────────────────────────────── */
 
 .bc-dropdown-create {

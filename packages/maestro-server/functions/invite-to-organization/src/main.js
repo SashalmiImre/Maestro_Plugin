@@ -53,6 +53,22 @@ const crypto = require("crypto");
  *     - Optimistic concurrency: doc.version !== payload.version → version_conflict.
  *     - Return: { success: true, version: newVersion }
  *
+ *   ACTION='delete_editorial_office' — org owner/admin törli a szerkesztőséget
+ *     az összes alárendelt publikációval, workflow-val, csoporttal, csoport-
+ *     tagsággal és office-tagsággal együtt. A publikációkat doc-onként törli,
+ *     így a cascade-delete CF elkapja az event-et és takarítja az articles/
+ *     layouts/deadlines (→ validations + thumbnails) rekurzívan.
+ *     - Payload: { editorialOfficeId }
+ *     - Return: { success: true, deletedCollections: {...} }
+ *
+ *   ACTION='delete_organization' — kizárólag az org `owner` role-lal
+ *     rendelkező tagja törölheti az egész szervezetet. Minden alárendelt
+ *     office-ra futtatja a delete_editorial_office kaszkádot, majd takarítja
+ *     az organizationInvites + organizationMemberships collectiont, végül az
+ *     org dokumentumot.
+ *     - Payload: { organizationId }
+ *     - Return: { success: true, deletedOffices, officeStats, orgCleanup }
+ *
  * Trigger: nincs (HTTP, `execute: ["users"]`)
  * Runtime: Node.js 18.0+
  *
@@ -67,6 +83,7 @@ const crypto = require("crypto");
  * - GROUPS_COLLECTION_ID
  * - GROUP_MEMBERSHIPS_COLLECTION_ID
  * - WORKFLOWS_COLLECTION_ID
+ * - PUBLICATIONS_COLLECTION_ID (Fázis 8 — a delete_* action-ökhöz)
  */
 
 /**
@@ -85,8 +102,181 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VALID_ACTIONS = new Set([
     'bootstrap_organization', 'create', 'accept',
     'add_group_member', 'remove_group_member',
-    'create_workflow', 'update_workflow', 'update_organization'
+    'create_workflow', 'update_workflow', 'update_organization',
+    'delete_organization', 'delete_editorial_office'
 ]);
+
+// Kaszkád törlés batch mérete — lapozás a nagy dokumentum-mennyiségek kezeléséhez.
+const CASCADE_BATCH_LIMIT = 100;
+
+/**
+ * Egy collection összes, adott mezőértékhez tartozó dokumentumát törli.
+ * Lapozással dolgozik, minden batch-et Promise.allSettled-lel párhuzamosít.
+ *
+ * **Fail-closed**: ha bármely dokumentum törlése sikertelen, a függvény
+ * dob a batch feldolgozás után (miután az összes aktuális batch művelet
+ * lefutott — nem „all-or-nothing", hanem „fuss amennyi megy, aztán dobj").
+ * Ez garantálja, hogy a hívó NEM törli a szülő doc-ot részleges gyerek
+ * cleanup után.
+ *
+ * @param {sdk.Databases} databases
+ * @param {string} databaseId
+ * @param {string} collectionId
+ * @param {string} fieldName — szűrő mező neve (pl. 'editorialOfficeId')
+ * @param {string} fieldValue — szűrő mező értéke
+ * @returns {Promise<{ found: number, deleted: number }>}
+ * @throws {Error} ha bármely dokumentum törlése sikertelen
+ */
+async function deleteByQuery(databases, databaseId, collectionId, fieldName, fieldValue) {
+    let totalFound = 0;
+    let totalDeleted = 0;
+    const failures = [];
+
+    while (true) {
+        const response = await databases.listDocuments(
+            databaseId,
+            collectionId,
+            [
+                sdk.Query.equal(fieldName, fieldValue),
+                sdk.Query.limit(CASCADE_BATCH_LIMIT)
+            ]
+        );
+        if (response.documents.length === 0) break;
+
+        totalFound += response.documents.length;
+
+        const deleteResults = await Promise.allSettled(
+            response.documents.map(doc =>
+                databases.deleteDocument(databaseId, collectionId, doc.$id)
+            )
+        );
+
+        let batchDeleted = 0;
+        for (let i = 0; i < deleteResults.length; i++) {
+            const result = deleteResults[i];
+            if (result.status === 'fulfilled') {
+                batchDeleted++;
+            } else {
+                failures.push({
+                    docId: response.documents[i].$id,
+                    message: result.reason?.message || String(result.reason)
+                });
+            }
+        }
+        totalDeleted += batchDeleted;
+
+        // Ha egy batch egyetlen törlése sem sikerült, a következő listDocuments
+        // ugyanazokat a dokumentumokat adná vissza → végtelen ciklus. Kilépünk,
+        // a failures lista lejjebb dob.
+        if (batchDeleted === 0) break;
+
+        // Ha az utolsó batch nem telt meg, nincs több dokumentum → kilépünk
+        // egy felesleges listDocuments hívás nélkül.
+        if (response.documents.length < CASCADE_BATCH_LIMIT) break;
+    }
+
+    if (failures.length > 0) {
+        const err = new Error(
+            `deleteByQuery: ${failures.length}/${totalFound} törlés sikertelen a(z) "${collectionId}" collectionben (${fieldName}=${fieldValue}). Első hiba: ${failures[0].message}`
+        );
+        err.collectionId = collectionId;
+        err.failures = failures;
+        throw err;
+    }
+
+    return { found: totalFound, deleted: totalDeleted };
+}
+
+/**
+ * Szerkesztőség-szintű kaszkád törlés — a publikációkat doc-onként törli
+ * (a cascade-delete CF kapja el a publication.delete event-et és takarítja
+ * az articles/layouts/deadlines-t rekurzívan), a többi office-kötött
+ * collectiont pedig deleteByQuery-vel iratja ki.
+ *
+ * NEM törli magát az office dokumentumot — ezt a hívó intézi, hogy a
+ * delete_organization ág is ezen a helper-en keresztül takaríthassa
+ * az office-ait a saját lépéseiben.
+ *
+ * **Fail-closed**: bármely lépés hibája esetén dob, és a hívó NEM
+ * törölheti az office doc-ot (különben árva gyerekek maradnának).
+ * A hívó responsibility, hogy `try/catch`-el kezelje.
+ *
+ * @returns {Promise<{ publications, workflows, groups, groupMemberships, officeMemberships }>}
+ * @throws {Error} ha bármely gyerek dokumentum törlése sikertelen
+ */
+async function cascadeDeleteOffice(databases, officeId, env, log) {
+    const {
+        databaseId,
+        publicationsCollectionId,
+        workflowsCollectionId,
+        groupsCollectionId,
+        groupMembershipsCollectionId,
+        officeMembershipsCollectionId
+    } = env;
+
+    // 1) Publikációk — doc-onkénti deleteDocument, hogy a cascade-delete CF
+    //    kapja el a publication.delete event-et (articles → layouts → deadlines,
+    //    majd article.delete → validations + thumbnails).
+    //
+    //    Fail-closed: az első sikertelen törlés után azonnal dobunk —
+    //    a részleges törlés nem vezethet árva office-szintű cleanup-hoz.
+    let pubFound = 0;
+    let pubDeleted = 0;
+    while (true) {
+        const response = await databases.listDocuments(
+            databaseId,
+            publicationsCollectionId,
+            [
+                sdk.Query.equal('editorialOfficeId', officeId),
+                sdk.Query.limit(CASCADE_BATCH_LIMIT)
+            ]
+        );
+        if (response.documents.length === 0) break;
+
+        pubFound += response.documents.length;
+
+        // Szekvenciális törlés — a cascade-delete CF nehéz munka, ne indítsuk
+        // egyszerre 100 párhuzamos kaszkádot, az rate limit-be futna.
+        // Az első hiba → throw (fail-closed).
+        for (const doc of response.documents) {
+            try {
+                await databases.deleteDocument(databaseId, publicationsCollectionId, doc.$id);
+                pubDeleted++;
+            } catch (err) {
+                const wrapped = new Error(
+                    `cascadeDeleteOffice: publikáció ${doc.$id} ("${doc.name || '?'}") törlése sikertelen: ${err.message}`
+                );
+                wrapped.cause = err;
+                wrapped.collectionId = publicationsCollectionId;
+                wrapped.docId = doc.$id;
+                throw wrapped;
+            }
+        }
+
+        if (response.documents.length < CASCADE_BATCH_LIMIT) break;
+    }
+
+    // 2) A többi office-kötött collection — parallel deleteByQuery.
+    //    Promise.all: ha bármelyik dob, a többi in-flight is befejeződik,
+    //    de a wrapper rejection propagál, és NEM jutunk el az office doc
+    //    törléséhez.
+    const [workflows, groups, groupMemberships, officeMemberships] = await Promise.all([
+        deleteByQuery(databases, databaseId, workflowsCollectionId, 'editorialOfficeId', officeId),
+        deleteByQuery(databases, databaseId, groupsCollectionId, 'editorialOfficeId', officeId),
+        deleteByQuery(databases, databaseId, groupMembershipsCollectionId, 'editorialOfficeId', officeId),
+        deleteByQuery(databases, databaseId, officeMembershipsCollectionId, 'editorialOfficeId', officeId)
+    ]);
+
+    log(`[CascadeOffice ${officeId}] pubs=${pubDeleted}/${pubFound}, workflows=${workflows.deleted}/${workflows.found}, groups=${groups.deleted}/${groups.found}, groupMemberships=${groupMemberships.deleted}/${groupMemberships.found}, officeMemberships=${officeMemberships.deleted}/${officeMemberships.found}`);
+
+    return {
+        publications: { found: pubFound, deleted: pubDeleted },
+        workflows,
+        groups,
+        groupMemberships,
+        officeMemberships
+    };
+}
 
 /**
  * Alapértelmezett csoportok — bootstrap_organization hozza létre mindegyiket
@@ -179,6 +369,13 @@ module.exports = async function ({ req, res, log, error }) {
         const groupsCollectionId = process.env.GROUPS_COLLECTION_ID;
         const groupMembershipsCollectionId = process.env.GROUP_MEMBERSHIPS_COLLECTION_ID;
         const workflowsCollectionId = process.env.WORKFLOWS_COLLECTION_ID;
+        // Fázis 8 — a delete_organization / delete_editorial_office action-ök
+        // igénylik a publications collectiont (doc-onként deleteDocument, hogy
+        // a cascade-delete CF elkapja a publication.delete event-et). Ez csak
+        // a delete ágakban kötelező — NEM tesszük a globális guard-ba, hogy a
+        // meglévő action-ök (bootstrap/invite/workflow) tovább működjenek, ha
+        // az env var még nincs beállítva a Console-on.
+        const publicationsCollectionId = process.env.PUBLICATIONS_COLLECTION_ID;
 
         // ── Fail-fast env var guard ──
         const missingEnvVars = [];
@@ -1324,6 +1521,287 @@ module.exports = async function ({ req, res, log, error }) {
                 action: 'updated',
                 organizationId,
                 name: sanitizedName
+            });
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // ACTION = 'delete_editorial_office'
+        // ════════════════════════════════════════════════════════════════
+        //
+        // Szerkesztőség kaszkád törlés: publications (→ cascade-delete CF
+        // takarítja az articles/layouts/deadlines-t), workflows, groups,
+        // groupMemberships, editorialOfficeMemberships, majd maga az office.
+        //
+        // Caller: a szervezet `owner` vagy `admin` role-lal rendelkező tagja.
+        //
+        // Fail-closed: ha bármely gyerek cleanup-lépés elhasal, az office
+        // dokumentumot NEM töröljük — inkább árva gyerek nélküli retry,
+        // mint elveszett tulajdonosi lánc.
+        if (action === 'delete_editorial_office') {
+            // Delete action-szintű env var guard — a PUBLICATIONS_COLLECTION_ID
+            // csak ehhez az action-höz kell, ne blokkolja a többi flow-t.
+            if (!publicationsCollectionId) {
+                error('[DeleteOffice] PUBLICATIONS_COLLECTION_ID nincs beállítva.');
+                return fail(res, 500, 'misconfigured', { missing: ['PUBLICATIONS_COLLECTION_ID'] });
+            }
+
+            const { editorialOfficeId } = payload;
+            if (!editorialOfficeId || typeof editorialOfficeId !== 'string') {
+                return fail(res, 400, 'missing_fields', { required: ['editorialOfficeId'] });
+            }
+
+            // 1) Office létezés check
+            let officeDoc;
+            try {
+                officeDoc = await databases.getDocument(
+                    databaseId,
+                    officesCollectionId,
+                    editorialOfficeId
+                );
+            } catch (fetchErr) {
+                if (fetchErr.code === 404) return fail(res, 404, 'office_not_found');
+                error(`[DeleteOffice] getDocument hiba: ${fetchErr.message}`);
+                return fail(res, 500, 'office_fetch_failed');
+            }
+
+            const officeOrgId = officeDoc.organizationId;
+
+            // 2) Caller jogosultság — org owner/admin
+            const callerMembership = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', officeOrgId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.select(['role']),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (callerMembership.documents.length === 0) {
+                return fail(res, 403, 'not_a_member');
+            }
+            const callerRole = callerMembership.documents[0].role;
+            if (callerRole !== 'owner' && callerRole !== 'admin') {
+                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            }
+
+            // 3) Kaszkád takarítás a helper-rel — fail-closed.
+            const envIds = {
+                databaseId,
+                publicationsCollectionId,
+                workflowsCollectionId,
+                groupsCollectionId,
+                groupMembershipsCollectionId,
+                officeMembershipsCollectionId
+            };
+
+            let stats;
+            try {
+                stats = await cascadeDeleteOffice(databases, editorialOfficeId, envIds, log);
+            } catch (cascadeErr) {
+                error(`[DeleteOffice] Kaszkád hiba (${editorialOfficeId}) [collection=${cascadeErr.collectionId || 'n/a'}]: ${cascadeErr.message}`);
+                return fail(res, 500, 'cascade_failed', {
+                    message: cascadeErr.message
+                });
+            }
+
+            // 4) Az office dokumentum törlése — csak akkor, ha minden gyerek
+            //    cleanup sikeres volt.
+            try {
+                await databases.deleteDocument(databaseId, officesCollectionId, editorialOfficeId);
+            } catch (deleteErr) {
+                error(`[DeleteOffice] office doc törlés: ${deleteErr.message}`);
+                return fail(res, 500, 'office_delete_failed');
+            }
+
+            log(`[DeleteOffice] User ${callerId} törölte office ${editorialOfficeId} ("${officeDoc.name}") + kaszkád`);
+
+            return res.json({
+                success: true,
+                action: 'deleted',
+                editorialOfficeId,
+                deletedCollections: stats
+            });
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // ACTION = 'delete_organization'
+        // ════════════════════════════════════════════════════════════════
+        //
+        // Szervezet kaszkád törlés: minden alárendelt office-ot végigvesz
+        // (→ cascadeDeleteOffice), majd az org-szintű collection-öket
+        // (organizationInvites, organizationMemberships), végül az org-ot.
+        //
+        // Caller: kizárólag a szervezet `owner` role-lal rendelkező tagja
+        // (admin NEM törölhet org-ot — ez szándékos, magas blast radius).
+        //
+        // Fail-closed: ha bármely office kaszkád hibát dob, azonnal leállunk,
+        // és NEM nyúlunk az org-szintű cleanup-hoz vagy az org doc-hoz.
+        // A részleges törlés után a user retry-olhat (idempotens), vagy a
+        // maradék árva office-t az Appwrite Console-ból takaríthatja.
+        if (action === 'delete_organization') {
+            // Delete action-szintű env var guard — lásd delete_editorial_office.
+            if (!publicationsCollectionId) {
+                error('[DeleteOrg] PUBLICATIONS_COLLECTION_ID nincs beállítva.');
+                return fail(res, 500, 'misconfigured', { missing: ['PUBLICATIONS_COLLECTION_ID'] });
+            }
+
+            const { organizationId } = payload;
+            if (!organizationId || typeof organizationId !== 'string') {
+                return fail(res, 400, 'missing_fields', { required: ['organizationId'] });
+            }
+
+            // 1) Org létezés check
+            let orgDoc;
+            try {
+                orgDoc = await databases.getDocument(
+                    databaseId,
+                    organizationsCollectionId,
+                    organizationId
+                );
+            } catch (fetchErr) {
+                if (fetchErr.code === 404) return fail(res, 404, 'organization_not_found');
+                error(`[DeleteOrg] getDocument hiba: ${fetchErr.message}`);
+                return fail(res, 500, 'organization_fetch_failed');
+            }
+
+            // 2) Caller jogosultság — owner-only
+            const callerMembership = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', organizationId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.select(['role']),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (callerMembership.documents.length === 0) {
+                return fail(res, 403, 'not_a_member');
+            }
+            const callerRole = callerMembership.documents[0].role;
+            if (callerRole !== 'owner') {
+                return fail(res, 403, 'insufficient_role', {
+                    yourRole: callerRole,
+                    required: 'owner'
+                });
+            }
+
+            const envIds = {
+                databaseId,
+                publicationsCollectionId,
+                workflowsCollectionId,
+                groupsCollectionId,
+                groupMembershipsCollectionId,
+                officeMembershipsCollectionId
+            };
+
+            // 3) Lapozott office-törlés: a következő batch-et mindig frissen
+            //    listázzuk, így (a) nem kell tudni előre, hány office van, és
+            //    (b) az imént törölt office-ok már nem szerepelnek a listában,
+            //    tehát a ciklus természetesen kiürül. Fail-closed: az első
+            //    office kaszkád hiba dobja a futást.
+            const officeStats = [];
+            while (true) {
+                let officesBatch;
+                try {
+                    const response = await databases.listDocuments(
+                        databaseId,
+                        officesCollectionId,
+                        [
+                            sdk.Query.equal('organizationId', organizationId),
+                            sdk.Query.limit(CASCADE_BATCH_LIMIT)
+                        ]
+                    );
+                    officesBatch = response.documents;
+                } catch (listErr) {
+                    error(`[DeleteOrg] office listing: ${listErr.message}`);
+                    return fail(res, 500, 'office_list_failed', { message: listErr.message });
+                }
+
+                if (officesBatch.length === 0) break;
+
+                for (const office of officesBatch) {
+                    let stats;
+                    try {
+                        stats = await cascadeDeleteOffice(databases, office.$id, envIds, log);
+                    } catch (cascadeErr) {
+                        error(`[DeleteOrg] office ${office.$id} ("${office.name}") kaszkád hiba [collection=${cascadeErr.collectionId || 'n/a'}]: ${cascadeErr.message}`);
+                        return fail(res, 500, 'cascade_failed', {
+                            message: cascadeErr.message,
+                            officeId: office.$id,
+                            completedOffices: officeStats
+                        });
+                    }
+
+                    try {
+                        await databases.deleteDocument(databaseId, officesCollectionId, office.$id);
+                    } catch (deleteErr) {
+                        error(`[DeleteOrg] office doc ${office.$id} törlés: ${deleteErr.message}`);
+                        return fail(res, 500, 'office_delete_failed', {
+                            officeId: office.$id,
+                            message: deleteErr.message,
+                            completedOffices: officeStats
+                        });
+                    }
+
+                    officeStats.push({ officeId: office.$id, name: office.name, stats });
+                }
+
+                if (officesBatch.length < CASCADE_BATCH_LIMIT) break;
+            }
+
+            // 4) Invites takarítás (a memberships-et NEM itt — lásd lentebb).
+            //    Az invites doksik törlése nem befolyásolja a caller retry
+            //    képességét (a caller jog `organizationMemberships`-ből jön),
+            //    ezért biztonsággal előre vehetők.
+            let invitesCleanup;
+            try {
+                invitesCleanup = await deleteByQuery(databases, databaseId, invitesCollectionId, 'organizationId', organizationId);
+            } catch (cleanupErr) {
+                error(`[DeleteOrg] invites cleanup: ${cleanupErr.message}`);
+                return fail(res, 500, 'org_cleanup_failed', { message: cleanupErr.message });
+            }
+
+            // 5) Org dokumentum törlése — a memberships ELŐTT.
+            //    Ha a memberships-et előbb törölnénk és ez a lépés elhasalna,
+            //    a caller elvesztené a `owner` membership-ét és a retry
+            //    `not_a_member` hibával elakadna → árva szervezet. Az org doc
+            //    törlés után a caller membership-e redundáns (az org már nem
+            //    létezik), így a cleanup sikertelensége csak kozmetikus
+            //    inkonzisztenciát hagy.
+            try {
+                await databases.deleteDocument(databaseId, organizationsCollectionId, organizationId);
+            } catch (deleteErr) {
+                error(`[DeleteOrg] org doc törlés: ${deleteErr.message}`);
+                return fail(res, 500, 'organization_delete_failed');
+            }
+
+            // 6) Memberships takarítás — az org doc már nincs, a caller
+            //    membership-e már nem ad semmilyen retry-lehetőséget.
+            //    Ha ez elbukik, a maradék memberships árvák maradnak
+            //    (nem létező orgId-ra mutatnak), manuális cleanup kell.
+            let membershipsCleanup;
+            try {
+                membershipsCleanup = await deleteByQuery(databases, databaseId, membershipsCollectionId, 'organizationId', organizationId);
+            } catch (cleanupErr) {
+                error(`[DeleteOrg] memberships cleanup az org doc törlése után elbukott: ${cleanupErr.message}`);
+                // Ponton a szervezet már törölve van — a user-nek nem dobunk
+                // hibát, csak hard log-ba tesszük a failure-t, hogy az ops
+                // oldalon észrevehető legyen.
+                membershipsCleanup = { found: null, deleted: null, error: cleanupErr.message };
+            }
+            const orgCleanup = { invites: invitesCleanup, memberships: membershipsCleanup };
+
+            log(`[DeleteOrg] User ${callerId} törölte org ${organizationId} ("${orgDoc.name}") — ${officeStats.length} office kaszkád + org cleanup`);
+
+            return res.json({
+                success: true,
+                action: 'deleted',
+                organizationId,
+                deletedOffices: officeStats.length,
+                officeStats,
+                orgCleanup
             });
         }
 
