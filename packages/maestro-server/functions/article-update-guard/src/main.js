@@ -32,40 +32,110 @@ const sdk = require("node-appwrite");
 
 const SERVER_GUARD_ID = 'server-guard';
 
-// ─── Workflow cache (process-szintű, 60s TTL) ───────────────────────────────
+// ─── Workflow cache (process-szintű, 60s TTL, Map-alapú) ────────────────────
+//
+// Fázis 6: a workflow-t a publikáció `workflowId`-ja alapján töltjük be,
+// fallback az office első workflow-jára ha null. A Map két kulcstípust kezel:
+//   - `wf:${workflowId}`        — konkrét workflow ID
+//   - `office:${officeId}`      — fallback az office első workflow-jára
+//
+// Soft FIFO eviction CACHE_MAX_ENTRIES felett; Appwrite function process-ek
+// ephemeralisek, a memória-pressure alacsony, ezért LRU overkill lenne.
 
-let workflowCache = { compiled: null, officeId: null, fetchedAt: 0 };
+const workflowCache = new Map();
 const CACHE_TTL_MS = 60_000;
+const CACHE_MAX_ENTRIES = 32;
+
+function cacheGet(key) {
+    const entry = workflowCache.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.fetchedAt >= CACHE_TTL_MS) {
+        workflowCache.delete(key);
+        return null;
+    }
+    return entry.compiled;
+}
+
+function cacheSet(key, compiled) {
+    if (workflowCache.size >= CACHE_MAX_ENTRIES) {
+        // FIFO: Map insertion order garantált, a legrégebbi kerül ki
+        const firstKey = workflowCache.keys().next().value;
+        if (firstKey) workflowCache.delete(firstKey);
+    }
+    workflowCache.set(key, { compiled, fetchedAt: Date.now() });
+}
 
 /**
- * Betölti a compiled workflow JSON-t az adott szerkesztőséghez.
- * 60 másodperces process-szintű cache-sel.
+ * Betölti a compiled workflow JSON-t egy publikáció számára.
  *
- * @returns {Object|null} A compiled workflow objektum vagy null
+ * Elsődleges (Fázis 7): `publication.workflowId` alapján a `workflows`
+ * collection-ből, cross-tenant védelemmel (a workflow `editorialOfficeId`-jának
+ * egyeznie kell a publikáció office-ával). Ha a workflowId explicit beállított,
+ * de nem oldható fel (404, scope mismatch, egyéb hiba), a függvény `null`-t ad
+ * vissza — a hívó ilyenkor fail-closed módon revert-el, soha nem esünk vissza
+ * egy másik workflow-ra (cross-workflow leak védelem).
+ *
+ * Legacy fallback: kizárólag akkor, ha a `publication.workflowId` mező
+ * explicit null/undefined (Fázis 7 előtti rekordok), akkor az office első
+ * workflow-jára esünk vissza. Új publikációkat a Dashboard mindig `workflowId`-val
+ * hoz létre, így ez az ág éles adatokon nem tüzel.
+ *
+ * @param {sdk.Databases} databases
+ * @param {string} databaseId
+ * @param {string} workflowsCollectionId
+ * @param {{ editorialOfficeId?: string, workflowId?: string }} parentPublication
+ * @param {Function} log
+ * @returns {Promise<Object|null>}
  */
-async function getWorkflowForOffice(databases, databaseId, workflowsCollectionId, editorialOfficeId, log) {
-    const now = Date.now();
-    if (workflowCache.officeId === editorialOfficeId && (now - workflowCache.fetchedAt) < CACHE_TTL_MS) {
-        return workflowCache.compiled;
-    }
+async function getWorkflowForPublication(databases, databaseId, workflowsCollectionId, parentPublication, log) {
+    if (!parentPublication) return null;
+    const officeId = parentPublication.editorialOfficeId;
+    const workflowId = parentPublication.workflowId;
 
-    try {
-        const result = await databases.listDocuments(databaseId, workflowsCollectionId, [
-            sdk.Query.equal('editorialOfficeId', editorialOfficeId),
-            sdk.Query.limit(1)
-        ]);
-
-        if (result.documents.length === 0) {
-            log(`[Workflow] Nincs workflow doc az office-hoz: ${editorialOfficeId}`);
+    // 1. Primary: publication.workflowId — fail-closed, nincs cross-workflow fallback
+    if (workflowId) {
+        const cacheKey = `wf:${workflowId}`;
+        const cached = cacheGet(cacheKey);
+        if (cached) return cached;
+        try {
+            const doc = await databases.getDocument(databaseId, workflowsCollectionId, workflowId);
+            if (officeId && doc.editorialOfficeId !== officeId) {
+                log(`[Workflow] Cross-tenant leak blokkolva: wf ${workflowId} office=${doc.editorialOfficeId} ≠ pub office=${officeId} — fail-closed`);
+                return null;
+            }
+            const compiled = typeof doc.compiled === 'string' ? JSON.parse(doc.compiled) : doc.compiled;
+            cacheSet(cacheKey, compiled);
+            return compiled;
+        } catch (e) {
+            if (e.code === 404) {
+                log(`[Workflow] publication.workflowId=${workflowId} not found — fail-closed`);
+            } else {
+                log(`[Workflow] workflow lookup hiba (${workflowId}): ${e.message} — fail-closed`);
+            }
             return null;
         }
+    }
 
+    // 2. Legacy fallback: csak akkor, ha a publication.workflowId explicit null
+    if (!officeId) return null;
+    const fallbackKey = `office:${officeId}`;
+    const cached = cacheGet(fallbackKey);
+    if (cached) return cached;
+    try {
+        const result = await databases.listDocuments(databaseId, workflowsCollectionId, [
+            sdk.Query.equal('editorialOfficeId', officeId),
+            sdk.Query.limit(1)
+        ]);
+        if (result.documents.length === 0) {
+            log(`[Workflow] Nincs workflow az office-hoz: ${officeId}`);
+            return null;
+        }
         const doc = result.documents[0];
         const compiled = typeof doc.compiled === 'string' ? JSON.parse(doc.compiled) : doc.compiled;
-        workflowCache = { compiled, officeId: editorialOfficeId, fetchedAt: now };
+        cacheSet(fallbackKey, compiled);
         return compiled;
     } catch (e) {
-        log(`[Workflow] Workflow betöltés hiba: ${e.message}`);
+        log(`[Workflow] Office fallback hiba: ${e.message}`);
         return null;
     }
 }
@@ -216,11 +286,19 @@ module.exports = async function ({ req, res, log, error }) {
         }
 
         // ── 4. Workflow betöltés (fail-closed) ──
+        // Fázis 6: a workflow a publication.workflowId alapján töltődik be
+        // (fallback: office első workflow-ja). Ha a parent publication törölt
+        // vagy nem elérhető, a freshDoc.editorialOfficeId-val megyünk tovább.
         let compiled = null;
-        if (freshDoc.editorialOfficeId) {
-            compiled = await getWorkflowForOffice(
+        if (parentPublication) {
+            compiled = await getWorkflowForPublication(
+                databases, databaseId, workflowsCollectionId, parentPublication, log
+            );
+        } else if (freshDoc.editorialOfficeId) {
+            compiled = await getWorkflowForPublication(
                 databases, databaseId, workflowsCollectionId,
-                freshDoc.editorialOfficeId, log
+                { editorialOfficeId: freshDoc.editorialOfficeId, workflowId: null },
+                log
             );
         }
 

@@ -36,7 +36,7 @@ function formatActivatedAt(iso) {
 }
 
 export default function GeneralTab({ publication }) {
-    const { workflows, deadlines, updatePublication } = useData();
+    const { workflows, deadlines, articles, updatePublication } = useData();
     const { showToast } = useToast();
     const confirm = useConfirm();
 
@@ -108,7 +108,16 @@ export default function GeneralTab({ publication }) {
     }
 
     const isActivated = publication.isActivated === true;
-    const workflowDisabled = workflows.length <= 1 || isActivated;
+
+    // Fázis 6 — ha van cikk, a workflow nem módosítható. A modal csak az aktív
+    // publikációra nyílik (BreadcrumbHeader), a DataContext `articles` pedig
+    // pontosan az aktív publikáció cikkeit tartja — Realtime-ready, nincs
+    // szükség külön query-re.
+    const hasArticles = useMemo(
+        () => articles.some((a) => a.publicationId === publication.$id),
+        [articles, publication.$id]
+    );
+    const workflowDisabled = workflows.length <= 1 || isActivated || hasArticles;
 
     // Publikáció-hoz tartozó deadline-ok (scope-on belül, DataContext szűr)
     const pubDeadlines = useMemo(
@@ -235,7 +244,13 @@ export default function GeneralTab({ publication }) {
                     value={publication.workflowId || ''}
                     onChange={handleWorkflowChange}
                     disabled={workflowDisabled}
-                    title={isActivated ? 'Workflow aktiválás után nem módosítható.' : undefined}
+                    title={
+                        isActivated
+                            ? 'Workflow aktiválás után nem módosítható.'
+                            : hasArticles
+                                ? 'A kiadványhoz már tartoznak cikkek — a workflow nem módosítható.'
+                                : undefined
+                    }
                 >
                     {workflows.length === 0 && <option value="">— Nincs elérhető workflow —</option>}
                     {!publication.workflowId && workflows.length > 0 && (

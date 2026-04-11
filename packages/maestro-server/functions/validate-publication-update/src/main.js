@@ -31,6 +31,8 @@ const sdk = require("node-appwrite");
  * - PUBLICATIONS_COLLECTION_ID
  * - EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID (B.8)
  * - DEADLINES_COLLECTION_ID (Fázis 5 — aktiválási határidő-lekérdezéshez)
+ * - ARTICLES_COLLECTION_ID (Fázis 6 — workflow immutabilitás cikkek mellett)
+ * - WORKFLOWS_COLLECTION_ID (Fázis 6 — workflow scope ellenőrzéshez)
  */
 
 const SERVER_GUARD_ID = 'server-guard';
@@ -212,6 +214,8 @@ module.exports = async function ({ req, res, log, error }) {
         const publicationsCollectionId = process.env.PUBLICATIONS_COLLECTION_ID;
         const officeMembershipsCollectionId = process.env.EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID;
         const deadlinesCollectionId = process.env.DEADLINES_COLLECTION_ID;
+        const articlesCollectionId = process.env.ARTICLES_COLLECTION_ID;
+        const workflowsCollectionId = process.env.WORKFLOWS_COLLECTION_ID;
 
         // ── Fail-fast env var guard (B.8) ──
         // A DEADLINES_COLLECTION_ID csak az aktivációs ágban kötelező — ott
@@ -414,7 +418,69 @@ module.exports = async function ({ req, res, log, error }) {
             }
         }
 
-        // ── 6. Korrekciók alkalmazása ──
+        // ── 6. Workflow immutabilitás cikkekkel rendelkező aktív publikáción (Fázis 6) ──
+        // Post-event CF nem látja a pre-update állapotot. Ha isActivated=true
+        // ÉS van cikk, a workflowId-nek létező + az office-hoz tartozó workflow-ra
+        // kell mutatnia. Ha nem, deaktiválunk (fail-closed). A Dashboard UI
+        // disabled dropdown fedi a normál use case-t; ez a safety net direkt
+        // API hívás ellen.
+        //
+        // Korlát: office-on belüli workflow csere (A → B, mindkettő ugyanabban
+        // az office-ban) nem detektálható pre-state snapshot nélkül. A valódi
+        // immutabilitás `activatedWorkflowId` séma-mezővel oldható meg (Fázis 6.1
+        // hatáskör), ha production use case indokolja.
+        //
+        // Az §5 után fut: ha az aktiválási check már deaktivált, nem duplikáljuk.
+        if (freshDoc.isActivated === true && corrections.isActivated === undefined) {
+            // Hiányzó env esetén a §6 check kimarad — a korábbi megoldás
+            // minden hívásnál deaktivált érintetlen publikációkat. Log (nem
+            // error), hogy ne szórjon riasztásokat minden publikáció update-en.
+            if (!articlesCollectionId || !workflowsCollectionId) {
+                log(`[WorkflowLock] Hiányzó env var (ARTICLES_COLLECTION_ID vagy WORKFLOWS_COLLECTION_ID) — §6 check kihagyva`);
+            } else {
+                let workflowLockReason = null;
+                try {
+                    const articlesResult = await databases.listDocuments(
+                        databaseId,
+                        articlesCollectionId,
+                        [sdk.Query.equal('publicationId', freshDoc.$id), sdk.Query.limit(1)]
+                    );
+                    if ((articlesResult.total || 0) > 0) {
+                        if (!freshDoc.workflowId) {
+                            workflowLockReason = 'Van cikk, de nincs workflowId';
+                        } else {
+                            try {
+                                const wf = await databases.getDocument(
+                                    databaseId, workflowsCollectionId, freshDoc.workflowId
+                                );
+                                if (wf.editorialOfficeId !== freshDoc.editorialOfficeId) {
+                                    workflowLockReason = `Workflow office mismatch (${wf.editorialOfficeId} ≠ ${freshDoc.editorialOfficeId})`;
+                                }
+                            } catch (e) {
+                                if (e.code === 404) {
+                                    // Workflow admin-szinten törölt — csak logolás,
+                                    // nem deaktiválunk (admin döntést tiszteljük,
+                                    // a cikk átmenetek amúgy is state revert-en
+                                    // akadnak el az article-update-guard §4-ben).
+                                    log(`[WorkflowLock] ${freshDoc.$id}: workflow ${freshDoc.workflowId} nem található (admin törölte?) — csak logolás`);
+                                } else {
+                                    workflowLockReason = `Workflow lookup hiba: ${e.message}`;
+                                }
+                            }
+                        }
+                    }
+                } catch (e) {
+                    workflowLockReason = `Articles lookup hiba: ${e.message}`;
+                }
+                if (workflowLockReason) {
+                    error(`[WorkflowLock] ${freshDoc.$id} deaktiválva — ${workflowLockReason}`);
+                    corrections.isActivated = false;
+                    corrections.activatedAt = null;
+                }
+            }
+        }
+
+        // ── 7. Korrekciók alkalmazása ──
         if (Object.keys(corrections).length > 0) {
             corrections.modifiedByClientId = SERVER_GUARD_ID;
 

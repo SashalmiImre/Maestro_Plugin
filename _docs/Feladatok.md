@@ -63,18 +63,19 @@ tags: [feladatok]
 - [x] `validate-publication-update` CF bővítés: `isActivated === true` esetén deadline lekérés + inline `validatePublicationActivation` → invalid esetén revert (`isActivated: false`, `activatedAt: null`). Inline helper (`validateDeadlinesInline`, `validatePublicationActivationInline`) a maestro-shared másolataként. Új env var: `DEADLINES_COLLECTION_ID` (Appwrite Console-on kézzel hozzáadandó).
 - Megjegyzés: A szerver-oldali `workflowId` immutability **Fázis 6** hatáskör — a post-event CF nem látja a pre-update állapotot, ezért a cikkek létezése alapján (`articles.length > 0 && isActivated`) fogjuk kikényszeríteni. Fázis 5-ben a Dashboard UI disabled dropdown + tooltip véd a normál használat ellen.
 
-#### Fázis 6 — Workflow zárolás cikkek mellett
+#### Fázis 6 — Workflow zárolás cikkek mellett ✅ (2026-04-11)
 
-- [ ] `PublicationSettingsModal.jsx`: ha a publikációban van cikk (`articles.length > 0`) → workflowId dropdown disabled + tooltip
-- [ ] `validate-publication-update` CF bővítés: `workflowId` változás esetén articles query → ha van cikk ÉS `isActivated`, revert
-- [ ] `article-update-guard` CF: workflow lekérés `publication.workflowId`-ből (fallback: office egyetlen workflow-ja ha null)
+- [x] `PublicationSettingsModal.jsx` (GeneralTab): ha a publikációhoz tartozik cikk (`articles.some(a => a.publicationId === pub.$id)`) → workflowId dropdown disabled + tooltip "A kiadványhoz már tartoznak cikkek — a workflow nem módosítható." Az `isActivated` prioritást kap a tooltip prioritásban.
+- [x] `article-update-guard` CF: `getWorkflowForPublication(parentPublication)` helper — elsődleges a `publication.workflowId` szerinti lookup cross-tenant scope check-kel (`doc.editorialOfficeId === parent.editorialOfficeId`). **Fail-closed**: ha `workflowId` explicit megadva, de 404 / scope mismatch / parse error → `null` (cikk update blokkolva). Legacy office-first fallback kizárólag akkor aktiválódik, ha `publication.workflowId === null` (pre-Fázis 7 rekordok). A cache Map-alapú (`wf:${id}` vagy `office:${id}` kulccsal, 60s TTL, FIFO eviction CACHE_MAX_ENTRIES=32-től). Ez egyben Fázis 7 (többszörös workflow) előkészítés is.
+- [x] `validate-publication-update` CF bővítés: új §6 — `isActivated=true` + van cikk + (workflowId null VAGY workflow doc office mismatch) → deaktiválás (`isActivated=false, activatedAt=null`). 404 workflow doc → csak logolás (admin-döntés tisztelete). Új env var-ok: `ARTICLES_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID` (Appwrite Console-on kézzel hozzáadandó).
+- Megjegyzés: A pre-update snapshot nélküli CF nem tudja megkülönböztetni az office-on belüli workflow cserét (A → B, mindkettő ugyanabban az office-ban). Ezt a Dashboard UI disabled dropdown fedi. Valódi immutabilitás `activatedWorkflowId` séma-mezővel lenne — Fázis 6.1 ha production use case indokolja.
 
 #### Fázis 7 — Többszörös workflow támogatás
 
-- [ ] Workflow Designer route bővítés: workflow lista/választó az office-on belül, „Új workflow" gomb, route: `/admin/office/:officeId/workflow/:workflowId`
-- [ ] Dashboard `DataContext.jsx`: `workflows` (többes szám) state az office összes workflow-jával (publication settings dropdown-hoz), `fetchWorkflows()` metódus
-- [ ] Plugin `DataContext.jsx`: workflow feloldás `publication.workflowId` alapján (kiadvány-váltáskor vált), fallback office workflow-ra ha null
-- [ ] `invite-to-organization` CF: új `create_workflow` action (office-hoz új workflow, admin-only), `bootstrap_organization` továbbra is 1 default-ot seed-el
+- [x] Workflow Designer route bővítés: workflow lista/választó az office-on belül, „Új workflow" gomb, rename input a toolbar-ban, route: `/admin/office/:officeId/workflow/:workflowId`, régi `/admin/office/:officeId/workflow` URL redirect-el az első workflow-ra (`WorkflowDesignerRedirect.jsx`) *(2026-04-11)*
+- [x] Dashboard `DataContext.jsx`: `workflows` (többes szám) state az office összes workflow-jával (publication settings dropdown-hoz), `fetchWorkflows()` metódus *(2026-03 — Fázis 4 keretében előre meg lett csinálva)*
+- [x] Plugin `DataContext.jsx`: `workflows[]` plural state + három külön useMemo (parse cache docId-alapján, `activeWorkflowId` külön memo a publikáció-váltás szűk deps-ével, derived `workflow`) a `publication.workflowId` alapján. **Fail-closed**: ha nincs `activeWorkflowId` vagy a cache nem tartalmazza az ID-t → `null` (nincs `workflows[0]` fallback, nincs legacy fallback — konzisztens adatok elvárva). Realtime handler merge-öli a workflows[]-t (create/update/delete), `workflowChanged` event külön useEffect-ben `prevWorkflowRef`-fel a derived identitás változására *(2026-04-11, harden pass)*
+- [x] `invite-to-organization` CF: új `create_workflow` action (office-hoz új workflow, owner/admin only, `DEFAULT_WORKFLOW` klónozás, név unique check); `update_workflow` bővítés opcionális `workflowId` + `name` paraméterrel (rename + stabil multi-workflow targeting, scope check: `workflowDoc.editorialOfficeId === editorialOfficeId`) *(2026-04-11)*
 
 #### Fázis 8 — Törlés névmegerősítéssel (kaszkád)
 

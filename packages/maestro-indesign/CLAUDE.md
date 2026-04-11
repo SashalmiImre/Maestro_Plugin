@@ -195,11 +195,11 @@
 
 10. **Dinamikus Workflow Rendszer**
     - **Egyetlen igazságforrás**: A `workflows` collection `compiled` JSON mezője tartalmazza a teljes workflow konfigurációt (states, transitions, validations, commands, elementPermissions, contributorGroups, leaderGroups, statePermissions).
-    - **Szerkesztőség-szintű**: Minden editorial office saját workflow dokumentummal rendelkezik. Létrehozáskor a `defaultWorkflow.json` kerül seedingre.
-    - **Plugin read-only**: A Plugin NEM ír a `workflows` collection-be — csak olvassa. A Dashboard Workflow Designer szerkeszti.
-    - **DataContext integráció**: A `workflow` state a `DataContext`-ben él. Fetch az aktív `editorialOfficeId` alapján, Realtime feliratkozás a `workflows` collection-re. Hot-reload: `setWorkflow(JSON.parse(payload.compiled))` → minden fogyasztó azonnal frissül.
+    - **Szerkesztőség-szintű, publikáció-kötött**: Egy editorial office több workflow doc-ot is tarthat (Fázis 7). Minden publikáció a saját `publication.workflowId` mezője alapján hivatkozik egy konkrét workflow-ra. Onboarding / office létrehozáskor egy default workflow (a `defaultWorkflow.json`-ből klónozva) kerül seedingre, a többi szerkesztői szándékkal (Dashboard Workflow Designer „+ Új workflow" gomb) jön létre.
+    - **Plugin read-only**: A Plugin NEM ír a `workflows` collection-be — csak olvassa. A Dashboard Workflow Designer szerkeszti (create/update/rename, delete Fázis 8).
+    - **DataContext integráció**: A Plugin DataContext `workflows[]` plural state-et tart (összes workflow az aktív office-ban, név szerint rendezve). A workflow feloldás három külön useMemo-val történik: (1) `workflowCache` — parse cache doc-onként (stabil referencia publikáció-váltáskor, ha ugyanarra a workflow-ra mutat); (2) `activeWorkflowId` — csak a publikáció-változást figyeli, szűk deps-szel; (3) derived `workflow` — az `activeWorkflowId`-t feloldja a cache-ből. **Fail-closed**: ha nincs `activeWorkflowId` (`publication.workflowId === null`), vagy a cache nem tartalmazza az ID-t (törölt/cross-tenant workflow), a derived `workflow` → `null`. Nincs legacy `workflows[0]` fallback — az adatok konzisztenciáját elvárjuk. A Realtime handler a `workflows[]`-t merge-öli (create / update / delete), a `workflowChanged` event-et egy külön `useEffect` dispatcheli, amely a derived `workflow` identitás változására figyel `prevWorkflowRef`-fel.
     - **workflowRuntime.js** (maestro-shared): 16+ tiszta függvény (`getStateConfig`, `getAllStates`, `getAvailableTransitions`, `canUserMoveArticle`, `canEditElement`, `canRunCommand`, stb.) — minden `compiled` paramétert kap, nincsenek globális állapotok.
-    - **CF process cache**: A Cloud Function-ök 60s TTL-lel cache-elik a workflow dokumentumot (`getWorkflowForOffice()`). Ha nincs workflow doc → fail-closed (state revert / reject).
+    - **CF process cache**: A Cloud Function-ök 60s TTL-lel cache-elik a workflow dokumentumot per (office, workflowId) kulcs (`getWorkflowForPublication()`). Ha nincs workflow doc → fail-closed (state revert / reject).
 
 11. **Szerver-oldali Guard Function-ök (Cloud Functions)**
     - A Cloud Function-ök külön csomagban élnek: `../maestro-server/`

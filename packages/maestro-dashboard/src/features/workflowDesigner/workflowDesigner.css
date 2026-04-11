@@ -53,6 +53,51 @@
     margin: 0;
 }
 
+/* Rename input — a h2 title helyén, a workflow neve szerkeszthetően */
+.workflow-designer-toolbar__name {
+    font-size: 16px;
+    font-weight: 600;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-primary, #e8e8e8);
+    padding: 4px 8px;
+    border-radius: 6px;
+    min-width: 200px;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.workflow-designer-toolbar__name:hover {
+    border-color: rgba(255, 255, 255, 0.1);
+}
+
+.workflow-designer-toolbar__name:focus {
+    outline: none;
+    border-color: rgba(59, 130, 246, 0.5);
+    background: rgba(255, 255, 255, 0.04);
+}
+
+/* Workflow selector dropdown — a rename input mellett, csak ha >1 workflow van */
+.workflow-designer-toolbar__selector {
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--text-secondary, #999);
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+}
+
+.workflow-designer-toolbar__selector:hover {
+    border-color: rgba(255, 255, 255, 0.2);
+    color: var(--text-primary, #e8e8e8);
+}
+
+.workflow-designer-toolbar__selector:focus {
+    outline: none;
+    border-color: rgba(59, 130, 246, 0.5);
+}
+
 .workflow-designer-toolbar__version {
     font-size: 12px;
     color: var(--text-secondary, #999);

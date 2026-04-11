@@ -37,6 +37,7 @@ import DashboardLayout from './routes/dashboard/DashboardLayout.jsx';
 import TableViewRoute from './routes/dashboard/TableViewRoute.jsx';
 import LayoutViewRoute from './routes/dashboard/LayoutViewRoute.jsx';
 import WorkflowDesignerPage from './features/workflowDesigner/WorkflowDesignerPage.jsx';
+import WorkflowDesignerRedirect from './features/workflowDesigner/WorkflowDesignerRedirect.jsx';
 import { ModalProvider } from './contexts/ModalContext.jsx';
 
 /**
@@ -56,13 +57,16 @@ function DashboardLayoutWithProviders() {
 
 /**
  * A Workflow Designer-hez szintén szükséges a DataProvider (workflow fetch)
- * és ToastProvider (toast értesítések).
+ * és ToastProvider (toast értesítések). A gyermek komponenst route-onként
+ * különböző komponens adja: a régi URL-en a `WorkflowDesignerRedirect` az
+ * első workflow-ra navigál, az új paraméteres URL-en pedig a
+ * `WorkflowDesignerPage` tölti be a konkrét workflow doc-ot.
  */
-function WorkflowDesignerWithProviders() {
+function WorkflowDesignerWithProviders({ children }) {
     return (
         <ToastProvider>
             <DataProvider>
-                <WorkflowDesignerPage />
+                {children}
             </DataProvider>
         </ToastProvider>
     );
@@ -131,10 +135,23 @@ export const router = createBrowserRouter([
                         ]
                     },
 
-                    // Workflow Designer
+                    // Workflow Designer — régi URL: redirect az első workflow-ra
                     {
                         path: '/admin/office/:officeId/workflow',
-                        element: <WorkflowDesignerWithProviders />
+                        element: (
+                            <WorkflowDesignerWithProviders>
+                                <WorkflowDesignerRedirect />
+                            </WorkflowDesignerWithProviders>
+                        )
+                    },
+                    // Workflow Designer — paraméterezett URL: konkrét workflow szerkesztése
+                    {
+                        path: '/admin/office/:officeId/workflow/:workflowId',
+                        element: (
+                            <WorkflowDesignerWithProviders>
+                                <WorkflowDesignerPage />
+                            </WorkflowDesignerWithProviders>
+                        )
                     }
                 ]
             },

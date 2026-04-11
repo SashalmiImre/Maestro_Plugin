@@ -2,21 +2,27 @@
  * Maestro Dashboard — Workflow Designer oldal
  *
  * A vizuális workflow szerkesztő gyökér komponense.
- * Route: /admin/office/:officeId/workflow
+ * Route: /admin/office/:officeId/workflow/:workflowId
  *
  * Betölti a teljes workflow dokumentumot (compiled + graph),
  * konvertálja xyflow állapotra, és rendereli a canvast.
+ *
+ * Egy szerkesztőség több workflow-t is tarthat (Fázis 7). A toolbar
+ * selector dropdown-ja engedi a váltást, a „+ Új workflow" gomb új
+ * workflow-t hoz létre (CF `create_workflow` action).
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useParams, Link, useBlocker } from 'react-router-dom';
+import { useParams, Link, useBlocker, useNavigate } from 'react-router-dom';
 import { useNodesState, useEdgesState } from '@xyflow/react';
 import { Databases, Query } from 'appwrite';
 import { getClient } from '../../contexts/AuthContext.jsx';
 import { DATABASE_ID, COLLECTIONS } from '../../config.js';
+import { useData } from '../../contexts/DataContext.jsx';
+import { useToast } from '../../contexts/ToastContext.jsx';
 import { compiledToGraph, graphToCompiled, extractGraphData } from './compiler.js';
 import { validateWorkflow } from './validator.js';
-import { saveWorkflow } from './api.js';
+import { saveWorkflow, createWorkflow } from './api.js';
 import { exportWorkflow } from './exportImport.js';
 
 import NodePalette from './NodePalette.jsx';
@@ -29,13 +35,24 @@ import './workflowDesigner.css';
 const DIRTY_CHANGE_TYPES = new Set(['remove', 'add', 'replace']);
 
 export default function WorkflowDesignerPage() {
-    const { officeId } = useParams();
+    const { officeId, workflowId } = useParams();
+    const navigate = useNavigate();
+    const { workflows: availableWorkflows } = useData();
+    const { showToast } = useToast();
 
     // ── Workflow dokumentum ─────────────────────────────────────────────────
     const [workflowDocId, setWorkflowDocId] = useState(null);
+    const [workflowName, setWorkflowName] = useState('');
+    const [originalName, setOriginalName] = useState('');
     const [version, setVersion] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
     const [loadError, setLoadError] = useState(null);
+
+    // ── Új workflow dialog állapot ──────────────────────────────────────────
+    const [isCreateOpen, setIsCreateOpen] = useState(false);
+    const [createName, setCreateName] = useState('');
+    const [createError, setCreateError] = useState(null);
+    const [isCreating, setIsCreating] = useState(false);
 
     // ── Xyflow állapot ──────────────────────────────────────────────────────
     const [nodes, setNodes, onNodesChange] = useNodesState([]);
@@ -50,7 +67,13 @@ export default function WorkflowDesignerPage() {
     // ── UI állapot ──────────────────────────────────────────────────────────
     const [selectedNodeId, setSelectedNodeId] = useState(null);
     const [selectedEdgeId, setSelectedEdgeId] = useState(null);
-    const [isDirty, setIsDirty] = useState(false);
+    // Dirty split: a graph mutációi külön állapotban (isGraphDirty) maradnak,
+    // a név-változás pedig az originálissal való direkt összehasonlításból
+    // származik (isNameDirty). Így ha a felhasználó vissza-gépeli az eredeti
+    // nevet, a dirty jelzés automatikusan eltűnik — nem ragad be.
+    const [isGraphDirty, setIsGraphDirty] = useState(false);
+    const isNameDirty = workflowName.trim() !== originalName;
+    const isDirty = isGraphDirty || isNameDirty;
     const [isSaving, setIsSaving] = useState(false);
     const [saveError, setSaveError] = useState(null);
     const [isImportOpen, setIsImportOpen] = useState(false);
@@ -79,34 +102,37 @@ export default function WorkflowDesignerPage() {
     );
 
     // ── Workflow betöltés ────────────────────────────────────────────────────
+    // A workflowId route param szerint töltjük be a konkrét workflow doc-ot.
+    // Scope check: a doc editorialOfficeId-ja egyezzen a route officeId-vel.
 
     useEffect(() => {
-        if (!officeId) return;
+        if (!officeId || !workflowId) return;
         let cancelled = false;
 
         (async () => {
             setIsLoading(true);
             setLoadError(null);
+            // Dirty és remote-version warning resetelése új workflow-ra
+            // váltáskor — nem hurcoljuk tovább a régi állapotot.
+            setIsGraphDirty(false);
+            setSaveError(null);
+            setRemoteVersionWarning(null);
             try {
                 const client = getClient();
                 const databases = new Databases(client);
-                const result = await databases.listDocuments(
+                const doc = await databases.getDocument(
                     DATABASE_ID,
                     COLLECTIONS.WORKFLOWS,
-                    [
-                        Query.equal('editorialOfficeId', officeId),
-                        Query.limit(1)
-                    ]
+                    workflowId
                 );
 
                 if (cancelled) return;
 
-                if (result.documents.length === 0) {
-                    setLoadError('Nem található workflow ehhez a szerkesztőséghez.');
+                if (doc.editorialOfficeId !== officeId) {
+                    setLoadError('Ez a workflow nem az adott szerkesztőséghez tartozik.');
                     return;
                 }
 
-                const doc = result.documents[0];
                 const compiled = typeof doc.compiled === 'string'
                     ? JSON.parse(doc.compiled) : doc.compiled;
                 const savedGraph = doc.graph
@@ -114,6 +140,8 @@ export default function WorkflowDesignerPage() {
                     : null;
 
                 setWorkflowDocId(doc.$id);
+                setWorkflowName(doc.name || '');
+                setOriginalName(doc.name || '');
                 setVersion(compiled?.version ?? doc.version ?? 1);
 
                 const { nodes: n, edges: e, metadata: m, viewport } = compiledToGraph(compiled, savedGraph);
@@ -124,7 +152,12 @@ export default function WorkflowDesignerPage() {
                 originalStateIdsRef.current = new Set(n.map(node => node.id));
             } catch (err) {
                 if (!cancelled) {
-                    setLoadError('Workflow betöltési hiba: ' + (err?.message || 'Ismeretlen hiba'));
+                    const code = err?.code || err?.response?.code;
+                    if (code === 404) {
+                        setLoadError('Nem található a workflow. Lehet, hogy időközben törölve lett.');
+                    } else {
+                        setLoadError('Workflow betöltési hiba: ' + (err?.message || 'Ismeretlen hiba'));
+                    }
                 }
             } finally {
                 if (!cancelled) setIsLoading(false);
@@ -132,7 +165,7 @@ export default function WorkflowDesignerPage() {
         })();
 
         return () => { cancelled = true; };
-    }, [officeId]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [officeId, workflowId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ── Realtime awareness: más felhasználó mentett ────────────────────────
 
@@ -184,14 +217,14 @@ export default function WorkflowDesignerPage() {
             DIRTY_CHANGE_TYPES.has(c.type) ||
             (c.type === 'position' && c.dragging === false)
         )) {
-            setIsDirty(true);
+            setIsGraphDirty(true);
         }
     }, [onNodesChange]);
 
     const handleEdgesChange = useCallback((changes) => {
         onEdgesChange(changes);
         if (changes.some(c => DIRTY_CHANGE_TYPES.has(c.type))) {
-            setIsDirty(true);
+            setIsGraphDirty(true);
         }
     }, [onEdgesChange]);
 
@@ -218,7 +251,7 @@ export default function WorkflowDesignerPage() {
         });
         setSelectedEdgeId(edgeId);
         setSelectedNodeId(null);
-        setIsDirty(true);
+        setIsGraphDirty(true);
     }, [setEdges]);
 
     // ── Sidebar: node/edge adat módosítás ──────────────────────────────────
@@ -255,7 +288,7 @@ export default function WorkflowDesignerPage() {
                 n.id === selectedNodeId ? { ...n, data: newData } : n
             ));
         }
-        setIsDirty(true);
+        setIsGraphDirty(true);
     }, [selectedNodeId, setNodes]);
 
     const handleEdgeDataChange = useCallback((newData) => {
@@ -263,7 +296,7 @@ export default function WorkflowDesignerPage() {
         setEdges(prev => prev.map(e =>
             e.id === selectedEdgeId ? { ...e, data: newData } : e
         ));
-        setIsDirty(true);
+        setIsGraphDirty(true);
     }, [selectedEdgeId, setEdges]);
 
     const handleDeleteNode = useCallback(() => {
@@ -272,19 +305,19 @@ export default function WorkflowDesignerPage() {
         // Kapcsolódó edge-ek törlése
         setEdges(prev => prev.filter(e => e.source !== selectedNodeId && e.target !== selectedNodeId));
         setSelectedNodeId(null);
-        setIsDirty(true);
+        setIsGraphDirty(true);
     }, [selectedNodeId, setNodes, setEdges]);
 
     const handleDeleteEdge = useCallback(() => {
         if (!selectedEdgeId) return;
         setEdges(prev => prev.filter(e => e.id !== selectedEdgeId));
         setSelectedEdgeId(null);
-        setIsDirty(true);
+        setIsGraphDirty(true);
     }, [selectedEdgeId, setEdges]);
 
     const handleMetadataChange = useCallback((newMetadata) => {
         setMetadata(newMetadata);
-        setIsDirty(true);
+        setIsGraphDirty(true);
     }, []);
 
     // ── DnD: új node létrehozás a palette-ból ────────────────────────────────
@@ -333,7 +366,7 @@ export default function WorkflowDesignerPage() {
         setNodes(prev => [...prev, newNode]);
         setSelectedNodeId(newId);
         setSelectedEdgeId(null);
-        setIsDirty(true);
+        setIsGraphDirty(true);
     }, [setNodes]);
 
     // ── Mentés ──────────────────────────────────────────────────────────────
@@ -341,6 +374,13 @@ export default function WorkflowDesignerPage() {
     const handleSave = useCallback(async () => {
         if (isSaving) return;
         setSaveError(null);
+
+        // Név validáció — rename esetén
+        const trimmedName = workflowName.trim();
+        if (!trimmedName) {
+            setSaveError('A workflow neve nem lehet üres.');
+            return;
+        }
 
         // 1. Compiled JSON generálás
         const compiled = graphToCompiled(nodes, edges, metadata);
@@ -384,20 +424,63 @@ export default function WorkflowDesignerPage() {
         const viewport = reactFlowRef.current?.getViewport() || null;
         const graph = extractGraphData(nodes, viewport);
 
-        // 5. Mentés a szerverre
+        // 5. Mentés a szerverre — opcionális rename-mel
         setIsSaving(true);
         try {
-            const result = await saveWorkflow(officeId, compiled, graph, version);
+            const nameToSend = trimmedName !== originalName ? trimmedName : undefined;
+            const result = await saveWorkflow(officeId, workflowDocId, compiled, graph, version, nameToSend);
             setVersion(result.version);
-            setIsDirty(false);
+            setIsGraphDirty(false);
             setSaveError(null);
             originalStateIdsRef.current = currentStateIds;
+            if (nameToSend !== undefined) {
+                setOriginalName(trimmedName);
+            }
         } catch (err) {
             setSaveError(err.message || 'Mentési hiba.');
         } finally {
             setIsSaving(false);
         }
-    }, [isSaving, nodes, edges, metadata, officeId, version]);
+    }, [isSaving, nodes, edges, metadata, officeId, workflowDocId, version, workflowName, originalName]);
+
+    // ── Workflow switch (selector dropdown) ────────────────────────────────
+
+    const handleSwitchWorkflow = useCallback((newWorkflowId) => {
+        if (!newWorkflowId || newWorkflowId === workflowDocId) return;
+        // A useBlocker elkapja a dirty állapotot, a felhasználó maradhat
+        // vagy elhagyhatja az oldalt — mindkét útvonalat a standard blocker kezeli.
+        navigate(`/admin/office/${officeId}/workflow/${newWorkflowId}`);
+    }, [workflowDocId, officeId, navigate]);
+
+    // ── Új workflow létrehozás ─────────────────────────────────────────────
+
+    const handleOpenCreateDialog = useCallback(() => {
+        setCreateName('');
+        setCreateError(null);
+        setIsCreateOpen(true);
+    }, []);
+
+    const handleConfirmCreate = useCallback(async () => {
+        const trimmed = createName.trim();
+        if (!trimmed) {
+            setCreateError('A név megadása kötelező.');
+            return;
+        }
+        setIsCreating(true);
+        setCreateError(null);
+        try {
+            const result = await createWorkflow(officeId, trimmed);
+            showToast(`Workflow létrehozva: „${result.name}".`, 'success');
+            setIsCreateOpen(false);
+            // Navigáció az új workflow szerkesztőjére — a useBlocker
+            // elkapja, ha dirty, és rákérdez.
+            navigate(`/admin/office/${officeId}/workflow/${result.workflowId}`);
+        } catch (err) {
+            setCreateError(err.message || 'Létrehozási hiba.');
+        } finally {
+            setIsCreating(false);
+        }
+    }, [createName, officeId, navigate, showToast]);
 
     // ── Export / Import ───────────────────────────────────────────────────
 
@@ -412,7 +495,7 @@ export default function WorkflowDesignerPage() {
         setMetadata(importedMetadata);
         setSelectedNodeId(null);
         setSelectedEdgeId(null);
-        setIsDirty(true);
+        setIsGraphDirty(true);
         if (importedViewport && reactFlowRef.current) {
             reactFlowRef.current.setViewport(importedViewport);
         }
@@ -458,12 +541,40 @@ export default function WorkflowDesignerPage() {
                     <Link to="/" className="workflow-designer-toolbar__back" title="Vissza a kiadványokhoz">
                         ←
                     </Link>
-                    <h2 className="workflow-designer-toolbar__title">Workflow Tervező</h2>
+                    <input
+                        type="text"
+                        className="workflow-designer-toolbar__name"
+                        value={workflowName}
+                        onChange={(e) => setWorkflowName(e.target.value)}
+                        placeholder="Workflow neve"
+                        maxLength={128}
+                        aria-label="Workflow neve"
+                    />
+                    {availableWorkflows && availableWorkflows.length > 1 && (
+                        <select
+                            className="workflow-designer-toolbar__selector"
+                            value={workflowDocId || ''}
+                            onChange={(e) => handleSwitchWorkflow(e.target.value)}
+                            aria-label="Workflow váltás"
+                        >
+                            {availableWorkflows.map((wf) => (
+                                <option key={wf.$id} value={wf.$id}>{wf.name}</option>
+                            ))}
+                        </select>
+                    )}
                     <span className="workflow-designer-toolbar__version">v{version}</span>
                 </div>
                 <div className="workflow-designer-toolbar__right">
                     {saveError && <span className="workflow-designer-toolbar__error">{saveError}</span>}
                     {isDirty && !saveError && <span className="workflow-designer-toolbar__dirty">Nem mentett változások</span>}
+                    <button
+                        type="button"
+                        className="workflow-designer-toolbar__btn-secondary"
+                        onClick={handleOpenCreateDialog}
+                        title="Új workflow létrehozása ebben a szerkesztőségben"
+                    >
+                        + Új workflow
+                    </button>
                     <button
                         type="button"
                         className="workflow-designer-toolbar__btn-secondary"
@@ -545,6 +656,53 @@ export default function WorkflowDesignerPage() {
                 currentMetadata={metadata}
                 onImport={handleImport}
             />
+
+            {/* Új workflow dialógus */}
+            {isCreateOpen && (
+                <div className="import-dialog__overlay" onClick={() => !isCreating && setIsCreateOpen(false)}>
+                    <div className="import-dialog" onClick={e => e.stopPropagation()}>
+                        <h3 className="import-dialog__title">Új workflow létrehozása</h3>
+                        <p style={{ fontSize: 13, color: 'var(--text-secondary, #999)', margin: '0 0 12px' }}>
+                            Add meg az új workflow nevét. A default állapotgépből indul.
+                        </p>
+                        <input
+                            type="text"
+                            className="workflow-designer-toolbar__name"
+                            style={{ width: '100%', marginBottom: 12 }}
+                            value={createName}
+                            onChange={(e) => setCreateName(e.target.value)}
+                            placeholder="Workflow neve"
+                            maxLength={128}
+                            autoFocus
+                            disabled={isCreating}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter' && !isCreating) handleConfirmCreate();
+                            }}
+                        />
+                        {createError && (
+                            <p className="import-dialog__error" style={{ marginBottom: 12 }}>{createError}</p>
+                        )}
+                        <div className="import-dialog__actions">
+                            <button
+                                type="button"
+                                className="import-dialog__btn import-dialog__btn--cancel"
+                                onClick={() => setIsCreateOpen(false)}
+                                disabled={isCreating}
+                            >
+                                Mégse
+                            </button>
+                            <button
+                                type="button"
+                                className="import-dialog__btn import-dialog__btn--confirm"
+                                onClick={handleConfirmCreate}
+                                disabled={isCreating || !createName.trim()}
+                            >
+                                {isCreating ? 'Létrehozás...' : 'Létrehozás'}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* Navigáció blokkoló dialógus */}
             {blocker.state === 'blocked' && (

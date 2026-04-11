@@ -73,7 +73,10 @@ export const DataProvider = ({ children }) => {
     const [layouts, setLayouts] = useState([]);
     const [deadlines, setDeadlines] = useState([]);
 
-    const [workflow, setWorkflow] = useState(null);
+    // Az office-hoz tartozó összes workflow doc (nyers, NEM parse-olt compiled).
+    // A derived `workflow` memo a publication.workflowId alapján oldja fel,
+    // a parse a memo-ban történik — így a Realtime handler olcsó.
+    const [workflows, setWorkflows] = useState([]);
     const workflowFetchedForOfficeRef = useRef(null);
 
     // 4. Loading indikátorok
@@ -276,7 +279,7 @@ export const DataProvider = ({ children }) => {
             setLayouts([]);
             setDeadlines([]);
             setValidations([]);
-            setWorkflow(null);
+            setWorkflows([]);
             setIsInitialized(true);
             if (!isBackground) {
                 setIsLoading(false);
@@ -549,10 +552,12 @@ export const DataProvider = ({ children }) => {
     // ═══════════════════════════════════════════════════════════════════════════
 
     // Workflow fetch — office-szintű, a fetchData-ban (és recovery-nél) fut.
-    // A compiled JSON-t parse-oljuk és a workflow state-be rakjuk.
+    // Fázis 7: egy office-ban több workflow is lehet, ezért az összeset behúzzuk
+    // név szerint rendezve. A derived `workflow` memo a publication.workflowId
+    // alapján oldja fel, a compiled JSON parse-olás is ott történik.
     const fetchWorkflow = useCallback(async (officeId) => {
         if (!officeId) {
-            setWorkflow(null);
+            setWorkflows([]);
             return true;
         }
         try {
@@ -563,7 +568,8 @@ export const DataProvider = ({ children }) => {
                         tableId: WORKFLOWS_COLLECTION_ID,
                         queries: [
                             Query.equal("editorialOfficeId", officeId),
-                            Query.limit(1)
+                            Query.orderAsc("name"),
+                            Query.limit(100)
                         ]
                     }),
                     FETCH_TIMEOUT_CONFIG.NON_CRITICAL_DATA_MS, "fetchWorkflow"
@@ -572,13 +578,11 @@ export const DataProvider = ({ children }) => {
             );
             const rows = response.documents || response.rows || [];
             if (rows.length > 0) {
-                const doc = rows[0];
-                const compiled = typeof doc.compiled === 'string' ? JSON.parse(doc.compiled) : doc.compiled;
-                setWorkflow(compiled);
-                log(`[DataContext] Workflow betöltve (v${doc.version}, office=${officeId})`);
+                setWorkflows(rows);
+                log(`[DataContext] Workflow-k betöltve (${rows.length} doc, office=${officeId})`);
             } else {
                 logWarn('[DataContext] Nincs workflow doc ehhez az office-hoz:', officeId);
-                setWorkflow(null);
+                setWorkflows([]);
             }
             return true;
         } catch (err) {
@@ -586,6 +590,49 @@ export const DataProvider = ({ children }) => {
             return false;
         }
     }, []);
+
+    // Parse cache docId szerint — stabil compiled referencia, ha két publikáció
+    // ugyanarra a workflow doc-ra mutat (publikáció-váltáskor nincs fals
+    // workflowChanged event).
+    const workflowCache = useMemo(() => {
+        const cache = new Map();
+        for (const doc of workflows) {
+            try {
+                const compiled = typeof doc.compiled === 'string'
+                    ? JSON.parse(doc.compiled)
+                    : doc.compiled;
+                cache.set(doc.$id, compiled);
+            } catch (err) {
+                logError(`[DataContext] Workflow compiled parse hiba (${doc.$id}):`, err);
+            }
+        }
+        return cache;
+    }, [workflows]);
+
+    // Az aktív publikáció workflowId-ja — külön memo, hogy a workflow memo
+    // ne invalidálódjon minden publikáció-mutációnál (lock flip, rename stb.).
+    const activeWorkflowId = useMemo(() => {
+        if (!activePublicationId) return null;
+        const activePub = publications.find(p => p.$id === activePublicationId);
+        return activePub?.workflowId || null;
+    }, [publications, activePublicationId]);
+
+    // Derived workflow — fail-closed: ha a workflowId érvénytelen vagy nincs,
+    // null. A plugin `!workflow` ágakra megy (cikk blokkolás). Egyezik a CF
+    // `article-update-guard` `getWorkflowForPublication()` viselkedésével.
+    const workflow = useMemo(() => {
+        if (!activeWorkflowId) return null;
+        return workflowCache.get(activeWorkflowId) || null;
+    }, [activeWorkflowId, workflowCache]);
+
+    // workflowChanged dispatch a derived workflow identitás változására —
+    // lefedi a Realtime eseményeket ÉS a publikáció-váltást is.
+    const prevWorkflowRef = useRef(null);
+    useEffect(() => {
+        if (prevWorkflowRef.current === workflow) return;
+        prevWorkflowRef.current = workflow;
+        dispatchMaestroEvent(MaestroEvent.workflowChanged);
+    }, [workflow]);
 
     // Active Publication váltás kezelése
     const updateActivePublicationId = useCallback((id) => {
@@ -1241,25 +1288,31 @@ export const DataProvider = ({ children }) => {
             }
 
             // --- Workflow ---
-            // Office-szintű workflow doc változás → compiled JSON újra parse-olás
+            // Office-szintű workflow doc változás → a workflows[] array-t frissítjük.
+            // A derived `workflow` memo automatikusan újraszámolódik a publikáció
+            // workflowId-ja alapján, a workflowChanged event dispatch külön useEffect-ben.
             else if (event.includes(WORKFLOWS_COLLECTION_ID)) {
                 if (payload.editorialOfficeId && payload.editorialOfficeId !== activeEditorialOfficeIdRef.current) {
                     return; // Más szerkesztőség workflow-ja — ignoráljuk
                 }
-                if (event.includes(".update") || event.includes(".create")) {
-                    try {
-                        const compiled = typeof payload.compiled === 'string'
-                            ? JSON.parse(payload.compiled)
-                            : payload.compiled;
-                        setWorkflow(compiled);
-                        log('[DataContext] Workflow frissítve (Realtime)');
-                        dispatchMaestroEvent(MaestroEvent.workflowChanged);
-                    } catch (err) {
-                        logError('[DataContext] Workflow compiled parse hiba (Realtime):', err);
-                    }
+                if (event.includes(".create")) {
+                    log(`[DataContext] Workflow doc létrehozva (Realtime): ${payload.$id}`);
+                    setWorkflows(prev => {
+                        if (prev.some(w => w.$id === payload.$id)) return prev;
+                        return [...prev, payload].sort(compareByName);
+                    });
+                } else if (event.includes(".update")) {
+                    log(`[DataContext] Workflow doc frissítve (Realtime): ${payload.$id}`);
+                    setWorkflows(prev => {
+                        const idx = prev.findIndex(w => w.$id === payload.$id);
+                        if (idx === -1) return [...prev, payload].sort(compareByName);
+                        const next = [...prev];
+                        next[idx] = payload;
+                        return next.sort(compareByName);
+                    });
                 } else if (event.includes(".delete")) {
-                    logWarn('[DataContext] Workflow doc törölve (Realtime)');
-                    setWorkflow(null);
+                    logWarn(`[DataContext] Workflow doc törölve (Realtime): ${payload.$id}`);
+                    setWorkflows(prev => prev.filter(w => w.$id !== payload.$id));
                 }
             }
         });
@@ -1298,6 +1351,7 @@ export const DataProvider = ({ children }) => {
         layouts,
         deadlines,
         workflow,
+        workflows,
         isLoading,
         isSwitchingPublication,
         activePublicationId,
@@ -1330,7 +1384,7 @@ export const DataProvider = ({ children }) => {
         updateDeadline,
         deleteDeadline
     }), [
-        publications, articles, validations, layouts, deadlines, workflow,
+        publications, articles, validations, layouts, deadlines, workflow, workflows,
         isLoading, isSwitchingPublication, activePublicationId,
         updateActivePublicationId, fetchData,
         createPublication, updatePublication, deletePublication,

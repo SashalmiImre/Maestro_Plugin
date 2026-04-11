@@ -85,7 +85,7 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VALID_ACTIONS = new Set([
     'bootstrap_organization', 'create', 'accept',
     'add_group_member', 'remove_group_member',
-    'update_workflow', 'update_organization'
+    'create_workflow', 'update_workflow', 'update_organization'
 ]);
 
 /**
@@ -1004,17 +1004,18 @@ module.exports = async function ({ req, res, log, error }) {
         }
 
         // ════════════════════════════════════════════════════════
-        // ACTION = 'update_workflow'
+        // ACTION = 'create_workflow'
         // ════════════════════════════════════════════════════════
         //
-        // Workflow compiled + graph JSON frissítése optimistic concurrency-vel.
-        // A Dashboard Workflow Designer hívja mentéskor.
-        if (action === 'update_workflow') {
-            const { editorialOfficeId, compiled, graph, version } = payload;
+        // Új workflow létrehozása egy meglévő szerkesztőséghez. Owner/admin only.
+        // A Dashboard Workflow Designer „+ Új workflow" gombja hívja.
+        if (action === 'create_workflow') {
+            const { editorialOfficeId } = payload;
+            const sanitizedName = sanitizeString(payload.name, NAME_MAX_LENGTH);
 
-            if (!editorialOfficeId || !compiled || version == null) {
+            if (!editorialOfficeId || !sanitizedName) {
                 return fail(res, 400, 'missing_fields', {
-                    required: ['editorialOfficeId', 'compiled', 'version']
+                    required: ['editorialOfficeId', 'name']
                 });
             }
 
@@ -1055,19 +1056,151 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
             }
 
-            // 3. Workflow doc betöltés
-            const workflowResult = await databases.listDocuments(
+            // 3. Név unique check az office-on belül
+            const nameClash = await databases.listDocuments(
                 databaseId,
                 workflowsCollectionId,
                 [
                     sdk.Query.equal('editorialOfficeId', editorialOfficeId),
+                    sdk.Query.equal('name', sanitizedName),
                     sdk.Query.limit(1)
                 ]
             );
-            if (workflowResult.documents.length === 0) {
-                return fail(res, 404, 'workflow_not_found');
+            if (nameClash.documents.length > 0) {
+                return fail(res, 400, 'name_taken', { name: sanitizedName });
             }
-            const workflowDoc = workflowResult.documents[0];
+
+            // 4. Compiled JSON: default workflow klón, de frissen version=1
+            const compiledClone = JSON.parse(JSON.stringify(DEFAULT_WORKFLOW));
+            compiledClone.version = 1;
+
+            // 5. Workflow doc létrehozás — az ID automatikus (nem `wf-${officeId}`,
+            // mert egy office-on belül több workflow is létezhet)
+            let newWorkflowDoc;
+            try {
+                newWorkflowDoc = await databases.createDocument(
+                    databaseId,
+                    workflowsCollectionId,
+                    sdk.ID.unique(),
+                    {
+                        editorialOfficeId,
+                        organizationId: orgId,
+                        name: sanitizedName,
+                        version: 1,
+                        compiled: JSON.stringify(compiledClone),
+                        updatedByUserId: callerId
+                    }
+                );
+            } catch (createErr) {
+                error(`[CreateWorkflow] createDocument hiba: ${createErr.message}`);
+                return fail(res, 500, 'create_failed');
+            }
+
+            log(`[CreateWorkflow] User ${callerId} új workflow-t hozott létre: id=${newWorkflowDoc.$id}, name="${sanitizedName}", office=${editorialOfficeId}`);
+
+            return res.json({
+                success: true,
+                action: 'created',
+                workflowId: newWorkflowDoc.$id,
+                name: sanitizedName
+            });
+        }
+
+        // ════════════════════════════════════════════════════════
+        // ACTION = 'update_workflow'
+        // ════════════════════════════════════════════════════════
+        //
+        // Workflow compiled + graph JSON frissítése optimistic concurrency-vel.
+        // A Dashboard Workflow Designer hívja mentéskor.
+        //
+        // Opcionális `workflowId`: ha meg van adva, a konkrét doc-ot célozza
+        // (multi-workflow support). Ha nincs, az office első workflow-ját módosítja
+        // (backward compat — bootstrap scenariókhoz).
+        // Opcionális `name`: workflow átnevezés (unique check az office-on belül).
+        if (action === 'update_workflow') {
+            const { editorialOfficeId, workflowId, compiled, graph, version } = payload;
+            const renameTo = payload.name !== undefined
+                ? sanitizeString(payload.name, NAME_MAX_LENGTH)
+                : null;
+
+            if (!editorialOfficeId || !compiled || version == null) {
+                return fail(res, 400, 'missing_fields', {
+                    required: ['editorialOfficeId', 'compiled', 'version']
+                });
+            }
+            if (payload.name !== undefined && !renameTo) {
+                return fail(res, 400, 'invalid_name');
+            }
+
+            // 1. Office lookup → organizationId
+            let office;
+            try {
+                office = await databases.listDocuments(
+                    databaseId,
+                    officesCollectionId,
+                    [
+                        sdk.Query.equal('$id', editorialOfficeId),
+                        sdk.Query.limit(1)
+                    ]
+                );
+            } catch (err) {
+                return fail(res, 404, 'office_not_found');
+            }
+            if (office.documents.length === 0) {
+                return fail(res, 404, 'office_not_found');
+            }
+            const orgId = office.documents[0].organizationId;
+
+            // 2. Caller jogosultság: org owner/admin
+            const callerMembership = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', orgId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (callerMembership.documents.length === 0) {
+                return fail(res, 403, 'not_a_member');
+            }
+            const callerRole = callerMembership.documents[0].role;
+            if (callerRole !== 'owner' && callerRole !== 'admin') {
+                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            }
+
+            // 3. Workflow doc betöltés — elsődleges: explicit workflowId,
+            // fallback: office első workflow-ja (backward compat).
+            let workflowDoc;
+            if (workflowId) {
+                try {
+                    workflowDoc = await databases.getDocument(
+                        databaseId,
+                        workflowsCollectionId,
+                        workflowId
+                    );
+                } catch (err) {
+                    return fail(res, 404, 'workflow_not_found');
+                }
+                // Cross-tenant scope check — a payload officeId-nak egyeznie
+                // kell a doc editorialOfficeId-jával.
+                if (workflowDoc.editorialOfficeId !== editorialOfficeId) {
+                    return fail(res, 403, 'scope_mismatch');
+                }
+            } else {
+                const workflowResult = await databases.listDocuments(
+                    databaseId,
+                    workflowsCollectionId,
+                    [
+                        sdk.Query.equal('editorialOfficeId', editorialOfficeId),
+                        sdk.Query.limit(1)
+                    ]
+                );
+                if (workflowResult.documents.length === 0) {
+                    return fail(res, 404, 'workflow_not_found');
+                }
+                workflowDoc = workflowResult.documents[0];
+            }
 
             // 4. Optimistic concurrency check
             const currentCompiled = typeof workflowDoc.compiled === 'string'
@@ -1082,7 +1215,24 @@ module.exports = async function ({ req, res, log, error }) {
                 });
             }
 
-            // 5. Compiled JSON frissítése a verzióval
+            // 5. Rename unique check (csak ha változik)
+            if (renameTo && renameTo !== workflowDoc.name) {
+                const nameClash = await databases.listDocuments(
+                    databaseId,
+                    workflowsCollectionId,
+                    [
+                        sdk.Query.equal('editorialOfficeId', editorialOfficeId),
+                        sdk.Query.equal('name', renameTo),
+                        sdk.Query.limit(1)
+                    ]
+                );
+                const clashDoc = nameClash.documents[0];
+                if (clashDoc && clashDoc.$id !== workflowDoc.$id) {
+                    return fail(res, 400, 'name_taken', { name: renameTo });
+                }
+            }
+
+            // 6. Compiled JSON frissítése a verzióval
             const newVersion = currentVersion + 1;
             const updatedCompiled = typeof compiled === 'string'
                 ? JSON.parse(compiled)
@@ -1096,6 +1246,9 @@ module.exports = async function ({ req, res, log, error }) {
             if (graph !== undefined) {
                 updateData.graph = typeof graph === 'string' ? graph : JSON.stringify(graph);
             }
+            if (renameTo && renameTo !== workflowDoc.name) {
+                updateData.name = renameTo;
+            }
 
             await databases.updateDocument(
                 databaseId,
@@ -1104,11 +1257,13 @@ module.exports = async function ({ req, res, log, error }) {
                 updateData
             );
 
-            log(`[UpdateWorkflow] Office ${editorialOfficeId} workflow frissítve: v${currentVersion} → v${newVersion} (by ${callerId})`);
+            log(`[UpdateWorkflow] Workflow ${workflowDoc.$id} (office ${editorialOfficeId}) frissítve: v${currentVersion} → v${newVersion}${renameTo && renameTo !== workflowDoc.name ? `, név: "${workflowDoc.name}" → "${renameTo}"` : ''} (by ${callerId})`);
 
             return res.json({
                 success: true,
-                version: newVersion
+                version: newVersion,
+                workflowId: workflowDoc.$id,
+                name: renameTo || workflowDoc.name
             });
         }
 
