@@ -23,10 +23,6 @@ export const STORAGE_KEYS = {
     SECTION_ARTICLE_MESSAGES_COLLAPSED: "maestro.section.article.messages.collapsed",           // Cikk üzenetek szekció
     SECTION_ARTICLE_CONTRIBUTORS_COLLAPSED: "maestro.section.article.contributors.collapsed",   // Cikk közreműködők szekció
     SECTION_ARTICLE_VALIDATION_COLLAPSED: "maestro.section.article.validation.collapsed",       // Cikk validáció szekció
-    SECTION_PUBLICATION_GENERAL_COLLAPSED: "maestro.section.publication.general.collapsed",           // Kiadvány általános szekció
-    SECTION_PUBLICATION_LAYOUTS_COLLAPSED: "maestro.section.publication.layouts.collapsed",           // Kiadvány elrendezések szekció
-    SECTION_PUBLICATION_CONTRIBUTORS_COLLAPSED: "maestro.section.publication.contributors.collapsed", // Kiadvány munkatársak szekció
-    SECTION_PUBLICATION_DEADLINES_COLLAPSED: "maestro.section.publication.deadlines.collapsed",         // Kiadvány határidők szekció
     FILTER_STATUS: "maestro.filter.status",                   // Kiválasztott workflow állapotok (JSON tömb)
     FILTER_SHOW_IGNORED: "maestro.filter.showIgnored",        // Kimarad cikkek mutatása (boolean string)
     FILTER_SHOW_ONLY_MINE: "maestro.filter.showOnlyMine",     // Csak saját cikkek (boolean string)

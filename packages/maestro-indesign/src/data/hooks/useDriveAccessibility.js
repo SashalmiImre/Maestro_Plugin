@@ -38,7 +38,7 @@ const mapsAreDifferent = (prev, next) => {
 /**
  * Központi mappa-elérhetőség hook.
  *
- * @param {Array} publications - A kiadványok tömbje (usePublications()-ből).
+ * @param {Array} publications - A kiadványok tömbje (a DataContext-ből).
  * @returns {Map<string, boolean>} accessibilityMap — pubId → elérhetőség.
  */
 export const useDriveAccessibility = (publications) => {

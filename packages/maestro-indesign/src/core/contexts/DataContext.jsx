@@ -95,6 +95,11 @@ export const DataProvider = ({ children }) => {
         latestArticlesRef.current = articles;
     }, [articles]);
 
+    const latestPublicationsRef = useRef(publications);
+    useEffect(() => {
+        latestPublicationsRef.current = publications;
+    }, [publications]);
+
     const activePublicationIdRef = useRef(activePublicationId);
     useEffect(() => {
         activePublicationIdRef.current = activePublicationId;
@@ -707,75 +712,6 @@ export const DataProvider = ({ children }) => {
     }, []);
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Write-Through API — Publikációk
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /**
-     * Új kiadvány létrehozása az adatbázisban.
-     * A szerver válaszával azonnal frissíti a helyi state-et.
-     *
-     * @param {Object} data - A kiadvány adatai (name, rootPath, stb.)
-     * @returns {Promise<Object>} A létrehozott dokumentum.
-     */
-    const createPublication = useCallback(async (data) => {
-        const result = await withTimeout(
-            tables.createRow({
-                databaseId: DATABASE_ID,
-                tableId: PUBLICATIONS_COLLECTION_ID,
-                rowId: ID.unique(),
-                data: withScope(data)
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: createPublication"
-        );
-        setPublications(prev => {
-            if (prev.some(pub => pub.$id === result.$id)) return prev;
-            return [...prev, result].sort(compareByName);
-        });
-        return result;
-    }, [withScope]);
-
-    /**
-     * Kiadvány frissítése az adatbázisban.
-     *
-     * @param {string} publicationId - A frissítendő kiadvány azonosítója.
-     * @param {Object} data - A frissítendő mezők.
-     * @returns {Promise<Object>} A frissített dokumentum.
-     */
-    const updatePublication = useCallback(async (publicationId, data) => {
-        const result = await withTimeout(
-            tables.updateRow({
-                databaseId: DATABASE_ID,
-                tableId: PUBLICATIONS_COLLECTION_ID,
-                rowId: publicationId,
-                data
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: updatePublication"
-        );
-        setPublications(prev => prev.map(publication => publication.$id === publicationId ? result : publication).sort(compareByName));
-        return result;
-    }, []);
-
-    /**
-     * Kiadvány törlése az adatbázisból.
-     *
-     * @param {string} publicationId - A törlendő kiadvány azonosítója.
-     */
-    const deletePublication = useCallback(async (publicationId) => {
-        await withTimeout(
-            tables.deleteRow({
-                databaseId: DATABASE_ID,
-                tableId: PUBLICATIONS_COLLECTION_ID,
-                rowId: publicationId
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: deletePublication"
-        );
-        setPublications(prev => prev.filter(publication => publication.$id !== publicationId));
-    }, []);
-
-    // ═══════════════════════════════════════════════════════════════════════════
     // Write-Through API — Cikkek (Articles)
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -934,142 +870,6 @@ export const DataProvider = ({ children }) => {
     }, []);
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Write-Through API — Layoutok
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /**
-     * Új layout létrehozása az adatbázisban.
-     *
-     * @param {Object} data - A layout adatai (publicationId, name, order)
-     * @returns {Promise<Object>} A létrehozott dokumentum.
-     */
-    const createLayout = useCallback(async (data) => {
-        const result = await withTimeout(
-            tables.createRow({
-                databaseId: DATABASE_ID,
-                tableId: LAYOUTS_COLLECTION_ID,
-                rowId: ID.unique(),
-                data: withScope(data)
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: createLayout"
-        );
-        setLayouts(prev => {
-            if (prev.some(l => l.$id === result.$id)) return prev;
-            return [...prev, result].sort(compareByOrder);
-        });
-        return result;
-    }, [withScope]);
-
-    /**
-     * Layout frissítése az adatbázisban.
-     *
-     * @param {string} layoutId - A frissítendő layout azonosítója.
-     * @param {Object} data - A frissítendő mezők.
-     * @returns {Promise<Object>} A frissített dokumentum.
-     */
-    const updateLayout = useCallback(async (layoutId, data) => {
-        const result = await withTimeout(
-            tables.updateRow({
-                databaseId: DATABASE_ID,
-                tableId: LAYOUTS_COLLECTION_ID,
-                rowId: layoutId,
-                data
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: updateLayout"
-        );
-        setLayouts(prev => prev.map(layout => layout.$id === layoutId ? result : layout).sort(compareByOrder));
-        return result;
-    }, []);
-
-    /**
-     * Layout törlése az adatbázisból.
-     *
-     * @param {string} layoutId - A törlendő layout azonosítója.
-     */
-    const deleteLayout = useCallback(async (layoutId) => {
-        await withTimeout(
-            tables.deleteRow({
-                databaseId: DATABASE_ID,
-                tableId: LAYOUTS_COLLECTION_ID,
-                rowId: layoutId
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: deleteLayout"
-        );
-        setLayouts(prev => prev.filter(layout => layout.$id !== layoutId));
-    }, []);
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Write-Through API — Határidők (Deadlines)
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /**
-     * Új határidő létrehozása az adatbázisban.
-     *
-     * @param {Object} data - A határidő adatai (publicationId, startPage, endPage, datetime)
-     * @returns {Promise<Object>} A létrehozott dokumentum.
-     */
-    const createDeadline = useCallback(async (data) => {
-        const result = await withTimeout(
-            tables.createRow({
-                databaseId: DATABASE_ID,
-                tableId: DEADLINES_COLLECTION_ID,
-                rowId: ID.unique(),
-                data: withScope(data)
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: createDeadline"
-        );
-        setDeadlines(prev => {
-            if (prev.some(d => d.$id === result.$id)) return prev;
-            return [...prev, result].sort(compareByStartPage);
-        });
-        return result;
-    }, [withScope]);
-
-    /**
-     * Határidő frissítése az adatbázisban.
-     *
-     * @param {string} deadlineId - A frissítendő határidő azonosítója.
-     * @param {Object} data - A frissítendő mezők.
-     * @returns {Promise<Object>} A frissített dokumentum.
-     */
-    const updateDeadline = useCallback(async (deadlineId, data) => {
-        const result = await withTimeout(
-            tables.updateRow({
-                databaseId: DATABASE_ID,
-                tableId: DEADLINES_COLLECTION_ID,
-                rowId: deadlineId,
-                data
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: updateDeadline"
-        );
-        setDeadlines(prev => prev.map(deadline => deadline.$id === deadlineId ? result : deadline).sort(compareByStartPage));
-        return result;
-    }, []);
-
-    /**
-     * Határidő törlése az adatbázisból.
-     *
-     * @param {string} deadlineId - A törlendő határidő azonosítója.
-     */
-    const deleteDeadline = useCallback(async (deadlineId) => {
-        await withTimeout(
-            tables.deleteRow({
-                databaseId: DATABASE_ID,
-                tableId: DEADLINES_COLLECTION_ID,
-                rowId: deadlineId
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: deleteDeadline"
-        );
-        setDeadlines(prev => prev.filter(deadline => deadline.$id !== deadlineId));
-    }, []);
-
-    // ═══════════════════════════════════════════════════════════════════════════
     // Realtime Szinkronizáció
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -1132,6 +932,25 @@ export const DataProvider = ({ children }) => {
                     setValidations([]);
                 }
 
+                // A coverage-változás detektálása a setPublications ELŐTT, a prev state-ből,
+                // hogy Strict Mode-ban is idempotens legyen (a setter callback kétszer fut).
+                // Csak akkor érdekes az overlap validációnak, ha az érintett publikáció
+                // éppen az aktív (azaz cikkei betöltve vannak).
+                const shouldCheckCoverage = event.includes(".update")
+                    && payload.isActivated
+                    && payload.$id === activePublicationIdRef.current;
+                if (shouldCheckCoverage) {
+                    const existing = latestPublicationsRef.current.find(pub => pub.$id === payload.$id);
+                    const isStale = existing?.$updatedAt && payload.$updatedAt && existing.$updatedAt > payload.$updatedAt;
+                    if (existing && !isStale) {
+                        const coverageDidChange = existing.coverageStart !== payload.coverageStart
+                            || existing.coverageEnd !== payload.coverageEnd;
+                        if (coverageDidChange) {
+                            dispatchMaestroEvent(MaestroEvent.publicationCoverageChanged, { publication: payload });
+                        }
+                    }
+                }
+
                 setPublications(prev => {
                     if (event.includes(".update")) {
                         const existing = prev.find(pub => pub.$id === payload.$id);
@@ -1143,12 +962,11 @@ export const DataProvider = ({ children }) => {
                             // Új aktivált publikáció (pl. first-time activation): hozzáadás
                             return [...prev, payload].sort(compareByName);
                         }
+                        // $updatedAt staleness guard — ha a helyi adat frissebb, skip
+                        const isStale = existing.$updatedAt && payload.$updatedAt && existing.$updatedAt > payload.$updatedAt;
                         return prev.map(publication => {
                             if (publication.$id !== payload.$id) return publication;
-                            // $updatedAt staleness guard
-                            if (publication.$updatedAt && payload.$updatedAt && publication.$updatedAt > payload.$updatedAt) {
-                                return publication;
-                            }
+                            if (isStale) return publication;
                             return payload;
                         }).sort(compareByName);
                     } else if (event.includes(".create")) {
@@ -1247,6 +1065,10 @@ export const DataProvider = ({ children }) => {
                         }
                         return prev;
                     });
+
+                    // Az useOverlapValidation hook a layoutChanged eseményre hallgat —
+                    // a Dashboard-oldali layout CRUD így triggereli az overlap újraszámítást.
+                    dispatchMaestroEvent(MaestroEvent.layoutChanged, { publicationId: payload.publicationId });
                 }
             }
 
@@ -1358,11 +1180,6 @@ export const DataProvider = ({ children }) => {
         setActivePublicationId: updateActivePublicationId,
         fetchData,
 
-        // Write-Through API — Publikációk
-        createPublication,
-        updatePublication,
-        deletePublication,
-
         // Write-Through API — Cikkek
         createArticle,
         updateArticle,
@@ -1372,26 +1189,13 @@ export const DataProvider = ({ children }) => {
         // Write-Through API — Validációk
         createValidation,
         updateValidation,
-        deleteValidation,
-
-        // Write-Through API — Layoutok
-        createLayout,
-        updateLayout,
-        deleteLayout,
-
-        // Write-Through API — Határidők
-        createDeadline,
-        updateDeadline,
-        deleteDeadline
+        deleteValidation
     }), [
         publications, articles, validations, layouts, deadlines, workflow, workflows,
         isLoading, isSwitchingPublication, activePublicationId,
         updateActivePublicationId, fetchData,
-        createPublication, updatePublication, deletePublication,
         createArticle, updateArticle, deleteArticle, applyArticleUpdate,
-        createValidation, updateValidation, deleteValidation,
-        createLayout, updateLayout, deleteLayout,
-        createDeadline, updateDeadline, deleteDeadline
+        createValidation, updateValidation, deleteValidation
     ]);
 
     return (

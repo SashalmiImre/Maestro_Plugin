@@ -269,7 +269,7 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
             clearTimeout(clickTimerRef.current);
         }
         clickTimerRef.current = setTimeout(() => {
-            onShowProperties?.(article, 'article');
+            onShowProperties?.(article);
             clickTimerRef.current = null;
         }, UI_TIMING.CLICK_DEBOUNCE_MS);
     };

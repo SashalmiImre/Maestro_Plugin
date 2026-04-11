@@ -113,13 +113,13 @@ Maestro/
 │   │   └── utils/               # Segédfüggvények, validátorok, InDesign scriptek, workflow
 │   │
 │   ├── data/                    # Adat hookok (Context ↔ UI híd)
-│   │   └── hooks/               # useArticles, usePublications, useWorkflowValidation, stb.
+│   │   └── hooks/               # useArticles, useWorkflowValidation, useOverlapValidation, stb.
 │   │
 │   ├── ui/                      # React komponensek
 │   │   ├── common/              # Újrafelhasználható elemek (Table, Toast, Loading, stb.)
 │   │   └── features/            # Domain-specifikus komponensek
 │   │       ├── articles/        # ArticleTable, ArticleProperties
-│   │       ├── publications/    # PublicationList, Publication, PublicationProperties
+│   │       ├── publications/    # PublicationList, Publication (read-only, Dashboard deeplink)
 │   │       ├── workspace/       # Workspace, DocumentMonitor, LockManager, PropertiesPanel
 │   │       └── user/            # Login
 │   │

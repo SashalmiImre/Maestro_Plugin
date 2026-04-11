@@ -31,6 +31,12 @@ import { DATA_QUERY_CONFIG, TOAST_TYPES } from "../../core/utils/constants.js";
 // Egyetlen megosztott példány
 const structureValidator = new PublicationStructureValidator();
 
+// Debounce ablak a layoutChanged event kezeléséhez.
+// A Dashboard-oldali bulk layout műveletek (pl. tömeges törlés/import) egymás után több
+// Realtime eseményt generálnak publikációnként — a debounce összevonja őket egyetlen
+// overlap-revalidációs futtatásba, megelőzve a fölösleges DB-fetcheket és UI jank-et.
+const LAYOUT_CHANGED_DEBOUNCE_MS = 250;
+
 /**
  * Lapozva lekéri az összes validációs sort az Appwrite-ból a megadott szűrőkkel.
  * PAGE_SIZE-os kötegekben halad, amíg az utolsó köteg kisebb, mint PAGE_SIZE.
@@ -81,6 +87,9 @@ export const useOverlapValidation = () => {
     const articlesRef = useRef(articles);
     const publicationsRef = useRef(publications);
     const layoutsRef = useRef(layouts);
+
+    // Per-publikáció debounce timer a layoutChanged eseményekhez (ld. LAYOUT_CHANGED_DEBOUNCE_MS)
+    const layoutChangedTimersRef = useRef(new Map());
 
     useEffect(() => {
         articlesRef.current = articles;
@@ -378,32 +387,46 @@ export const useOverlapValidation = () => {
         const publicationId = changedArticle?.publicationId || directPubId;
         if (!publicationId) return;
 
-        const publication = publicationsRef.current.find(p => p.$id === publicationId);
-        if (!publication) return;
+        // Az aktuális event payload-ját egy Map-ben rögzítjük per-publikáció, hogy
+        // a késleltetett futás a legfrissebb cikk-override-okat lássa (bulk dispatch esetén).
+        const timers = layoutChangedTimersRef.current;
+        const prev = timers.get(publicationId);
+        if (prev) clearTimeout(prev.timerId);
 
-        // Frissített cikk(ek) becsatolása a testvérek közé.
-        // Az event detail-ből kapott cikkek felülírják a ref-ben lévő (esetleg stale) adatokat.
-        const updatedMap = new Map();
-        if (changedArticle) updatedMap.set(changedArticle.$id, changedArticle);
-        if (changedArticles) changedArticles.forEach(a => updatedMap.set(a.$id, a));
+        // Az összevonás során halmozzuk az event-ekben szereplő override-okat,
+        // hogy egy bulk operáció minden frissítése bekerüljön a végső validációba.
+        const pendingOverrides = prev?.overrides || new Map();
+        if (changedArticle) pendingOverrides.set(changedArticle.$id, changedArticle);
+        if (changedArticles) changedArticles.forEach(a => pendingOverrides.set(a.$id, a));
 
-        const siblingArticles = articlesRef.current
-            .filter(a => a.publicationId === publicationId)
-            .map(a => updatedMap.get(a.$id) || a);
+        const timerId = setTimeout(() => {
+            timers.delete(publicationId);
 
-        const resultsMap = structureValidator.validatePerArticle({
-            publication,
-            articles: siblingArticles,
-            layouts: layoutsRef.current
-        });
+            const publication = publicationsRef.current.find(p => p.$id === publicationId);
+            if (!publication) return;
 
-        const allArticleIds = siblingArticles.map(a => a.$id);
-        const itemsMap = transformResultsToItems(resultsMap);
-        updatePublicationValidation(itemsMap, allArticleIds, VALIDATION_SOURCES.STRUCTURE);
-        persistToDatabase(publicationId, resultsMap);
+            const siblingArticles = articlesRef.current
+                .filter(a => a.publicationId === publicationId)
+                .map(a => pendingOverrides.get(a.$id) || a);
 
-        // Toast értesítés (konfigurációs változás → user nem feltétlenül látja a ValidationSection-t)
-        notifyIfErrors(resultsMap);
+            if (siblingArticles.length === 0) return;
+
+            const resultsMap = structureValidator.validatePerArticle({
+                publication,
+                articles: siblingArticles,
+                layouts: layoutsRef.current
+            });
+
+            const allArticleIds = siblingArticles.map(a => a.$id);
+            const itemsMap = transformResultsToItems(resultsMap);
+            updatePublicationValidation(itemsMap, allArticleIds, VALIDATION_SOURCES.STRUCTURE);
+            persistToDatabase(publicationId, resultsMap);
+
+            // Toast értesítés (konfigurációs változás → user nem feltétlenül látja a ValidationSection-t)
+            notifyIfErrors(resultsMap);
+        }, LAYOUT_CHANGED_DEBOUNCE_MS);
+
+        timers.set(publicationId, { timerId, overrides: pendingOverrides });
     }, [updatePublicationValidation, persistToDatabase, notifyIfErrors]);
 
     /**
@@ -494,6 +517,15 @@ export const useOverlapValidation = () => {
             window.removeEventListener(MaestroEvent.documentClosed, handleDocumentClosed);
         };
     }, [handlePageRangesChanged, handlePublicationCoverageChanged, handleLayoutChanged, handleArticlesAdded, handleDocumentClosed]);
+
+    // ── Unmount cleanup: függő debounce timer-ek törlése ──
+    useEffect(() => {
+        const timers = layoutChangedTimersRef.current;
+        return () => {
+            for (const pending of timers.values()) clearTimeout(pending.timerId);
+            timers.clear();
+        };
+    }, []);
 
     // ── Realtime feliratkozás (más felhasználók validációs változásai) ──
     // A SYSTEM_VALIDATIONS_COLLECTION_ID csatornára iratkozunk fel, így ha egy másik kliens

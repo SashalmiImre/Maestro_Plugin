@@ -9,20 +9,17 @@ import { ConfirmDialog } from "../../../common/ConfirmDialog.jsx";
 import { useArticles } from "../../../../data/hooks/useArticles.js";
 import { useUser } from "../../../../core/contexts/UserContext.jsx";
 import { useData } from "../../../../core/contexts/DataContext.jsx";
-import { useToast } from "../../../common/Toast/ToastContext.jsx";
 
 // Utils
 import { MARKERS } from "maestro-shared/constants.js";
 import { logDebug, logError } from "../../../../core/utils/logger.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../../core/config/maestroEvents.js";
-import { useElementPermissions } from "../../../../data/hooks/useElementPermission.js";
 import { buildPlaceholderRows } from "../../../../core/utils/pageGapUtils.js";
 import { isContributor } from "maestro-shared/contributorHelpers.js";
 
-export const Publication = React.memo(({ publication, onDelete, onRename, onShowProperties, isExpanded, onToggle, isDriveAccessible, filterState }) => {
+export const Publication = React.memo(({ publication, onShowProperties, onOpenInDashboard, isExpanded, onToggle, isDriveAccessible, filterState }) => {
     const { user } = useUser();
     const { workflow } = useData();
-    const { showToast } = useToast();
     const {
         articles,
         addArticle,
@@ -30,6 +27,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
     } = useArticles(publication.$id, publication.rootPath);
 
     const [isHovered, setIsHovered] = useState(false);
+    const [isFocused, setIsFocused] = useState(false);
 
     // Dialog state
     const [dialogOpen, setDialogOpen] = useState(false);
@@ -39,9 +37,6 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
     const { statusFilters, showIgnored, showOnlyMine, showPlaceholders } = filterState;
 
     const userGroupSlugs = user?.groupSlugs || [];
-
-    // Kiadvány jogosultság hook-kal
-    const pubPermissions = useElementPermissions(['publicationProperties'], 'publication');
 
     const filteredArticles = React.useMemo(() => {
         const filtered = articles.filter(article => {
@@ -68,16 +63,15 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
         return [...filteredArticles, ...placeholderRows];
     }, [filteredArticles, placeholderRows, showPlaceholders, showOnlyMine]);
 
-    const canOpenPublicationProperties = pubPermissions.publicationProperties.allowed;
-
     const handlePublicationDoubleClick = useCallback((e) => {
         e.stopPropagation();
-        if (!canOpenPublicationProperties) {
-            showToast('Nincs jogosultság', 'error', 'A kiadvány beállításait csak vezető szerkesztők és művészeti vezetők nyithatják meg.');
-            return;
-        }
-        onShowProperties?.(publication, 'publication');
-    }, [onShowProperties, publication, canOpenPublicationProperties, showToast]);
+        onOpenInDashboard?.(publication.$id);
+    }, [onOpenInDashboard, publication.$id]);
+
+    const handleOpenInDashboardClick = useCallback((e) => {
+        e.stopPropagation();
+        onOpenInDashboard?.(publication.$id);
+    }, [onOpenInDashboard, publication.$id]);
 
     const handleChevronClick = useCallback((e) => {
         e.stopPropagation();
@@ -166,11 +160,6 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
         }
     }, [addArticle, isExpanded, onToggle]);
 
-    const deletePublication = useCallback((e) => {
-        e.stopPropagation();
-        onDelete?.(publication.$id, publication.name);
-    }, [onDelete, publication]);
-
     return (
         <div
             style={{
@@ -183,7 +172,8 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                 marginBottom: "12px"
             }}
         >
-            {/* Publikáció fejléc sor */}
+            {/* Publikáció fejléc sor — a toolbar hover VAGY focus-within állapotra jelenik meg,
+                hogy billentyűzettel navigáló felhasználók is elérjék a műveleteket. */}
             <div
                 style={{
                     display: "flex",
@@ -195,6 +185,11 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                 }}
                 onMouseEnter={() => setIsHovered(true)}
                 onMouseLeave={() => setIsHovered(false)}
+                onFocus={() => setIsFocused(true)}
+                onBlur={(e) => {
+                    // Csak akkor rejtjük el, ha a fókusz a fejléc sor doboza ELHAGYJA (nem belső mozgás)
+                    if (!e.currentTarget.contains(e.relatedTarget)) setIsFocused(false);
+                }}
             >
                 <div style={{ display: "flex", alignItems: "center" }}>
                     <div onClick={handleChevronClick} style={{
@@ -210,8 +205,9 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                     </div>
                     <sp-heading size="xxs"
                         onDoubleClick={handlePublicationDoubleClick}
+                        title="Dupla kattintás: megnyitás a Dashboardon"
                         style={{
-                            cursor: canOpenPublicationProperties ? "pointer" : "default",
+                            cursor: "pointer",
                             margin: 0,
                             color: isDriveAccessible ? "var(--spectrum-global-color-blue-400)" : "var(--spectrum-global-color-red-400)"
                         }}>
@@ -219,32 +215,29 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                     </sp-heading>
                 </div>
 
-                {isHovered && (
-                    <sp-body style={{ margin: 0 }}>
-                        <div style={{ display: "flex", alignItems: "center" }}>
-                            <div
-                                onClick={handleAddArticleClick}
-                                title="Cikk hozzáadása"
-                                style={{ cursor: "pointer", display: "flex", alignItems: "center" }}
-                            >
-                                <sp-icon-add
-                                    size="s"
-                                    style={{ width: "14px", height: "14px", display: "inline-block" }}
-                                ></sp-icon-add>
-                            </div>
+                {(isHovered || isFocused) && (
+                    <div style={{ display: "flex", alignItems: "center" }}>
+                        <sp-action-button
+                            quiet
+                            size="s"
+                            aria-label="Cikk hozzáadása"
+                            title="Cikk hozzáadása"
+                            onClick={handleAddArticleClick}
+                        >
+                            <sp-icon-add slot="icon" size="s"></sp-icon-add>
+                        </sp-action-button>
 
-                            <div
-                                onClick={deletePublication}
-                                title="Kiadvány törlése"
-                                style={{ cursor: "pointer", display: "flex", alignItems: "center", marginLeft: "8px" }}
-                            >
-                                <sp-icon-delete
-                                    size="s"
-                                    style={{ width: "14px", height: "14px", display: "inline-block" }}
-                                ></sp-icon-delete>
-                            </div>
-                        </div>
-                    </sp-body>
+                        <sp-action-button
+                            quiet
+                            size="s"
+                            aria-label="Megnyitás a Dashboardon"
+                            title="Megnyitás a Dashboardon"
+                            onClick={handleOpenInDashboardClick}
+                            style={{ marginLeft: "4px" }}
+                        >
+                            <sp-icon-link-out slot="icon" size="s"></sp-icon-link-out>
+                        </sp-action-button>
+                    </div>
                 )}
             </div>
 
@@ -285,7 +278,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                         articles={tableData}
                         publication={publication}
                         onOpen={handleOpenArticle}
-                        onShowProperties={(article, type) => onShowProperties?.(article, type, publication)}
+                        onShowProperties={(article) => onShowProperties?.(article, publication)}
                     />
                 )
             }

@@ -91,15 +91,17 @@ tags: [feladatok]
 
 #### Fázis 9 — Plugin egyszerűsítés
 
-- [ ] Plugin `DataContext.jsx`: `createPublication`, `updatePublication`, `deletePublication` + layout/deadline write-through eltávolítás
-- [ ] `usePublications.js` hook: CRUD függvények eltávolítása (vagy hook törlés ha üressé válik)
-- [x] `PublicationListToolbar.jsx` „+" gomb eltávolítása *(2026-04-10 — Fázis 5 harden pass keretében előrehozva: a plugin-oldali create gomb elvezetne egy nem aktivált, tehát a plugin számára láthatatlan rekordhoz; csak a belépési pont lett letiltva, a `createPublication` API Fázis 9-ben kerül törlésre)*
-- [ ] `PublicationProperties/` teljes mappa törlése (GeneralSection, LayoutsSection, DeadlinesSection, ContributorsSection)
-- [ ] `Publication.jsx`: csak olvasható mód (nincs rename, delete, properties dupla kattintás)
-- [ ] `Workspace.jsx`: properties nézet eltávolítás publikációkra (`selectedType: 'publication'` ág)
-- [ ] „Megnyitás a Dashboardon" link/gomb hozzáadása a plugin-ban ahol szükséges
-- [ ] **Verifikáció**: plugin-ban nincs pub CRUD, Realtime szinkron működik, dashboard link elérhető
-- [ ] CLAUDE.md + docs frissítés az új architektúrával
+- [x] Plugin `DataContext.jsx`: `createPublication`/`updatePublication`/`deletePublication` + layout/deadline write-through metódusok + Context value kulcsok eltávolítása; a Realtime layouts handler új `MaestroEvent.layoutChanged` dispatchet kapott, hogy a Dashboard-oldali layout CRUD triggerelje a plugin `useOverlapValidation` újraszámítását *(2026-04-11)*
+- [x] `usePublications.js` / `useLayouts.js` / `useDeadlines.js` hook fájlok törlése — a Plugin a DataContext-et közvetlenül olvassa *(2026-04-11)*
+- [x] `PublicationListToolbar.jsx` „+" gomb eltávolítása *(2026-04-10 — Fázis 5 harden pass keretében előrehozva: a plugin-oldali create gomb elvezetne egy nem aktivált, tehát a plugin számára láthatatlan rekordhoz; csak a belépési pont lett letiltva, a `createPublication` API Fázis 9-ben került törlésre)*
+- [x] `PublicationProperties/` teljes mappa törlése (GeneralSection, LayoutsSection, DeadlinesSection, ContributorsSection) *(2026-04-11)*
+- [x] `Publication.jsx`: csak olvasható mód — nincs rename/delete handler, a properties dupla kattintás helyett a publikáció fejléc és a hover toolbar új „Megnyitás a Dashboardon" (`sp-icon-link-out`) ikonja nyitja a Dashboardot JWT auto-loginnal *(2026-04-11)*
+- [x] `Workspace.jsx`: properties nézet csak cikkekre (`selectedType` mező törlése), `handleOpenDashboard(pubId?)` refaktor opcionális paraméterrel — `?pub=<id>` query + `#jwt=<token>` fragment, prop drill `PublicationList` → `Publication` útvonalon *(2026-04-11)*
+- [x] `PropertiesPanel.jsx`: publication ág törlése, csak `ArticleProperties`-t renderel *(2026-04-11)*
+- [x] CLAUDE.md frissítés: Architektúra DataContext Write-through szekció (szűk hatókör + Realtime layoutChanged dispatch) + DataContext API referencia (Olvas-csak szekció a publikáció/layout/határidő collection-ökhöz) *(2026-04-11)*
+- [x] Harden pass: (1) `publicationCoverageChanged` új dispatcher a publications Realtime `.update` handlerben (`{ publication }` payload, `latestPublicationsRef` alapú Strict Mode-safe check a `setPublications` előtt) — Dashboard-oldali coverage szűkítés most triggereli az overlap újraszámítást a pluginban; (2) `useOverlapValidation` per-publikáció 250 ms `setTimeout` debounce + override accumulation Map-pel a `layoutChanged` storm (bulk Dashboard CRUD) ellen + empty-sibling early-return + unmount cleanup; (3) `PublicationList.jsx` új empty state aktivált kiadvány hiányában (Dashboard CTA); (4) `Publication.jsx` hover toolbar billentyűzet-a11y (`isFocused` state + `sp-action-button` `slot="icon"` minta, dead `sp-body` wrapper törlés); (5) `DeadlineValidator.js` törlés (orphan a DeadlinesSection törlés után) + üres `PublicationProperties/` mappa + 4 árva `STORAGE_KEYS.SECTION_PUBLICATION_*` konstans takarítás; (6) doc sync (EVENT_ARCHITECTURE payload + URGENCY/VALIDATION/README/CLAUDE.md) *(2026-04-11, Codex baseline + adversarial + verifying review, simplify pass kritikus payload contract bug fix-szel)*
+- [ ] **Verifikáció**: plugin-ban nincs pub CRUD, Realtime szinkron működik, dashboard link elérhető (build + dead-code grep + funkcionális smoke test)
+- [ ] **Follow-up (külön task)**: `article-update-guard` CF kiterjesztése — a permission block jelenleg csak `stateChanged` mezőt védi, de a jogosultság-visszavonás fail-closed biztosításához minden cikk-update mezőre (startPage/endPage/contributors/name/...) futnia kell. Scope: [packages/maestro-server/functions/article-update-guard/src/main.js:365-390](packages/maestro-server/functions/article-update-guard/src/main.js). Eredet: Fázis 9 harden pass Design Question — user döntés 2026-04-11.
 
 ## Kész
 

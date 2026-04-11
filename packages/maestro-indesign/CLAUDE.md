@@ -88,7 +88,9 @@
     - **Aktivált kiadvány szűrés (Fázis 5)**: A Plugin kizárólag `isActivated === true` publikációkat lát — a `fetchData` query-ben `Query.equal('isActivated', true)` feltétel, a Realtime handler pedig `.create`/`.update` eseményeknél ellenőrzi a `payload.isActivated === true`-t (különben skip/eltávolít a listából). Ha a deaktivált/törölt publikáció éppen az aktív, az `activePublicationId` és a derived state (`articles`/`layouts`/`deadlines`/`validations`) azonnal törlődik. A publikáció létrehozás Fázis 4-től a Dashboard hatásköre — a Plugin csak aktivált rekordokkal dolgozik.
     - **Aktív Kiadvány Hatókör**: Cikkeket és felhasználói validációkat *csak* az aktuálisan aktív kiadványhoz (`activePublicationId`) kér le.
     - REST API lekérés (kezdeti) + Appwrite Realtime (folyamatos szinkron).
-    - **Write-through API**: A komponensek DataContext metódusokon keresztül írnak (`createArticle`, `updateArticle`, stb.), amelyek DB írást hajtanak végre → optimista helyi állapotfrissítés a szerver válaszával.
+    - **Write-through API (szűk hatókör, Fázis 9)**: A Plugin csak `articles` és `userValidations` rekordokba ír (`createArticle`, `updateArticle`, `deleteArticle`, `createValidation`, stb.) — optimista helyi állapotfrissítés a szerver válaszával. A `publications`, `layouts`, `deadlines` collection-ökbe NEM ír (ezeket a Dashboard szerkeszti; a Plugin kizárólag olvassa Realtime szinkron + `fetchData` útján). A „Megnyitás a Dashboardon" hover ikon és a publikáció fejléc dupla kattintás a böngészőben nyitja meg a Dashboardot JWT auto-loginnal (ld. `Workspace.handleOpenDashboard(pubId)`).
+    - **Realtime `layoutChanged` dispatch**: A layouts Realtime handler minden `.create`/`.update`/`.delete` esemény után dispatcheli a `MaestroEvent.layoutChanged`-et, hogy a Dashboard-oldali layout módosítások is triggereljék a Plugin `useOverlapValidation` újraszámítását. A hook oldalán per-publikáció 250 ms debounce (`layoutChangedTimersRef` Map) összevonja a Dashboard bulk layout műveletek (pl. kötegelt törlés) Realtime burst-jét egyetlen overlap-revalidációs futtatásba.
+    - **Realtime `publicationCoverageChanged` dispatch**: A publications Realtime `.update` handler a `setPublications` ELŐTT (a `latestPublicationsRef`-ből olvasva) ellenőrzi, hogy a `coverageStart`/`coverageEnd` mezők módosultak-e, és csak akkor dispatcheli a `MaestroEvent.publicationCoverageChanged`-et a teljes payload-dal (`{ publication }`), ha (a) a publikáció az aktív, (b) nem stale, (c) tényleg változott a coverage. Ez triggereli a `useOverlapValidation` per-cikk újraszámítását Dashboard-oldali coverage szűkítés után.
     - **`applyArticleUpdate(doc)`**: Külső írók (WorkflowEngine hívók) számára — szerver választ alkalmaz a helyi állapotra DB hívás nélkül.
     - **`$updatedAt` elavulás-védelem**: A Realtime handler kihagyja azokat az eseményeket, ahol a helyi adat frissebb, mint a bejövő payload (megakadályozza, hogy elavult WebSocket események felülírják az optimista frissítéseket).
     - **Stabil Realtime feliratkozás**: Ref-eket használ az `activePublicationId`-hoz és az `articles`-hoz, hogy ne iratkozzon újra fel állapotváltozáskor.
@@ -118,7 +120,7 @@
     - **Struktúra Validáció (PublicationStructureValidator)**: Bounds check (`getEffectivePageRange()` — `startPage`/`endPage` + `pageRanges` JSON fallback) és overlap detektálás (`getOccupiedPages()` — layout-alapú csoportosítás). A `validatePerArticle()` per-cikk eredményeket ad vissza (deduplikált párok `reportedPairs` Set-tel). A `useOverlapValidation` hook az `articlesAdded` event payload-ból merge-öli az új cikkeket a ref-elt állapottal (React state batching megkerülése).
     - **Blokkolási Logika**: Bármely aktív `error` típusú elem blokkolja az állapotátmeneteket.
     - **Komponensek**: `ValidationSection.jsx` (UI), `useUnifiedValidation` (Logika), `ValidationContext` (Rendszeradatok).
-    - **Mező-szintű Validáció**: `ValidatedTextField` `invalid` prop + validátor statikus metódusok (pl. `DeadlineValidator.isValidDate/isValidTime`, `isValidFileName`) — azonnali piros keret blur-kor, formátum-hibára. Fájlnév validáció: `\ / : * ? " < > |` tiltott karakterek + Windows fenntartott nevek (CON, PRN, AUX, NUL, COM1–9, LPT1–9) + pontra/szóközre végződő nevek tiltása.
+    - **Mező-szintű Validáció**: `ValidatedTextField` `invalid` prop + validátor statikus metódusok (pl. `isValidFileName`) — azonnali piros keret blur-kor, formátum-hibára. Fájlnév validáció: `\ / : * ? " < > |` tiltott karakterek + Windows fenntartott nevek (CON, PRN, AUX, NUL, COM1–9, LPT1–9) + pontra/szóközre végződő nevek tiltása. (A határidő mezőket Fázis 9 óta a Dashboard szerkeszti — a plugin-oldali `DeadlineValidator` megszűnt.)
     - **Dokumentáció**: `docs/VALIDATION_MECHANISM.md`
     - Ld. `docs/diagrams/data-flow-architecture.md`
 
@@ -292,7 +294,6 @@ Maestro/
 │   │       │   ├── PreflightValidator.js
 │   │       │   ├── PublicationStructureValidator.js
 │   │       │   ├── StateComplianceValidator.js  ← Állapotátmenet-validáció koordinátor (fájl, oldalszám, fájlnév, preflight)
-│   │       │   ├── DeadlineValidator.js
 │   │       │   └── index.js
 │   │       ├── indesign/               ← ExtendScript generálás & InDesign segédfüggvények
 │   │       │   ├── indesignUtils.js    ← Script futtatás, dokumentum műveletek
@@ -311,19 +312,16 @@ Maestro/
 │   ├── data/                     ← Adat hook-ok réteg (Context ↔ UI híd)
 │   │   └── hooks/
 │   │       ├── useArticles.js                   ← CRUD + megnyitás/bezárás + szűrés kiadvány szerint
-│   │       ├── usePublications.js               ← CRUD + lefedettség kezelés
 │   │       ├── useGroupMembers.js                ← Csoporttagok listázása (scope-szűrt, Realtime szinkronnal)
-│   │       ├── useContributorGroups.js           ← Contributor csoportok + tagok (2 query, 5 perces cache, dinamikus ContributorsSection)
+│   │       ├── useContributorGroups.js           ← Contributor csoportok + tagok (2 query, 5 perces cache)
 │   │       ├── useUserValidations.js            ← Felhasználói validációs üzenetek CRUD
 │   │       ├── useUnifiedValidation.js          ← Rendszer + felhasználói validációk összefésülése
 │   │       ├── useWorkflowValidation.js         ← Preflight + workflow validáció (esemény-vezérelt)
 │   │       ├── useDatabaseIntegrityValidation.js ← DB integritás esemény-feliratkozó hook
-│   │       ├── useOverlapValidation.js          ← Átfedés detektálás esemény-feliratkozó hook
+│   │       ├── useOverlapValidation.js          ← Átfedés detektálás esemény-feliratkozó hook (per-pub debounce)
 │   │       ├── useThumbnails.js                ← Thumbnail generálás hook (documentClosed event)
-│   │       ├── useDeadlines.js                  ← Határidők CRUD
-│   │       ├── useLayouts.js                    ← Layoutok CRUD + layoutChanged esemény
 │   │       ├── useUrgency.js                    ← Sürgősség-számítás hook (percenkénti frissítés)
-│   │       ├── useElementPermission.js          ← UI elem jogosultság hookok (useElementPermission, useElementPermissions)
+│   │       ├── useElementPermission.js          ← UI elem jogosultság hookok (useElementPermissions, useContributorPermissions)
 │   │       ├── useDriveAccessibility.js         ← Központi mappa-elérhetőség figyelő (batched ExtendScript)
 │   │       └── useFilters.js                    ← Központi szűrő állapot hook (localStorage perzisztált)
 │   │
@@ -346,17 +344,11 @@ Maestro/
 │   │       │       ├── ContributorsSection.jsx
 │   │       │       └── ValidationSection.jsx
 │   │       ├── publications/
-│   │       │   ├── PublicationList.jsx
+│   │       │   ├── PublicationList.jsx  ← Kiadvány lista (read-only; üres állapot Dashboard CTA-val)
 │   │       │   ├── PublicationListToolbar.jsx
-│   │       │   ├── Publication/         ← Egyetlen kiadvány nézet
-│   │       │   │   ├── Publication.jsx
-│   │       │   │   └── WorkflowStatus.jsx
-│   │       │   └── PublicationProperties/
-│   │       │       ├── PublicationProperties.jsx
-│   │       │       ├── GeneralSection.jsx
-│   │       │       ├── ContributorsSection.jsx
-│   │       │       ├── LayoutsSection.jsx
-│   │       │       └── DeadlinesSection.jsx
+│   │       │   └── Publication/         ← Egyetlen kiadvány nézet (hover toolbar: Cikk hozzáadása + Dashboard megnyitása)
+│   │       │       ├── Publication.jsx
+│   │       │       └── WorkflowStatus.jsx
 │   │       ├── workspace/
 │   │       │   ├── Workspace.jsx        ← Fő munkaterület konténer
 │   │       │   ├── WorkspaceHeader.jsx  ← Fejléc sáv (felhasználó név + szűrők gomb + dashboard link)
@@ -469,14 +461,14 @@ már betöltődött-e és a `ScopeContext` auto-pick adott-e aktív officeId-t.
 - `setActivePublicationId(id)` — Kontextust vált és adat lekérést indít
 - `isLoading`, `isSwitchingPublication` — betöltési állapot
 - `fetchData(isBackground)` — REST API lekérés (inicializáláskor & újracsatlakozáskor)
-- **Write-Through — Kiadványok**: `createPublication(data)`, `updatePublication(id, data)`, `deletePublication(id)` — a `createPublication` API még létezik, de UI belépési pont nincs hozzá (a `PublicationListToolbar`-ból a „+ Új kiadvány" gomb eltávolítva Fázis 4-től, mert a létrehozás a Dashboard hatáskörébe került és a Plugin csak aktivált rekordokat lát). A teljes CRUD API eltávolítás Fázis 9-ben történik.
-- **Write-Through — Cikkek**: `createArticle(data)`, `updateArticle(id, data)`, `deleteArticle(id)`
-- **Write-Through — Validációk**: `createValidation(data)`, `updateValidation(id, data)`, `deleteValidation(id)`
+- **Write-Through — Cikkek**: `createArticle(data)`, `updateArticle(id, data)`, `deleteArticle(id)` — a cikk CRUD a Pluginban marad (InDesign fájlfelvétel, oldalszám, állapotváltások).
+- **Write-Through — Validációk**: `createValidation(data)`, `updateValidation(id, data)`, `deleteValidation(id)` — user message CRUD.
+- **Olvas-csak — Kiadványok / Layoutok / Határidők (Fázis 9)**: A Plugin NEM ír publikáció, layout vagy határidő rekordokba. A DataContext a megfelelő `create*`/`update*`/`delete*` metódusokat nem exportálja, ezeket a Dashboard szerkeszti. A Plugin kizárólag olvassa ezeket Realtime szinkron + `fetchData` útján. A Publication hover toolbar „Megnyitás a Dashboardon" (`sp-icon-link-out`) ikonja és a publikáció fejléc dupla kattintása a böngészőben nyitja meg a Dashboardot JWT auto-loginnal (`handleOpenDashboard(pubId)` a Workspace-ben, `?pub=<id>` query + `#jwt=<token>` fragment).
 - **Apply-Optimistic**: `applyArticleUpdate(serverDocument)` — külső írók (WorkflowEngine hívók) számára. Tartalmaz `$updatedAt` elavulás-védelmet: frissebb helyi adat nem felülíródik régebbi szerveradattal. Ez kritikus az `syncLocks()` és `fetchData()` párhuzamos futásánál — megakadályozza, hogy egy korábbi lock műveleti válasz felülírja a frissebb (lock-mentes) DB állapotot.
 - **Realtime handler**: Automatikusan frissíti az állapotot WebSocket eseményekből `$updatedAt` elavulás-védelemmel. Ugyanez a minta mint az `applyArticleUpdate()`-ben — garantálja, hogy egy hosszabb hálózati késleltetésű update soha nem írja felül az optimista UI frissítéseket vagy közelmúltbeli szerver válaszokat.
 - **Scope-szűrt fetch**: A `fetchData` minden lekérdezéséhez (`publications`, `articles`, `layouts`, `deadlines`, `userValidations`) hozzáfűzi a `Query.equal("editorialOfficeId", activeEditorialOfficeIdRef.current)` feltételt — így a Plugin kizárólag az aktív szerkesztőség adatait látja. A `publications` query ezen felül tartalmaz `Query.equal('isActivated', true)` feltételt is (Fázis 5). Ha nincs aktív officeId, a `fetchData` üres listákat állít be és `isInitialized=true`-ra vált, hogy a Realtime feliratkozás tudjon indulni. Office-váltáskor a `prevOfficeIdRef` alapján egy külön effect nullázza az `activePublicationId`-t és törli a derived state-et (`articles`, `layouts`, `deadlines`, `validations`).
 - **Realtime scope szűrés**: A `publications`, `articles`, `layouts`, `deadlines`, `userValidations` ágak a meglévő `publicationId` szűrés MELLÉ `payload.editorialOfficeId === activeEditorialOfficeIdRef.current` ellenőrzést futtatnak (kivéve `.delete` eseményeknél, ahol a `filter()` amúgy is védett). **Publications aktiválás szűrés (Fázis 5)**: A `publications` ág `.create`/`.update` eseményeinél `payload.isActivated !== true` → skip (create) vagy filter-out (update, mintha delete lenne). Deaktiváláskor vagy törléskor, ha a target az aktív publikáció, az `activePublicationId` és a derived state (articles/layouts/deadlines/validations) azonnal nullázódik.
-- **Write-through scope injection**: A `createPublication`, `createArticle`, `createLayout`, `createDeadline`, `createValidation` közös `withScope(data)` helper-en keresztül automatikusan rácsapja az `organizationId` + `editorialOfficeId` mezőket a payload-ra, refből olvasva az aktív értékeket. Ha nincs aktív scope, a helper dob (`'Nincs aktív szerkesztőség — a művelet nem hajtható végre.'`) — ez a happy path-ban nem tüzelhet (a UI a `ScopeMissingPlaceholder` mögött zárolva). Az `updateX` metódusok NEM kapnak scope injection-t — a scope mezők immutable-ek a CF guard-ok által.
+- **Write-through scope injection**: A `createArticle` és `createValidation` közös `withScope(data)` helper-en keresztül automatikusan rácsapja az `organizationId` + `editorialOfficeId` mezőket a payload-ra, refből olvasva az aktív értékeket. Ha nincs aktív scope, a helper dob (`'Nincs aktív szerkesztőség — a művelet nem hajtható végre.'`) — ez a happy path-ban nem tüzelhet (a UI a `ScopeMissingPlaceholder` mögött zárolva). Az `updateX` metódusok NEM kapnak scope injection-t — a scope mezők immutable-ek a CF guard-ok által.
 
 ### ScopeContext API
 - `activeOrganizationId`, `activeEditorialOfficeId` — az aktuálisan választott multi-tenant scope (localStorage-ban perzisztált, `maestro.activeOrganizationId` / `maestro.activeEditorialOfficeId` kulcsok; a Plugin és Dashboard localStorage izolált, nincs ütközés).
