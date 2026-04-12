@@ -214,6 +214,10 @@ export const GROUPS_COLLECTION_ID = COLLECTIONS.GROUPS;
 export const GROUP_MEMBERSHIPS_COLLECTION_ID = COLLECTIONS.GROUP_MEMBERSHIPS;
 export const WORKFLOWS_COLLECTION_ID = COLLECTIONS.WORKFLOWS;
 
+// Cloud Function ID-k
+/** Pre-event szinkron cikk-update endpoint (Fázis 9 follow-up). */
+export const UPDATE_ARTICLE_FUNCTION_ID = 'update-article';
+
 // =============================================================================
 // cookieFallback Diagnosztika — Session token eltűnés nyomkövetés
 // =============================================================================

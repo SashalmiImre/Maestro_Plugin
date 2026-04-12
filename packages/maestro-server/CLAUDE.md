@@ -56,7 +56,10 @@ maestro-server/
 ├── appwrite.json                      ← Appwrite CLI deployment konfig
 │
 └── functions/                         ← Appwrite Cloud Function-ök
-    ├── article-update-guard/          ← Cikk frissítés guard (állapotátmenet + jogosultság + contributor)
+    ├── update-article/                ← Cikk update pre-event szinkron CF (Fázis 9 follow-up — HTTP endpoint, `users` execute)
+    │   ├── package.json
+    │   └── src/main.js
+    ├── article-update-guard/          ← Post-event log-only safety net + parent publication scope sync
     │   ├── package.json
     │   └── src/main.js
     ├── validate-article-creation/     ← Cikk létrehozás validáció (publicationId, state, contributor-ok)
@@ -90,6 +93,7 @@ maestro-server/
 
 | Function ID | Név | Runtime | Timeout | Trigger |
 |---|---|---|---|---|
+| `update-article` | Update Article | node-18.0 | 15s | Kliens hívás (HTTP, `execute: ["users"]`) |
 | `article-update-guard` | Article Update Guard | node-18.0 | 30s | `articles.*.update` |
 | `validate-article-creation` | Validate Article Creation | node-18.0 | 15s | `articles.*.create` |
 | `validate-publication-update` | Validate Publication Update | node-18.0 | 15s | `publications.*.create/update` |
@@ -108,13 +112,14 @@ maestro-server/
 | Változó | Érték | Leírás |
 |---|---|---|
 | `APPWRITE_API_KEY` | *(secret)* | API kulcs — `MaestroFunctionsKey` (databases.rw, users.rw, files.rw) |
-| `APPWRITE_FUNCTION_ENDPOINT` | automatikus | Appwrite végpont (Appwrite beállítja) |
+| `APPWRITE_ENDPOINT` | `https://fra.cloud.appwrite.io/v1` | Appwrite végpont — explicit beállítás szükséges, mert az automatikus `APPWRITE_FUNCTION_ENDPOINT` belső runtime endpoint a `role: applications` identitást kényszeríti, ami felülírja az API key scope-okat |
 | `APPWRITE_FUNCTION_PROJECT_ID` | automatikus | Projekt ID (Appwrite beállítja) |
 
 ### Per-function
 
 | Function | Változók |
 |---|---|
+| `update-article` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `GROUPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID` |
 | `article-update-guard` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `GROUPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID` |
 | `validate-article-creation` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID` |
 | `validate-publication-update` | `DATABASE_ID`, `PUBLICATIONS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `DEADLINES_COLLECTION_ID` |
@@ -130,6 +135,7 @@ maestro-server/
 
 | Function | Szükséges Scopes |
 |---|---|
+| `update-article` | `databases.read`, `databases.write`, `users.read` |
 | `article-update-guard` | `databases.read`, `databases.write`, `users.read` |
 | `validate-article-creation` | `databases.read`, `databases.write`, `users.read` |
 | `validate-publication-update` | `databases.read`, `databases.write`, `users.read` |
@@ -145,20 +151,53 @@ maestro-server/
 
 ## Működési Leírás
 
+### update-article
+
+HTTP endpoint (`execute: ["users"]`) a Plugin `functions.createExecution(..., async: false)` hívására. Minden cikk update egyetlen belépési pontja Fázis 9 follow-up óta. Fail-closed pre-event validáció — csak pozitív ellenőrzés után ír a DB-be szerver API key-jel.
+
+**Bemenet** (req.body JSON): `{ articleId, data }`. Az `ALLOWED_FIELDS` szűri a `data` kulcsokat: `state`, `previousState`, `name`, `filePath`, `startPage`, `endPage`, `pageRanges`, `contributors`, `markers`, `lockType`, `lockOwnerId`, `thumbnails`. Minden egyéb mező `invalid_field`.
+
+**Kimenet** (res.json):
+- Siker: `{ success: true, action: 'applied', document }`.
+- Permission denied: `{ success: false, permissionDenied: true, reason, requiredGroups }` (400).
+- Invalid / 404 / config: `{ success: false, reason }` megfelelő státuszkóddal.
+
+**Ellenőrzések (sorrendben, fail-closed):**
+1. **Auth** — `x-appwrite-user-id` header kötelező.
+2. **Payload validáció** — `articleId` + `data` objektum, `ALLOWED_FIELDS` szűrés.
+3. **Fresh doc fetch** — `databases.getDocument(articles, articleId)`. 404 → 404 válasz.
+4. **Parent publication** — `getDocument(publications, publicationId)`; 404 esetén soft-skip, a fresh doc scope-jával megyünk tovább.
+5. **Parent scope drift sync** — ha `parent.editorialOfficeId !== freshDoc.editorialOfficeId` → soft-fix a fresh doc-ra memóriában (a CF a végső write-nál nem alkalmazza).
+6. **lockType enum validáció** — ha `data.lockType` jelen van, `VALID_LOCK_TYPES` Set-tel (`'USER'`, `'SYSTEM'`, `null`) ellenőrzés. Érvénytelen érték → 400 `invalid_lock_type`.
+7. **Lock fast-path kivétel** — ha a payload kizárólag `lockType`/`lockOwnerId` mezőket tartalmaz ÉS a user a saját lockját állítja be (`data.lockOwnerId === userId` ÉS `freshDoc.lockOwnerId === null || === userId`) VAGY oldja fel (`freshDoc.lockOwnerId === userId` és a payload null-ra állít), a csoportjogosultsági check ki van hagyva. A `freshDoc.lockOwnerId` ellenőrzés megakadályozza, hogy más office tagja zároljon egy már zárolt dokumentumot.
+8. **Data validáció** — `data.state`: compiled.states kulcs érvényesség + transition `from: currentState, to: data.state` a compiled.transitions-ben. `data.contributors`: JSON parse + per-userId létezés (log only).
+9. **Workflow betöltés** — `getWorkflowForPublication()`, 60s process cache. Nincs workflow → 500 `misconfigured`.
+10. **Office membership** — MINDIG fut (lock fast-path esetén is) — a caller tagja-e a `freshDoc.editorialOfficeId`-nek (`editorialOfficeMemberships` lookup). Nem → 403 permissionDenied.
+11. **Jogosultsági check** — leader bypass (`compiled.leaderGroups`), utána `statePermissions[freshDoc.state]` a cikk szerkesztéséhez. State váltáskor a cél állapotnak is léteznie kell a transitions-ben. Lock fast-path esetén skip-elve.
+12. **DB write** — `databases.updateDocument()` az API key-jel, `modifiedByClientId: 'server-guard'` sentinel-lel — ez jelzi a post-event `article-update-guard` CF-nek, hogy skip-peljen.
+13. **Válasz** — `{ success: true, action: 'applied', document }`.
+
+**DB permission függés**: éles környezetben az `articles` collection `Update` role-ból a `users` meg van vonva — így a direkt kliens DB írás lehetetlen, minden update ezen a CF-en keresztül megy.
+
 ### article-update-guard
 
-Összevont workflow állapotátmenet + contributor validáció. Minden cikk frissítéskor fut.
+**Fázis 9 follow-up óta defense-in-depth log-only safety net** — az elsődleges érvényesítő az `update-article` CF. Ez a post-event trigger mostantól megfigyelési célt szolgál (Dashboard közvetlen írás, manual Console edit, jövőbeli integrációk) és csak minimális korrekciókat alkalmaz.
 
 **Ellenőrzések:**
-1. **Sentinel guard** — `modifiedByClientId === 'server-guard'` → skip (végtelen ciklus védelem)
-2. **Workflow betöltés** — `workflows` collection-ből az office `editorialOfficeId` alapján, 60s process cache (fail-closed: nincs workflow → state revert)
-3. **Parent scope sync (B.8)** — szülő publikáció `editorialOfficeId`/`organizationId` mezőkhöz igazítás
-4. **Állapot érvényesség** — `compiled.states` kulcsai között van-e (érvénytelen → első állapot order szerint)
-5. **Állapotátmenet** — `previousState → state` a `compiled.transitions` alapján
-6. **Scope ellenőrzés (B.8)** — caller user tagja-e a cikk `editorialOfficeId`-jának; nem-tag → state revert
-7. **Jogosultság** — felhasználó csoporttagsága (`groupMemberships` + `groups` → slug tömb) a `compiled.statePermissions` és `compiled.leaderGroups` alapján
-8. **Contributor mezők** — `contributors` JSON parse → slug-ok iterálása → userId létezés ellenőrzés (log only)
-9. **previousState karbantartás** — null esetén inicializálás, revert esetén frissítés
+1. **Sentinel guard** — `modifiedByClientId === 'server-guard'` → skip (az `update-article` CF írta, már validált)
+2. **Workflow betöltés** — `workflows` collection-ből, 60s process cache (csak a log-only check-ek működéséhez)
+3. **Parent scope sync (KORREKCIÓ MARAD)** — szülő publikáció `editorialOfficeId`/`organizationId` mezőkhöz igazítás. Ez minden írási forrást lefed, ezért továbbra is kijavítja a drift-et.
+4. **Állapot érvényesség** — log-only warning, ha `currentState` nincs a `compiled.states`-ben
+5. **Állapotátmenet** — log-only warning, ha `previousState → state` nincs a `compiled.transitions`-ben
+6. **Office scope** — log-only warning, ha a caller nem tagja az office-nak (cross-tenant update detektálás)
+7. **Jogosultság** — log-only warning, ha a csoporttagság sértett (`[SafetyNet] Jogosultsági sértés ...`)
+8. **Contributor mezők** — `contributors` JSON parse + userId létezés (log only, változatlan)
+9. **previousState hygiene (KORREKCIÓ MARAD)** — null esetén `currentState`-tel inicializálás
+
+**Mit NEM csinál már** (ezt az `update-article` CF előzetesen lekezeli):
+- State revert érvénytelen állapot vagy átmenet esetén
+- State revert jogosultság hiány miatt
+- State revert office scope sértés miatt
 
 ### validate-article-creation
 

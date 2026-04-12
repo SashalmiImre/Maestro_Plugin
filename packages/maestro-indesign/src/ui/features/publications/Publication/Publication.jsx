@@ -217,26 +217,52 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
 
                 {(isHovered || isFocused) && (
                     <div style={{ display: "flex", alignItems: "center" }}>
-                        <sp-action-button
-                            quiet
-                            size="s"
+                        <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={handleAddArticleClick}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    handleAddArticleClick();
+                                }
+                            }}
                             aria-label="Cikk hozzáadása"
                             title="Cikk hozzáadása"
-                            onClick={handleAddArticleClick}
+                            style={{
+                                cursor: "pointer",
+                                display: "flex",
+                                alignItems: "center",
+                                padding: "2px",
+                                color: "var(--spectrum-global-color-blue-400)"
+                            }}
                         >
-                            <sp-icon-add slot="icon" size="s"></sp-icon-add>
-                        </sp-action-button>
+                            <sp-icon-add size="s" style={{ width: "14px", height: "14px", display: "inline-block", verticalAlign: "middle" }}></sp-icon-add>
+                        </div>
 
-                        <sp-action-button
-                            quiet
-                            size="s"
+                        <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={handleOpenInDashboardClick}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    handleOpenInDashboardClick();
+                                }
+                            }}
                             aria-label="Megnyitás a Dashboardon"
                             title="Megnyitás a Dashboardon"
-                            onClick={handleOpenInDashboardClick}
-                            style={{ marginLeft: "4px" }}
+                            style={{
+                                cursor: "pointer",
+                                display: "flex",
+                                alignItems: "center",
+                                padding: "2px",
+                                marginLeft: "4px",
+                                color: "var(--spectrum-global-color-blue-400)"
+                            }}
                         >
-                            <sp-icon-link-out slot="icon" size="s"></sp-icon-link-out>
-                        </sp-action-button>
+                            <sp-icon-link-out size="s" style={{ width: "14px", height: "14px", display: "inline-block", verticalAlign: "middle" }}></sp-icon-link-out>
+                        </div>
                     </div>
                 )}
             </div>

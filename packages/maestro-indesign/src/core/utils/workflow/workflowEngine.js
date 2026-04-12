@@ -8,8 +8,8 @@
  * @module utils/workflowEngine
  */
 
-import { tables, DATABASE_ID, ARTICLES_COLLECTION_ID } from "../../config/appwriteConfig.js";
-import { withTimeout } from "../promiseUtils.js";
+import { callUpdateArticleCF } from "../updateArticleClient.js";
+import { PermissionDeniedError } from "../errorUtils.js";
 import { getAvailableTransitions as rtGetAvailableTransitions } from "maestro-shared/workflowRuntime.js";
 import { canUserMoveArticle } from "./workflowPermissions.js";
 import { LOCK_TYPE } from "../constants.js";
@@ -18,6 +18,15 @@ import { VALIDATOR_TYPES } from "../validationConstants.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../config/maestroEvents.js";
 
 import { log, logError } from "../logger.js";
+
+/** Közös hibakezelés a CF-hívó metódusokhoz. */
+function _handleCFError(error, context) {
+    if (error instanceof PermissionDeniedError) {
+        return { success: false, error: error.message, permissionDenied: true };
+    }
+    logError(context, error);
+    return { success: false, error: error.message };
+}
 
 /**
  * WorkflowEngine osztály a cikkek munkafolyamat-állapotainak és átmeneteinek kezelésére.
@@ -84,20 +93,11 @@ export class WorkflowEngine {
 
             log(`[WorkflowEngine] Cikk (${article.$id}) állapotváltása: ${article.state} → ${targetState}, felhasználó: ${user?.name || user?.$id || 'ismeretlen'}`);
 
-            // 2. Cikk frissítése az adatbázisban
-            const result = await withTimeout(
-                tables.updateRow({
-                    databaseId: DATABASE_ID,
-                    tableId: ARTICLES_COLLECTION_ID,
-                    rowId: article.$id,
-                    data: {
-                        state: targetState,
-                        previousState: article.state
-                    }
-                }),
-                20000,
-                "WorkflowEngine: executeTransition"
-            );
+            // 2. Cikk frissítése az update-article CF-en keresztül
+            const result = await callUpdateArticleCF(article.$id, {
+                state: targetState,
+                previousState: article.state
+            }, "WorkflowEngine: executeTransition");
 
             // Állapotváltás jelzése az event rendszeren keresztül
             try {
@@ -112,8 +112,7 @@ export class WorkflowEngine {
 
             return { success: true, document: result };
         } catch (error) {
-            logError("Állapotváltás sikertelen:", error);
-            return { success: false, error: error.message };
+            return _handleCFError(error, "Állapotváltás sikertelen:");
         }
     }
 
@@ -131,22 +130,12 @@ export class WorkflowEngine {
             const currentMarkersMask = typeof article.markers === 'number' ? article.markers : 0;
             const newMarkersMask = currentMarkersMask ^ markerType;
 
-            const result = await withTimeout(
-                tables.updateRow({
-                    databaseId: DATABASE_ID,
-                    tableId: ARTICLES_COLLECTION_ID,
-                    rowId: article.$id,
-                    data: {
-                        markers: newMarkersMask
-                    }
-                }),
-                20000,
-                "WorkflowEngine: toggleMarker"
-            );
+            const result = await callUpdateArticleCF(article.$id, {
+                markers: newMarkersMask
+            }, "WorkflowEngine: toggleMarker");
             return { success: true, document: result };
         } catch (error) {
-            logError("Marker kapcsolása sikertelen:", error);
-            return { success: false, error: error.message };
+            return _handleCFError(error, "Marker kapcsolása sikertelen:");
         }
     }
 
@@ -174,25 +163,15 @@ export class WorkflowEngine {
         }
 
         try {
-            const result = await withTimeout(
-                tables.updateRow({
-                    databaseId: DATABASE_ID,
-                    tableId: ARTICLES_COLLECTION_ID,
-                    rowId: article.$id,
-                    data: {
-                        lockType: lockType,
-                        lockOwnerId: user.$id
-                    }
-                }),
-                20000,
-                "WorkflowEngine: lockDocument"
-            );
+            const result = await callUpdateArticleCF(article.$id, {
+                lockType: lockType,
+                lockOwnerId: user.$id
+            }, "WorkflowEngine: lockDocument");
 
             return { success: true, document: result };
 
         } catch (error) {
-            logError("Dokumentum zárolása sikertelen:", error);
-            return { success: false, error: error.message };
+            return _handleCFError(error, "Dokumentum zárolása sikertelen:");
         }
     }
 
@@ -213,25 +192,15 @@ export class WorkflowEngine {
                 return { success: false, error: "not authorized" };
             }
 
-            const result = await withTimeout(
-                tables.updateRow({
-                    databaseId: DATABASE_ID,
-                    tableId: ARTICLES_COLLECTION_ID,
-                    rowId: article.$id,
-                    data: {
-                        lockType: null,
-                        lockOwnerId: null
-                    }
-                }),
-                20000,
-                "WorkflowEngine: unlockDocument"
-            );
+            const result = await callUpdateArticleCF(article.$id, {
+                lockType: null,
+                lockOwnerId: null
+            }, "WorkflowEngine: unlockDocument");
 
             return { success: true, document: result };
 
         } catch (error) {
-            logError("Dokumentum feloldása sikertelen:", error);
-            return { success: false, error: error.message };
+            return _handleCFError(error, "Dokumentum feloldása sikertelen:");
         }
     }
 }

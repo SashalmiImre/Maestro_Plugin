@@ -6,6 +6,7 @@ import { useUser } from "../../../core/contexts/UserContext.jsx";
 import { useData } from "../../../core/contexts/DataContext.jsx";
 import { useToast } from "../../common/Toast/ToastContext.jsx";
 import { tables, Query, DATABASE_ID, ARTICLES_COLLECTION_ID } from "../../../core/config/appwriteConfig.js";
+import { callUpdateArticleCF } from "../../../core/utils/updateArticleClient.js";
 
 // Segédfüggvények
 import { toCanonicalPath, toRelativeArticlePath, getArticleCanonicalPath } from "../../../core/utils/pathUtils.js";
@@ -148,25 +149,18 @@ export const LockManager = () => {
 
             if (!isMountedRef.current) return;
 
-            // Minden talált lockot törlünk
+            // Minden talált lockot törlünk — az update-article CF a lock-only
+            // payload-ra kivételt alkalmaz, így a cleanup csoporttagság nélkül
+            // is működik, ha a user a SAJÁT lock-ját adja vissza.
             for (const article of response.rows) {
                 if (!isMountedRef.current) break;
                 try {
                     const updatedDoc = await withRetry(
-                        () => withTimeout(
-                            tables.updateRow({
-                                databaseId: DATABASE_ID,
-                                tableId: ARTICLES_COLLECTION_ID,
-                                rowId: article.$id,
-                                data: {
-                                    lockType: null,
-                                    lockOwnerId: null
-                                }
-                            }),
-                            10000,
-                            "LockManager: cleanupOrphanedLocks updateRow"
-                        ),
-                        { operationName: "LockManager: cleanupOrphanedLocks updateRow" }
+                        () => callUpdateArticleCF(article.$id, {
+                            lockType: null,
+                            lockOwnerId: null
+                        }, "LockManager: cleanupOrphanedLocks"),
+                        { operationName: "LockManager: cleanupOrphanedLocks updateArticleCF" }
                     );
                     log(`[LockManager] Orphaned lock törölve: ${article.name}`);
                     // Optimista UI frissítés — az orphaned lock törlése azonnal megjelenjen

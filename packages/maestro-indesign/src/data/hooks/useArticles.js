@@ -10,6 +10,7 @@ import { useAllGroupMembers } from "./useGroupMembers.js";
 // Segédprogramok (Utils)
 import { isNetworkError, isAuthError, getAPIErrorMessage } from "../../core/utils/errorUtils.js";
 import { tables, DATABASE_ID, ARTICLES_COLLECTION_ID, Query } from "../../core/config/appwriteConfig.js";
+import { callUpdateArticleCF } from "../../core/utils/updateArticleClient.js";
 import {
     generateIsDocumentOpenScript,
     generateOpenDocumentScript,
@@ -336,14 +337,10 @@ export const useArticles = (publicationId, publicationRoot) => {
                             const isKnownMember = members.length > 0 && members.some(m => m.userId === freshArticle.lockOwnerId);
                             if (!isKnownMember && members.length > 0) {
                                 log(`[useArticles] Ghost lock detektálva (${freshArticle.lockOwnerId}) — automatikus törlés`);
-                                const cleaned = await withTimeout(
-                                    tables.updateRow({
-                                        databaseId: DATABASE_ID,
-                                        tableId: ARTICLES_COLLECTION_ID,
-                                        rowId: freshArticle.$id,
-                                        data: { lockType: null, lockOwnerId: null }
-                                    }),
-                                    10000, "useArticles: cleanGhostLock"
+                                const cleaned = await callUpdateArticleCF(
+                                    freshArticle.$id,
+                                    { lockType: null, lockOwnerId: null },
+                                    "useArticles: cleanGhostLock"
                                 );
                                 if (cleaned) applyArticleUpdate(cleaned);
                             } else {

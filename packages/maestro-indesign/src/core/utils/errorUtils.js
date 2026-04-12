@@ -81,6 +81,24 @@ export const isNetworkError = (error) => {
 };
 
 /**
+ * Szerver-oldali jogosultság-megtagadás (`update-article` CF 403).
+ *
+ * A `DataContext.updateArticle()` dobja, ha a CF strukturált
+ * `{ permissionDenied: true, reason, requiredGroups }` választ ad. A hívók
+ * ezt `try/catch`-ben felismerhetik (`err instanceof PermissionDeniedError`),
+ * és a `reason`-t toast-ban megjeleníthetik anélkül, hogy 500-as hibának
+ * kezelnék.
+ */
+export class PermissionDeniedError extends Error {
+    constructor(reason, requiredGroups = []) {
+        super(reason || 'Nincs jogosultságod a művelethez.');
+        this.name = 'PermissionDeniedError';
+        this.permissionDenied = true;
+        this.requiredGroups = requiredGroups;
+    }
+}
+
+/**
  * Eldönti, hogy egy hiba Appwrite „hiányzó index" hiba-e.
  * Először stabil, strukturált property-ket vizsgál (code, type),
  * majd fallback-ként az üzenet szövegét ellenőrzi.

@@ -17,6 +17,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { tables, ID, DATABASE_ID, PUBLICATIONS_COLLECTION_ID, ARTICLES_COLLECTION_ID, USER_VALIDATIONS_COLLECTION_ID, LAYOUTS_COLLECTION_ID, DEADLINES_COLLECTION_ID, GROUP_MEMBERSHIPS_COLLECTION_ID, WORKFLOWS_COLLECTION_ID, Query } from "../config/appwriteConfig.js";
+import { callUpdateArticleCF } from "../utils/updateArticleClient.js";
 import { realtime } from "../config/realtimeClient.js";
 import { useConnection } from "./ConnectionContext.jsx";
 import { useScope } from "./ScopeContext.jsx";
@@ -26,7 +27,6 @@ import { withTimeout, withRetry } from "../utils/promiseUtils.js";
 import { isNetworkError, isAuthError } from "../utils/errorUtils.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../config/maestroEvents.js";
 import { FETCH_TIMEOUT_CONFIG, TOAST_TYPES } from "../utils/constants.js";
-import { isLegacyRootPath, isAbsoluteFilePath, toCanonicalPath, toRelativeArticlePath } from "../utils/pathUtils.js";
 
 /** Név szerinti komparátor rendezéshez. */
 const compareByName = (a, b) => (a?.name ?? '').localeCompare(b?.name ?? '');
@@ -116,140 +116,6 @@ export const DataProvider = ({ children }) => {
     useEffect(() => {
         activeEditorialOfficeIdRef.current = activeEditorialOfficeId;
     }, [activeEditorialOfficeId]);
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Lazy migráció (régi formátumú útvonalak konvertálása)
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /** Flag: a migráció már lefutott és nem talált legacy path-okat. */
-    const hasMigratedRef = useRef(false);
-
-    /**
-     * Háttérben konvertálja a régi formátumú útvonalakat kanonikus/relatív formátumra.
-     * Nem blokkolja a UI-t — best-effort DB frissítés.
-     * Az első sikeres (üres) futás után nem iterál újra.
-     */
-    const migratePathsIfNeeded = useCallback(async (pubs, arts) => {
-        if (hasMigratedRef.current) return;
-
-        try {
-            // 0. Normalizálj publikációkat — kanonikus rootPath-okat készítsd elő
-            // Ezt később használd a cikk loop-ban, hogy elkerüld a redundáns toCanonicalPath hívásokat
-            const normalizedPubs = pubs.map(pub => {
-                if (pub.rootPath && isLegacyRootPath(pub.rootPath)) {
-                    return { ...pub, rootPath: toCanonicalPath(pub.rootPath) };
-                }
-                return pub;
-            });
-
-            // 1. Publikációk: gyűjtsd össze az összes update ígéretet párhuzamosan
-            const pubPromises = [];
-            const pubUpdates = new Map();
-
-            for (let i = 0; i < pubs.length; i++) {
-                const pub = pubs[i];
-                if (pub.rootPath && isLegacyRootPath(pub.rootPath)) {
-                    const canonical = normalizedPubs[i].rootPath;
-                    log(`[DataContext] Migráció: pub rootPath "${pub.rootPath}" → "${canonical}"`);
-
-                    pubPromises.push(
-                        tables.updateRow({
-                            databaseId: DATABASE_ID,
-                            tableId: PUBLICATIONS_COLLECTION_ID,
-                            rowId: pub.$id,
-                            data: { rootPath: canonical }
-                        })
-                            .then(() => {
-                                pubUpdates.set(pub.$id, canonical);
-                            })
-                            .catch(e => {
-                                logError(`[DataContext] Migráció sikertelen (pub ${pub.$id}):`, e);
-                            })
-                    );
-                }
-            }
-
-            // Várakozz az összes pub update-re párhuzamosan
-            if (pubPromises.length > 0) {
-                await Promise.all(pubPromises);
-            }
-
-            // Alkalmzd a pub frissítéseket egyetlen state update-ben
-            if (pubUpdates.size > 0) {
-                setPublications(prev => prev.map(p => pubUpdates.has(p.$id) ? { ...p, rootPath: pubUpdates.get(p.$id) } : p));
-            }
-
-            // 2. Cikkek: gyűjtsd össze az összes update ígéretet párhuzamosan
-            // Használd normalizedPubs-t, hogy elkerüld a redundáns toCanonicalPath hívásokat
-            const articlePromises = [];
-            const articleUpdates = new Map();
-
-            for (const article of arts) {
-                if (article.filePath && isAbsoluteFilePath(article.filePath)) {
-                    // Abszolút (legacy) filePath → relatív konverzió
-                    const pub = normalizedPubs.find(p => p.$id === article.publicationId);
-                    const pubRoot = pub?.rootPath;
-                    if (!pubRoot) continue;
-
-                    const relative = toRelativeArticlePath(article.filePath, pubRoot);
-                    if (relative === article.filePath) continue;
-
-                    log(`[DataContext] Migráció: article filePath "${article.filePath}" → "${relative}"`);
-
-                    articlePromises.push(
-                        tables.updateRow({
-                            databaseId: DATABASE_ID,
-                            tableId: ARTICLES_COLLECTION_ID,
-                            rowId: article.$id,
-                            data: { filePath: relative }
-                        })
-                            .then(() => {
-                                articleUpdates.set(article.$id, relative);
-                            })
-                            .catch(e => {
-                                logError(`[DataContext] Migráció sikertelen (article ${article.$id}):`, e);
-                            })
-                    );
-                } else if (article.filePath && !isAbsoluteFilePath(article.filePath) && article.filePath.includes('\\')) {
-                    // Relatív filePath backslash normalizáció → forward slash
-                    const normalized = article.filePath.replace(/\\/g, '/');
-
-                    log(`[DataContext] Migráció: article filePath backslash "${article.filePath}" → "${normalized}"`);
-
-                    articlePromises.push(
-                        tables.updateRow({
-                            databaseId: DATABASE_ID,
-                            tableId: ARTICLES_COLLECTION_ID,
-                            rowId: article.$id,
-                            data: { filePath: normalized }
-                        })
-                            .then(() => {
-                                articleUpdates.set(article.$id, normalized);
-                            })
-                            .catch(e => {
-                                logError(`[DataContext] Migráció sikertelen (article ${article.$id}):`, e);
-                            })
-                    );
-                }
-            }
-
-            // Várakozz az összes article update-re párhuzamosan
-            if (articlePromises.length > 0) {
-                await Promise.all(articlePromises);
-            }
-
-            // Alkalmzd az article frissítéseket egyetlen state update-ben
-            if (articleUpdates.size > 0) {
-                setArticles(prev => prev.map(a => articleUpdates.has(a.$id) ? { ...a, filePath: articleUpdates.get(a.$id) } : a));
-            }
-
-            // Migráció készen: ne iteráljunk újra a következő fetch-nél
-            hasMigratedRef.current = true;
-        } catch (e) {
-            logError('[DataContext] Migráció hiba:', e);
-            hasMigratedRef.current = true; // Még hiba esetén is jelöld meg, hogy ne próbálkozz újra
-        }
-    }, []);
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Adatlekérés (Fetch)
@@ -430,10 +296,6 @@ export const DataProvider = ({ children }) => {
             const articleList = articlesResponse.documents || articlesResponse.rows || [];
             const sortedArticles = articleList.sort(compareByName);
             setArticles(sortedArticles);
-
-            // Lazy migráció: régi formátumú path-ok konvertálása kanonikus/relatív formátumra
-            // A migráció háttérben fut, nem blokkolja a UI megjelenést.
-            migratePathsIfNeeded(sortedPublications, sortedArticles);
 
             // Layoutok feldolgozása (nem-kritikus — allSettled)
             if (layoutsResult.status === 'fulfilled') {
@@ -740,23 +602,21 @@ export const DataProvider = ({ children }) => {
     }, [withScope]);
 
     /**
-     * Cikk frissítése az adatbázisban.
+     * Cikk frissítése az adatbázisban az `update-article` Cloud Function-ön keresztül.
+     *
+     * A Plugin NEM ír közvetlenül az `articles` collection-be — minden írás
+     * ezen a CF-en fut át, amely szerver-oldalon validál és jogosultságot
+     * ellenőriz (Fázis 9 follow-up). Fail-closed: ha a CF `permissionDenied`-et
+     * jelez, a hívó `PermissionDeniedError`-t kap, és a hívó oldal kezeli
+     * (toast + optimista UI revert).
      *
      * @param {string} articleId - A frissítendő cikk azonosítója.
-     * @param {Object} data - A frissítendő mezők.
-     * @returns {Promise<Object>} A frissített dokumentum.
+     * @param {Object} data - A frissítendő mezők (csak engedett whitelist).
+     * @returns {Promise<Object>} A szerver által visszaadott frissített dokumentum.
+     * @throws {PermissionDeniedError} Ha a szerver 403-mal utasítja el a kérést.
      */
     const updateArticle = useCallback(async (articleId, data) => {
-        const result = await withTimeout(
-            tables.updateRow({
-                databaseId: DATABASE_ID,
-                tableId: ARTICLES_COLLECTION_ID,
-                rowId: articleId,
-                data
-            }),
-            20000,
-            "DataContext: updateArticle"
-        );
+        const result = await callUpdateArticleCF(articleId, data, "DataContext: updateArticle");
         setArticles(prev => prev.map(article => article.$id === articleId ? result : article).sort(compareByName));
         return result;
     }, []);

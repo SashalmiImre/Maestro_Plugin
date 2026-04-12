@@ -1,20 +1,21 @@
 const sdk = require("node-appwrite");
 
 /**
- * Appwrite Function: Article Update Guard
+ * Appwrite Function: Article Update Guard (Defense-in-depth safety net)
  *
- * Szerver-oldali validáció cikk frissítésekor.
- * A workflow konfigurációt a `workflows` collection `compiled` JSON-jából olvassa.
+ * Fázis 9 follow-up óta a cikk update-ek elsődleges érvényesítője az
+ * `update-article` CF (pre-event, szinkron). Ez a post-event guard mostantól
+ * csak DEFENSE-IN-DEPTH szerepet tölt be:
  *
- * Ellenőrzések:
- * 1. Állapot érvényessége (a compiled.states-ben létezik-e)
- * 2. Állapotátmenet érvényessége (compiled.transitions alapján)
- * 3. Parent publication scope sync (Fázis 1 / B.8)
- * 4. Office scope (caller user tagja-e a cikk editorialOfficeId-jának)
- * 5. Jogosultság (a felhasználó csoporttagsága engedélyezi-e az átmenetet)
- * 6. Contributor mezők validitása
- *
- * Fail-closed: ha a workflow doc nem elérhető → state revert.
+ *  • Ha az `update-article` CF írta a rekordot (modifiedByClientId === server-guard
+ *    sentinel), teljesen átugorja az eseményt — a CF már validált.
+ *  • A parent publication cross-tenant scope sync TOVÁBBRA IS korrekciót alkalmaz —
+ *    ez minden írási forrást lefed (Dashboard közvetlen írás, Console edit,
+ *    jövőbeli integrációk).
+ *  • Minden egyéb invariáns (state érvényesség, átmenet, office scope,
+ *    jogosultság, contributor lookup) LOG-ONLY — warning-ot ír, de nem
+ *    módosítja a rekordot. Ezek a check-ek megfigyelési célt szolgálnak, hogy
+ *    észleljük, ha a CF-en kívüli írás sértette az invariánsokat.
  *
  * Trigger: databases.*.collections.articles.documents.*.update
  * Runtime: Node.js 18.0+
@@ -210,7 +211,7 @@ module.exports = async function ({ req, res, log, error }) {
 
         // ── SDK inicializálás ──
         const client = new sdk.Client()
-            .setEndpoint(process.env.APPWRITE_FUNCTION_ENDPOINT || 'https://cloud.appwrite.io/v1')
+            .setEndpoint(process.env.APPWRITE_ENDPOINT || 'https://cloud.appwrite.io/v1')
             .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
             .setKey(process.env.APPWRITE_API_KEY);
 
@@ -307,35 +308,27 @@ module.exports = async function ({ req, res, log, error }) {
         const stateChanged = previousState !== null && previousState !== undefined
             && previousState !== currentState;
 
-        // ── 5. Állapot érvényesség ──
+        // ── 5. Állapot érvényesség (LOG ONLY — safety net) ──
         if (compiled) {
             const states = Array.isArray(compiled.states) ? compiled.states : [];
             const validStateIds = states.map(s => s.id);
             if (currentState && !validStateIds.includes(currentState)) {
-                // Érvénytelen állapot → első állapot (order szerinti)
-                const sorted = [...states].sort((a, b) => (a.order || 0) - (b.order || 0));
-                const initialState = sorted.length > 0 ? sorted[0].id : "";
-                corrections.state = initialState;
-                log(`Érvénytelen állapot (${currentState}) → visszaállítás: ${initialState}`);
+                log(`[SafetyNet] Érvénytelen állapot ${freshDoc.$id}: "${currentState}" nincs a compiled.states-ben — CF-en kívüli írás?`);
             }
         } else if (stateChanged) {
-            // Nincs workflow → fail-closed: state revert
-            corrections.state = previousState;
-            log(`[Workflow] Nincs elérhető workflow — state revert: ${currentState} → ${previousState}`);
+            log(`[SafetyNet] Nincs elérhető workflow ${freshDoc.$id}: state "${previousState}" → "${currentState}" — CF-en kívüli írás?`);
         }
 
-        // ── 6. Állapotátmenet validáció ──
-        if (stateChanged && !corrections.state && compiled) {
+        // ── 6. Állapotátmenet validáció (LOG ONLY — safety net) ──
+        if (stateChanged && compiled) {
             const transitions = compiled.transitions || [];
             const isValid = transitions.some(t => t.from === previousState && t.to === currentState);
-
             if (!isValid) {
-                corrections.state = previousState;
-                log(`Érvénytelen átmenet: ${previousState} → ${currentState} → visszaállítás`);
+                log(`[SafetyNet] Érvénytelen átmenet ${freshDoc.$id}: "${previousState}" → "${currentState}" nincs a compiled.transitions-ben — CF-en kívüli írás?`);
             }
         }
 
-        // ── 7. Office scope ellenőrzés (Fázis 1 / B.8) ──
+        // ── 7. Office scope ellenőrzés (LOG ONLY — safety net) ──
         const userId = req.headers['x-appwrite-user-id'];
 
         if (userId && freshDoc.editorialOfficeId) {
@@ -345,25 +338,17 @@ module.exports = async function ({ req, res, log, error }) {
                     userId, freshDoc.editorialOfficeId
                 );
                 if (!membership) {
-                    if (stateChanged && !corrections.state) {
-                        corrections.state = previousState;
-                        log(`[Scope] User ${userId} nem tagja az office-nak ${freshDoc.editorialOfficeId} → state revert`);
-                    } else {
-                        log(`[Scope] User ${userId} nem tagja az office-nak ${freshDoc.editorialOfficeId} — non-state cross-tenant update detektálva`);
-                    }
+                    log(`[SafetyNet] Cross-tenant update ${freshDoc.$id}: user ${userId} nem tagja az office-nak ${freshDoc.editorialOfficeId}`);
                 }
             } catch (e) {
-                error(`[Scope] Membership lookup hiba: ${e.message} — fail-closed, state revert`);
-                if (stateChanged && !corrections.state) {
-                    corrections.state = previousState;
-                }
+                error(`[SafetyNet] Membership lookup hiba ${freshDoc.$id}: ${e.message}`);
             }
         } else if (userId && !freshDoc.editorialOfficeId) {
-            log(`[Scope] Legacy cikk ${freshDoc.$id} — nincs editorialOfficeId, office check kihagyva`);
+            log(`[SafetyNet] Legacy cikk ${freshDoc.$id} — nincs editorialOfficeId, office check kihagyva`);
         }
 
-        // ── 8. Jogosultsági ellenőrzés (állapotváltáskor) ──
-        if (stateChanged && !corrections.state && userId && compiled) {
+        // ── 8. Jogosultsági ellenőrzés (LOG ONLY — safety net) ──
+        if (stateChanged && userId && compiled) {
             const statePermissions = compiled.statePermissions || {};
             const leaderGroups = compiled.leaderGroups || [];
             const requiredGroups = statePermissions[previousState] || [];
@@ -374,16 +359,12 @@ module.exports = async function ({ req, res, log, error }) {
                     : [];
 
                 if (userGroupSlugs === null) {
-                    error(`Jogosultság check: getUserGroupSlugs hiba — fail-closed, state revert: userId=${userId}`);
-                    corrections.state = previousState;
+                    error(`[SafetyNet] Jogosultság check lookup hiba ${freshDoc.$id}: userId=${userId}`);
                 } else {
-                    // Vezetők mindig átléphetnek
                     const isLeader = leaderGroups.some(g => userGroupSlugs.includes(g));
                     const hasPermission = isLeader || requiredGroups.some(slug => userGroupSlugs.includes(slug));
-
                     if (!hasPermission) {
-                        corrections.state = previousState;
-                        log(`Jogosultsági hiba: felhasználó ${userId} nem mozgathatja a cikket állapotból ${previousState} (szükséges: [${requiredGroups.join(', ')}])`);
+                        log(`[SafetyNet] Jogosultsági sértés ${freshDoc.$id}: user ${userId} mozgatta "${previousState}" → "${currentState}" (szükséges: [${requiredGroups.join(', ')}])`);
                     }
                 }
             }
@@ -408,16 +389,15 @@ module.exports = async function ({ req, res, log, error }) {
             }
         }
 
-        // ── 10. previousState karbantartás ──
+        // ── 10. previousState karbantartás (legacy data hygiene) ──
+        // Régi, previousState=null rekordoknál inicializáljuk, hogy a
+        // stateChanged detektor kompatibilis legyen. Csak akkor, ha tényleg null.
         if (freshDoc.previousState === null || freshDoc.previousState === undefined) {
-            const effectiveState = corrections.state !== undefined ? corrections.state : currentState;
-            corrections.previousState = effectiveState;
-            log(`previousState inicializálva: ${effectiveState}`);
-        } else if (corrections.state !== undefined) {
-            corrections.previousState = corrections.state;
+            corrections.previousState = currentState;
+            log(`previousState inicializálva: ${currentState}`);
         }
 
-        // ── 11. Korrekciók alkalmazása ──
+        // ── 11. Korrekciók alkalmazása (csak scope sync + previousState init) ──
         if (Object.keys(corrections).length > 0) {
             corrections.modifiedByClientId = SERVER_GUARD_ID;
 
@@ -425,7 +405,7 @@ module.exports = async function ({ req, res, log, error }) {
                 databaseId, articlesCollectionId, payload.$id, corrections
             );
 
-            log(`Korrekciók alkalmazva: ${JSON.stringify(corrections)}`);
+            log(`[SafetyNet] Korrekciók alkalmazva (scope/previousState): ${JSON.stringify(corrections)}`);
 
             return res.json({
                 success: true,

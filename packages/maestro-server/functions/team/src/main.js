@@ -11,9 +11,9 @@ module.exports = async function ({ req, res, log, error }) {
   const client = new sdk.Client();
   
   // Initialize Client
-  // APPWRITE_FUNCTION_ENDPOINT and APPWRITE_FUNCTION_PROJECT_ID are automatically set by Appwrite
+  // APPWRITE_ENDPOINT and APPWRITE_FUNCTION_PROJECT_ID are automatically set by Appwrite
   client
-    .setEndpoint(process.env.APPWRITE_FUNCTION_ENDPOINT || 'https://cloud.appwrite.io/v1')
+    .setEndpoint(process.env.APPWRITE_ENDPOINT || 'https://cloud.appwrite.io/v1')
     .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
     .setKey(process.env.APPWRITE_API_KEY);
   const teams = new sdk.Teams(client);

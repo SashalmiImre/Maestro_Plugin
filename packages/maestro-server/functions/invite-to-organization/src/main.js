@@ -353,7 +353,7 @@ module.exports = async function ({ req, res, log, error }) {
         // „Execute function" gombbal).
         const apiKey = req.headers['x-appwrite-key'] || process.env.APPWRITE_API_KEY || '';
         const client = new sdk.Client()
-            .setEndpoint(process.env.APPWRITE_FUNCTION_ENDPOINT || 'https://cloud.appwrite.io/v1')
+            .setEndpoint(process.env.APPWRITE_ENDPOINT || 'https://cloud.appwrite.io/v1')
             .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
             .setKey(apiKey);
 

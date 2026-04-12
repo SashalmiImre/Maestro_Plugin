@@ -92,6 +92,8 @@
             "scopes": [
                 "databases.read",
                 "databases.write",
+                "documents.read",
+                "documents.write",
                 "files.read",
                 "files.write"
             ],
@@ -168,6 +170,31 @@
             "scopes": [
                 "databases.read",
                 "databases.write"
+            ],
+            "events": [],
+            "specification": "s-0.5vcpu-512mb",
+            "schedule": "",
+            "buildSpecification": "s-0.5vcpu-512mb",
+            "runtimeSpecification": "s-0.5vcpu-512mb",
+            "deploymentRetention": 0
+        },
+        {
+            "$id": "update-article",
+            "name": "Update Article",
+            "runtime": "node-18.0",
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "path": "functions/update-article",
+            "execute": [
+                "users"
+            ],
+            "scopes": [
+                "databases.read",
+                "databases.write",
+                "users.read"
             ],
             "events": [],
             "specification": "s-0.5vcpu-512mb",
