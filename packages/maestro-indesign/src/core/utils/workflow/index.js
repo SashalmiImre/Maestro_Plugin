@@ -4,4 +4,4 @@
  */
 
 export { WorkflowEngine } from "./workflowEngine.js";
-export { canUserMoveArticle, hasTransitionPermission, hasSpecificTransitionPermission } from "./workflowPermissions.js";
+export { canUserMoveArticle, hasTransitionPermission } from "./workflowPermissions.js";

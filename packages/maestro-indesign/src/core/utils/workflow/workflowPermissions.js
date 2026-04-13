@@ -11,8 +11,7 @@
  */
 
 import {
-    canUserMoveArticle as rtCanUserMoveArticle,
-    hasTransitionPermission as rtHasTransitionPermission
+    canUserMoveArticle as rtCanUserMoveArticle
 } from "maestro-shared/workflowRuntime.js";
 
 /**
@@ -39,15 +38,3 @@ export function hasTransitionPermission(workflow, currentState, userGroupSlugs) 
     return canUserMoveArticle(workflow, currentState, userGroupSlugs).allowed;
 }
 
-/**
- * Ellenőrzi, hogy az adott átmenethez (from→to) van-e jogosultsága a felhasználónak.
- *
- * @param {Object} workflow - A compiled workflow JSON.
- * @param {string} fromState - Kiindulási állapot.
- * @param {string} toState - Célállapot.
- * @param {string[]} userGroupSlugs - A felhasználó csoporttagságai.
- * @returns {{ allowed: boolean, reason?: string }}
- */
-export function hasSpecificTransitionPermission(workflow, fromState, toState, userGroupSlugs) {
-    return rtHasTransitionPermission(workflow, fromState, toState, userGroupSlugs);
-}

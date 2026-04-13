@@ -17,7 +17,7 @@ import { validate } from "../validationRunner.js";
 import { VALIDATOR_TYPES } from "../validationConstants.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../config/maestroEvents.js";
 
-import { log, logError } from "../logger.js";
+import { log, logError, logWarn } from "../logger.js";
 
 /** Közös hibakezelés a CF-hívó metódusokhoz. */
 function _handleCFError(error, context) {
@@ -48,6 +48,7 @@ export class WorkflowEngine {
      * @returns {Array<Object>} Érvényes átmenetek tömbje (from, to, label, direction, allowedGroups).
      */
     static getAvailableTransitions(workflow, currentState) {
+        if (!workflow) return [];
         return rtGetAvailableTransitions(workflow, currentState);
     }
 
@@ -62,6 +63,9 @@ export class WorkflowEngine {
      * @returns {Promise<Object>} Validációs eredmény: { isValid, errors[], warnings[] }.
      */
     static async validateTransition(workflow, article, targetState, publicationRootPath) {
+        if (!workflow) {
+            return { isValid: false, errors: ["Hiányzó workflow konfiguráció."], warnings: [] };
+        }
         return validate(article, VALIDATOR_TYPES.STATE_COMPLIANCE, { workflow, targetState, publicationRootPath });
     }
 
@@ -78,6 +82,11 @@ export class WorkflowEngine {
      * @returns {Promise<Object>} { success, document?, error?, permissionDenied? }
      */
     static async executeTransition(workflow, article, targetState, user, userGroupSlugs, publicationRootPath) {
+        if (!workflow || !article) {
+            logWarn("[WorkflowEngine] executeTransition: hiányzó workflow vagy article");
+            return { success: false, error: "Hiányzó workflow konfiguráció vagy cikk." };
+        }
+
         try {
             // 0. Jogosultsági ellenőrzés (a validáció ELŐTT — a drága preflight ne fusson feleslegesen)
             const permission = canUserMoveArticle(workflow, article.state, userGroupSlugs);
@@ -126,6 +135,14 @@ export class WorkflowEngine {
      * @returns {Promise<Object>} { success, document?, error? }
      */
     static async toggleMarker(article, markerType, user) {
+        if (!article) {
+            return { success: false, error: "Hiányzó cikk." };
+        }
+        if (!markerType || markerType <= 0 || (markerType & (markerType - 1)) !== 0) {
+            logWarn(`[WorkflowEngine] toggleMarker: érvénytelen markerType: ${markerType}`);
+            return { success: false, error: `Érvénytelen marker típus: ${markerType}` };
+        }
+
         try {
             const currentMarkersMask = typeof article.markers === 'number' ? article.markers : 0;
             const newMarkersMask = currentMarkersMask ^ markerType;
@@ -151,10 +168,13 @@ export class WorkflowEngine {
      * @returns {Promise<Object>} { success, document?, error? }
      */
     static async lockDocument(article, lockType, user) {
+        if (!article) {
+            return { success: false, error: "Hiányzó cikk." };
+        }
         if (!Object.values(LOCK_TYPE).includes(lockType)) {
             return {
                 success: false,
-                error: `Invalid lockType: ${lockType}. Must be one of: ${Object.values(LOCK_TYPE).join(", ")}`
+                error: `Érvénytelen zárolási típus: ${lockType}. Engedélyezett: ${Object.values(LOCK_TYPE).join(", ")}`
             };
         }
 
@@ -183,13 +203,17 @@ export class WorkflowEngine {
      * @returns {Promise<Object>} { success, document?, error? }
      */
     static async unlockDocument(article, user) {
+        if (!article) {
+            return { success: false, error: "Hiányzó cikk." };
+        }
+
         try {
             if (!article.lockOwnerId) {
                 return { success: true };
             }
 
             if (article.lockOwnerId !== user.$id) {
-                return { success: false, error: "not authorized" };
+                return { success: false, error: "Nincs jogosultság a zárolás feloldásához." };
             }
 
             const result = await callUpdateArticleCF(article.$id, {
