@@ -16,7 +16,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useScope } from "../../core/contexts/ScopeContext.jsx";
 
 // Config
-import { tables, DATABASE_ID, GROUPS_COLLECTION_ID, GROUP_MEMBERSHIPS_COLLECTION_ID, Query } from "../../core/config/appwriteConfig.js";
+import { tables, DATABASE_ID, COLLECTIONS, Query } from "../../core/config/appwriteConfig.js";
 import { MaestroEvent } from "../../core/config/maestroEvents.js";
 
 // Utils
@@ -67,7 +67,7 @@ export async function getGroupMembers(groupSlug, editorialOfficeId) {
         const groupsResult = await withRetry(
             () => tables.listRows({
                 databaseId: DATABASE_ID,
-                tableId: GROUPS_COLLECTION_ID,
+                tableId: COLLECTIONS.GROUPS,
                 queries: [
                     Query.equal('slug', groupSlug),
                     Query.equal('editorialOfficeId', editorialOfficeId),
@@ -89,7 +89,7 @@ export async function getGroupMembers(groupSlug, editorialOfficeId) {
         const membershipsResult = await withRetry(
             () => tables.listRows({
                 databaseId: DATABASE_ID,
-                tableId: GROUP_MEMBERSHIPS_COLLECTION_ID,
+                tableId: COLLECTIONS.GROUP_MEMBERSHIPS,
                 queries: [
                     Query.equal('groupId', groupId),
                     Query.limit(100)
@@ -244,7 +244,7 @@ export const useAllGroupMembers = () => {
             const result = await withRetry(
                 () => tables.listRows({
                     databaseId: DATABASE_ID,
-                    tableId: GROUP_MEMBERSHIPS_COLLECTION_ID,
+                    tableId: COLLECTIONS.GROUP_MEMBERSHIPS,
                     queries: [
                         Query.equal('editorialOfficeId', activeEditorialOfficeId),
                         Query.limit(500)

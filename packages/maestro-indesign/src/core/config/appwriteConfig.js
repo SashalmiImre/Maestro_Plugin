@@ -8,7 +8,7 @@ import {
     BUCKETS
 } from "maestro-shared/appwriteIds.js";
 
-export { APPWRITE_PROJECT_ID, DATABASE_ID, BUCKETS };
+export { APPWRITE_PROJECT_ID, DATABASE_ID, COLLECTIONS, BUCKETS };
 
 export const APPWRITE_LOCALE = "hu-HU";
 
@@ -118,15 +118,17 @@ client.headers['X-Appwrite-Package-Name'] = "com.sashalmiimre.maestro";
 // amit az Appwrite SDK automatikusan használ a hitelesítéshez.
 const originalFetch = window.fetch;
 const sessionCookiePattern = new RegExp(`a_session_${APPWRITE_PROJECT_ID}=([^;]+)`);
+// Előre kiszámított proxy base URL-ek — nem kell minden fetch-nél újraszámolni
+const PROXY_BASES = [
+    ENDPOINTS.PRIMARY.replace(/\/v1$/, ''),
+    ENDPOINTS.FALLBACK.replace(/\/v1$/, '')
+];
 window.fetch = async (...args) => {
     const [resource, config] = args;
     const response = await originalFetch(resource, config);
 
-    // Mindkét proxy endpoint-ot ellenőrizzük (Railway + emago.hu)
-    const isProxyRequest = typeof resource === 'string' && (
-        resource.includes('gallant-balance-production-b513.up.railway.app') ||
-        resource.includes('maestro-proxy')
-    );
+    const isProxyRequest = typeof resource === 'string' &&
+        PROXY_BASES.some(base => resource.startsWith(base));
     if (isProxyRequest) {
         const setCookie = response.headers.get('set-cookie');
         if (setCookie) {
@@ -203,58 +205,8 @@ export function clearLocalSession() {
     }
 }
 
-// Gyűjtemény ID-k — shared-ből, visszafelé kompatibilis egyedi exportokkal
-export const PUBLICATIONS_COLLECTION_ID = COLLECTIONS.PUBLICATIONS;
-export const ARTICLES_COLLECTION_ID = COLLECTIONS.ARTICLES;
-export const USER_VALIDATIONS_COLLECTION_ID = COLLECTIONS.USER_VALIDATIONS;
-export const SYSTEM_VALIDATIONS_COLLECTION_ID = COLLECTIONS.SYSTEM_VALIDATIONS;
-export const LAYOUTS_COLLECTION_ID = COLLECTIONS.LAYOUTS;
-export const DEADLINES_COLLECTION_ID = COLLECTIONS.DEADLINES;
-export const GROUPS_COLLECTION_ID = COLLECTIONS.GROUPS;
-export const GROUP_MEMBERSHIPS_COLLECTION_ID = COLLECTIONS.GROUP_MEMBERSHIPS;
-export const WORKFLOWS_COLLECTION_ID = COLLECTIONS.WORKFLOWS;
-
 // Cloud Function ID-k
 /** Pre-event szinkron cikk-update endpoint (Fázis 9 follow-up). */
 export const UPDATE_ARTICLE_FUNCTION_ID = 'update-article';
-
-// =============================================================================
-// cookieFallback Diagnosztika — Session token eltűnés nyomkövetés
-// =============================================================================
-
-/**
- * localStorage.setItem monkey-patch a cookieFallback kulcsra.
- *
- * Ha egy írás elveszítené a session tokent (korábbi tokennel rendelkező állapotból
- * üresre vagy token nélkülire váltana), a stack trace-t logoljuk. Így a következő
- * előfordulásnál pontosan látjuk, melyik kódútvonal törli a tokent.
- *
- * Nem blokkolja az írást — csak diagnosztikai célú.
- */
-try {
-    const originalSetItem = window.localStorage.setItem.bind(window.localStorage);
-    window.localStorage.setItem = function(key, value) {
-        if (key === 'cookieFallback') {
-            const sessionKey = `a_session_${APPWRITE_PROJECT_ID}`;
-            const previous = window.localStorage.getItem('cookieFallback');
-            let hadSession = false;
-            let hasSession = false;
-            try {
-                hadSession = previous && JSON.parse(previous)[sessionKey];
-                hasSession = value && JSON.parse(value)[sessionKey];
-            } catch (e) { /* ignore parse errors */ }
-
-            if (hadSession && !hasSession) {
-                logWarn('[Maestro] [GUARD] cookieFallback session token elveszne!',
-                    new Error().stack);
-            }
-        }
-        return originalSetItem(key, value);
-    };
-} catch (e) {
-    // Ha a monkey-patch regisztráció sikertelen (pl. Object.freeze, strict mode),
-    // az alkalmazás indulása nem törhet meg — a diagnosztika opcionális.
-    logWarn('[Maestro] cookieFallback diagnosztika regisztráció sikertelen:', e);
-}
 
 export { client, ID, Query };

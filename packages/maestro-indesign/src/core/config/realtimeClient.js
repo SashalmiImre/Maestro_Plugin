@@ -188,90 +188,18 @@ class RealtimeClient {
             
         this.realtime = new Realtime(this.client);
 
-        /**
-         * Egyedi WebSocket implementáció a UXP platform számára.
-         *
-         * A UXP környezetben a WebSocket nem küldi a cookie-kat és a custom headereket
-         * a handshake során. Ez a metódus felülírja az Appwrite SDK `createSocket`-jét,
-         * és az alábbi feladatokat végzi:
-         *
-         * 1. **Auth injekció**: A session cookie-t és a csomagnevet query paraméterként
-         *    fűzi a WebSocket URL-hez — a proxy szerver ezeket HTTP headerekké alakítja.
-         * 2. **Csatorna-deduplikáció**: Ha az aktív socket már tartalmazza az összes
-         *    kért csatornát, nem épít új socket-et. Ha új csatornák érkeznek
-         *    (pl. eltérő React render ciklusból), a régit lezárja és újat hoz létre.
-         * 3. **Ghost socket védelem**: Generáció-számláló (`_socketGeneration`) biztosítja,
-         *    hogy a régi socket-ek close event-jei ne indítsanak reconnect ciklust.
-         * 4. **Auth frame küldés**: Socket megnyitása után azonnali `authentication`
-         *    üzenetet küld (Appwrite natív funkció, biztonsági háló a proxy injection mellé).
-         *    UXP timing guard: `readyState` ellenőrzés + 200ms retry.
-         * 5. **Szerverhiba kezelés**: A `message` event handler nyomon követi az egymás
-         *    utáni szerverhibákat és cooldown-t aktivál a küszöbérték elérésekor.
-         * 6. **Close event stratégia**: A close kód alapján dönt a teendőről:
-         *    - 1000 (Normal): `reconnect` flag beállítása, nincs azonnali reconnect
-         *    - 1001 (Going Away): alkalmazás bezárul, reconnect mellőzve
-         *    - 1005/1006 (No Status / Abnormal): halott TCP, RecoveryManager-re bízva
-         *    - 1008 (Policy Violation): auth hiba, backoff-fal kezelt reconnect
-         *    - Egyéb: exponenciális backoff vagy SDK alapértelmezett timeout
-         *
-         * @returns {Promise<void>} A socket megnyitásának Promise-a
-         */
+        // Az Appwrite SDK createSocket felülírása UXP-specifikus WebSocket implementációval.
+        // A részletes logika a privát metódusokban: _buildSocketUrl, _handleSocketOpen,
+        // _handleSocketMessage, _handleSocketClose.
         this.realtime.createSocket = () => {
-            // v24: activeChannels eltávolítva → activeSubscriptions Map-ből kinyerjük a csatornákat
-            const allChannels = new Set();
-            for (const sub of this.realtime.activeSubscriptions.values()) {
-                for (const ch of sub.channels) {
-                    allChannels.add(ch);
-                }
-            }
-            const channelArray = Array.from(allChannels);
-            const query = new URLSearchParams();
-            query.append('project', this.client.config.project);
-            channelArray.forEach(ch => query.append('channels[]', ch));
+            const { url, session, channelArray } = this._buildSocketUrl();
 
-            // v24 per-slot query paraméterek — a szerver ezek alapján rendeli hozzá
-            // a subscription ID-kat a slotokhoz, amelyeket a handleResponseConnected()
-            // eltárol, és a handleResponseEvent() az event routing-hoz használ.
-            // Enélkül a szerver nem küld data.subscriptions-t → az események droppolódnak.
-            const selectAllQuery = AppwriteQuery.select(['*']).toString();
-            for (const [slot, subscription] of this.realtime.activeSubscriptions) {
-                const queries = subscription.queries.length === 0
-                    ? [selectAllQuery]
-                    : subscription.queries;
-                for (const channel of subscription.channels) {
-                    for (const q of queries) {
-                        query.append(`${channel}[${slot}][]`, q);
-                    }
-                }
-            }
-            
-            // 1. Auth Query Params (ha a proxy/szerver támogatja)
-            query.append('x-appwrite-package-name', "com.sashalmiimre.maestro");
-            
-            // Cookie fallback olvasása
-            let session = null;
-            try {
-                if (typeof window !== 'undefined') {
-                    const cookieFallback = window.localStorage.getItem('cookieFallback');
-                    if (cookieFallback) {
-                        query.append('x-fallback-cookies', cookieFallback); // Proxy-hoz
-                        const cookies = JSON.parse(cookieFallback);
-                        session = cookies[`a_session_${this.client.config.project}`];
-                    }
-                }
-            } catch (e) {
-                logError('[Realtime] Cookie read error:', e);
-            }
-
-            const url = this.client.config.endpointRealtime + '/realtime?' + query.toString();
-
-            return new Promise((resolve, reject) => {
+            return new Promise((resolve) => {
                 // Ellenőrizzük, hogy vannak-e új csatornák az aktív socket-hez képest
                 const hasNewChannels = channelArray.some(ch => !this._subscribedChannels.has(ch));
 
                 if (this.realtime.socket && (this.realtime.socket.readyState === WebSocket.CONNECTING || this.realtime.socket.readyState === WebSocket.OPEN)) {
                     if (!hasNewChannels) {
-                        // Nincs új csatorna — skip (eredeti viselkedés)
                         resolve();
                         return;
                     }
@@ -285,210 +213,290 @@ class RealtimeClient {
 
                 // Socket generáció növelése — CSAK ha tényleg új socketet hozunk létre.
                 // A close handler ezzel ellenőrzi, hogy az aktuális socket-hez tartozik-e az esemény.
-                // Ha a skip ág előtt növelnénk, az aktuális socket close event-je ghost-nak tűnne.
                 this._socketGeneration = (this._socketGeneration || 0) + 1;
                 const myGeneration = this._socketGeneration;
 
-                // Socket létrehozása — az aktív csatornák nyilvántartása
                 this._subscribedChannels = new Set(channelArray);
                 this.realtime.socket = new WebSocket(url);
-                
-                this.realtime.socket.addEventListener('open', () => {
-                    const socket = this.realtime.socket; // Capture local reference
-                    logDebug('[Realtime] [OPEN] Socket Open');
-                    
-                    // Azonnali autentikációs üzenet (Appwrite natív támogatás)
-                    if (session) {
-                        const authData = JSON.stringify({
-                            type: 'authentication',
-                            data: { session }
-                        });
 
-                        logDebug('[Realtime] [AUTH] Sending auth frame...');
-
-                        // UXP WebSocket timing guard: readyState may not be OPEN yet
-                        if (socket.readyState === WebSocket.OPEN) {
-                            try {
-                                socket.send(authData);
-                            } catch (err) {
-                                logError('[Realtime] [FAIL] Auth frame send failed (immediate):', err);
-                            }
-                        } else {
-                            logWarn(`[Realtime] [WAIT] Socket not ready (state=${socket.readyState}), retrying in 200ms...`);
-                            setTimeout(() => {
-                                if (socket.readyState === WebSocket.OPEN) {
-                                    try {
-                                        socket.send(authData);
-                                        logDebug('[Realtime] [AUTH] Auth frame sent after retry');
-                                    } catch (err) {
-                                        logError('[Realtime] [FAIL] Auth frame send failed (retry):', err);
-                                    }
-                                } else {
-                                    logError('[Realtime] [FAIL] Socket still not ready after retry, skipping auth frame');
-                                }
-                            }, REALTIME_CONFIG.AUTH_RETRY_DELAY_MS);
-                        }
-                    }
-
-                    this.realtime.reconnectAttempts = 0;
-                    this.realtime.onOpenCallbacks.forEach(callback => callback());
-                    this.realtime.startHeartbeat();
-                    resolve();
-                });
-
-                this.realtime.socket.addEventListener('message', (event) => {
-                    try {
-                        const message = JSON.parse(event.data);
-
-                        if (message.type === 'error') {
-                            const errorCode = message.data?.code;
-                            this.consecutiveServerErrors++;
-                            logError(
-                                `[Realtime] [FAIL] Server Error (${this.consecutiveServerErrors}/${this.MAX_CONSECUTIVE_SERVER_ERRORS}):`,
-                                message.data
-                            );
-
-                            // Cooldown aktiválása ha túl sok egymás utáni hiba
-                            if (this.consecutiveServerErrors >= this.MAX_CONSECUTIVE_SERVER_ERRORS) {
-                                const cooldownMs = REALTIME_CONFIG.COOLDOWN_MS;
-                                this.serverErrorCooldownUntil = Date.now() + cooldownMs;
-                                logWarn(
-                                    `[Realtime] [PAUSE] Szerver hiba cooldown aktiválva (${cooldownMs / 1000}s). ` +
-                                    `${this.consecutiveServerErrors} egymás utáni hiba.`
-                                );
-                                this._notifyError({
-                                    message: `Appwrite szerver ismétlődő hiba (code: ${errorCode}). Újrapróbálkozás ${cooldownMs / 1000} másodperc múlva.`,
-                                    code: errorCode,
-                                    cooldownUntil: this.serverErrorCooldownUntil
-                                });
-                            }
-                        } else if (message.type === 'event') {
-                            // Sikeres adat esemény → server error számláló nullázása
-                            if (this.consecutiveServerErrors > 0) {
-                                log(`[Realtime] [OK] Szerver hiba számláló nullázva (volt: ${this.consecutiveServerErrors})`);
-                                this.consecutiveServerErrors = 0;
-                                this.serverErrorCooldownUntil = 0;
-                            }
-                        }
-
-                        this.realtime.handleMessage(message);
-                    } catch (error) {
-                        // ignore parse errors
-                    }
-                });
-
-                this.realtime.socket.addEventListener('close', async (event) => {
-                    // Ghost socket védelem: ha ez a close event egy régi socket-ről jön
-                    // (mert közben reconnect() újat hozott létre), ignoráljuk.
-                    if (myGeneration !== this._socketGeneration) {
-                        logDebug(`[Realtime] [GHOST] Régi socket close (gen ${myGeneration} vs ${this._socketGeneration}), ignorálva`);
-                        return;
-                    }
-
-                    log(`[Realtime] [CLOSED] Code=${event.code} Reason=${event.reason}`);
-                    this.realtime?.stopHeartbeat();
-                    this.realtime?.onCloseCallbacks?.forEach(callback => callback());
-
-                    // Debug: Időmérés szakadások között
-                    const now = Date.now();
-                    if (this.lastDisconnectTime) {
-                        const diffSec = ((now - this.lastDisconnectTime) / 1000).toFixed(1);
-                        logDebug(`[Realtime] [TIMER] Idő az előző szakadás óta: ${diffSec} másodperc`);
-                    } else {
-                        logDebug(`[Realtime] [TIMER] Első szakadás mérése indítva`);
-                    }
-                    this.lastDisconnectTime = now;
-
-                    // Szándékos lecsatlakozás → ne reconnectelj
-                    if (!this.shouldReconnect) {
-                        logDebug('[Realtime] [STOP] Szándékos lecsatlakozás. Reconnect loop leállítva.');
-                        return;
-                    }
-
-                    // 1000 (Normal Closure) → szándékos lezárás, nem kell reconnect
-                    if (event.code === 1000) {
-                        if (this.realtime) this.realtime.reconnect = true;
-                        return;
-                    }
-
-                    // 1001 (Going Away) → alkalmazás / böngésző bezárul, ne reconnectelj
-                    if (event.code === 1001) {
-                        log('[Realtime] [EXIT] Going Away (1001) — alkalmazás bezárása, reconnect mellőzve');
-                        return;
-                    }
-
-                    // Disconnected jelzés (UI frissítéshez)
-                    this._notifyConnectionChange(false);
-
-                    // 1005 (No Status) → halott TCP (alvás után tipikus)
-                    // A RecoveryManager központilag kezeli, NEM indítunk
-                    // saját reconnect loop-ot, mert az végtelen ciklust okozna.
-                    if (event.code === 1005 || event.code === 1006) {
-                        log(`[Realtime] [SLEEP] Halott kapcsolat (${event.code}) — RecoveryManager-re bízva`);
-                        // Importálás elkerülése a cirkuláris dependency ellen:
-                        // A RecoveryManager figyeli a connectionChange-et,
-                        // vagy a Main.jsx IdleTask / afterActivate trigger kezeli.
-                        return;
-                    }
-
-                    // 1008 (Policy Violation) → auth probléma, backoff-fal kezeljük
-                    if (event.code === 1008) {
-                        this.consecutiveServerErrors++;
-                        logWarn(
-                            `[Realtime] [WARN] Policy Violation (1008) - lehetséges auth hiba ` +
-                            `(${this.consecutiveServerErrors}/${this.MAX_CONSECUTIVE_SERVER_ERRORS})`
-                        );
-                        this.realtime.reconnect = true;
-                    }
-
-                    // Ha reconnect nem szükséges, kilépünk
-                    if (!this.realtime.reconnect) {
-                        this.realtime.reconnect = true;
-                        return;
-                    }
-
-                    // Cooldown ellenőrzése szerver hibák után
-                    if (this.serverErrorCooldownUntil > Date.now()) {
-                        const remainingMs = this.serverErrorCooldownUntil - Date.now();
-                        log(`[Realtime] [PAUSE] Cooldown aktív, várakozás ${Math.ceil(remainingMs / 1000)}s...`);
-                        await this.realtime.sleep(remainingMs);
-                        // Sleep után ellenőrzés: disconnect() hívhatott közben
-                        if (!this.realtime || !this.shouldReconnect) return;
-                        // Cooldown után nullázzuk a számlálót és újrapróbálkozunk
-                        this.consecutiveServerErrors = 0;
-                        this.serverErrorCooldownUntil = 0;
-                    }
-
-                    // Exponenciális backoff szerver hibák alapján
-                    let timeout;
-                    if (this.consecutiveServerErrors > 0) {
-                        timeout = this._getServerErrorBackoff();
-                        log(
-                            `[Realtime] [WAIT] Server error backoff: ${timeout / 1000}s ` +
-                            `(${this.consecutiveServerErrors} egymás utáni hiba)`
-                        );
-                    } else {
-                        timeout = this.realtime.getTimeout();
-                    }
-
-                    log(`[Realtime] Reconnecting in ${timeout / 1000}s...`);
-                    await this.realtime.sleep(timeout);
-                    // Sleep után ellenőrzés: disconnect() hívhatott közben (null-dereferencia védelem)
-                    if (!this.realtime || !this.shouldReconnect) return;
-                    this.realtime.reconnectAttempts++;
-                    try {
-                        await this.realtime.createSocket();
-                    } catch (error) {
-                        logError('[Realtime] Reconnect failed:', error);
-                    }
-                });
-
-                this.realtime.socket.addEventListener('error', (event) => {
-                    // console.error('[Realtime] Socket error:', event);
+                this.realtime.socket.addEventListener('open', () => this._handleSocketOpen(session, resolve));
+                this.realtime.socket.addEventListener('message', (event) => this._handleSocketMessage(event));
+                this.realtime.socket.addEventListener('close', (event) => this._handleSocketClose(event, myGeneration));
+                this.realtime.socket.addEventListener('error', () => {
                     // Az 'error' után általában jön 'close' is, ott kezeljük az újrakapcsolódást.
                 });
             });
         };
+    }
+
+    /**
+     * Összeállítja a WebSocket URL-t az auth és csatorna paraméterekkel.
+     *
+     * Az Appwrite v24 activeSubscriptions Map-ből kinyeri a csatornákat,
+     * per-slot query paramétereket épít (event routing-hoz szükséges),
+     * és az auth adatokat query paraméterként fűzi hozzá (UXP proxy injection).
+     *
+     * @returns {{ url: string, session: string|null, channelArray: string[] }}
+     * @private
+     */
+    _buildSocketUrl() {
+        const allChannels = new Set();
+        for (const sub of this.realtime.activeSubscriptions.values()) {
+            for (const ch of sub.channels) {
+                allChannels.add(ch);
+            }
+        }
+        const channelArray = Array.from(allChannels);
+        const query = new URLSearchParams();
+        query.append('project', this.client.config.project);
+        channelArray.forEach(ch => query.append('channels[]', ch));
+
+        // v24 per-slot query paraméterek — a szerver ezek alapján rendeli hozzá
+        // a subscription ID-kat a slotokhoz, amelyeket a handleResponseConnected()
+        // eltárol, és a handleResponseEvent() az event routing-hoz használ.
+        const selectAllQuery = AppwriteQuery.select(['*']).toString();
+        for (const [slot, subscription] of this.realtime.activeSubscriptions) {
+            const queries = subscription.queries.length === 0
+                ? [selectAllQuery]
+                : subscription.queries;
+            for (const channel of subscription.channels) {
+                for (const q of queries) {
+                    query.append(`${channel}[${slot}][]`, q);
+                }
+            }
+        }
+
+        query.append('x-appwrite-package-name', "com.sashalmiimre.maestro");
+
+        // Cookie fallback olvasása — session token kinyerése az auth frame-hez
+        let session = null;
+        try {
+            if (typeof window !== 'undefined') {
+                const cookieFallback = window.localStorage.getItem('cookieFallback');
+                if (cookieFallback) {
+                    query.append('x-fallback-cookies', cookieFallback);
+                    const cookies = JSON.parse(cookieFallback);
+                    session = cookies[`a_session_${this.client.config.project}`];
+                }
+            }
+        } catch (e) {
+            logError('[Realtime] Cookie read error:', e);
+        }
+
+        const url = this.client.config.endpointRealtime + '/realtime?' + query.toString();
+        return { url, session, channelArray };
+    }
+
+    /**
+     * Socket open event handler — auth frame küldés és heartbeat indítás.
+     *
+     * UXP sajátosság: a readyState nem mindig OPEN az open event-ben,
+     * ezért 200ms retry-t alkalmazunk, ha az azonnali küldés nem lehetséges.
+     *
+     * @param {string|null} session - Session token (null ha nincs bejelentkezve)
+     * @param {function} resolve - A createSocket Promise resolve függvénye
+     * @private
+     */
+    _handleSocketOpen(session, resolve) {
+        const socket = this.realtime.socket;
+        logDebug('[Realtime] [OPEN] Socket Open');
+
+        if (session) {
+            const authData = JSON.stringify({
+                type: 'authentication',
+                data: { session }
+            });
+
+            logDebug('[Realtime] [AUTH] Sending auth frame...');
+
+            // UXP WebSocket timing guard: readyState may not be OPEN yet
+            if (socket.readyState === WebSocket.OPEN) {
+                try {
+                    socket.send(authData);
+                } catch (err) {
+                    logError('[Realtime] [FAIL] Auth frame send failed (immediate):', err);
+                }
+            } else {
+                logWarn(`[Realtime] [WAIT] Socket not ready (state=${socket.readyState}), retrying in 200ms...`);
+                setTimeout(() => {
+                    if (socket.readyState === WebSocket.OPEN) {
+                        try {
+                            socket.send(authData);
+                            logDebug('[Realtime] [AUTH] Auth frame sent after retry');
+                        } catch (err) {
+                            logError('[Realtime] [FAIL] Auth frame send failed (retry):', err);
+                        }
+                    } else {
+                        logError('[Realtime] [FAIL] Socket still not ready after retry, skipping auth frame');
+                    }
+                }, REALTIME_CONFIG.AUTH_RETRY_DELAY_MS);
+            }
+        }
+
+        this.realtime.reconnectAttempts = 0;
+        this.realtime.onOpenCallbacks.forEach(callback => callback());
+        this.realtime.startHeartbeat();
+        resolve();
+    }
+
+    /**
+     * Socket message event handler — szerverhiba nyomkövetés és SDK delegálás.
+     *
+     * A szerver error üzenetek számlálóját kezeli, és küszöb elérésekor
+     * cooldown-t aktivál. Sikeres adat esemény nullázza a számlálót.
+     * Végül a nyers üzenetet az Appwrite SDK handleMessage-nek delegálja.
+     *
+     * @param {MessageEvent} event - A WebSocket message event
+     * @private
+     */
+    _handleSocketMessage(event) {
+        try {
+            const message = JSON.parse(event.data);
+
+            if (message.type === 'error') {
+                const errorCode = message.data?.code;
+                this.consecutiveServerErrors++;
+                logError(
+                    `[Realtime] [FAIL] Server Error (${this.consecutiveServerErrors}/${this.MAX_CONSECUTIVE_SERVER_ERRORS}):`,
+                    message.data
+                );
+
+                if (this.consecutiveServerErrors >= this.MAX_CONSECUTIVE_SERVER_ERRORS) {
+                    const cooldownMs = REALTIME_CONFIG.COOLDOWN_MS;
+                    this.serverErrorCooldownUntil = Date.now() + cooldownMs;
+                    logWarn(
+                        `[Realtime] [PAUSE] Szerver hiba cooldown aktiválva (${cooldownMs / 1000}s). ` +
+                        `${this.consecutiveServerErrors} egymás utáni hiba.`
+                    );
+                    this._notifyError({
+                        message: `Appwrite szerver ismétlődő hiba (code: ${errorCode}). Újrapróbálkozás ${cooldownMs / 1000} másodperc múlva.`,
+                        code: errorCode,
+                        cooldownUntil: this.serverErrorCooldownUntil
+                    });
+                }
+            } else if (message.type === 'event') {
+                if (this.consecutiveServerErrors > 0) {
+                    log(`[Realtime] [OK] Szerver hiba számláló nullázva (volt: ${this.consecutiveServerErrors})`);
+                    this.consecutiveServerErrors = 0;
+                    this.serverErrorCooldownUntil = 0;
+                }
+            }
+
+            this.realtime.handleMessage(message);
+        } catch (error) {
+            // parse error — ignorálva
+        }
+    }
+
+    /**
+     * Socket close event handler — close code alapú döntés és reconnect logika.
+     *
+     * Ghost socket védelem: a generáció-számláló biztosítja, hogy régi socket-ek
+     * close event-jei ne indítsanak felesleges reconnect ciklust.
+     *
+     * Close kód stratégia:
+     * - 1000 (Normal): szándékos lezárás, nincs reconnect
+     * - 1001 (Going Away): alkalmazás bezárul, reconnect mellőzve
+     * - 1005/1006 (No Status / Abnormal): halott TCP → RecoveryManager-re bízva
+     * - 1008 (Policy Violation): auth hiba → backoff-fal kezelt reconnect
+     * - Egyéb: exponenciális backoff vagy SDK timeout
+     *
+     * @param {CloseEvent} event - A WebSocket close event
+     * @param {number} myGeneration - A socket generáció-számlálója (ghost védelem)
+     * @private
+     */
+    async _handleSocketClose(event, myGeneration) {
+        // Ghost socket védelem
+        if (myGeneration !== this._socketGeneration) {
+            logDebug(`[Realtime] [GHOST] Régi socket close (gen ${myGeneration} vs ${this._socketGeneration}), ignorálva`);
+            return;
+        }
+
+        log(`[Realtime] [CLOSED] Code=${event.code} Reason=${event.reason}`);
+        this.realtime?.stopHeartbeat();
+        this.realtime?.onCloseCallbacks?.forEach(callback => callback());
+
+        // Debug: Időmérés szakadások között
+        const now = Date.now();
+        if (this.lastDisconnectTime) {
+            const diffSec = ((now - this.lastDisconnectTime) / 1000).toFixed(1);
+            logDebug(`[Realtime] [TIMER] Idő az előző szakadás óta: ${diffSec} másodperc`);
+        } else {
+            logDebug(`[Realtime] [TIMER] Első szakadás mérése indítva`);
+        }
+        this.lastDisconnectTime = now;
+
+        if (!this.shouldReconnect) {
+            logDebug('[Realtime] [STOP] Szándékos lecsatlakozás. Reconnect loop leállítva.');
+            return;
+        }
+
+        // 1000 (Normal Closure) → szándékos lezárás
+        if (event.code === 1000) {
+            if (this.realtime) this.realtime.reconnect = true;
+            return;
+        }
+
+        // 1001 (Going Away) → alkalmazás bezárul
+        if (event.code === 1001) {
+            log('[Realtime] [EXIT] Going Away (1001) — alkalmazás bezárása, reconnect mellőzve');
+            return;
+        }
+
+        this._notifyConnectionChange(false);
+
+        // 1005/1006 — halott TCP, RecoveryManager-re bízva
+        if (event.code === 1005 || event.code === 1006) {
+            log(`[Realtime] [SLEEP] Halott kapcsolat (${event.code}) — RecoveryManager-re bízva`);
+            return;
+        }
+
+        // 1008 (Policy Violation) → auth probléma, backoff-fal
+        if (event.code === 1008) {
+            this.consecutiveServerErrors++;
+            logWarn(
+                `[Realtime] [WARN] Policy Violation (1008) - lehetséges auth hiba ` +
+                `(${this.consecutiveServerErrors}/${this.MAX_CONSECUTIVE_SERVER_ERRORS})`
+            );
+            this.realtime.reconnect = true;
+        }
+
+        if (!this.realtime.reconnect) {
+            this.realtime.reconnect = true;
+            return;
+        }
+
+        // Cooldown ellenőrzése szerver hibák után
+        if (this.serverErrorCooldownUntil > Date.now()) {
+            const remainingMs = this.serverErrorCooldownUntil - Date.now();
+            log(`[Realtime] [PAUSE] Cooldown aktív, várakozás ${Math.ceil(remainingMs / 1000)}s...`);
+            await this.realtime.sleep(remainingMs);
+            if (!this.realtime || !this.shouldReconnect) return;
+            this.consecutiveServerErrors = 0;
+            this.serverErrorCooldownUntil = 0;
+        }
+
+        // Exponenciális backoff szerver hibák alapján
+        let timeout;
+        if (this.consecutiveServerErrors > 0) {
+            timeout = this._getServerErrorBackoff();
+            log(
+                `[Realtime] [WAIT] Server error backoff: ${timeout / 1000}s ` +
+                `(${this.consecutiveServerErrors} egymás utáni hiba)`
+            );
+        } else {
+            timeout = this.realtime.getTimeout();
+        }
+
+        log(`[Realtime] Reconnecting in ${timeout / 1000}s...`);
+        await this.realtime.sleep(timeout);
+        if (!this.realtime || !this.shouldReconnect) return;
+        this.realtime.reconnectAttempts++;
+        try {
+            await this.realtime.createSocket();
+        } catch (error) {
+            logError('[Realtime] Reconnect failed:', error);
+        }
     }
 
     /**
@@ -569,11 +577,11 @@ class RealtimeClient {
      * feliratkozás azonnal lezárul.
      *
      * @param {string} channel - Az Appwrite Realtime csatorna neve
-     * @returns {Promise<void>}
+     * @returns {Promise<boolean>} true ha sikeres, false ha sikertelen
      * @private
      */
     async _attemptSdkSubscription(channel) {
-        if (this.subscriptions.has(channel)) return;
+        if (this.subscriptions.has(channel)) return true;
 
         // Ensure we have a valid instance
         if (!this.realtime) this._initClient();
@@ -610,12 +618,14 @@ class RealtimeClient {
             // close() async — a .catch() biztosítja, hogy ne legyen unhandled rejection
             this.subscriptions.set(channel, () => sub.close().catch(() => {}));
             this._notifyConnectionChange(true);
+            return true;
 
         } catch (err) {
             logError(`[Realtime] Subscription failed: ${channel}`, err);
             this._notifyError(err);
             this._notifyConnectionChange(false);
             this.subscriptions.delete(channel);  // placeholder törlése hiba esetén
+            return false;
         }
     }
 
@@ -692,7 +702,7 @@ class RealtimeClient {
      * - `shouldReconnect` flag: `disconnect()` után nem reconnectel
      * - `isReconnecting` flag: párhuzamos hívások kiszűrése
      */
-    reconnect() {
+    async reconnect() {
         // Shutdown védelem: disconnect() után ne reconnecteljünk
         if (!this.shouldReconnect) {
             log('[Realtime] [STOP] reconnect() kihagyva — disconnect() már meghívva');
@@ -735,26 +745,33 @@ class RealtimeClient {
             });
             this.subscriptions.clear();
 
-            // 4. INSTANCE MEGSEMMISÍTÉSE
+            // 4. Instance megsemmisítése
             this.realtime = null;
             this.client = null;
-            this._subscribedChannels = new Set(); // Csatorna-nyilvántartás törlése az újraépítéshez
+            this._subscribedChannels = new Set();
 
             // Szerver hiba számláló nullázása az újraépítésnél
             this.consecutiveServerErrors = 0;
             this.serverErrorCooldownUntil = 0;
 
-            // 4. Újrainicializálás
+            // 5. Újrainicializálás
             this._initClient();
 
-            // 5. Feliratkozások szinkron újraépítése
-            //    (A korábbi setTimeout(50ms) race window-t okozott: az isConnected
-            //    flag false maradt a 50ms alatt, és az InDesign afterActivate újabb
-            //    recovery-t indított, végtelen ciklusba kerülve.)
+            // 6. Feliratkozások újraépítése — a hívások szinkron indulnak (nincs setTimeout
+            //    delay), de megvárjuk a befejeződésüket, mielőtt az isReconnecting flag-et
+            //    false-ra állítanánk. Ez megakadályozza, hogy egy gyors egymás utáni recovery
+            //    újabb reconnect()-et indítson a feliratkozások létrejötte előtt.
             const channels = [...this.callbacks.keys()];
             if (channels.length > 0) {
                 logDebug(`[Realtime] [SUB] Rebuilding ${channels.length} subscriptions...`);
-                channels.forEach(ch => this._attemptSdkSubscription(ch));
+                const results = await Promise.all(
+                    channels.map(ch => this._attemptSdkSubscription(ch))
+                );
+
+                const failedCount = results.filter(ok => !ok).length;
+                if (failedCount > 0) {
+                    logWarn(`[Realtime] [WARN] ${failedCount}/${channels.length} feliratkozás sikertelen az újraépítéskor`);
+                }
 
                 // Adat frissítés jelzése az újrafeliratkozás UTÁN
                 if (typeof window !== 'undefined') {
@@ -762,10 +779,9 @@ class RealtimeClient {
                     dispatchMaestroEvent(MaestroEvent.dataRefreshRequested);
                 }
             }
-
-            this.isReconnecting = false;
         } catch (error) {
             logError('[Realtime] Reconnect hiba:', error);
+        } finally {
             this.isReconnecting = false;
         }
     }

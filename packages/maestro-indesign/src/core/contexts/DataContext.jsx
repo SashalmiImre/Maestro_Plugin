@@ -16,7 +16,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { tables, ID, DATABASE_ID, PUBLICATIONS_COLLECTION_ID, ARTICLES_COLLECTION_ID, USER_VALIDATIONS_COLLECTION_ID, LAYOUTS_COLLECTION_ID, DEADLINES_COLLECTION_ID, GROUP_MEMBERSHIPS_COLLECTION_ID, WORKFLOWS_COLLECTION_ID, Query } from "../config/appwriteConfig.js";
+import { tables, ID, DATABASE_ID, COLLECTIONS, Query } from "../config/appwriteConfig.js";
 import { callUpdateArticleCF } from "../utils/updateArticleClient.js";
 import { realtime } from "../config/realtimeClient.js";
 import { useConnection } from "./ConnectionContext.jsx";
@@ -185,7 +185,7 @@ export const DataProvider = ({ children }) => {
                 () => withTimeout(
                     tables.listRows({
                         databaseId: DATABASE_ID,
-                        tableId: PUBLICATIONS_COLLECTION_ID,
+                        tableId: COLLECTIONS.PUBLICATIONS,
                         queries: [
                             Query.equal("editorialOfficeId", currentOfficeId),
                             Query.equal("isActivated", true),
@@ -211,7 +211,7 @@ export const DataProvider = ({ children }) => {
                     () => withTimeout(
                         tables.listRows({
                             databaseId: DATABASE_ID,
-                            tableId: ARTICLES_COLLECTION_ID,
+                            tableId: COLLECTIONS.ARTICLES,
                             queries: [
                                 Query.equal("publicationId", currentPubId),
                                 Query.equal("editorialOfficeId", currentOfficeId),
@@ -229,7 +229,7 @@ export const DataProvider = ({ children }) => {
                     () => withTimeout(
                         tables.listRows({
                             databaseId: DATABASE_ID,
-                            tableId: LAYOUTS_COLLECTION_ID,
+                            tableId: COLLECTIONS.LAYOUTS,
                             queries: [
                                 Query.equal("publicationId", currentPubId),
                                 Query.equal("editorialOfficeId", currentOfficeId),
@@ -246,7 +246,7 @@ export const DataProvider = ({ children }) => {
                     () => withTimeout(
                         tables.listRows({
                             databaseId: DATABASE_ID,
-                            tableId: DEADLINES_COLLECTION_ID,
+                            tableId: COLLECTIONS.DEADLINES,
                             queries: [
                                 Query.equal("publicationId", currentPubId),
                                 Query.equal("editorialOfficeId", currentOfficeId),
@@ -332,7 +332,7 @@ export const DataProvider = ({ children }) => {
                         () => withTimeout(
                             tables.listRows({
                                 databaseId: DATABASE_ID,
-                                tableId: USER_VALIDATIONS_COLLECTION_ID,
+                                tableId: COLLECTIONS.USER_VALIDATIONS,
                                 queries: [
                                     Query.equal('articleId', chunkIds),
                                     Query.equal("editorialOfficeId", currentOfficeId),
@@ -432,7 +432,7 @@ export const DataProvider = ({ children }) => {
                 () => withTimeout(
                     tables.listRows({
                         databaseId: DATABASE_ID,
-                        tableId: WORKFLOWS_COLLECTION_ID,
+                        tableId: COLLECTIONS.WORKFLOWS,
                         queries: [
                             Query.equal("editorialOfficeId", officeId),
                             Query.orderAsc("name"),
@@ -587,7 +587,7 @@ export const DataProvider = ({ children }) => {
         const result = await withTimeout(
             tables.createRow({
                 databaseId: DATABASE_ID,
-                tableId: ARTICLES_COLLECTION_ID,
+                tableId: COLLECTIONS.ARTICLES,
                 rowId: ID.unique(),
                 data: withScope(data)
             }),
@@ -630,7 +630,7 @@ export const DataProvider = ({ children }) => {
         await withTimeout(
             tables.deleteRow({
                 databaseId: DATABASE_ID,
-                tableId: ARTICLES_COLLECTION_ID,
+                tableId: COLLECTIONS.ARTICLES,
                 rowId: articleId
             }),
             FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
@@ -673,7 +673,7 @@ export const DataProvider = ({ children }) => {
         const result = await withTimeout(
             tables.createRow({
                 databaseId: DATABASE_ID,
-                tableId: USER_VALIDATIONS_COLLECTION_ID,
+                tableId: COLLECTIONS.USER_VALIDATIONS,
                 rowId: ID.unique(),
                 data: withScope(data)
             }),
@@ -699,7 +699,7 @@ export const DataProvider = ({ children }) => {
         const result = await withTimeout(
             tables.updateRow({
                 databaseId: DATABASE_ID,
-                tableId: USER_VALIDATIONS_COLLECTION_ID,
+                tableId: COLLECTIONS.USER_VALIDATIONS,
                 rowId: validationId,
                 data
             }),
@@ -720,7 +720,7 @@ export const DataProvider = ({ children }) => {
         await withTimeout(
             tables.deleteRow({
                 databaseId: DATABASE_ID,
-                tableId: USER_VALIDATIONS_COLLECTION_ID,
+                tableId: COLLECTIONS.USER_VALIDATIONS,
                 rowId: validationId
             }),
             FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
@@ -739,13 +739,13 @@ export const DataProvider = ({ children }) => {
         log('[DataContext] Realtime feliratkozás...');
 
         const channels = [
-            `databases.${DATABASE_ID}.collections.${PUBLICATIONS_COLLECTION_ID}.documents`,
-            `databases.${DATABASE_ID}.collections.${ARTICLES_COLLECTION_ID}.documents`,
-            `databases.${DATABASE_ID}.collections.${USER_VALIDATIONS_COLLECTION_ID}.documents`,
-            `databases.${DATABASE_ID}.collections.${LAYOUTS_COLLECTION_ID}.documents`,
-            `databases.${DATABASE_ID}.collections.${DEADLINES_COLLECTION_ID}.documents`,
-            `databases.${DATABASE_ID}.collections.${GROUP_MEMBERSHIPS_COLLECTION_ID}.documents`,
-            `databases.${DATABASE_ID}.collections.${WORKFLOWS_COLLECTION_ID}.documents`
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.PUBLICATIONS}.documents`,
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.ARTICLES}.documents`,
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.USER_VALIDATIONS}.documents`,
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.LAYOUTS}.documents`,
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.DEADLINES}.documents`,
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.GROUP_MEMBERSHIPS}.documents`,
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.WORKFLOWS}.documents`
         ];
 
         const unsubscribe = realtime.subscribe(channels, (response) => {
@@ -775,7 +775,7 @@ export const DataProvider = ({ children }) => {
             // (a revert $updatedAt-ja mindig frissebb). A cikkek szerkesztése
             // addig is blokkolva van, mert a scope query-k (workflow, validations)
             // nem találnak semmit a még nem létező DB állapothoz.
-            if (event.includes(PUBLICATIONS_COLLECTION_ID)) {
+            if (event.includes(COLLECTIONS.PUBLICATIONS)) {
                 if (isOutOfScope(event, payload)) return;
 
                 // Ha a deaktivált (vagy törölt) publikáció éppen az aktív,
@@ -841,7 +841,7 @@ export const DataProvider = ({ children }) => {
             }
 
             // --- Cikkek ---
-            else if (event.includes(ARTICLES_COLLECTION_ID)) {
+            else if (event.includes(COLLECTIONS.ARTICLES)) {
                 if (isOutOfScope(event, payload)) return;
                 const currentActivePublicationId = activePublicationIdRef.current;
 
@@ -873,7 +873,7 @@ export const DataProvider = ({ children }) => {
             }
 
             // --- Validációk ---
-            else if (event.includes(USER_VALIDATIONS_COLLECTION_ID)) {
+            else if (event.includes(COLLECTIONS.USER_VALIDATIONS)) {
                 if (isOutOfScope(event, payload)) return;
                 const currentArticles = latestArticlesRef.current;
                 const isRelevant = currentArticles.some(article => article.$id === payload.articleId);
@@ -903,7 +903,7 @@ export const DataProvider = ({ children }) => {
             }
 
             // --- Layoutok ---
-            else if (event.includes(LAYOUTS_COLLECTION_ID)) {
+            else if (event.includes(COLLECTIONS.LAYOUTS)) {
                 if (isOutOfScope(event, payload)) return;
                 const currentActivePublicationId = activePublicationIdRef.current;
 
@@ -933,7 +933,7 @@ export const DataProvider = ({ children }) => {
             }
 
             // --- Határidők ---
-            else if (event.includes(DEADLINES_COLLECTION_ID)) {
+            else if (event.includes(COLLECTIONS.DEADLINES)) {
                 if (isOutOfScope(event, payload)) return;
                 const currentActivePublicationId = activePublicationIdRef.current;
 
@@ -960,7 +960,7 @@ export const DataProvider = ({ children }) => {
 
             // --- Csoporttagság ---
             // A groupMemberships collection-ről jövő események — csak az aktív szerkesztőség
-            else if (event.includes(GROUP_MEMBERSHIPS_COLLECTION_ID)) {
+            else if (event.includes(COLLECTIONS.GROUP_MEMBERSHIPS)) {
                 if (payload.editorialOfficeId && payload.editorialOfficeId !== activeEditorialOfficeIdRef.current) {
                     return; // Más szerkesztőség eseménye — ignoráljuk
                 }
@@ -973,7 +973,7 @@ export const DataProvider = ({ children }) => {
             // Office-szintű workflow doc változás → a workflows[] array-t frissítjük.
             // A derived `workflow` memo automatikusan újraszámolódik a publikáció
             // workflowId-ja alapján, a workflowChanged event dispatch külön useEffect-ben.
-            else if (event.includes(WORKFLOWS_COLLECTION_ID)) {
+            else if (event.includes(COLLECTIONS.WORKFLOWS)) {
                 if (payload.editorialOfficeId && payload.editorialOfficeId !== activeEditorialOfficeIdRef.current) {
                     return; // Más szerkesztőség workflow-ja — ignoráljuk
                 }

@@ -124,11 +124,12 @@ class RecoveryManager {
 
             // 2. Realtime reconnect
             // A realtime.reconnect() teljes destroy+rebuild-et csinál,
+            // megvárja a feliratkozások újraépítését (Promise.all),
             // és a végén dispatch-eli a dataRefreshRequested event-et is.
             const isConnected = realtime.getConnectionStatus();
             if (!isConnected && !realtime.isReconnecting) {
                 log('[Recovery] [PLUG] Realtime újraépítés...');
-                realtime.reconnect();
+                await realtime.reconnect();
             } else {
                 // Ha a WebSocket él, csak adat frissítést kérünk
                 log('[Recovery] [SUB] Realtime él, csak adat frissítés');

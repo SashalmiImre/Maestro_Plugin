@@ -21,7 +21,7 @@ import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 import { getStateValidations } from "maestro-shared/workflowRuntime.js";
 import { VALIDATOR_TYPES, VALIDATION_SOURCES } from "../../core/utils/validationConstants.js";
 import { VALIDATION_TYPES } from "../../core/utils/messageConstants.js";
-import { tables, DATABASE_ID, SYSTEM_VALIDATIONS_COLLECTION_ID, ID, Query } from "../../core/config/appwriteConfig.js";
+import { tables, DATABASE_ID, COLLECTIONS, ID, Query } from "../../core/config/appwriteConfig.js";
 import { log, logError } from "../../core/utils/logger.js";
 import { DATA_QUERY_CONFIG, TOAST_TYPES } from "../../core/utils/constants.js";
 
@@ -37,7 +37,7 @@ async function fetchAllPreflightRows(baseQueries) {
     while (true) {
         const response = await tables.listRows({
             databaseId: DATABASE_ID,
-            tableId: SYSTEM_VALIDATIONS_COLLECTION_ID,
+            tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
             queries: [
                 ...baseQueries,
                 Query.limit(DATA_QUERY_CONFIG.PAGE_SIZE),
@@ -140,7 +140,7 @@ export const useWorkflowValidation = () => {
                     // Update
                     await tables.updateRow({
                         databaseId: DATABASE_ID,
-                        tableId: SYSTEM_VALIDATIONS_COLLECTION_ID,
+                        tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
                         rowId: existingRows[0].$id,
                         data
                     });
@@ -148,7 +148,7 @@ export const useWorkflowValidation = () => {
                     // Create
                     await tables.createRow({
                         databaseId: DATABASE_ID,
-                        tableId: SYSTEM_VALIDATIONS_COLLECTION_ID,
+                        tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
                         rowId: ID.unique(),
                         data: {
                             articleId,
@@ -162,7 +162,7 @@ export const useWorkflowValidation = () => {
                 // Nincs hiba → régi sor törlése
                 await tables.deleteRow({
                     databaseId: DATABASE_ID,
-                    tableId: SYSTEM_VALIDATIONS_COLLECTION_ID,
+                    tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
                     rowId: existingRows[0].$id
                 });
             }

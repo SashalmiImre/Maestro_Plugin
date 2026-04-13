@@ -9,7 +9,7 @@ import { useAllGroupMembers } from "./useGroupMembers.js";
 
 // Segédprogramok (Utils)
 import { isNetworkError, isAuthError, getAPIErrorMessage } from "../../core/utils/errorUtils.js";
-import { tables, DATABASE_ID, ARTICLES_COLLECTION_ID, Query } from "../../core/config/appwriteConfig.js";
+import { tables, DATABASE_ID, COLLECTIONS, Query } from "../../core/config/appwriteConfig.js";
 import { callUpdateArticleCF } from "../../core/utils/updateArticleClient.js";
 import {
     generateIsDocumentOpenScript,
@@ -321,7 +321,7 @@ export const useArticles = (publicationId, publicationRoot) => {
                     const response = await withTimeout(
                         tables.listRows({
                             databaseId: DATABASE_ID,
-                            tableId: ARTICLES_COLLECTION_ID,
+                            tableId: COLLECTIONS.ARTICLES,
                             queries: [Query.equal("$id", article.$id)],
                             limit: 1
                         }),

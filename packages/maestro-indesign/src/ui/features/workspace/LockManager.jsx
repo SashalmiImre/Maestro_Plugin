@@ -5,7 +5,7 @@ import React, { useEffect, useRef } from "react";
 import { useUser } from "../../../core/contexts/UserContext.jsx";
 import { useData } from "../../../core/contexts/DataContext.jsx";
 import { useToast } from "../../common/Toast/ToastContext.jsx";
-import { tables, Query, DATABASE_ID, ARTICLES_COLLECTION_ID } from "../../../core/config/appwriteConfig.js";
+import { tables, Query, DATABASE_ID, COLLECTIONS } from "../../../core/config/appwriteConfig.js";
 import { callUpdateArticleCF } from "../../../core/utils/updateArticleClient.js";
 
 // Segédfüggvények
@@ -137,7 +137,7 @@ export const LockManager = () => {
                 () => withTimeout(
                     tables.listRows({
                         databaseId: DATABASE_ID,
-                        tableId: ARTICLES_COLLECTION_ID,
+                        tableId: COLLECTIONS.ARTICLES,
                         queries: orphanedQueries,
                         limit: 100
                     }),
@@ -212,7 +212,7 @@ export const LockManager = () => {
                 () => withTimeout(
                     tables.listRows({
                         databaseId: DATABASE_ID,
-                        tableId: ARTICLES_COLLECTION_ID,
+                        tableId: COLLECTIONS.ARTICLES,
                         queries: cleanupQuery,
                         limit: 100
                     }),
@@ -228,7 +228,7 @@ export const LockManager = () => {
                     () => withTimeout(
                         tables.listRows({
                             databaseId: DATABASE_ID,
-                            tableId: ARTICLES_COLLECTION_ID,
+                            tableId: COLLECTIONS.ARTICLES,
                             queries: openFilesQuery,
                             limit: 100
                         }),
@@ -268,7 +268,7 @@ export const LockManager = () => {
                 () => withTimeout(
                     tables.listRows({
                         databaseId: DATABASE_ID,
-                        tableId: ARTICLES_COLLECTION_ID,
+                        tableId: COLLECTIONS.ARTICLES,
                         queries: [Query.equal("filePath", searchVariants)],
                         limit: 10
                     }),
@@ -321,7 +321,7 @@ export const LockManager = () => {
                 () => withTimeout(
                     tables.listRows({
                         databaseId: DATABASE_ID,
-                        tableId: ARTICLES_COLLECTION_ID,
+                        tableId: COLLECTIONS.ARTICLES,
                         queries: [Query.equal("filePath", searchVariants)],
                         limit: 10
                     }),

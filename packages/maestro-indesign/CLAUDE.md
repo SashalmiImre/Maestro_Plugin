@@ -146,14 +146,15 @@
     - Lock + debounce védelemmel a párhuzamos és gyors egymás utáni recovery kérések ellen.
     - **Debounce végponttól**: A `lastRecoveryAt` a recovery VÉGÉN is frissül (`finally` blokk), megakadályozva, hogy egy hosszú recovery lejárja a debounce-t.
     - **isReconnecting guard**: Nem indít újabb `reconnect()`-et, ha egy már folyamatban van.
-    - Sorrend: health check → realtime reconnect → adat frissítés.
+    - Sorrend: health check → `await realtime.reconnect()` → adat frissítés.
     - Sleep detection (InDesign `IdleTask` gap > 60s) → `recoveryManager.requestRecovery('sleep')`.
-    - **Szinkron Resubscribe**: A `reconnect()` szinkron építi újra a feliratkozásokat (nincs `setTimeout`), megakadályozva az `isConnected` flag ideiglenesen hamis állapotát.
+    - **Async Resubscribe**: A `reconnect()` async — a hívások szinkron indulnak (nincs `setTimeout` delay), de `Promise.all`-lal megvárja a feliratkozások létrejöttét. A RecoveryManager `await`-eli a `reconnect()`-et, így az `isRecovering` flag végig true marad a teljes Realtime újraépítés alatt. A `_attemptSdkSubscription` boolean-nel tér vissza (true/false), így a sikertelen feliratkozások száma pontosan detektálható.
     - **Plugin Graceful Shutdown**: Az `index.jsx` `window.unload` eseményre iratkozik fel (az UXP `plugin.destroy()` hook nem mindig fut le, pl. InDesign kilépéskor). Shutdown-kor `recoveryManager.cancel()` → `realtime.disconnect()` sorrendben fut — megelőzi, hogy in-flight recovery egy már leállított kontextusban hozzon létre új WebSocket-et (crash). Az `_isCleanedUp` flag biztosítja, hogy a cleanup csak egyszer fusson le.
     - **Startup Error Capture**: Az `index.jsx` modul-szinten (React init előtt) regisztrál `error` és `unhandledrejection` listenereket. Az előző munkamenet esetleges összeomlásának részleteit localStorage-ba menti (`maestro.lastError`, `maestro.lastRejection`), és induláskor konzolra írja, majd törli.
     - **Recovery Cancellation**: A `RecoveryManager.cancel()` beállítja a `_isCancelled` flag-et, amely in-flight `_executeRecovery()` futást is leállít (health check await után ellenőrzött). Az aktív HTTP fetch kérések `AbortController`-eken keresztül (`_activeControllers` Set) azonnal megszakíthatók. Retry delay Promise-ok szintén megszakíthatók a `_retryReject` függvényen keresztül.
-    - **Ghost Socket Védelem**: Socket generáció-számláló (`_socketGeneration`) a `realtimeClient.js`-ben. A close handler ignorálja a régi socket-ek close event-jeit, megakadályozva a végtelen reconnect ciklust.
-    - **WebSocket 1001 (Going Away)**: Az alkalmazás/böngésző bezárásakor küldött 1001 close code-ot a close handler felismeri és nem indít reconnect-et (szemben az 1000-es normál lezárással, ahol a `realtime.reconnect` flag marad).
+    - **createSocket Moduláris Felépítés**: A `realtimeClient.js` `createSocket` metódusa 4 privát metódusra bontva: `_buildSocketUrl()` (URL + auth params), `_handleSocketOpen()` (auth frame + heartbeat), `_handleSocketMessage()` (szerverhiba tracking + SDK delegálás), `_handleSocketClose()` (close code stratégia + reconnect logika).
+    - **Ghost Socket Védelem**: Socket generáció-számláló (`_socketGeneration`) a `_handleSocketClose()`-ban. A close handler ignorálja a régi socket-ek close event-jeit, megakadályozva a végtelen reconnect ciklust.
+    - **WebSocket 1001 (Going Away)**: Az alkalmazás/böngésző bezárásakor küldött 1001 close code-ot a `_handleSocketClose()` felismeri és nem indít reconnect-et (szemben az 1000-es normál lezárással, ahol a `realtime.reconnect` flag marad).
     - **Dinamikus Csatorna-kezelés**: A `_subscribedChannels` Set nyomon követi az aktív socket csatornáit. Ha új csatorna érkezik (pl. az `account` a database channels után), a `createSocket` lezárja a régi socketet és újat hoz létre az összes csatornával. Ez megoldja az eltérő React render ciklusokból adódó subscription-sorrend problémát.
     - **Explicit Socket Cleanup**: A `reconnect()` metódus explicit `close(1000)` hívással zárja le a régi WebSocket-et az új létrehozása előtt.
     - **Dinamikus Endpoint (Realtime)**: A `realtimeClient.js` `_initClient()` metódusa `endpointManager.getEndpoint()`-ot használ → `reconnect()` automatikusan felveszi az aktuális (primary/fallback) endpoint-ot.
@@ -505,7 +506,7 @@ már betöltődött-e és a `ScopeContext` auto-pick adott-e aktív officeId-t.
 A konfigurációs konstansok: `src/core/config/appwriteConfig.js`
 
 - **Endpoint**: Dual-proxy failover-rel (`EndpointManager`): Railway (primary) → emago.hu (fallback). Mindig `endpointManager.getEndpoint()`-ot használj az aktuális endpoint lekéréséhez — a korábbi `APPWRITE_ENDPOINT` statikus export el lett távolítva. Az `endpointManager.getProxyBase()` a proxy gyökér URL-t adja vissza (a `/v1` suffix nélkül) — az AI clustering (`/api/cluster-article`) és egyéb proxy-szintű endpointokhoz.
-- **Project ID**, **Database ID**, **Collection ID-k** (Articles, Publications, Messages), **Bucket ID** (Storage).
+- **Project ID**, **Database ID**, **Collection ID-k** (`COLLECTIONS` objektum a `maestro-shared/appwriteIds.js`-ből, közvetlenül exportálva az `appwriteConfig.js`-ből), **Bucket ID** (Storage).
 - **Csoportok**: Saját `groups` + `groupMemberships` collection-ök (szerkesztőség-szintű scope). A csoportok szerkesztőség-szintűek (scope: `editorialOfficeId`). 7 alapértelmezett csoport: `editors`, `designers`, `writers`, `image_editors`, `art_directors`, `managing_editors`, `proofwriters`. Új csoportok a Dashboard `/settings/groups` UI-ról kezelhetők.
 
 ### Session Kezelés (UXP Sajátosság)
