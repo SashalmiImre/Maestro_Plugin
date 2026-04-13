@@ -18,7 +18,7 @@ tags: [feladatok]
 > 4. ✅ Kipipálás
 
 - [x] 1. **core/config/** — appwriteConfig, realtimeClient, recoveryManager, maestroEvents
-- [ ] 2. **core/utils/ (infra)** — logger, errorUtils, pathUtils, promiseUtils, constants, messageConstants
+- [x] 2. **core/utils/ (infra)** — logger, errorUtils, pathUtils, promiseUtils, constants, messageConstants
 - [ ] 3. **core/utils/workflow/** — workflowEngine, workflowPermissions
 - [ ] 4. **core/utils/validators/** — ValidatorBase, összes validator, validationRunner
 - [ ] 5. **core/utils/indesign/** — ExtendScript generátorok, scriptHelpers, indesignUtils

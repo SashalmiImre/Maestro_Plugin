@@ -128,6 +128,11 @@ export const isIndexNotFoundError = (error) => {
 export const getAPIErrorMessage = (error, operation = 'művelet') => {
     if (!error) return `A ${operation} sikertelen volt.`;
 
+    /** Defenzív string konverzió — hostile toString/Symbol.toPrimitive ellen */
+    const safeString = (val) => {
+        try { return String(val); } catch { return '[Error object]'; }
+    };
+
     // Appwrite hiba részletek kinyerése
     let message;
     if (error.message) {
@@ -135,22 +140,12 @@ export const getAPIErrorMessage = (error, operation = 'művelet') => {
     } else if (typeof error === 'object' && error !== null) {
         try {
             message = JSON.stringify(error);
-            if (message === '{}') {
-                try {
-                    message = error.toString();
-                } catch (e) {
-                    message = "[Error object]";
-                }
-            }
-        } catch (e) {
-            try {
-                message = error.toString();
-            } catch (e2) {
-                message = "[Error object]";
-            }
+        } catch {
+            message = safeString(error);
         }
+        if (message === '{}') message = safeString(error);
     } else {
-        message = String(error);
+        message = safeString(error);
     }
     
     const code = error.code;

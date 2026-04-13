@@ -235,7 +235,16 @@ export const toAbsoluteArticlePath = (relativePath, canonicalRoot) => {
 
     // Relatív → kanonikus abszolút → natív
     const root = normalize(canonicalRoot).replace(/\/$/, "");
-    const canonical = `${root}/${normalize(relativePath)}`;
+    const normalized = normalize(relativePath);
+
+    // Defense-in-depth: „.." path szegmens nem léphet ki a root-ból
+    // (normalize már dekódolt URI-t, így %2e%2e is elkapva)
+    if (/(^|\/)\.\.($|\/)/.test(normalized)) {
+        logWarn("[PathUtils] Path traversal blokkolva:", relativePath);
+        return "";
+    }
+
+    const canonical = `${root}/${normalized}`;
     return toNativePath(canonical);
 };
 
@@ -259,18 +268,6 @@ export const getArticleCanonicalPath = (article, publications) => {
         return `${root}/${normalize(article.filePath)}`;
     }
     return article.filePath;
-};
-
-/**
- * Backward compatibility wrapper — kanonikus vagy natív útvonalat natívra konvertál.
- *
- * @param {string} path - Bármilyen formátumú útvonal (kanonikus, natív, régi formátumú).
- * @returns {string} A platform-specifikus natív útvonal.
- * @deprecated Használd a toNativePath()-t új kódban.
- */
-export const resolvePlatformPath = (path) => {
-    if (!path) return "";
-    return toNativePath(path);
 };
 
 /**

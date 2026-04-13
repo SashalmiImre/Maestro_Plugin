@@ -169,7 +169,7 @@
 7. **Cross-Platform Útvonalkezelés**
     - **Kanonikus formátum**: A DB-ben platform-független útvonalak: `/ShareName/relative/path` (pl. `/Story/2026/March`). Article `filePath` relatív a kiadvány `rootPath`-jához (pl. `.maestro/article.indd`).
     - **MOUNT_PREFIX** (`constants.js`): `{ darwin: "/Volumes", win32: "C:/Volumes" }`. Mac-en a rendszer automatikusan ide mountol, Windows-en IT állítja be symlink-ekkel (`mklink /D C:\Volumes\ShareName \\server\ShareName`).
-    - **Konverziós függvények** (`pathUtils.js`): `toCanonicalPath()` (natív → DB), `toNativePath()` (DB → natív), `toRelativeArticlePath()` (abszolút → relatív), `toAbsoluteArticlePath()` (relatív → natív abszolút).
+    - **Konverziós függvények** (`pathUtils.js`): `toCanonicalPath()` (natív → DB), `toNativePath()` (DB → natív), `toRelativeArticlePath()` (abszolút → relatív), `toAbsoluteArticlePath()` (relatív → natív abszolút, `..` path traversal védelemmel).
     - **Lazy migráció** (`DataContext.jsx`): `migratePathsIfNeeded()` automatikusan konvertálja a régi formátumú útvonalakat (abszolút natív) kanonikus/relatív formátumra az adatbázisban, fetch után futva.
     - **LockManager / DocumentMonitor**: Kanonikus útvonal-összehasonlítást használnak (`getArticleCanonicalPath()`) a cross-platform egyeztetéshez. A `nativePathToQueryVariants()` generálja a DB lekérdezéshez szükséges útvonal-variánsokat (relatív + legacy kanonikus).
     - **`convertNativePathToUrl()`**: Natív útvonalat `file:///` URL-lé konvertál a UXP `getEntryWithUrl()` számára. **Nem kódol** `encodeURIComponent`-tel — a UXP API saját maga végzi az URL-kódolást. A kézi kódolás dupla kódolást okozna (szóköz → `%20` → `%2520`). Már kódolt URL-eket (`file:` prefix) `decodeURIComponent`-tel nyers útvonalra decode-ol.
