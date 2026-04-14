@@ -138,7 +138,7 @@
       - `useElementPermission(key)` / `useElementPermissions(keys[])` / `useContributorPermissions(articleState)` hookok (`useElementPermission.js`) — React komponensekben, változatlan publikus API.
       - **Kompozíció**: `disabled={isIgnored || isSyncing || !perm.allowed}` + tooltip a `reason`-nel.
     - **Konfiguráció**: `workflowRuntime.js` (fogyasztói API), `workflowPermissions.js` (plugin proxy), `workflowEngine.js` (átmenet végrehajtás).
-    - Ld. `docs/WORKFLOW_PERMISSIONS.md`
+    - **Szerver-oldali érvényesítés**: A kliens-oldali ACL-ek UI hint-ek — a végleges engedélyezés az `update-article` Cloud Function-ben történik (office scope, workflow állapot + átmenet, `statePermissions[currentState]`, csoporttagság). Részletek: `../maestro-server/CLAUDE.md` (update-article funkció). A Pluginból minden `updateArticle` hívás a `callUpdateArticleCF` helperen keresztül megy (`updateArticleClient.js`), a direkt DB írás permission-ről meg van vonva.
 
 6. **Kapcsolat-helyreállítás (RecoveryManager) & Dual-Proxy Failover**
     - **Dual-Proxy Architektúra**: Railway (primary, EU West Amsterdam, ~0.5s TTFB) + emago.hu (fallback, Apache/Passenger, 8-10s cold start). Független infrastruktúra → szinte nulla egyidejű kiesés esélye.
@@ -432,7 +432,6 @@ Appwrite `groupMemberships` collection Realtime csatorna → `DataContext` handl
 | `docs/diagrams/data-flow-architecture.md` | Teljes adatáramlás: Context + Event + komponens hierarchia          |
 | `docs/diagrams/open-file-flow.md`         | Fájl megnyitás lépésről lépésre (kattintástól a UI frissülésig)     |
 | `docs/diagrams/network-architecture.md`   | Hálózati kapcsolatkezelés, sleep recovery, auto-retry               |
-| `docs/WORKFLOW_PERMISSIONS.md`            | Jogosultsági rendszer: csoporttagság-alapú állapotátmenet-védelem   |
 | `docs/URGENCY_SYSTEM.md`                  | Sürgősség-számítás: munkaidő, ünnepnapok, ratio, progresszív sáv   |
 | `docs/VALIDATION_MECHANISM.md`            | Egységes validációs és üzenetküldő rendszer működése                |
 | `docs/ARCHIVING_TEXT_EXTRACTION.md`       | Archiválási szövegkinyerés: clustering, típusosztályozás, XML/TXT   |

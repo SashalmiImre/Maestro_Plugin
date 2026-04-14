@@ -151,49 +151,142 @@ graph TD
 
 ### Esemény → Feliratkozó mátrix
 
-| Esemény                      | useWorkflowValidation  | useDatabaseIntegrityValidation | useOverlapValidation |   DataContext   |
-| ---------------------------- | :---------------------: | :----------------------------: | :------------------: | :-------------: |
-| `documentSaved`              |   ha PREFLIGHT state    |              igen              |          —           |        —        |
-| `documentClosed`             |   ha PREFLIGHT state    |      igen (registerTask)       |          —           |        —        |
-| `stateChanged`               | belépés/kilépés kezelés |               —                |          —           |        —        |
-| `pageRangesChanged`          |            —            |               —                |         igen         |        —        |
-| `layoutChanged`              |            —            |               —                |         igen         |        —        |
-| `publicationCoverageChanged` |            —            |               —                |         igen         |        —        |
-| `dataRefreshRequested`       |            —            |               —                |          —           | fetchData(true) + UserContext: account.get() |
+| Esemény                      | useWorkflowValidation   | useDatabaseIntegrityValidation | useOverlapValidation |   DataContext   |   UserContext   |
+| ---------------------------- | :---------------------: | :----------------------------: | :------------------: | :-------------: | :-------------: |
+| `documentSaved`              |   ha PREFLIGHT state    |              igen              |          —           |        —        |        —        |
+| `documentClosed`             |   ha PREFLIGHT state    |      igen (registerTask)       |          —           |        —        |        —        |
+| `stateChanged`               | belépés/kilépés kezelés |               —                |          —           |        —        |        —        |
+| `pageRangesChanged`          |            —            |               —                |         igen         |        —        |        —        |
+| `layoutChanged`              |            —            |               —                |         igen         |        —        |        —        |
+| `publicationCoverageChanged` |            —            |               —                |         igen         |        —        |        —        |
+| `articlesAdded`              |            —            |               —                | igen (merge + recalc)|        —        |        —        |
+| `groupMembershipChanged`     |            —            |               —                |          —           |        —        | refreshGroupSlugs() |
+| `scopeChanged`               |            —            |               —                |          —           | derived state reset | refreshGroupSlugs() |
+| `workflowChanged`            |            —            |               —                |          —           | setWorkflow (hot-reload) |        —        |
+| `dataRefreshRequested`       |            —            |               —                |          —           | fetchData(true) | account.get() + refreshGroupSlugs() |
+
+---
+
+## 2a. Multi-tenant scope + groupSlugs szinkronizáció
+
+A Plugin multi-tenant (szervezet + szerkesztőség) hatókörrel dolgozik. A `ScopeContext` és a `UserContext` három csatornán keresztül tart szinkront:
+
+```mermaid
+graph TD
+    subgraph "Adatforrások"
+        GroupMembershipsRT["Appwrite Realtime:<br/>groupMemberships collection"]
+        AccountRT["Appwrite Realtime:<br/>account channel"]
+        ScopeChange["Scope-váltás<br/>(WorkspaceHeader dropdown)"]
+        Recovery["Recovery<br/>(sleep/wake/reconnect)"]
+    end
+
+    subgraph "Esemény dispatch"
+        GMC["dispatch: groupMembershipChanged"]
+        SC["dispatch: scopeChanged"]
+        DRR["dispatch: dataRefreshRequested"]
+
+        GroupMembershipsRT --> GMC
+        ScopeChange --> SC
+        Recovery --> DRR
+    end
+
+    subgraph "UserContext"
+        RefreshSlugs["refreshGroupSlugs()<br/>= groupMemberships + groups query"]
+        AccountGet["account.get()<br/>(labels, prefs, email)"]
+        SetUser["setUser({...user, groupSlugs})"]
+
+        GMC --> RefreshSlugs
+        SC --> RefreshSlugs
+        DRR --> AccountGet
+        DRR --> RefreshSlugs
+        AccountRT -->|"account event"| SetUser
+        RefreshSlugs --> SetUser
+    end
+
+    subgraph "ScopeContext"
+        ResolveScope["resolveScope() tiszta függvény<br/>(stale ID védelem + auto-pick)"]
+        SetOrg["setActiveOrganization(id)"]
+        SetOffice["setActiveOffice(id)"]
+
+        SC --> ResolveScope
+        ResolveScope --> SetOrg
+        ResolveScope --> SetOffice
+    end
+
+    subgraph "Fogyasztók"
+        UIPermissions["UI Permission Hooks<br/>(useElementPermission, useContributorPermissions)"]
+        DataCtxScope["DataContext scope-szűrt fetch +<br/>derived state reset office-váltáskor"]
+        GroupMembersCache["useGroupMembers cache invalidálás"]
+
+        SetUser --> UIPermissions
+        SetOffice --> DataCtxScope
+        GMC --> GroupMembersCache
+        SC --> GroupMembersCache
+    end
+
+    classDef source fill:#fff9c4,stroke:#f9a825,stroke-width:2px;
+    classDef event fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
+    classDef ctx fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+    classDef consumer fill:#fce4ec,stroke:#c62828,stroke-width:2px;
+
+    class GroupMembershipsRT,AccountRT,ScopeChange,Recovery source;
+    class GMC,SC,DRR event;
+    class RefreshSlugs,AccountGet,SetUser,ResolveScope,SetOrg,SetOffice ctx;
+    class UIPermissions,DataCtxScope,GroupMembersCache consumer;
+```
+
+### Kulcs garanciák
+
+- **`sameGroupSlugs()` helper**: Set-alapú összehasonlítás — azonos tartalom esetén nem okoz re-rendert.
+- **Stale ID védelem**: `ScopeContext` auto-pick effect csak `!membershipsError` esetén fut (átmeneti hiba nem törli a helyes scope-ot).
+- **Scope-szűrt fetch**: `DataContext.fetchData` minden collection-hez hozzáfűzi a `Query.equal("editorialOfficeId", ...)` feltételt + `publications` esetén `isActivated === true` szűrést.
+- **Office-váltáskor**: külön effect nullázza az `activePublicationId`-t és a derived state-et (`articles`, `layouts`, `deadlines`, `validations`).
+- **ValidationContext reset**: `scopeChanged` eseményre a `sourceResults` Map teljesen törlődik (idegen office articleId-s eredmények kitisztítása).
 
 ---
 
 ## 3. Komponens hierarchia
 
 ```text
-Main.jsx
-  └─ DataProvider (publications[], articles[])
-       └─ ValidationProvider (validationResults Map)
-            └─ Workspace
-                 ├─ PublicationList
-                 │    ├─ useOverlapValidation()          ← event subscriber
-                 │    ├─ useDatabaseIntegrityValidation() ← event subscriber
-                 │    ├─ DocumentMonitor                  ← event dispatcher (afterSave, unlock; kétfázisú detektálás)
-                 │    ├─ LockManager                      ← lock kezelés (DB → realtime → UI)
-                 │    └─ Publication (×N)
-                 │         └─ useArticles(pubId)          ← DataContext szűrés
-                 │              └─ ArticleTable
-                 │                   └─ useValidation()   ← ValidationContext olvasás
-                 │                        └─ CustomTable
-                 │
-                 └─ PropertiesPanel (ha kiválasztva)
-                      └─ selectedArticle: useMemo a DataContext articles-ból
+index.jsx
+  └─ UserProvider                     ← Auth, session, groupSlugs szinkron (Realtime + recovery)
+       └─ ConnectionProvider          ← Online/offline/connecting UI állapot
+            └─ Main.jsx               ← Sleep detektálás, RecoveryManager trigger, Realtime watchdog
+                 └─ ToastProvider     ← Toast értesítési rendszer
+                      └─ (user?) ScopeProvider  ← activeOrganizationId, activeEditorialOfficeId (multi-tenant)
+                           └─ DataProvider       ← publications[], articles[], validations[], workflows[]
+                                └─ ValidationProvider ← validationResults Map (rendszer-validációk)
+                                     └─ ScopedWorkspace  ← ScopeMissingPlaceholder / Workspace switch
+                                          └─ Workspace
+                                               ├─ PublicationList
+                                               │    ├─ useOverlapValidation()          ← event subscriber
+                                               │    ├─ useDatabaseIntegrityValidation() ← event subscriber
+                                               │    ├─ DocumentMonitor                  ← event dispatcher (afterSave, unlock)
+                                               │    ├─ LockManager                      ← lock kezelés (DB → realtime → UI)
+                                               │    └─ Publication (×N)
+                                               │         └─ useArticles(pubId)          ← DataContext szűrés
+                                               │              └─ ArticleTable
+                                               │                   └─ useValidation()   ← ValidationContext olvasás
+                                               │                        └─ CustomTable
+                                               │
+                                               └─ PropertiesPanel (ha kiválasztva)
+                                                    └─ selectedArticle: useMemo a DataContext articles-ból
 ```
+
+A `ScopeProvider` csak a bejelentkezett ágon jelenik meg. A `ScopedWorkspace` dönti el, hogy a valódi `<Workspace />` vagy a `<ScopeMissingPlaceholder />` (loading / no-membership / error) renderelődik — a `UserContext` memberships betöltöttségétől és a `ScopeContext` auto-pick eredményétől függően.
 
 ### Melyik komponens honnan kapja az adatot?
 
-| Komponens         | Adatforrás               | Mechanizmus                                  |
-| ----------------- | ------------------------ | -------------------------------------------- |
-| `Publication`     | articles (szűrt)         | `useArticles()` → `useData()` → DataContext  |
-| `ArticleTable`    | articles (szűrt + szűrt) | props a Publication-től                      |
-| `ArticleTable`    | validationResults        | `useValidation()` → ValidationContext        |
-| `Workspace`       | selectedArticle          | `useMemo` → DataContext articles[].find()    |
-| `DocumentMonitor` | articles (összes)        | `useData()` → DataContext (ref-en keresztül) |
+| Komponens           | Adatforrás                 | Mechanizmus                                     |
+| ------------------- | -------------------------- | ----------------------------------------------- |
+| `WorkspaceHeader`   | organizations, offices     | `useUser()` → memberships + `useScope()`        |
+| `ScopedWorkspace`   | activeEditorialOfficeId    | `useScope()` → ScopeContext                     |
+| `Publication`       | articles (szűrt)           | `useArticles()` → `useData()` → DataContext     |
+| `ArticleTable`      | articles (szűrt + szűrt)   | props a Publication-től                         |
+| `ArticleTable`      | validationResults          | `useValidation()` → ValidationContext           |
+| `Workspace`         | selectedArticle            | `useMemo` → DataContext articles[].find()       |
+| `DocumentMonitor`   | articles (összes)          | `useData()` → DataContext (ref-en keresztül)    |
+| `ArticleProperties` | user.groupSlugs, workflow  | `useUser()` + `useData()` → jogosultság hookok  |
 
 ---
 
