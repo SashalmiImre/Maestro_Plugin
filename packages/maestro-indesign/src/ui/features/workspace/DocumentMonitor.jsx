@@ -19,7 +19,15 @@ import {
 import { WorkflowEngine } from "../../../core/utils/workflow/workflowEngine.js";
 import { LOCK_TYPE, LOCK_WAIT_CONFIG, TOAST_TYPES } from "../../../core/utils/constants.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../core/config/maestroEvents.js";
+import { withTimeout } from "../../../core/utils/promiseUtils.js";
 import { log, logWarn, logError } from "../../../core/utils/logger.js";
+
+/**
+ * Validátor feladatok maximális várakozási ideje. Ha egy feladat nem tér vissza
+ * (pl. thumbnail upload elakad), a verifikáció ne ragadjon be — a timeout után
+ * logolunk és folytatjuk a `finally` blokkba (unlock + state reset).
+ */
+const VALIDATION_TASKS_TIMEOUT_MS = 30000;
 
 
 
@@ -67,6 +75,20 @@ export const DocumentMonitor = () => {
     // Mindig frissítjük a ref-eket, ha változik a context adat
     useEffect(() => { latestArticlesRef.current = articles; }, [articles]);
     useEffect(() => { publicationsRef.current = publications; }, [publications]);
+
+    // Timestamp cache takarítás: a már nem létező cikkek bejegyzéseit töröljük,
+    // különben hosszú session alatt (publikáció-váltás, cikktörlés) feleslegesen
+    // nő a memóriahasználat. Az aktív articles listából képzett Set-tel szűrünk.
+    useEffect(() => {
+        if (!articles?.length) return;
+        const validIds = new Set(articles.map(a => a.$id));
+        const cache = lastValidatedTimestampsRef.current;
+        for (const id of Object.keys(cache)) {
+            if (!validIds.has(id)) {
+                delete cache[id];
+            }
+        }
+    }, [articles]);
 
     /**
      * Megkeres egy cikket a globális Context-ben a fájl útvonala alapján.
@@ -177,10 +199,19 @@ export const DocumentMonitor = () => {
                 registerTask: (promise) => tasks.push(promise)
             });
 
-            // Megvárjuk az összes regisztrált feladatot
+            // Megvárjuk az összes regisztrált feladatot — timeout-tal védve, hogy egy
+            // elakadt feladat ne ragassza be a verifikációt (lásd isVerifyingRef).
             if (tasks.length > 0) {
                 log(`[DocumentMonitor] ${tasks.length} validációs feladat fut: ${article.name}`);
-                await Promise.all(tasks);
+                try {
+                    await withTimeout(
+                        Promise.all(tasks),
+                        VALIDATION_TASKS_TIMEOUT_MS,
+                        `DocumentMonitor: validation tasks (${article.name})`
+                    );
+                } catch (tasksErr) {
+                    logWarn(`[DocumentMonitor] Validációs feladatok timeout / hiba (${article.name}) — folytatás:`, tasksErr);
+                }
             }
 
             // Sikeres validálás után friss timestamp mentése
@@ -279,7 +310,12 @@ export const DocumentMonitor = () => {
 
                 if (appInstance) {
                     const openPaths = await getOpenDocumentPaths(appInstance);
-                    if (openPaths) {
+                    if (!openPaths) {
+                        // Ha a ExtendScript hívás null/undefined-ot ad vissza, nem tudjuk
+                        // eldönteni, hogy a fájl nyitva van-e — loggoljuk a hibát, hogy
+                        // ne maradjon rejtve (korábban csendben továbbment).
+                        logWarn(`[DocumentMonitor] getOpenDocumentPaths nem adott vissza listát (${typeof openPaths}), nyitott-ellenőrzés kihagyva: ${unlockTarget.name}`);
+                    } else {
                         const articleCanonical = getArticleCanonicalPath(unlockTarget, publicationsRef.current).toLowerCase();
                         const isOpen = openPaths.some(p => {
                             return toCanonicalPath(p).toLowerCase() === articleCanonical;
