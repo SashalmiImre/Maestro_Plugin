@@ -75,7 +75,12 @@ export const CONNECTION_CONFIG = {
     REALTIME_STALENESS_MS: 45000,
 
     // Realtime kapcsolat ellenőrzése
-    RECONNECT_CHECK_MS: 30000      // 30mp fallback - az alvás detektálás kezeli az azonnali helyreállítást
+    RECONNECT_CHECK_MS: 30000,     // 30mp fallback - az alvás detektálás kezeli az azonnali helyreállítást
+
+    // Startup fallback: ennyi ms után ellenőrizzük, hogy a Realtime initial
+    // handshake-je létrejött-e. Ha nem, recovery-t indítunk — különben a
+    // _notifyConnectionChange(false→false) dedupe miatt ragadhatunk benne.
+    STARTUP_REALTIME_CHECK_MS: 5000
 };
 
 // =============================================================================

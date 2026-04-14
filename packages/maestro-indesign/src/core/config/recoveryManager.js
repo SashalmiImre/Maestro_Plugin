@@ -126,14 +126,27 @@ class RecoveryManager {
             // A realtime.reconnect() teljes destroy+rebuild-et csinál,
             // megvárja a feliratkozások újraépítését (Promise.all),
             // és a végén dispatch-eli a dataRefreshRequested event-et is.
-            const isConnected = realtime.getConnectionStatus();
-            if (!isConnected && !realtime.isReconnecting) {
-                log('[Recovery] [PLUG] Realtime újraépítés...');
-                await realtime.reconnect();
-            } else {
-                // Ha a WebSocket él, csak adat frissítést kérünk
+            //
+            // FONTOS: a „csak adat frissítés" ág CSAK akkor fusson, ha a Realtime
+            // ténylegesen él (getConnectionStatus() === true). Az isReconnecting
+            // flag önmagában nem jelent élő kapcsolatot — a close-handler backoff
+            // loop-ja is felteszi CONNECTING közben, és ebben az állapotban egy REST
+            // refresh félrevezető healthy UI-t mutatna. A reconnect() önmaga
+            // dedupe-ol (isReconnecting guard → ok: true, attempted: 0), szóval
+            // nyugodtan meghívható párhuzamos in-flight socket felépítés alatt is.
+            if (realtime.getConnectionStatus()) {
                 log('[Recovery] [SUB] Realtime él, csak adat frissítés');
                 dispatchMaestroEvent(MaestroEvent.dataRefreshRequested);
+            } else {
+                log('[Recovery] [PLUG] Realtime újraépítés...');
+                const result = await realtime.reconnect();
+                // Ha MINDEN subscribe elbukott, a kapcsolat nem él eseményekre.
+                // A realtime már jelezte disconnected-et + hibát; itt csak logoljuk,
+                // hogy a következő trigger (focus/sleep/online) új recovery-t indíthasson.
+                if (result && result.ok === false) {
+                    logWarn(`[Recovery] [FAIL] Realtime feliratkozások sikertelenek (${result.failed}/${result.attempted})`);
+                    return;
+                }
             }
 
             log('[Recovery] [OK] Recovery befejezve');
@@ -164,15 +177,22 @@ class RecoveryManager {
         const { MAX_RETRIES, RETRY_BASE_MS, HEALTH_TIMEOUT_MS } = RECOVERY_CONFIG;
 
         // 1. Aktív endpoint próbálkozás (retry-okkal)
-        const activeOk = await this._tryEndpointHealth(
+        const activeResult = await this._tryEndpointHealth(
             endpointManager.getHealthEndpoint(), MAX_RETRIES, RETRY_BASE_MS, HEALTH_TIMEOUT_MS
         );
 
-        if (activeOk) {
-            // Ha fallback-en voltunk és a primary most visszajött, próbáljuk visszakapcsolni
+        // Lejárt session: a failover-t nem folytatjuk — az expired session nem
+        // orvosolható másik proxyval, a sessionExpired event már dispatch-elve.
+        if (activeResult === 'session_expired') return false;
+
+        if (activeResult === 'ok') {
+            // Ha fallback-en voltunk és a primary most visszajött, próbáljuk visszakapcsolni.
+            // A primary 401-je NEM jelent session-lejáratot: az aktív fallback session él,
+            // csak a primary proxy auth konfigja eltérő/rossz.
             if (!endpointManager.getIsPrimary()) {
                 const primaryOk = await this._singleHealthCheck(
-                    endpointManager.getOtherHealthEndpoint(), HEALTH_TIMEOUT_MS
+                    endpointManager.getOtherHealthEndpoint(), HEALTH_TIMEOUT_MS,
+                    { reportSessionExpiry: false }
                 );
                 if (primaryOk) {
                     endpointManager.switchToPrimary();
@@ -182,10 +202,12 @@ class RecoveryManager {
             return true;
         }
 
-        // 2. Aktív nem elérhető → próbáljuk a másikat
+        // 2. Aktív nem elérhető → próbáljuk a másikat (failover). Itt a 401 valódi
+        //    session-problémát jelez (a user-nek ez az egyetlen nyitott útja).
         log('[Recovery] Aktív endpoint nem elérhető, fallback próba...');
         const otherOk = await this._singleHealthCheck(
-            endpointManager.getOtherHealthEndpoint(), HEALTH_TIMEOUT_MS
+            endpointManager.getOtherHealthEndpoint(), HEALTH_TIMEOUT_MS,
+            { reportSessionExpiry: true }
         );
 
         if (otherOk) {
@@ -203,7 +225,7 @@ class RecoveryManager {
      * @param {number} maxRetries - Maximum próbálkozások.
      * @param {number} retryBaseMs - Backoff alap (ms).
      * @param {number} timeoutMs - Kérés timeout (ms).
-     * @returns {Promise<boolean>} Igaz, ha elérhető.
+     * @returns {Promise<'ok'|'session_expired'|'unreachable'>}
      * @private
      */
     async _tryEndpointHealth(url, maxRetries, retryBaseMs, timeoutMs) {
@@ -220,18 +242,18 @@ class RecoveryManager {
                     signal: controller.signal
                 });
 
-                if (response.ok) return true;
+                if (response.ok) return 'ok';
 
                 if (response.status === 401) {
-                    log('[Recovery] Session lejárt (401)');
+                    log('[Recovery] Session lejárt (401) — reconnect megszakítva, sessionExpired dispatch');
                     dispatchMaestroEvent(MaestroEvent.sessionExpired);
-                    return true;
+                    return 'session_expired';
                 }
 
                 logWarn(`[Recovery] Health check HTTP ${response.status} (${attempt}/${maxRetries})`);
             } catch (error) {
                 if (error.name === 'AbortError') {
-                    if (this._isCancelled) return false;
+                    if (this._isCancelled) return 'unreachable';
                     logWarn(`[Recovery] Health check timeout (${attempt}/${maxRetries})`);
                 } else {
                     logWarn(`[Recovery] Health check hiba (${attempt}/${maxRetries}):`, error.message);
@@ -241,7 +263,7 @@ class RecoveryManager {
                 this._activeControllers.delete(controller);
             }
 
-            if (this._isCancelled) return false;
+            if (this._isCancelled) return 'unreachable';
 
             if (attempt < maxRetries) {
                 const delayMs = retryBaseMs * Math.pow(2, attempt - 1);
@@ -254,11 +276,11 @@ class RecoveryManager {
                     }, delayMs);
                 }).catch(() => {});
 
-                if (this._isCancelled) return false;
+                if (this._isCancelled) return 'unreachable';
             }
         }
 
-        return false;
+        return 'unreachable';
     }
 
     /**
@@ -266,10 +288,13 @@ class RecoveryManager {
      *
      * @param {string} url - Health endpoint URL.
      * @param {number} timeoutMs - Kérés timeout (ms).
+     * @param {{ reportSessionExpiry?: boolean }} [opts] - Ha true, a 401 sessionExpired
+     *   event-et dispatchel. Csak a failover-ág próbájánál true (az opportunistic
+     *   primary-back probe-nál false, hogy egy rossz primary ne logoltassa ki a usert).
      * @returns {Promise<boolean>} Igaz, ha elérhető.
      * @private
      */
-    async _singleHealthCheck(url, timeoutMs) {
+    async _singleHealthCheck(url, timeoutMs, opts = {}) {
         const controller = new AbortController();
         this._activeControllers.add(controller);
 
@@ -282,7 +307,15 @@ class RecoveryManager {
                 signal: controller.signal
             });
 
-            return response.ok || response.status === 401;
+            if (response.status === 401) {
+                if (opts.reportSessionExpiry) {
+                    log('[Recovery] _singleHealthCheck 401 (failover) — sessionExpired dispatch');
+                    dispatchMaestroEvent(MaestroEvent.sessionExpired);
+                }
+                return false;
+            }
+
+            return response.ok;
         } catch (error) {
             if (error.name !== 'AbortError') {
                 log(`[Recovery] _singleHealthCheck hiba (url: ${url}, timeout: ${timeoutMs}ms):`, error);

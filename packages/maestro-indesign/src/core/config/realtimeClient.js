@@ -79,7 +79,9 @@ class RealtimeClient {
         this.isConnected = false;
         this.lastError = null;
         this.lastActivity = Date.now();
-        this.isReconnecting = false; // Párhuzamos reconnect() hívások elleni védelem
+        this.isReconnecting = false; // Párhuzamos reconnect() és close-handler backoff közös guardja
+        // reconnect() rebuild alatt az open-time auto-notify-t a sub-pass utáni értékelésre halasztjuk.
+        this._suppressOpenNotify = false;
         this.lastDisconnectTime = null; // Debug: időmérés szakadások közt
 
         // Szerver hiba kezelés: exponenciális backoff és cooldown
@@ -336,6 +338,13 @@ class RealtimeClient {
         this.realtime.reconnectAttempts = 0;
         this.realtime.onOpenCallbacks.forEach(callback => callback());
         this.realtime.startHeartbeat();
+
+        // Reconnect() rebuild alatt a sikert a sub-pass dönti el — ne villanjon
+        // fel hamis connected az allFailed előtt.
+        if (!this._suppressOpenNotify) {
+            this._notifyConnectionChange(true);
+        }
+
         resolve();
     }
 
@@ -491,11 +500,23 @@ class RealtimeClient {
         log(`[Realtime] Reconnecting in ${timeout / 1000}s...`);
         await this.realtime.sleep(timeout);
         if (!this.realtime || !this.shouldReconnect) return;
+
+        // Közös guard a reconnect()-tel: ha a RecoveryManager közben elindított
+        // egy teljes újraépítést (destroy & rebuild), ne fusson párhuzamosan
+        // a close-handler backoff ciklusa — a reconnect() mindent átvesz.
+        if (this.isReconnecting) {
+            log('[Realtime] [SKIP] reconnect() folyamatban — close-handler backoff kihagyva');
+            return;
+        }
+
+        this.isReconnecting = true;
         this.realtime.reconnectAttempts++;
         try {
             await this.realtime.createSocket();
         } catch (error) {
             logError('[Realtime] Reconnect failed:', error);
+        } finally {
+            this.isReconnecting = false;
         }
     }
 
@@ -700,25 +721,36 @@ class RealtimeClient {
      *
      * Védelmek:
      * - `shouldReconnect` flag: `disconnect()` után nem reconnectel
-     * - `isReconnecting` flag: párhuzamos hívások kiszűrése
+     * - `isReconnecting` flag: közös — a close-handler belső reconnect ciklusa is ezt
+     *   figyeli, hogy ne fusson párhuzamosan a `reconnect()`-tel
+     *
+     * @returns {Promise<{ ok: boolean, attempted: number, failed: number }>}
+     *   `ok: true` ha legalább egy subscription sikeres volt (vagy nem volt subscribe
+     *   igény). `ok: false` ha mindegyik sikertelen — ilyenkor a RecoveryManager dönt
+     *   újrapróba ütemezéséről. Ha a reconnect-et kihagytuk (shutdown / párhuzamos),
+     *   `attempted: 0, ok: true` — a hívó nem dolgoz fel kudarcként.
      */
     async reconnect() {
         // Shutdown védelem: disconnect() után ne reconnecteljünk
         if (!this.shouldReconnect) {
             log('[Realtime] [STOP] reconnect() kihagyva — disconnect() már meghívva');
-            return;
+            return { ok: true, attempted: 0, failed: 0 };
         }
 
-        // Párhuzamos reconnect védelem
+        // Párhuzamos reconnect védelem — közös flag a close-handler ciklusával
         if (this.isReconnecting) {
             log('[Realtime] [WAIT] Reconnect már folyamatban, kihagyva');
-            return;
+            return { ok: true, attempted: 0, failed: 0 };
         }
 
         this.isReconnecting = true;
+        this._suppressOpenNotify = true;
 
         logDebug('[Realtime] [SYNC] FORCE RECONNECT (Destroy & Rebuild)');
 
+        let attempted = 0;
+        let failed = 0;
+        let threw = false;
         try {
             // 1. Disconnected jelzés
             this._notifyConnectionChange(false);
@@ -762,28 +794,61 @@ class RealtimeClient {
             //    false-ra állítanánk. Ez megakadályozza, hogy egy gyors egymás utáni recovery
             //    újabb reconnect()-et indítson a feliratkozások létrejötte előtt.
             const channels = [...this.callbacks.keys()];
-            if (channels.length > 0) {
-                logDebug(`[Realtime] [SUB] Rebuilding ${channels.length} subscriptions...`);
+            attempted = channels.length;
+            if (attempted > 0) {
+                logDebug(`[Realtime] [SUB] Rebuilding ${attempted} subscriptions...`);
                 const results = await Promise.all(
                     channels.map(ch => this._attemptSdkSubscription(ch))
                 );
-
-                const failedCount = results.filter(ok => !ok).length;
-                if (failedCount > 0) {
-                    logWarn(`[Realtime] [WARN] ${failedCount}/${channels.length} feliratkozás sikertelen az újraépítéskor`);
-                }
-
-                // Adat frissítés jelzése az újrafeliratkozás UTÁN
-                if (typeof window !== 'undefined') {
-                    logDebug('[Realtime] [SYNC] Dispatching data refresh after reconnect');
-                    dispatchMaestroEvent(MaestroEvent.dataRefreshRequested);
+                failed = results.filter(ok => !ok).length;
+                if (failed > 0) {
+                    logWarn(`[Realtime] [WARN] ${failed}/${attempted} feliratkozás sikertelen az újraépítéskor`);
                 }
             }
         } catch (error) {
             logError('[Realtime] Reconnect hiba:', error);
+            threw = true;
         } finally {
             this.isReconnecting = false;
+            this._suppressOpenNotify = false;
         }
+
+        // Ha a try blokk exception-nel szállt ki (pl. _initClient vagy _attemptSdkSubscription),
+        // a Realtime rendszer nem lett felépítve. Ne dispatcheljünk dataRefreshRequested-et:
+        // az overlay-t megtévesztő módon eltüntetné, miközben nincs WS.
+        if (threw) {
+            this._notifyConnectionChange(false);
+            this._notifyError({
+                message: 'Reconnect hiba — a Realtime kapcsolat nem épült újra.',
+                code: 'reconnect_exception'
+            });
+            return { ok: false, attempted, failed };
+        }
+
+        // Ha volt subscribe igény és MIND elbukott, a kapcsolat él, de eseményt nem kap.
+        const allFailed = attempted > 0 && failed === attempted;
+        if (allFailed) {
+            this._notifyConnectionChange(false);
+            this._notifyError({
+                message: 'A Realtime feliratkozások újraépítése sikertelen — kapcsolat él, de nem kap eseményeket.',
+                code: 'reconnect_all_failed'
+            });
+            // Nincs dataRefreshRequested: ha semmi nincs feliratkozva, egy sikeres
+            // REST fetch csak megtévesztő healthy UI-t mutatna, miközben nincs Realtime.
+            return { ok: false, attempted, failed };
+        }
+
+        if (this.realtime?.socket?.readyState === WebSocket.OPEN) {
+            this._notifyConnectionChange(true);
+        }
+
+        // Adat frissítés jelzése: csak ha legalább egy sub él (vagy nem volt mit újraépíteni).
+        if (typeof window !== 'undefined') {
+            logDebug('[Realtime] [SYNC] Dispatching data refresh after reconnect');
+            dispatchMaestroEvent(MaestroEvent.dataRefreshRequested);
+        }
+
+        return { ok: true, attempted, failed };
     }
 
     /**
@@ -854,6 +919,28 @@ class RealtimeClient {
 
     /** @returns {number|null} Az utolsó Realtime aktivitás időbélyege (Date.now()), vagy null ha lekapcsolódott */
     getLastActivity() { return this.lastActivity; }
+
+    /**
+     * Igaz, ha a WebSocket éppen kapcsolódik (CONNECTING) vagy a reconnect()/close-handler
+     * backoff éppen újrakapcsolódik. Ilyenkor a startup-fallback NE tépje szét az
+     * in-flight socket-et egy felesleges recovery-vel.
+     * @returns {boolean}
+     */
+    isHandshaking() {
+        if (this.isReconnecting) return true;
+        const sock = this.realtime?.socket;
+        return sock?.readyState === WebSocket.CONNECTING;
+    }
+
+    /**
+     * Van-e aktív feliratkozás (csatorna). A watchdog ennek hiányában nem
+     * próbálkozik recovery-vel — nincs mit újraépíteni, a getConnectionStatus()
+     * false lenne a végtelenségig.
+     * @returns {boolean}
+     */
+    hasActiveSubscriptions() {
+        return this.callbacks.size > 0;
+    }
 
     // Az auto-reconnect loop és a window 'online' listener eltávolítva.
     // A RecoveryManager (recoveryManager.js) központilag kezeli az összes

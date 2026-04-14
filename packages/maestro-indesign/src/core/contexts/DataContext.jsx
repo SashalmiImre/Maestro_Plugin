@@ -31,6 +31,14 @@ import { FETCH_TIMEOUT_CONFIG, TOAST_TYPES } from "../utils/constants.js";
 /** Név szerinti komparátor rendezéshez. */
 const compareByName = (a, b) => (a?.name ?? '').localeCompare(b?.name ?? '');
 
+// Elavult fetch eredmény — a catch csendben eldobja (nincs toast, nincs offline overlay).
+class StaleFetchError extends Error {
+    constructor(generation, current) {
+        super(`Stale fetch eredmény (gen ${generation}, aktuális: ${current})`);
+        this.name = 'StaleFetchError';
+    }
+}
+
 /** Sorrend szerinti komparátor rendezéshez. */
 const compareByOrder = (a, b) => (a?.order ?? 0) - (b?.order ?? 0);
 
@@ -54,7 +62,7 @@ export const useData = () => {
  */
 export const DataProvider = ({ children }) => {
     // Kapcsolat kezelése (ConnectionContext)
-    const { startConnecting, setConnected, setOffline, setConnectionStatus, incrementAttempts } = useConnection();
+    const { startConnecting, setOffline, setConnectionStatus, incrementAttempts } = useConnection();
     // Értesítések (ToastContext)
     const { showToast } = useToast();
     // Aktív scope (ScopeContext) — Fázis 1 / B.7
@@ -135,6 +143,18 @@ export const DataProvider = ({ children }) => {
         // egymás eredményeit felülírja.
         const generation = ++fetchGenerationRef.current;
 
+        const throwIfStale = () => {
+            if (generation !== fetchGenerationRef.current) {
+                throw new StaleFetchError(generation, fetchGenerationRef.current);
+            }
+        };
+
+        // Háttér (recovery utáni) fetch-nél elnyomjuk a nem-kritikus toast-okat —
+        // a user már dolgozik, ne zavarjuk átmeneti hibákkal; a hiba logban marad.
+        const warnUser = (title, type, details) => {
+            if (!isBackground) showToast(title, type, details);
+        };
+
         // Ref-ből olvassuk — így a fetchData nem függ az activePublicationId-tól,
         // és nem generálódik újra pub-váltáskor (elkerüli a dupla fetch-et).
         const currentPubId = activePublicationIdRef.current;
@@ -156,7 +176,12 @@ export const DataProvider = ({ children }) => {
                 setIsLoading(false);
                 setIsSwitchingPublication(false);
             }
-            setConnected();
+            // Overlay tisztítás: ha korábbi fetch/recovery már kapcsolódó állapotba
+            // állította a UI-t, a no-office ág megkerülné a finally cleanup-ot.
+            setConnectionStatus(prev => {
+                if (prev.isOffline || !prev.isConnecting) return prev;
+                return { ...prev, isConnecting: false, message: null, details: null };
+            });
             return;
         }
 
@@ -170,6 +195,9 @@ export const DataProvider = ({ children }) => {
         // Auth hibát külön jelezzük a finally-nek — auth hiba esetén NEM inicializálunk
         // (nincs értelme Realtime feliratkozásnak session nélkül; a user vissza fog kerülni Login-ra).
         let didAuthError = false;
+        // Sikerült-e elérni a szervert? Ha igen, egy korábbi setOffline overlay
+        // feloldható — a REST recovery bizonyítja, hogy a hálózat él.
+        let didFetchSucceed = false;
 
         try {
             log('[DataContext] Adatok lekérése...', { activePublicationId: currentPubId, generation });
@@ -290,12 +318,8 @@ export const DataProvider = ({ children }) => {
 
             const [layoutsResult, deadlinesResult, workflowsResult] = settledResults;
 
-            // Elavult generáció ellenőrzése: ha közben újabb fetchData indult,
-            // az eredményt eldobjuk, mert a frissebb hívás fogja a state-et beállítani.
-            if (generation !== fetchGenerationRef.current) {
-                log(`[DataContext] Elavult fetch eredmény eldobva (gen ${generation}, aktuális: ${fetchGenerationRef.current})`);
-                return;
-            }
+            // Elavult generáció: a catch blokk StaleFetchError-ként némán eldobja.
+            throwIfStale();
 
             // Feldolgozás
             const publicationList = publicationsResponse.documents || publicationsResponse.rows || [];
@@ -313,26 +337,23 @@ export const DataProvider = ({ children }) => {
             const sortedArticles = articleList.sort(compareByName);
             setArticles(sortedArticles);
 
-            // Layoutok feldolgozása (nem-kritikus — allSettled)
             if (layoutsResult.status === 'fulfilled') {
                 const layoutList = layoutsResult.value.documents || layoutsResult.value.rows || [];
                 setLayouts(layoutList.sort(compareByOrder));
             } else {
                 logError('[DataContext] Layoutok lekérése sikertelen:', layoutsResult.reason);
-                showToast('Layoutok betöltése sikertelen', TOAST_TYPES.ERROR, 'A layoutok nem töltődtek be. Próbáld újra később.');
+                warnUser('Layoutok betöltése sikertelen', TOAST_TYPES.ERROR, 'A layoutok nem töltődtek be. Próbáld újra később.');
             }
 
-            // Határidők feldolgozása (nem-kritikus — allSettled)
             if (deadlinesResult.status === 'fulfilled') {
                 const deadlineList = deadlinesResult.value.documents || deadlinesResult.value.rows || [];
                 setDeadlines(deadlineList.sort(compareByStartPage));
             } else {
                 logError('[DataContext] Határidők lekérése sikertelen:', deadlinesResult.reason);
-                showToast('Határidők betöltése sikertelen', TOAST_TYPES.ERROR, 'A határidők nem töltődtek be. Próbáld újra később.');
+                warnUser('Határidők betöltése sikertelen', TOAST_TYPES.ERROR, 'A határidők nem töltődtek be. Próbáld újra később.');
             }
 
-            // Workflow-k feldolgozása (nem-kritikus — allSettled). Ha skip-elve volt
-            // (már betöltve), a value null — ilyenkor nem érintjük a meglévő state-et.
+            // Workflows: ha skip-elve volt (már betöltve, value=null), nem érintjük.
             if (needsWorkflowFetch) {
                 if (workflowsResult.status === 'fulfilled' && workflowsResult.value) {
                     const rows = workflowsResult.value.documents || workflowsResult.value.rows || [];
@@ -345,7 +366,7 @@ export const DataProvider = ({ children }) => {
                     }
                 } else {
                     logError('[DataContext] Workflow lekérése sikertelen:', workflowsResult.reason);
-                    showToast('Workflow betöltése sikertelen', TOAST_TYPES.WARNING, 'A munkafolyamat nem töltődött be — a cikk-szerkesztés átmenetileg korlátozott.');
+                    warnUser('Workflow betöltése sikertelen', TOAST_TYPES.WARNING, 'A munkafolyamat nem töltődött be — a cikk-szerkesztés átmenetileg korlátozott.');
                 }
             }
 
@@ -380,31 +401,29 @@ export const DataProvider = ({ children }) => {
                 );
 
                 const chunkResults = await Promise.all(chunkPromises);
+                // Korai stale-check a normalizáció előtt, hogy ne végezzünk
+                // felesleges munkát, ha közben pub-switch/recovery új fetch-et indított.
+                throwIfStale();
                 loadedValidations = chunkResults.flatMap(response => response.documents || response.rows || []);
                 log(`[DataContext] ${loadedValidations.length} validáció betöltve.`);
             }
 
-            // Validációk ID normalizálás
             const normalizedValidations = loadedValidations.map(validation => ({
                 ...validation,
                 id: validation.$id,
                 $id: validation.$id
             }));
 
-            // Végső elavulás-ellenőrzés a validációk után (a validáció lekérés is időt vehet igénybe)
-            if (generation !== fetchGenerationRef.current) {
-                log(`[DataContext] Elavult fetch eredmény eldobva validációk után (gen ${generation}, aktuális: ${fetchGenerationRef.current})`);
-                return;
-            }
+            throwIfStale();
 
             setValidations(normalizedValidations);
 
-            setConnected();
+            didFetchSucceed = true;
 
         } catch (error) {
-            // Elavult generáció: a hiba is elavult, nem kell kezelni
-            if (generation !== fetchGenerationRef.current) {
-                log(`[DataContext] Elavult fetch hiba figyelmen kívül hagyva (gen ${generation})`);
+            // Elavult generáció: csendben eldobjuk — nincs user-látható mellékhatás.
+            if (error instanceof StaleFetchError) {
+                log(`[DataContext] ${error.message}`);
                 return;
             }
 
@@ -413,18 +432,25 @@ export const DataProvider = ({ children }) => {
                 didAuthError = true;
                 dispatchMaestroEvent(MaestroEvent.sessionExpired);
             } else if (isNetworkError(error)) {
-                // Timeout ≠ offline: a szerver elérhető lehet, csak a lekérés lassú
+                // Timeout ≠ offline: a szerver elérhető lehet, csak a lekérés lassú.
+                // Háttérben (recovery után) ne zajongjunk toast-tal — a user már
+                // dolgozik; a recovery lánc maga rendezi a következő trigger-nél.
                 const isTimeout = error.message?.includes('időtúllépés');
                 if (isTimeout) {
-                    showToast('Lassú kapcsolat', TOAST_TYPES.WARNING, 'Az adatlekérés időtúllépés miatt megszakadt.');
+                    if (!isBackground) {
+                        showToast('Lassú kapcsolat', TOAST_TYPES.WARNING, 'Az adatlekérés időtúllépés miatt megszakadt.');
+                    }
                 } else {
-                    // Valódi hálózati hiba — offline overlay
+                    // Valódi hálózati hiba — offline overlay (háttérben is, mert a
+                    // kapcsolat tényleges megszakadása mindig látható state).
                     const attempts = incrementAttempts();
                     setOffline(error, attempts);
                 }
-            } else {
+            } else if (!isBackground) {
                 showToast('Adatok betöltése sikertelen', TOAST_TYPES.ERROR, error.message);
             }
+            // Háttér (recovery utáni) fetch ismeretlen hibájánál a fentebbi logError elég —
+            // a user-t nem zavarjuk, a következő recovery trigger majd rendezi.
         } finally {
             if (connectingDelayTimerId) clearTimeout(connectingDelayTimerId);
 
@@ -445,17 +471,21 @@ export const DataProvider = ({ children }) => {
                     setIsInitialized(true);
                 }
 
-                // Overlay tisztítás: ha a startConnecting tüzelt (200ms eltelt) de
-                // nem mentünk offline-ba, töröljük az isConnecting-et, hogy az overlay
-                // ne ragadjon be (timeout, auth hiba, egyéb hiba esetén).
+                // Overlay tisztítás:
+                // - Siker: ha korábban offline-ba mentünk (más útvonalon, pl. előző
+                //   fetch), a sikeres REST bizonyítja, hogy a hálózat él → clear.
+                // - Egyéb: a startConnecting által felhúzott isConnecting törlése.
                 setConnectionStatus(prev => {
-                    if (prev.isOffline) return prev; // Offline overlay marad (valódi hálózati hiba)
+                    if (didFetchSucceed && prev.isOffline) {
+                        return { ...prev, isOffline: false, isConnecting: false, message: null, details: null };
+                    }
+                    if (prev.isOffline) return prev; // Valódi hálózati hiba — offline marad
                     if (!prev.isConnecting) return prev; // Nincs mit tisztítani
                     return { ...prev, isConnecting: false, message: null, details: null };
                 });
             }
         }
-    }, [startConnecting, setConnected, setOffline, setConnectionStatus, incrementAttempts, showToast]);
+    }, [startConnecting, setOffline, setConnectionStatus, incrementAttempts, showToast]);
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Inicializálás és Active Publication Váltás
