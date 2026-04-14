@@ -1,5 +1,5 @@
 // React
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 
 // Components
 import { Publication } from "./Publication/Publication.jsx";
@@ -107,13 +107,21 @@ export const PublicationList = ({ onShowProperties, onOpenInDashboard, filterSta
         });
     }, [setActivePublicationId]);
 
-    // Sync initial expanded state from localStorage with DataContext
+    // Sync initial expanded state from localStorage with DataContext — csak AKKOR,
+    // ha a publications már betöltődött ÉS az expandedId valóban létező publikációra
+    // mutat. Korábban a mount effect vakon dispatch-elt `setActivePublicationId`-t,
+    // akár törölt/deaktivált publikáció ID-jára is — a fetch utána üres listát kapott.
+    // A `didRestoreRef` biztosítja, hogy a restore pontosan egyszer fusson le.
+    const didRestoreRef = useRef(false);
     useEffect(() => {
-        if (expandedId) {
+        if (didRestoreRef.current) return;
+        if (publications.length === 0) return;
+        if (expandedId && publications.some(p => p.$id === expandedId)) {
             setActivePublicationId(expandedId);
-            logDebug('[PublicationList] Restored Active form LocalStorage:', expandedId);
+            logDebug('[PublicationList] Restored Active from LocalStorage:', expandedId);
         }
-    }, []); // Run once on mount
+        didRestoreRef.current = true;
+    }, [publications, expandedId, setActivePublicationId]);
 
     return (
         <>

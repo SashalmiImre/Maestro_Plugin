@@ -1,5 +1,5 @@
 // React
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo, useRef, useEffect } from "react";
 
 // Components
 import { ArticleTable } from "../../articles/ArticleTable.jsx";
@@ -63,15 +63,40 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
         return [...filteredArticles, ...placeholderRows];
     }, [filteredArticles, placeholderRows, showPlaceholders, showOnlyMine]);
 
+    // Dupla Dashboard open guard: fejléc dupla kattintás + hover ikon gyors egymás utáni
+    // triggerelése két JWT lekérést és két tab-nyitást eredményezne. 1s-os ref-alapú zár
+    // (ref, nem state — nincs render impact) egyetlen hívásra szűkíti.
+    const isOpeningDashboardRef = useRef(false);
+    const openDashboardTimerRef = useRef(null);
+
+    useEffect(() => {
+        return () => {
+            if (openDashboardTimerRef.current) {
+                clearTimeout(openDashboardTimerRef.current);
+                openDashboardTimerRef.current = null;
+            }
+        };
+    }, []);
+
+    const triggerOpenInDashboard = useCallback(() => {
+        if (isOpeningDashboardRef.current) return;
+        isOpeningDashboardRef.current = true;
+        onOpenInDashboard?.(publication.$id);
+        openDashboardTimerRef.current = setTimeout(() => {
+            isOpeningDashboardRef.current = false;
+            openDashboardTimerRef.current = null;
+        }, 1000);
+    }, [onOpenInDashboard, publication.$id]);
+
     const handlePublicationDoubleClick = useCallback((e) => {
         e.stopPropagation();
-        onOpenInDashboard?.(publication.$id);
-    }, [onOpenInDashboard, publication.$id]);
+        triggerOpenInDashboard();
+    }, [triggerOpenInDashboard]);
 
     const handleOpenInDashboardClick = useCallback((e) => {
         e.stopPropagation();
-        onOpenInDashboard?.(publication.$id);
-    }, [onOpenInDashboard, publication.$id]);
+        triggerOpenInDashboard();
+    }, [triggerOpenInDashboard]);
 
     const handleChevronClick = useCallback((e) => {
         e.stopPropagation();
@@ -94,7 +119,10 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
     }, [openArticle, user]);
 
     const handleAddArticleClick = useCallback(async (e) => {
-        e.stopPropagation();
+        e?.stopPropagation?.();
+        // Védelmi guard: ha a mappa nem elérhető, a fájl-írás (saveACopy) elbukna —
+        // a UI-n a gomb disabled, de a billentyűzet-handler is ide fut, ezért itt is szűrünk.
+        if (!isDriveAccessible) return;
         try {
             const fs = require("uxp").storage.localFileSystem;
             const files = await fs.getFileForOpening({
@@ -149,16 +177,16 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
             }
 
             if (!isExpanded) onToggle?.();
-        } catch (e) {
-            logError("Error selecting files:", e);
+        } catch (err) {
+            logError("Error selecting files:", err);
             setDialogConfig({
                 title: "Hiba",
-                message: "Nem sikerült megnyitni a fájlválasztót: " + e.message,
+                message: "Nem sikerült megnyitni a fájlválasztót: " + err.message,
                 isAlert: true
             });
             setDialogOpen(true);
         }
-    }, [addArticle, isExpanded, onToggle]);
+    }, [addArticle, isExpanded, onToggle, isDriveAccessible, publication.$id]);
 
     return (
         <div
@@ -219,21 +247,24 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
                     <div style={{ display: "flex", alignItems: "center" }}>
                         <div
                             role="button"
-                            tabIndex={0}
-                            onClick={handleAddArticleClick}
+                            tabIndex={isDriveAccessible ? 0 : -1}
+                            aria-disabled={!isDriveAccessible}
+                            onClick={isDriveAccessible ? handleAddArticleClick : undefined}
                             onKeyDown={(e) => {
+                                if (!isDriveAccessible) return;
                                 if (e.key === "Enter" || e.key === " ") {
                                     e.preventDefault();
                                     handleAddArticleClick();
                                 }
                             }}
                             aria-label="Cikk hozzáadása"
-                            title="Cikk hozzáadása"
+                            title={isDriveAccessible ? "Cikk hozzáadása" : "A kiadvány mappája nem elérhető — a cikkfelvétel most nem lehetséges"}
                             style={{
-                                cursor: "pointer",
+                                cursor: isDriveAccessible ? "pointer" : "not-allowed",
                                 display: "flex",
                                 alignItems: "center",
                                 padding: "2px",
+                                opacity: isDriveAccessible ? 1 : 0.4,
                                 color: "var(--spectrum-global-color-blue-400)"
                             }}
                         >
