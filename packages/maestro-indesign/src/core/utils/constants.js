@@ -14,6 +14,13 @@ export { LOCK_TYPE };
 // Ez a konstans jelöli a JavaScript nyelvet az InDesign `doScript` metódusában.
 export const SCRIPT_LANGUAGE_JAVASCRIPT = 1246973031;
 
+// LocalStorage Kulcsok — Multi-tenant scope
+// Külön top-level export, mert a ScopeContext és a UserContext is bootstrap-kor
+// (még a React fa összeszerelése előtt) olvassa. Közös helyen tartás megszünteti
+// a ScopeContext ↔ UserContext korábbi körkörös importját.
+export const STORAGE_ORG_KEY = "maestro.activeOrganizationId";
+export const STORAGE_OFFICE_KEY = "maestro.activeEditorialOfficeId";
+
 // LocalStorage Kulcsok
 // Az alkalmazás állapotának mentéséhez használt kulcsok.
 export const STORAGE_KEYS = {

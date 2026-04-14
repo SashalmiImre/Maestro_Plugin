@@ -16,8 +16,7 @@ import { realtime } from "../config/realtimeClient.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../config/maestroEvents.js";
 import { log, logWarn, logError } from "../utils/logger.js";
 import { withRetry, withTimeout } from "../utils/promiseUtils.js";
-import { FETCH_TIMEOUT_CONFIG } from "../utils/constants.js";
-import { STORAGE_ORG_KEY, STORAGE_OFFICE_KEY } from "./ScopeContext.jsx";
+import { FETCH_TIMEOUT_CONFIG, STORAGE_ORG_KEY, STORAGE_OFFICE_KEY } from "../utils/constants.js";
 
 /**
  * Retry + timeout wrapper az Appwrite list lekérdezésekhez. A `fetchMemberships`
@@ -252,6 +251,11 @@ export function AuthorizationProvider({ children }) {
      * @param {string} logLabel - Naplózásban megjelenő kontextus-azonosító.
      */
     const refreshGroupSlugs = async (logLabel) => {
+        // userRef-ből olvassuk a $id-t, hogy a handler (pl. groupMembershipChanged)
+        // soha ne a bezárt closure stale user-ére lőjön. Logout közben
+        // userRef.current === null → korai kilépés (guard alább).
+        const currentUserId = userRef.current?.$id;
+        if (!currentUserId) return;
         try {
             const officeId = window.localStorage.getItem(STORAGE_OFFICE_KEY);
             if (!officeId) {
@@ -262,7 +266,7 @@ export function AuthorizationProvider({ children }) {
                 });
                 return;
             }
-            const groupSlugs = await fetchGroupSlugsForUser(user?.$id, officeId);
+            const groupSlugs = await fetchGroupSlugsForUser(currentUserId, officeId);
             setUser(prev => {
                 if (!prev) return prev;
                 if (sameGroupSlugs(prev.groupSlugs, groupSlugs)) return prev;

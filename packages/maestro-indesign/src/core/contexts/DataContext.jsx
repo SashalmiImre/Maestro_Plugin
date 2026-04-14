@@ -167,17 +167,12 @@ export const DataProvider = ({ children }) => {
             startConnecting("Adatok betöltése...");
         }, 200) : null;
 
+        // Auth hibát külön jelezzük a finally-nek — auth hiba esetén NEM inicializálunk
+        // (nincs értelme Realtime feliratkozásnak session nélkül; a user vissza fog kerülni Login-ra).
+        let didAuthError = false;
+
         try {
             log('[DataContext] Adatok lekérése...', { activePublicationId: currentPubId, generation });
-            const cacheBustId = `cache-bust-${Date.now()}`;
-
-            // Workflow fetch — csak ha office változott vagy még nem töltöttük be
-            // (Realtime hot-reload frissíti, ha közben módosul)
-            if (workflowFetchedForOfficeRef.current !== currentOfficeId) {
-                fetchWorkflow(currentOfficeId).then(success => {
-                    if (success) workflowFetchedForOfficeRef.current = currentOfficeId;
-                });
-            }
 
             // 1. Publikációk lekérése (Mindig) — kritikus
             // isActivated szűrés: a plugin csak aktivált kiadványokat lát
@@ -189,8 +184,7 @@ export const DataProvider = ({ children }) => {
                         queries: [
                             Query.equal("editorialOfficeId", currentOfficeId),
                             Query.equal("isActivated", true),
-                            Query.limit(100),
-                            Query.notEqual("$id", cacheBustId)
+                            Query.limit(100)
                         ]
                     }),
                     FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS, "fetchPublications"
@@ -215,8 +209,7 @@ export const DataProvider = ({ children }) => {
                             queries: [
                                 Query.equal("publicationId", currentPubId),
                                 Query.equal("editorialOfficeId", currentOfficeId),
-                                Query.limit(1000),
-                                Query.notEqual("$id", cacheBustId)
+                                Query.limit(1000)
                             ]
                         }),
                         FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS, "fetchArticles"
@@ -259,9 +252,32 @@ export const DataProvider = ({ children }) => {
                 );
             }
 
+            // 2d. Workflow-k lekérése (nem-kritikus) — csak ha office változott vagy
+            // még nincs meg. Része a kritikus Promise.all-nak, hogy a
+            // `isInitialized=true` csak betöltött workflow után billenjen — különben
+            // a Realtime handler átmenetileg `workflow=null`-t látna.
+            const needsWorkflowFetch = workflowFetchedForOfficeRef.current !== currentOfficeId;
+            const workflowsPromise = needsWorkflowFetch
+                ? withRetry(
+                    () => withTimeout(
+                        tables.listRows({
+                            databaseId: DATABASE_ID,
+                            tableId: COLLECTIONS.WORKFLOWS,
+                            queries: [
+                                Query.equal("editorialOfficeId", currentOfficeId),
+                                Query.orderAsc("name"),
+                                Query.limit(100)
+                            ]
+                        }),
+                        FETCH_TIMEOUT_CONFIG.NON_CRITICAL_DATA_MS, "fetchWorkflows"
+                    ),
+                    { operationName: "fetchWorkflows" }
+                )
+                : Promise.resolve(null); // Skip — már betöltve, Realtime frissít
+
             // Kritikus adatok (publications, articles) — ha elbuknak, a catch kezeli
-            // Nem-kritikus adatok (layouts, deadlines) — Promise.allSettled: ha elbuknak,
-            // toast figyelmeztetés, a UI működik tovább üres listával
+            // Nem-kritikus adatok (layouts, deadlines, workflows) — allSettled: ha elbuknak,
+            // toast figyelmeztetés, a UI működik tovább üres listával / read-only módban
             const [
                 publicationsResponse,
                 articlesResponse,
@@ -269,10 +285,10 @@ export const DataProvider = ({ children }) => {
             ] = await Promise.all([
                 publicationsPromise,
                 articlesPromise,
-                Promise.allSettled([layoutsPromise, deadlinesPromise])
+                Promise.allSettled([layoutsPromise, deadlinesPromise, workflowsPromise])
             ]).then(([pubs, arts, settled]) => [pubs, arts, ...settled]);
 
-            const [layoutsResult, deadlinesResult] = settledResults;
+            const [layoutsResult, deadlinesResult, workflowsResult] = settledResults;
 
             // Elavult generáció ellenőrzése: ha közben újabb fetchData indult,
             // az eredményt eldobjuk, mert a frissebb hívás fogja a state-et beállítani.
@@ -313,6 +329,24 @@ export const DataProvider = ({ children }) => {
             } else {
                 logError('[DataContext] Határidők lekérése sikertelen:', deadlinesResult.reason);
                 showToast('Határidők betöltése sikertelen', TOAST_TYPES.ERROR, 'A határidők nem töltődtek be. Próbáld újra később.');
+            }
+
+            // Workflow-k feldolgozása (nem-kritikus — allSettled). Ha skip-elve volt
+            // (már betöltve), a value null — ilyenkor nem érintjük a meglévő state-et.
+            if (needsWorkflowFetch) {
+                if (workflowsResult.status === 'fulfilled' && workflowsResult.value) {
+                    const rows = workflowsResult.value.documents || workflowsResult.value.rows || [];
+                    setWorkflows(rows);
+                    workflowFetchedForOfficeRef.current = currentOfficeId;
+                    if (rows.length === 0) {
+                        logWarn('[DataContext] Nincs workflow doc ehhez az office-hoz:', currentOfficeId);
+                    } else {
+                        log(`[DataContext] Workflow-k betöltve (${rows.length} doc, office=${currentOfficeId})`);
+                    }
+                } else {
+                    logError('[DataContext] Workflow lekérése sikertelen:', workflowsResult.reason);
+                    showToast('Workflow betöltése sikertelen', TOAST_TYPES.WARNING, 'A munkafolyamat nem töltődött be — a cikk-szerkesztés átmenetileg korlátozott.');
+                }
             }
 
             // 3. Validációk lekérése (Ha vannak cikkek)
@@ -366,7 +400,6 @@ export const DataProvider = ({ children }) => {
             setValidations(normalizedValidations);
 
             setConnected();
-            setIsInitialized(true);
 
         } catch (error) {
             // Elavult generáció: a hiba is elavult, nem kell kezelni
@@ -377,6 +410,7 @@ export const DataProvider = ({ children }) => {
 
             logError('[DataContext] Hiba:', error);
             if (isAuthError(error)) {
+                didAuthError = true;
                 dispatchMaestroEvent(MaestroEvent.sessionExpired);
             } else if (isNetworkError(error)) {
                 // Timeout ≠ offline: a szerver elérhető lehet, csak a lekérés lassú
@@ -402,6 +436,15 @@ export const DataProvider = ({ children }) => {
                     setIsSwitchingPublication(false);
                 }
 
+                // Initialized flag: auth hibán kívül MINDEN terminal ágon true-ra
+                // billen, hogy a Realtime feliratkozás elinduljon — hálózati hiba
+                // után is (különben csak a RecoveryManager `dataRefreshRequested`
+                // eseményére tudna indulni). Auth hibánál viszont értelmetlen a
+                // feliratkozás (nincs session → a user Login-ra kerül).
+                if (!didAuthError) {
+                    setIsInitialized(true);
+                }
+
                 // Overlay tisztítás: ha a startConnecting tüzelt (200ms eltelt) de
                 // nem mentünk offline-ba, töröljük az isConnecting-et, hogy az overlay
                 // ne ragadjon be (timeout, auth hiba, egyéb hiba esetén).
@@ -412,51 +455,11 @@ export const DataProvider = ({ children }) => {
                 });
             }
         }
-    }, [startConnecting, setConnected, setOffline, incrementAttempts, showToast]);
+    }, [startConnecting, setConnected, setOffline, setConnectionStatus, incrementAttempts, showToast]);
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Inicializálás és Active Publication Váltás
     // ═══════════════════════════════════════════════════════════════════════════
-
-    // Workflow fetch — office-szintű, a fetchData-ban (és recovery-nél) fut.
-    // Fázis 7: egy office-ban több workflow is lehet, ezért az összeset behúzzuk
-    // név szerint rendezve. A derived `workflow` memo a publication.workflowId
-    // alapján oldja fel, a compiled JSON parse-olás is ott történik.
-    const fetchWorkflow = useCallback(async (officeId) => {
-        if (!officeId) {
-            setWorkflows([]);
-            return true;
-        }
-        try {
-            const response = await withRetry(
-                () => withTimeout(
-                    tables.listRows({
-                        databaseId: DATABASE_ID,
-                        tableId: COLLECTIONS.WORKFLOWS,
-                        queries: [
-                            Query.equal("editorialOfficeId", officeId),
-                            Query.orderAsc("name"),
-                            Query.limit(100)
-                        ]
-                    }),
-                    FETCH_TIMEOUT_CONFIG.NON_CRITICAL_DATA_MS, "fetchWorkflow"
-                ),
-                { operationName: "fetchWorkflow" }
-            );
-            const rows = response.documents || response.rows || [];
-            if (rows.length > 0) {
-                setWorkflows(rows);
-                log(`[DataContext] Workflow-k betöltve (${rows.length} doc, office=${officeId})`);
-            } else {
-                logWarn('[DataContext] Nincs workflow doc ehhez az office-hoz:', officeId);
-                setWorkflows([]);
-            }
-            return true;
-        } catch (err) {
-            logError('[DataContext] Workflow fetch hiba:', err);
-            return false;
-        }
-    }, []);
 
     // Parse cache docId szerint — stabil compiled referencia, ha két publikáció
     // ugyanarra a workflow doc-ra mutat (publikáció-váltáskor nincs fals

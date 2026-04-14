@@ -14,6 +14,7 @@ import React, { createContext, useContext, useState, useCallback, useEffect } fr
 import { useUser } from './UserContext.jsx';
 import { log } from '../utils/logger.js';
 import { MaestroEvent, dispatchMaestroEvent } from '../config/maestroEvents.js';
+import { STORAGE_ORG_KEY, STORAGE_OFFICE_KEY } from '../utils/constants.js';
 
 const ScopeContext = createContext(null);
 
@@ -22,9 +23,6 @@ export function useScope() {
     if (!context) throw new Error('useScope must be used within a ScopeProvider');
     return context;
 }
-
-export const STORAGE_ORG_KEY = 'maestro.activeOrganizationId';
-export const STORAGE_OFFICE_KEY = 'maestro.activeEditorialOfficeId';
 
 /**
  * Olyan orgot választ, amelyhez van legalább egy office membership — enélkül
@@ -41,6 +39,80 @@ const pickPreferredOrganization = (orgs, offices) => {
     );
     return orgWithOffice || orgs[0];
 };
+
+/**
+ * Tiszta scope-feloldó: input state → { resolved, apply, reason }.
+ *
+ * A cascading logikát (org → office) egyetlen függvénybe tömöríti. A React
+ * side effect csak az `apply` callback-et hívja — a függvény maga nem hív
+ * settert, nem dispatchel eventet, tehát unit-tesztelhető.
+ *
+ * @returns {{ resolved: boolean, apply: null | ((setOrg, setOffice) => void), reason?: string }}
+ *   - resolved=true + apply=null: nincs teendő, `isScopeValidated`-et beállíthatjuk
+ *   - apply !== null: futtatjuk, utána az effect a setter miatt újrafut; addig
+ *     NEM állítjuk a `isScopeValidated`-et
+ */
+function resolveScope({
+    loading, membershipsError,
+    organizations, editorialOffices,
+    currentOrgId, currentOfficeId
+}) {
+    if (loading) {
+        return { resolved: false, apply: null };
+    }
+
+    // Membership fetch hiba: nem trust-oljuk a persistált ID-kat, amíg nem
+    // láttuk a hozzájuk tartozó membership listát (cross-tenant védelem).
+    if (membershipsError) {
+        if (currentOrgId) return { resolved: false, apply: (setOrg) => setOrg(null), reason: 'membership error — clearing stale org' };
+        if (currentOfficeId) return { resolved: false, apply: (_, setOffice) => setOffice(null), reason: 'membership error — clearing stale office' };
+        return { resolved: true, apply: null };
+    }
+
+    const orgs = organizations || [];
+    const offices = editorialOffices || [];
+    const orgIds = new Set(orgs.map((o) => o.$id));
+
+    // Stale / missing org.
+    if (currentOrgId && !orgIds.has(currentOrgId)) {
+        const replacement = pickPreferredOrganization(orgs, offices);
+        return {
+            resolved: false,
+            apply: (setOrg) => setOrg(replacement ? replacement.$id : null),
+            reason: replacement
+                ? `stale organizationId (${currentOrgId}) → ${replacement.$id}`
+                : 'no available organization — clearing'
+        };
+    }
+    if (!currentOrgId && orgs.length > 0) {
+        const preferred = pickPreferredOrganization(orgs, offices);
+        return { resolved: false, apply: (setOrg) => setOrg(preferred.$id), reason: `auto-pick organization: ${preferred.$id}` };
+    }
+    if (!currentOrgId) {
+        return { resolved: true, apply: null };
+    }
+
+    // Org stabil → office cascading feloldás.
+    const scopedOffices = offices.filter((o) => o.organizationId === currentOrgId);
+    const officeIds = new Set(scopedOffices.map((o) => o.$id));
+
+    if (currentOfficeId && !officeIds.has(currentOfficeId)) {
+        const firstOffice = scopedOffices[0];
+        return {
+            resolved: false,
+            apply: (_, setOffice) => setOffice(firstOffice ? firstOffice.$id : null),
+            reason: firstOffice
+                ? `stale editorialOfficeId (${currentOfficeId}) → ${firstOffice.$id}`
+                : 'no available office in active org — clearing'
+        };
+    }
+    if (!currentOfficeId && scopedOffices.length > 0) {
+        const firstOffice = scopedOffices[0];
+        return { resolved: false, apply: (_, setOffice) => setOffice(firstOffice.$id), reason: `auto-pick editorialOffice: ${firstOffice.$id}` };
+    }
+
+    return { resolved: true, apply: null };
+}
 
 export function ScopeProvider({ children }) {
     const { organizations, editorialOffices, loading, membershipsError } = useUser();
@@ -82,74 +154,25 @@ export function ScopeProvider({ children }) {
         dispatchMaestroEvent(MaestroEvent.scopeChanged, { editorialOfficeId: id });
     }, []);
 
-    // Stale ID validáció + auto-pick. A futás sorrendje kritikus: előbb org,
-    // utána office — az office validáció az aktív orghoz szűri a listát, tehát
-    // egy stale org először frissülnie kell. Minden terminal ág
-    // `setIsScopeValidated(true)`-val zár (kivéve, amikor setter-rel triggereljük
-    // a következő futást).
+    // Tiszta feloldás → egyetlen side-effect pont. A resolveScope adja
+    // vissza, hogy van-e teendő (action) vagy a scope stabil (resolved=true).
     useEffect(() => {
-        if (loading) return;
+        const outcome = resolveScope({
+            loading,
+            membershipsError,
+            organizations,
+            editorialOffices,
+            currentOrgId: activeOrganizationId,
+            currentOfficeId: activeEditorialOfficeId
+        });
 
-        // Membership fetch hiba: nem trust-oljuk a persistált ID-kat, amíg nem
-        // láttuk a hozzájuk tartozó membership listát (cross-tenant védelem).
-        if (membershipsError) {
-            if (activeOrganizationId || activeEditorialOfficeId) {
-                log('[ScopeContext] Membership fetch hibás — stale scope törlése');
-                if (activeOrganizationId) setActiveOrganization(null);
-                if (activeEditorialOfficeId) setActiveOffice(null);
-                return;
-            }
-            setIsScopeValidated(true);
-            return;
-        }
-
-        const orgIds = new Set((organizations || []).map((o) => o.$id));
-        if (activeOrganizationId && !orgIds.has(activeOrganizationId)) {
-            const replacement = pickPreferredOrganization(organizations, editorialOffices);
-            if (replacement) {
-                log(`[ScopeContext] Stale organizationId (${activeOrganizationId}), váltás: ${replacement.$id}`);
-                setActiveOrganization(replacement.$id);
-            } else {
-                log('[ScopeContext] Nincs elérhető szervezet, activeOrganizationId törlése');
-                setActiveOrganization(null);
-            }
-            return;
-        }
-        if (!activeOrganizationId && (organizations || []).length > 0) {
-            const preferred = pickPreferredOrganization(organizations, editorialOffices);
-            log(`[ScopeContext] Auto-pick organization: ${preferred.$id}`);
-            setActiveOrganization(preferred.$id);
+        if (outcome.apply) {
+            if (outcome.reason) log(`[ScopeContext] ${outcome.reason}`);
+            outcome.apply(setActiveOrganization, setActiveOffice);
             return;
         }
 
-        if (!activeOrganizationId) {
-            setIsScopeValidated(true);
-            return;
-        }
-
-        const scopedOffices = (editorialOffices || []).filter(
-            (o) => o.organizationId === activeOrganizationId
-        );
-        const officeIds = new Set(scopedOffices.map((o) => o.$id));
-        if (activeEditorialOfficeId && !officeIds.has(activeEditorialOfficeId)) {
-            const firstOffice = scopedOffices[0];
-            if (firstOffice) {
-                log(`[ScopeContext] Stale editorialOfficeId (${activeEditorialOfficeId}), váltás: ${firstOffice.$id}`);
-                setActiveOffice(firstOffice.$id);
-            } else {
-                log('[ScopeContext] Nincs elérhető szerkesztőség az aktív orgban, activeEditorialOfficeId törlése');
-                setActiveOffice(null);
-            }
-            return;
-        }
-        if (!activeEditorialOfficeId && scopedOffices.length > 0) {
-            const firstOffice = scopedOffices[0];
-            log(`[ScopeContext] Auto-pick editorialOffice: ${firstOffice.$id}`);
-            setActiveOffice(firstOffice.$id);
-            return;
-        }
-
-        setIsScopeValidated(true);
+        if (outcome.resolved) setIsScopeValidated(true);
     }, [
         loading,
         membershipsError,

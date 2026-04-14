@@ -110,13 +110,17 @@ export const ConnectionProvider = ({ children }) => {
             detailsVal = "Ellenőrizd az internetkapcsolatot";
         }
 
+        // Spinner akkor pörögjön, ha aktívan próbálkozunk újracsatlakozni.
+        // Szerverhibánál (502/503/504) igen — a retry ciklus fut.
+        // Hálózati hibánál (offline) nincs próbálkozás amíg vissza nem jön az online,
+        // kivéve ha a hálózati hibát szerver oldali hiba okozza (ritka együttállás).
         setConnectionStatus({
             isConnecting: false,
             isOffline: true,
             attempts: attemptsRef.current,
             message: messageVal,
             details: detailsVal,
-            showSpinner: !isNetworkError || isServerError, // Szerver hibánál is pörögjön, mert próbálkozunk
+            showSpinner: !isNetworkError || isServerError,
             realtimeStatus: CONNECTION_STATES.DISCONNECTED
         });
     }, []);

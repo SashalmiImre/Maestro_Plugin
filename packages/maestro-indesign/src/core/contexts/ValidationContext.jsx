@@ -12,9 +12,10 @@
  * a saját eredményeit anélkül, hogy más validátor eredményeit érintené.
  */
 
-import React, { createContext, useContext, useState, useCallback, useMemo } from "react";
+import React, { createContext, useContext, useState, useCallback, useMemo, useEffect } from "react";
 
 import { VALIDATION_TYPES } from "../utils/messageConstants.js";
+import { MaestroEvent } from "../config/maestroEvents.js";
 
 const ValidationContext = createContext(null);
 
@@ -120,6 +121,17 @@ export const ValidationProvider = ({ children }) => {
             next.delete(articleId);
             return next;
         });
+    }, []);
+
+    // Scope-váltáskor teljes reset: az idegen office articleId-s eredményei
+    // különben itt rekednének (a validationResults memo már nem mutatna rájuk,
+    // de a belső Map monoton nőne). Egyszerűbb, mint scope-kulcsú struktúra.
+    useEffect(() => {
+        const handleScopeChange = () => {
+            setSourceResults(prev => prev.size === 0 ? prev : new Map());
+        };
+        window.addEventListener(MaestroEvent.scopeChanged, handleScopeChange);
+        return () => window.removeEventListener(MaestroEvent.scopeChanged, handleScopeChange);
     }, []);
 
     const validationResults = useMemo(() => {

@@ -96,7 +96,8 @@
     - **Stabil Realtime feliratkozás**: Ref-eket használ az `activePublicationId`-hoz és az `articles`-hoz, hogy ne iratkozzon újra fel állapotváltozáskor.
     - **Ref-alapú `fetchData`**: Az `activePublicationId`-t ref-ből olvassa (nem closure-ból) a stabil identitás érdekében; a kiadvány-váltó effect deps tartalmazza az `isInitialized`-t, hogy kezelje a versenyhelyzetet, amikor a PublicationList a pubId-t az kezdeti fetch befejezése előtt állítja be.
     - **Fetch generáció-számláló (`fetchGenerationRef`)**: Minden `fetchData` hívás kap egy sorszámot. Ha közben újabb hívás indul (pl. recovery + publication switch egyidejűleg), az elavult eredmény eldobódik — megelőzi a dupla fetch miatti UI ugrást és felesleges state felülírást.
-    - **Kritikus vs. nem-kritikus adatlekérés**: A publications és articles `Promise.all`-lal futnak (ha elbuknak, a catch kezeli). A layouts és deadlines `Promise.allSettled`-del futnak — ha VPN-en timeout-olnak, a UI azonnal megjelenik a kritikus adatokkal, és toast figyelmeztet a hiányzó adatokról.
+    - **Kritikus vs. nem-kritikus adatlekérés**: A publications és articles `Promise.all`-lal futnak (ha elbuknak, a catch kezeli). A layouts, deadlines és workflows `Promise.allSettled`-del futnak — ha VPN-en timeout-olnak, a UI azonnal megjelenik a kritikus adatokkal, és toast figyelmeztet a hiányzó adatokról. A workflows ugyanebben az `allSettled`-ben fut (nem külön fire-and-forget fetch-ben), hogy a `isInitialized=true` csak betöltött workflow után billenjen — különben a Realtime handler átmenetileg `workflow=null`-t látna.
+    - **`isInitialized` a `finally` blokkban**: Auth hibán kívül minden terminal ágon true-ra billen (sikeres fetch, hálózati hiba, timeout) — hogy a Realtime feliratkozás ne csak a RecoveryManager `dataRefreshRequested` eseményére tudjon indulni. Auth hiba esetén viszont NEM állítjuk: nincs session → a Realtime feliratkozás amúgy is elbukna, a user pedig a Login képernyőre kerül.
     - Ld. `docs/diagrams/data-flow-architecture.md`
 
 2. **MaestroEvent Rendszer**
@@ -473,7 +474,7 @@ már betöltődött-e és a `ScopeContext` auto-pick adott-e aktív officeId-t.
 ### ScopeContext API
 - `activeOrganizationId`, `activeEditorialOfficeId` — az aktuálisan választott multi-tenant scope (localStorage-ban perzisztált, `maestro.activeOrganizationId` / `maestro.activeEditorialOfficeId` kulcsok; a Plugin és Dashboard localStorage izolált, nincs ütközés).
 - `setActiveOrganization(id)`, `setActiveOffice(id)` — írják az állapotot és a localStorage-ot. A `setActiveOffice` dispatch-eli a `scopeChanged` MaestroEvent-et, amely triggereli a UserContext `refreshGroupSlugs()`-t és a `useGroupMembers` hookok cache invalidálását.
-- **Stale ID védelem + auto-pick**: A `useEffect` a `UserContext` memberships betöltése után (`loading === false && !membershipsError`) ellenőrzi, hogy az aktuális ID-k még szerepelnek-e a listákban. Stale esetben az első elérhetőre vált, vagy nullázza. Ha nincs aktív scope, de van membership, automatikusan az elsőt választja (ez biztosítja a Dashboardon frissen onboardolt user első Plugin-belépésnél az azonnali scope-ot, külön UI interakció nélkül).
+- **Stale ID védelem + auto-pick**: A `useEffect` a `UserContext` memberships betöltése után (`loading === false && !membershipsError`) ellenőrzi, hogy az aktuális ID-k még szerepelnek-e a listákban. Stale esetben az első elérhetőre vált, vagy nullázza. Ha nincs aktív scope, de van membership, automatikusan az elsőt választja (ez biztosítja a Dashboardon frissen onboardolt user első Plugin-belépésnél az azonnali scope-ot, külön UI interakció nélkül). A cascading logika (org → office) egy tiszta `resolveScope({...})` függvénybe van kiemelve, ami `{ resolved, apply, reason }`-t ad vissza — az `useEffect` csak az `apply(setOrg, setOffice)` callbacket hívja. Nincs React dep a függvényben, így unit-tesztelhető.
 - **WorkspaceHeader dropdown**: Ha a user több org-hoz vagy office-hoz tartozik, a `WorkspaceHeader` feltételes `CustomDropdown`-okat mutat a scope váltáshoz.
 
 ### UserContext API
@@ -496,6 +497,7 @@ már betöltődött-e és a `ScopeContext` auto-pick adott-e aktív officeId-t.
 - `validationResults` — összefésült Map (articleId → { errors, warnings })
 - `updateArticleValidation(articleId, source, results)`, `updatePublicationValidation(pubId, source, results)`
 - `clearArticleValidation(articleId, source)` — egy forrás eredményeinek törlése
+- **Scope-váltás reset**: A `scopeChanged` MaestroEvent-re a belső `sourceResults` Map teljesen törlődik (no-op guard: ha már üres, nem cseréli) — különben az idegen office articleId-s eredményei benne rekednének. Az új office eredményei amúgy is új validátor futáson jönnek.
 
 ---
 
