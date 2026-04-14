@@ -28,16 +28,31 @@ export const DEFAULT_GROUPS = [
  * GroupMembership dokumentumokból és Group dokumentumokból feloldja a felhasználó
  * csoportjainak slug-jait.
  *
+ * A két bemenet két külön DB query eredménye — a közöttük eltelt időben egy
+ * csoport törölhető / átnevezhető, ezért a memberships által hivatkozott
+ * `groupId`-k egy része hiányozhat a `groupDocs`-ból. A hívónak át kell adni
+ * a `missingGroupIds`-t egy loggernek / telemetriának, hogy a tranziens
+ * de-privilegizálás (és a hosszabban fennmaradó inkonzisztencia) detektálható
+ * legyen.
+ *
  * @param {Array<{groupId: string}>} groupMembershipDocs - A user groupMemberships rekordjai
  * @param {Array<{$id: string, slug: string}>} groupDocs - Az érintett group dokumentumok
- * @returns {string[]} Deduplikált slug tömb (pl. ['designers', 'art_directors'])
+ * @returns {{ slugs: string[], missingGroupIds: string[] }}
+ *   `slugs`: Deduplikált slug tömb (pl. ['designers', 'art_directors']).
+ *   `missingGroupIds`: Olyan groupId-k, amelyeket a memberships hivatkoz, de
+ *   a groupDocs nem tartalmazza őket (race / törölt csoport). A hívó loggolja.
  */
 export function resolveGroupSlugs(groupMembershipDocs, groupDocs) {
     const groupIdToSlug = new Map(groupDocs.map(g => [g.$id, g.slug]));
     const slugs = new Set();
+    const missing = new Set();
     for (const m of groupMembershipDocs) {
         const slug = groupIdToSlug.get(m.groupId);
-        if (slug) slugs.add(slug);
+        if (slug) {
+            slugs.add(slug);
+        } else {
+            missing.add(m.groupId);
+        }
     }
-    return [...slugs];
+    return { slugs: [...slugs], missingGroupIds: [...missing] };
 }

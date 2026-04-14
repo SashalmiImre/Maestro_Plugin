@@ -109,7 +109,11 @@ async function fetchGroupSlugsForUser(userId, editorialOfficeId) {
         queries: [Query.equal('$id', groupIds), Query.limit(100)]
     }, 'fetchGroups');
 
-    return resolveGroupSlugs(membershipsResult.documents, groupsResult.documents);
+    const { slugs, missingGroupIds } = resolveGroupSlugs(membershipsResult.documents, groupsResult.documents);
+    if (missingGroupIds.length > 0) {
+        logWarn(`[UserContext] Inkonzisztens csoporttagság — ${missingGroupIds.length} groupId nem oldódott fel (törölt / race): ${missingGroupIds.join(', ')}`);
+    }
+    return slugs;
 }
 
 /**

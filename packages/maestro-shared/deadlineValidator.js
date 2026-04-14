@@ -22,6 +22,12 @@
 
 /**
  * ISO 8601 datetime string érvényességének ellenőrzése.
+ *
+ * Figyelmeztetés: a `new Date()` clamp-el (pl. "2024-01-01T25:00:00" →
+ * "2024-01-02T01:00:00"), ezért ez a függvény szemantikai érvényességet
+ * nem garantál — csak azt, hogy a string Date-té parse-olható.
+ * Formátum-szintű ellenőrzéshez használd az `isValidDate`/`isValidTime`-ot.
+ *
  * @param {string} isoString
  * @returns {boolean}
  */

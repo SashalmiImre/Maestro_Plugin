@@ -621,7 +621,7 @@ A következő aktív munka a **Dashboard Redesign** — ld. `_docs/Feladatok.md`
 - [x] D.20 — Build verifikáció: mindkét build (webpack + vite) sikeres, 0 stale import (grep clean)
 
 **Technikai részletek:**
-- `workflowRuntime.js`: `getStateConfig`, `getAllStates`, `getAvailableTransitions`, `canUserMoveArticle`, `validateTransition`, `canEditElement`, `canRunCommand`, `canEditContributorDropdown`, `canUserAccessInState`, `hasCapability`, `getContributorGroups`, `isLeaderGroup`, `isInitialState`, `getInitialState`, `getStateLabel`, `getStateColor`, `getStateDuration`, `getStateValidations`, `isTerminalState`, `getStateCommands`
+- `workflowRuntime.js`: `getStateConfig`, `getAllStates`, `getAvailableTransitions`, `canUserMoveArticle`, `canEditElement`, `canRunCommand`, `canEditContributorDropdown`, `canUserAccessInState`, `isInitialState`, `getInitialState`, `getStateLabel`, `getStateColor`, `getStateDuration`, `getStateValidations`, `isTerminalState`, `getStateCommands`
 - CF process cache: 60s TTL (`getWorkflowForOffice()`), fail-closed (nincs workflow → state revert)
 - Import konvenció: `"maestro-shared/..."` webpack alias (plugin), `@shared/...` vite alias (dashboard)
 - **Appwrite Console tennivalók** (MCP-vel): `WORKFLOWS_COLLECTION_ID` env var hozzáadás a CF-ekhez, `CONFIG_COLLECTION_ID` env var törlés, `config` collection törlés, `validate-labels` CF disable/törlés

@@ -42,7 +42,7 @@ Ez a dokumentum segít eligazodni, ha a régi kódbázisból indulsz és meg sze
 | `labelConfig.js:CAPABILITY_LABELS` | `compiled.capabilities` (exkluzív capability-k) |
 | `labelConfig.js:VALID_LABELS` | Nincs — a labelek eltűnnek |
 | `labelConfig.js:resolveGrantedTeams()` | Nincs — a `user.groupSlugsByOffice` közvetlenül jön a `groupMemberships`-ből |
-| `labelConfig.js:hasCapability()` | `workflowRuntime.js:hasCapability(compiled, name, userGroups)` |
+| `labelConfig.js:hasCapability()` | **Törölve** — dead code, nem volt kódbázis-szintű fogyasztója. A `compiled.capabilities` mező megmaradt, új fogyasztó közvetlenül olvashat belőle. |
 | `workflowConstants.js:WORKFLOW_CONFIG` | `compiled.transitions` + `compiled.validations` + `compiled.commands` |
 | `workflowConstants.js:STATE_PERMISSIONS` | `compiled.statePermissions` |
 | `workflowConstants.js:VALID_TRANSITIONS` | `compiled.transitions` (a `from` → `to` párok listája) |

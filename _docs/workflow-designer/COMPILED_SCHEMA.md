@@ -224,15 +224,13 @@ Exkluzív capability-k (nincs csapat-ekvivalensük) — a régi `CAPABILITY_LABE
 }
 ```
 
-A `hasCapability(compiled, capabilityName, userGroups)` helper igazat ad vissza, ha a user bármely csoporttagsága megjelenik a capability listájában, vagy ha a user leader csoport tagja.
+A `capabilities` mező a compiled schema része marad (a Dashboard Workflow Designer szerkesztheti), de a fogyasztói `hasCapability()` helper törölve lett (nem volt kódbázis-szintű használata). Új capability használatkor a fogyasztó közvetlenül olvas a `compiled.capabilities[name]` tömbből, vagy új helper kerül a `workflowRuntime.js`-be.
 
 **Példa capability-k**:
 - `canAddArticlePlan` — cikk terv hozzáadása InDesign fájl nélkül
 - `canExportFinalPdf` — végleges PDF generálás
 - `canArchivePublication` — kiadvány archiválás
 - `canDeletePublication` — kiadvány törlés
-
-Új capability = új kulcs ebben az objektumban + új kódhivatkozás (`hasCapability(workflow, 'canXxx', userGroups)`).
 
 ---
 
@@ -244,14 +242,10 @@ A plugin és a Cloud Function-ök a [workflowRuntime.js](../../packages/maestro-
 - `getStateConfig(compiled, stateId)` — `{label, color, duration, isInitial, isTerminal}`
 - `getAvailableTransitions(compiled, currentState)` — a `from === currentState` átmenetek
 - `canUserMoveArticle(compiled, userGroups, currentState)` — bool
-- `validateTransition(compiled, fromState, toState)` — bool + ok
 - `canEditElement(compiled, scope, elementKey, userGroups)` — `{allowed, reason}`
 - `canRunCommand(compiled, stateId, commandId, userGroups)` — `{allowed, reason}`
 - `canEditContributorDropdown(compiled, groupSlug, userGroups, currentState)` — bool
 - `canUserAccessInState(compiled, userGroups, stateId)` — bool
-- `hasCapability(compiled, capabilityName, userGroups)` — bool
-- `getContributorGroups(compiled)` — `[{slug, label}]` — a ContributorsSection-nek
-- `isLeaderGroup(compiled, slug)` — bool
 - `isInitialState(compiled, stateId)` — bool
 - `getInitialState(compiled)` — stateId string
 

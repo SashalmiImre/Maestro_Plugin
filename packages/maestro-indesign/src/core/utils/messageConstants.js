@@ -21,15 +21,11 @@ export const RECIPIENT_TYPE_LABELS = {
     [RECIPIENT_TYPES.ALL_IMAGE_EDITORS]: 'Összes képszerkesztő'
 };
 
-// Validáció / Üzenet típusok
-export const VALIDATION_TYPES = {
-    ERROR: 'error',
-    WARNING: 'warning',
-    INFO: 'info',
-    SUCCESS: 'success' // pl. "Megoldva" állapothoz
-};
+// Validáció / Üzenet típusok — egyetlen igazságforrás a maestro-shared-ben.
+// A VALIDATION_TYPE_CONFIG (label/color/icon) Plugin-specifikus UI meta.
+import { VALIDATION_TYPES } from "maestro-shared/constants.js";
+export { VALIDATION_TYPES };
 
-// Validáció / Üzenet típusok megjelenítése (címke, szín)
 export const VALIDATION_TYPE_CONFIG = {
     [VALIDATION_TYPES.ERROR]: { label: 'Hiba', color: '#d7373f', icon: 'Alert' },
     [VALIDATION_TYPES.WARNING]: { label: 'Figyelmeztetés', color: '#e68619', icon: 'Alert' },

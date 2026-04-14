@@ -45,6 +45,10 @@ export function getContributor(contributorsJson, slug) {
  * Beállít egy contributor userId-t és visszaadja az új JSON stringet.
  * Ha a userId null, a slug kulcsot eltávolítja az objektumból.
  *
+ * Nincs slug-validáció — a hívó felelős, hogy a slug létezik a
+ * `workflow.contributorGroups`-ban. Ismeretlen slug-ok csendesen
+ * beíródnak a JSON-ba.
+ *
  * @param {string|null|undefined} contributorsJson - Meglévő JSON string
  * @param {string} slug - Csoport slug
  * @param {string|null} userId - Az új userId (null = eltávolítás)

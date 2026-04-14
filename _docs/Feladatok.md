@@ -26,7 +26,7 @@ tags: [feladatok]
 - [x] 7. **data/hooks/** — useArticles, useOverlapValidation, useUnifiedValidation, useElementPermission, stb.
 - [x] 8. **ui/features/** — articles, publications, workspace komponensek
 - [x] 9. **ui/common/** — CollapsibleSection, ConfirmDialog, ValidatedTextField, Table, Toast
-- [ ] 10. **maestro-shared/** — workflowRuntime, constants, urgency, pageGapUtils, contributorHelpers
+- [x] 10. **maestro-shared/** — workflowRuntime, constants, urgency, pageGapUtils, contributorHelpers
 
 ### Cross-module interakciók (a modul-harden UTÁN)
 

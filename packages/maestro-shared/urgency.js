@@ -48,10 +48,9 @@ export async function fetchHolidays(year) {
             const holidays = new Set(data.map(h => h.date));
             holidayCache.set(year, holidays);
             return holidays;
-        } catch (error) {
-            console.error(`fetchHolidays(${year}) failed: ${HOLIDAYS_API_BASE}/${year}/HU`, {
-                error: error?.message || error
-            });
+        } catch {
+            // Csendes hiba — a null visszatérés jelzi a sikertelenséget.
+            // A maestro-shared kétoldalú (Plugin + Dashboard), nincs közös logger.
             return null;
         } finally {
             pendingFetches.delete(year);
@@ -255,13 +254,17 @@ export function getUrgencyBackground(ratio) {
 /**
  * Kiszámítja egy cikk sürgősségi arányát.
  *
+ * Lejárt határidő + van hátralévő munka esetén `ratio: 1.0` +
+ * `isOverdue: true` jelzést ad vissza (nem `Infinity`-t), hogy
+ * rendezés / összehasonlítás fogyasztók ne hibázzanak.
+ *
  * @param {Object} article
  * @param {Array} deadlines
  * @param {Object} workflow - A compiled workflow JSON
  * @param {Object} options
  * @param {Set<string>} options.holidays
  * @param {boolean} options.excludeWeekends
- * @returns {{ ratio: number, background: string|null }|null}
+ * @returns {{ ratio: number, isOverdue: boolean, background: string|null }|null}
  */
 export function calculateUrgencyRatio(article, deadlines, workflow, { holidays, excludeWeekends }) {
     if (!workflow) return null;
@@ -282,9 +285,10 @@ export function calculateUrgencyRatio(article, deadlines, workflow, { holidays, 
     const deadlineDate = new Date(deadline.datetime);
     const availableMinutes = calculateWorkingMinutes(now, deadlineDate, { holidays, excludeWeekends });
 
-    const ratio = availableMinutes > 0
-        ? remainingMinutes / availableMinutes
-        : Infinity;
+    if (availableMinutes <= 0) {
+        return { ratio: 1.0, isOverdue: true, background: getUrgencyBackground(1.0) };
+    }
 
-    return { ratio, background: getUrgencyBackground(ratio) };
+    const ratio = remainingMinutes / availableMinutes;
+    return { ratio, isOverdue: false, background: getUrgencyBackground(ratio) };
 }

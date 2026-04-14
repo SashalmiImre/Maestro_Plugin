@@ -93,6 +93,7 @@ export function buildPlaceholderRows(articles, publication, workflow) {
  *
  * @param {number} startPage
  * @param {number} endPage
+ * @param {Object} [workflow] - Ha megadott, az initial state ID-ját használja; különben `"designing"` fallback.
  * @returns {Object}
  */
 function createPlaceholder(startPage, endPage, workflow) {

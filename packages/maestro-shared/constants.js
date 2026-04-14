@@ -15,12 +15,15 @@ export const LOCK_TYPE = {
 
 /**
  * Validáció típusok (felhasználói validációk severity szintjei).
+ * A SUCCESS a Plugin-oldali `isResolved` megjelenítéshez használt — a DB-ben
+ * nem fordul elő, de az UI state-kalkuláció ismeri.
  * @enum {string}
  */
 export const VALIDATION_TYPES = {
     ERROR: 'error',
     WARNING: 'warning',
-    INFO: 'info'
+    INFO: 'info',
+    SUCCESS: 'success'
 };
 
 /**

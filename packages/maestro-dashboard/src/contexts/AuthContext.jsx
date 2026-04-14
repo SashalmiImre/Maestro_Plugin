@@ -91,7 +91,11 @@ async function fetchGroupSlugs(userId) {
             queries: [Query.equal('$id', groupIds), Query.limit(100)]
         });
 
-        return resolveGroupSlugs(membershipsResult.documents, groupsResult.documents);
+        const { slugs, missingGroupIds } = resolveGroupSlugs(membershipsResult.documents, groupsResult.documents);
+        if (missingGroupIds.length > 0) {
+            console.warn(`[AuthContext] Inkonzisztens csoporttagság — ${missingGroupIds.length} groupId nem oldódott fel (törölt / race): ${missingGroupIds.join(', ')}`);
+        }
+        return slugs;
     } catch {
         return [];
     }

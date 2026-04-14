@@ -46,6 +46,10 @@ export function getStateLabel(compiled, stateId) {
 /**
  * Visszaadja az állapot színét.
  *
+ * Eltérés a többi gettertől: ismeretlen állapot esetén `'#999999'`-et
+ * ad vissza (nem `null`), hogy CSS-ben közvetlenül felhasználható legyen
+ * fallback nélkül is.
+ *
  * @param {Object} compiled
  * @param {string} stateId
  * @returns {string}
@@ -109,18 +113,6 @@ export function isTerminalState(compiled, stateId) {
  */
 export function getAvailableTransitions(compiled, currentState) {
     return compiled?.transitions?.filter(t => t.from === currentState) ?? [];
-}
-
-/**
- * Ellenőrzi, hogy az átmenet érvényes-e (létezik from→to pár).
- *
- * @param {Object} compiled
- * @param {string} fromState
- * @param {string} toState
- * @returns {boolean}
- */
-export function validateTransition(compiled, fromState, toState) {
-    return getAvailableTransitions(compiled, fromState).some(t => t.to === toState);
 }
 
 // ─── Jogosultsági ellenőrzések ─────────────────────────────────────────────
@@ -196,6 +188,12 @@ export function hasTransitionPermission(compiled, fromState, toState, userGroupS
 /**
  * Ellenőrzi, hogy a felhasználó szerkesztheti-e az adott UI elemet.
  *
+ * Fail-open viselkedés (szándékos): ismeretlen `elementKey` vagy ismeretlen
+ * `perm.type` → `allowed: true`. A Dashboard designer új elemkulcsokat
+ * vezethet be anélkül, hogy a régi Plugin verziók blokkolnák — a CF
+ * szerver-oldali guardok (update-article, update-publication) amúgy is
+ * védik az írást.
+ *
  * @param {Object} compiled
  * @param {string} scope - "article" vagy "publication".
  * @param {string} elementKey - Az elem kulcsa (pl. "articleName", "publicationProperties").
@@ -209,7 +207,7 @@ export function canEditElement(compiled, scope, elementKey, userGroupSlugs) {
 
     const perm = compiled.elementPermissions?.[scope]?.[elementKey];
     if (!perm) {
-        // Ismeretlen elem → engedélyezett (fejlesztési kényelem)
+        // Ismeretlen elem → engedélyezett (fail-open, ld. JSDoc)
         return { allowed: true };
     }
 
@@ -237,7 +235,7 @@ export function canEditElement(compiled, scope, elementKey, userGroupSlugs) {
         return { allowed: false, reason: "Ez a mező csak olvasható." };
     }
 
-    // Ismeretlen típus → engedélyezett
+    // Ismeretlen típus → engedélyezett (fail-open, ld. függvény JSDoc)
     return { allowed: true };
 }
 
@@ -357,54 +355,6 @@ export function canRunCommand(compiled, stateId, commandId, userGroupSlugs) {
     }
 
     return { allowed: false, reason: "Ehhez a parancshoz nincs jogosultságod." };
-}
-
-// ─── Capability lekérdezések ───────────────────────────────────────────────
-
-/**
- * Ellenőrzi, hogy a felhasználó rendelkezik-e egy exkluzív capability-vel.
- * A leaderGroups tagjai automatikusan rendelkeznek minden capability-vel.
- *
- * @param {Object} compiled
- * @param {string} capabilityName - A capability neve (pl. "canAddArticlePlan").
- * @param {string[]} userGroupSlugs
- * @returns {boolean}
- */
-export function hasCapability(compiled, capabilityName, userGroupSlugs) {
-    if (!compiled || !userGroupSlugs) return false;
-
-    // Leader csoportok tagjai rendelkeznek minden capability-vel
-    if (_isLeaderMember(compiled, userGroupSlugs)) return true;
-
-    const groups = compiled.capabilities?.[capabilityName];
-    if (!groups) return false;
-
-    return groups.some(slug => userGroupSlugs.includes(slug));
-}
-
-// ─── Contributor csoport lekérdezések ──────────────────────────────────────
-
-/**
- * Visszaadja a contributor csoportokat (ContributorsSection dropdown-ok).
- *
- * @param {Object} compiled
- * @returns {Array<{slug: string, label: string}>}
- */
-export function getContributorGroups(compiled) {
-    return compiled?.contributorGroups ?? [];
-}
-
-// ─── Leader csoport lekérdezések ───────────────────────────────────────────
-
-/**
- * Ellenőrzi, hogy az adott csoport leader csoport-e.
- *
- * @param {Object} compiled
- * @param {string} slug
- * @returns {boolean}
- */
-export function isLeaderGroup(compiled, slug) {
-    return compiled?.leaderGroups?.includes(slug) ?? false;
 }
 
 // ─── Validáció lekérdezések ────────────────────────────────────────────────
