@@ -287,11 +287,10 @@ Maestro/
 │   │       ├── pageGapUtils.js         ← Placeholder sorok generálása lefedetlen oldalakhoz
 │   │       ├── urgencyUtils.js         ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színek)
 │   │       ├── validationConstants.js  ← VALIDATOR_TYPES és VALIDATION_SOURCES enumerációk
-│   │       ├── validationRunner.js     ← Validátor futtatás orchestrálása + standalone fájl létezés ellenőrzés
+│   │       ├── validationRunner.js     ← Validátor futtatás orchestrálása (fájl létezés delegálás: StateComplianceValidator.checkFileAccessible)
 │   │       ├── validators/             ← Tiszta validációs logika osztályok
 │   │       │   ├── ValidatorBase.js
 │   │       │   ├── DatabaseIntegrityValidator.js
-│   │       │   ├── FileSystemValidator.js
 │   │       │   ├── PreflightValidator.js
 │   │       │   ├── PublicationStructureValidator.js
 │   │       │   ├── StateComplianceValidator.js  ← Állapotátmenet-validáció koordinátor (fájl, oldalszám, fájlnév, preflight)

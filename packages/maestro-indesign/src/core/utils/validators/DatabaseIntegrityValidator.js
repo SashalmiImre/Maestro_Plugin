@@ -100,8 +100,8 @@ export class DatabaseIntegrityValidator extends ValidatorBase {
                 const physStart = parsed.startPage;
                 const physEnd = parsed.endPage;
 
-                // Use loose check (==) because API might return strings for numbers
-                mismatch = (dbStart != physStart) || (dbEnd != physEnd);
+                // Explicit Number konverzió — az API string-eket is küldhet
+                mismatch = (Number(dbStart) !== Number(physStart)) || (Number(dbEnd) !== Number(physEnd));
                 
                 // Csak akkor állítjuk be a rangeDetails-t, ha tényleg eltérés van
                 if (mismatch) {

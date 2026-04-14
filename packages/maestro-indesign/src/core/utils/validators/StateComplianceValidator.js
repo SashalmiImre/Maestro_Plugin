@@ -60,7 +60,7 @@ export class StateComplianceValidator extends ValidatorBase {
 
             switch (validatorName) {
                 case VALIDATOR_TYPES.FILE_ACCESSIBLE:
-                    await this._checkFileAccessible(article, results, context.publicationRootPath);
+                    await this._checkFileAccessibleImpl(article, results, context.publicationRootPath);
                     break;
 
                 case VALIDATOR_TYPES.PAGE_NUMBER_CHECK:
@@ -98,12 +98,26 @@ export class StateComplianceValidator extends ValidatorBase {
         return base;
     }
 
+    /**
+     * Fájl létezés ellenőrzése InDesign ExtendScript-tel.
+     * Publikus belépési pont a validationRunner FILE_ACCESSIBLE case számára.
+     *
+     * @param {Object} article - A validálandó cikk objektum
+     * @param {string} [publicationRootPath] - Kiadvány gyökér útvonala
+     * @returns {Promise<Object>} Validációs eredmény { isValid, errors[], warnings[], timestamp }
+     */
+    async checkFileAccessible(article, publicationRootPath) {
+        const results = { isValid: true, errors: [], warnings: [] };
+        await this._checkFileAccessibleImpl(article, results, publicationRootPath);
+        return results.isValid ? this.success(results.warnings) : this.failure(results.errors, results.warnings);
+    }
+
     // ── Privát check metódusok ──────────────────────────────────────────────
 
     /**
-     * Fájl létezés ellenőrzése InDesign ExtendScript-tel.
+     * Fájl létezés ellenőrzés implementáció (belső és publikus API közös magja).
      */
-    async _checkFileAccessible(article, results, publicationRootPath) {
+    async _checkFileAccessibleImpl(article, results, publicationRootPath) {
         const path = article.filePath || article.FilePath;
         if (!path) {
             results.isValid = false;
