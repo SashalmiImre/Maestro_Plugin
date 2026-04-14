@@ -120,6 +120,7 @@
     - **Állapotátmenet-validáció**: A `StateComplianceValidator` koordinálja az összes állapotváltási ellenőrzést (`file_accessible`, `page_number_check`, `filename_verification`, `preflight_check`) a `workflow.validations[state]` `requiredToEnter`/`requiredToExit` alapján. A `WorkflowEngine.validateTransition()` delegál a `validationRunner.validate()` → `StateComplianceValidator` láncon keresztül.
     - **Struktúra Validáció (PublicationStructureValidator)**: Bounds check (`getEffectivePageRange()` — `startPage`/`endPage` + `pageRanges` JSON fallback) és overlap detektálás (`getOccupiedPages()` — layout-alapú csoportosítás). A `validatePerArticle()` per-cikk eredményeket ad vissza (deduplikált párok `reportedPairs` Set-tel). A `useOverlapValidation` hook az `articlesAdded` event payload-ból merge-öli az új cikkeket a ref-elt állapottal (React state batching megkerülése).
     - **Blokkolási Logika**: Bármely aktív `error` típusú elem blokkolja az állapotátmeneteket.
+    - **Perzisztencia race-védelem**: A `useOverlapValidation` és `useWorkflowValidation` upsert műveletei a `validationPersist.queuePersist(key, fn)` helperen mennek keresztül — per-kulcs (pl. `structure::${pubId}` vagy `${source}::${articleId}`) Promise lánc sorosítja a fetch+write párokat, így egymás utáni gyors hívások nem keverednek (korábbi write még futhat, amikor a következő fetch már indulna). A helper belső hibákat a láncon elnyel, hogy egy elbukott persist ne törje meg a következőt.
     - **Komponensek**: `ValidationSection.jsx` (UI), `useUnifiedValidation` (Logika), `ValidationContext` (Rendszeradatok).
     - **Mező-szintű Validáció**: `ValidatedTextField` `invalid` prop + validátor statikus metódusok (pl. `isValidFileName`) — azonnali piros keret blur-kor, formátum-hibára. Fájlnév validáció: `\ / : * ? " < > |` tiltott karakterek + Windows fenntartott nevek (CON, PRN, AUX, NUL, COM1–9, LPT1–9) + pontra/szóközre végződő nevek tiltása. (A határidő mezőket Fázis 9 óta a Dashboard szerkeszti — a plugin-oldali `DeadlineValidator` megszűnt.)
     - **Dokumentáció**: `docs/VALIDATION_MECHANISM.md`
@@ -288,6 +289,7 @@ Maestro/
 │   │       ├── pageGapUtils.js         ← Placeholder sorok generálása lefedetlen oldalakhoz
 │   │       ├── urgencyUtils.js         ← Sürgősség-számítás (munkaidő, ünnepnapok, ratio, színek)
 │   │       ├── validationConstants.js  ← VALIDATOR_TYPES és VALIDATION_SOURCES enumerációk
+│   │       ├── validationPersist.js    ← Validáció upsert helperek: `fetchAllValidationRows` (paginált list), `queuePersist` (per-kulcs Promise lánc)
 │   │       ├── validationRunner.js     ← Validátor futtatás orchestrálása (fájl létezés delegálás: StateComplianceValidator.checkFileAccessible)
 │   │       ├── validators/             ← Tiszta validációs logika osztályok
 │   │       │   ├── ValidatorBase.js
@@ -389,15 +391,15 @@ Fájl kiválasztása → `useArticles.addArticle` → útvonal validáció (kiad
 - **Esemény payload**: Az `articlesAdded` event a `{ publicationId, articles }` payload-ot kapja, ahol `articles` a `createArticle` DB válaszából származó objektumok tömbje. Ez megkerüli a React state batching okozta race condition-t (a ref-ek nem frissülnek szinkron az event dispatch-kor).
 
 ### Átpaginázás (oldalszám-módosítás)
-`ArticleProperties.handlePageNumberChange` → validáció (filePath, startPage, coverage bounds) → dokumentum megnyitása (ha szükséges) → oldalak átszámozása (offset) → új oldalszámok kinyerése → mentés `maestroSkipMonitor` flag-gel (DocumentMonitor ne reagáljon) → régi PDF-ek törlése (`__PDF__`, `__FINAL_PDF__` mappák, `generateDeleteOldPdfsScript`) → thumbnail újragenerálás (ha plugin nyitotta meg, `!wasAlreadyOpen`) → dokumentum bezárás (ha mi nyitottuk) → DB frissítés (startPage, endPage, pageRanges, thumbnails).
+`ArticleProperties.handlePageNumberChange` → validáció (filePath, startPage, coverage bounds) → dokumentum megnyitása (ha szükséges) → oldalak átszámozása (offset) → új oldalszámok kinyerése → mentés `maestroSkipCount` számlálóval (DocumentMonitor ne reagáljon) → régi PDF-ek törlése (`__PDF__`, `__FINAL_PDF__` mappák, `generateDeleteOldPdfsScript`) → thumbnail újragenerálás (ha plugin nyitotta meg, `!wasAlreadyOpen`) → dokumentum bezárás (ha mi nyitottuk) → DB frissítés (startPage, endPage, pageRanges, thumbnails).
 
-- **`maestroSkipMonitor` minta**: Megakadályozza, hogy a programozott mentés visszacsatolási hurkot indítson a DocumentMonitor-ban. A Cikk Átnevezés is használja.
+- **`maestroSkipCount` minta**: Számláló (`window.maestroSkipCount`) megakadályozza, hogy a programozott mentés visszacsatolási hurkot indítson a DocumentMonitor-ban. A producer (átpaginázás, átnevezés) inkrementálja, a `DocumentMonitor.handleSave` dekrementálja és `return`-öl — így több egyidejű programozott mentés is pontosan egyszer-egyszer kihagyható (nincs bool flag ütközés). A Cikk Átnevezés is használja.
 - **PDF takarítás**: A `generateDeleteOldPdfsScript()` az eredeti (átszámozás előtti) oldalszámok alapján keresi a régi PDF fájlokat.
 
 ### Cikk Átnevezés
 - **Validáció**: `isValidFileName()` ellenőrzi a tiltott karaktereket (`\ / : * ? " < > |`), Windows fenntartott neveket (CON, PRN stb.), pontra/szóközre végződő neveket, lock ellenőrzés (más felhasználó szerkeszti-e).
 - **Zárt dokumentum**: `GeneralSection` → `handleFieldUpdate("name")` → `useArticles.renameArticle` → `generateRenameFileScript()` (ExtendScript `File.rename`) → DB update.
-- **Nyitott dokumentum**: `generateRenameOpenDocumentScript()` → dokumentum keresése `fullName` útvonal alapján (fallback: `name`) → `doc.save(newFile)` (Save As) → régi fájl törlése (hibakezeléssel) → DB update. A `maestroSkipMonitor` flag megakadályozza, hogy a DocumentMonitor reagáljon a programozott mentésre.
+- **Nyitott dokumentum**: `generateRenameOpenDocumentScript()` → dokumentum keresése `fullName` útvonal alapján (fallback: `name`) → `doc.save(newFile)` (Save As) → régi fájl törlése (hibakezeléssel) → DB update. A `maestroSkipCount` számláló megakadályozza, hogy a DocumentMonitor reagáljon a programozott mentésre.
 - **Rollback**: Ha a DB frissítés sikertelen, a fájl visszanevezése automatikus.
 
 ### Realtime Adatfolyam

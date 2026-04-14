@@ -334,9 +334,9 @@ export const DocumentMonitor = () => {
         const app = getIndesignApp();
 
         const handleSave = async (event) => {
-            // Programozott mentés kihagyása
-            if (typeof window !== 'undefined' && window.maestroSkipMonitor) {
-                window.maestroSkipMonitor = false;
+            // Programozott mentés kihagyása — számláló-alapú (több party egyidejűleg is jelezhet)
+            if (typeof window !== 'undefined' && window.maestroSkipCount > 0) {
+                window.maestroSkipCount--;
                 return;
             }
 

@@ -416,7 +416,7 @@ export function generateRollbackRenameScript(currentPath, originalName) {
  * Ehelyett: doc.save(newPath) (Save As) frissíti az InDesign belső hivatkozását,
  * majd töröljük a régi fájlt.
  *
- * A hívó felelős a `window.maestroSkipMonitor` flag beállításáért a UXP oldalon,
+ * A hívó felelős a `window.maestroSkipCount` inkrementálásáért a UXP oldalon,
  * hogy a DocumentMonitor ne reagáljon a programozott mentésre.
  *
  * @param {string} oldPath - Az eredeti fájl útvonal (InDesign-ban nyitva).

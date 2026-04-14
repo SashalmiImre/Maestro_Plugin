@@ -157,7 +157,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
      *   2. Megnyitás ha szükséges
      *   3. Átszámozás (renumber)
      *   4. Új oldalszámok kinyerése (extract page ranges)
-     *   5. Mentés (maestroSkipMonitor flag-gel)
+     *   5. Mentés (maestroSkipCount számlálóval)
      *   6. Bezárás (ha mi nyitottuk)
      *
      * @param {number} newStartPage - Új kezdőoldal
@@ -224,11 +224,18 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
                 logWarn('[ArticleProperties] Page extraction failed:', extractResult.error);
             }
 
-            // 5. Mentés (maestroSkipMonitor: DocumentMonitor ne reagáljon)
-            if (typeof window !== 'undefined') window.maestroSkipMonitor = true;
+            // 5. Mentés (maestroSkipCount: DocumentMonitor ne reagáljon a programozott mentésre).
+            // Ha a save sikertelen, a counter-t visszavonjuk (különben egy későbbi valódi user save
+            // is átugorna — a sikertelen save NEM tüzel afterSave eseményt, ami elhasználná).
+            if (typeof window !== 'undefined') {
+                window.maestroSkipCount = (window.maestroSkipCount || 0) + 1;
+            }
             const saveResult = executeInDesignScript(generateSaveDocumentScript(filePath), "Saving document");
             const parsedSave = parseExecutionStatus(saveResult);
             if (!parsedSave.success) {
+                if (typeof window !== 'undefined') {
+                    window.maestroSkipCount = Math.max(0, (window.maestroSkipCount || 0) - 1);
+                }
                 throw new Error(`Failed to save document: ${parsedSave.error || 'Unknown error'}`);
             }
 

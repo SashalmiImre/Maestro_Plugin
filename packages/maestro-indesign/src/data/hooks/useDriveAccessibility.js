@@ -19,7 +19,7 @@ import { MaestroEvent } from "../../core/config/maestroEvents.js";
 
 // Utils
 import { checkPathsAccessibleBatch, toNativePath } from "../../core/utils/pathUtils.js";
-import { logDebug } from "../../core/utils/logger.js";
+import { logDebug, logWarn } from "../../core/utils/logger.js";
 
 /**
  * Összehasonlít két Map-et (pubId → boolean) — true, ha eltérnek.
@@ -60,7 +60,15 @@ export const useDriveAccessibility = (publications) => {
             if (!pubs || pubs.length === 0) return;
 
             const nativePaths = pubs.map(pub => toNativePath(pub.rootPath));
-            const results = await checkPathsAccessibleBatch(nativePaths);
+            let results;
+            try {
+                results = await checkPathsAccessibleBatch(nativePaths);
+            } catch (err) {
+                // ExtendScript hiba vagy InDesign elérhetetlen — a poller tovább fut, az előző
+                // state megmarad. Így egy átmeneti doScript-hiccup nem dobja minden mappát pirosra.
+                logWarn('[useDriveAccessibility] checkPathsAccessibleBatch sikertelen:', err?.message || err);
+                return;
+            }
 
             const nextMap = new Map();
             pubs.forEach((pub, i) => {

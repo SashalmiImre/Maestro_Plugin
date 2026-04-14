@@ -23,41 +23,9 @@ import { VALIDATOR_TYPES, VALIDATION_SOURCES } from "../../core/utils/validation
 import { VALIDATION_TYPES } from "../../core/utils/messageConstants.js";
 import { tables, DATABASE_ID, COLLECTIONS, ID, Query } from "../../core/config/appwriteConfig.js";
 import { log, logError } from "../../core/utils/logger.js";
-import { DATA_QUERY_CONFIG, TOAST_TYPES } from "../../core/utils/constants.js";
-
-
-
-/**
- * Lapozva lekéri az összes preflight validációs sort az Appwrite-ból.
- */
-async function fetchAllPreflightRows(baseQueries) {
-    const allRows = [];
-    let offset = 0;
-
-    while (true) {
-        const response = await tables.listRows({
-            databaseId: DATABASE_ID,
-            tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
-            queries: [
-                ...baseQueries,
-                Query.limit(DATA_QUERY_CONFIG.PAGE_SIZE),
-                Query.offset(offset)
-            ]
-        });
-
-        if (!response || !Array.isArray(response.rows)) {
-            logError('[useWorkflowValidation] Hibás válasz a tables.listRows-tól:', response);
-            break;
-        }
-
-        allRows.push(...response.rows);
-
-        if (response.rows.length < DATA_QUERY_CONFIG.PAGE_SIZE) break;
-        offset += DATA_QUERY_CONFIG.PAGE_SIZE;
-    }
-
-    return allRows;
-}
+import { withRetry } from "../../core/utils/promiseUtils.js";
+import { fetchAllValidationRows, queuePersist } from "../../core/utils/validationPersist.js";
+import { TOAST_TYPES } from "../../core/utils/constants.js";
 
 /**
  * Hook a preflight validációs eredmények kezeléséhez.
@@ -90,9 +58,10 @@ export const useWorkflowValidation = () => {
             try {
                 // Betöltjük a 'preflight' forrású validációkat (hardkódolva a kompatibilitás miatt,
                 // de később kiterjeszthető más forrásokra is)
-                const allRows = await fetchAllPreflightRows([
-                    Query.equal('source', VALIDATION_SOURCES.PREFLIGHT)
-                ]);
+                const allRows = await fetchAllValidationRows(
+                    [Query.equal('source', VALIDATION_SOURCES.PREFLIGHT)],
+                    'useWorkflowValidation.loadExisting'
+                );
 
                 if (allRows.length === 0) return;
 
@@ -123,54 +92,69 @@ export const useWorkflowValidation = () => {
 
     /**
      * Egyetlen cikk validációs eredményét menti (upsert) az Appwrite-ba.
+     * Per-(articleId, source) queuePersist: sorba fűzi az egymás utáni hívásokat,
+     * hogy a fetch+write párok ne keveredjenek.
      */
-    const persistToDatabase = useCallback(async (articleId, publicationId, source, result) => {
-        try {
-            // 1. Meglévő sor keresése ehhez a cikkhez és forráshoz
-            const existingRows = await fetchAllPreflightRows([
-                Query.equal('articleId', articleId),
-                Query.equal('source', source)
-            ]);
+    const persistToDatabase = useCallback((articleId, publicationId, source, result) => {
+        return queuePersist(`${source}::${articleId}`, async () => {
+            try {
+                // 1. Meglévő sor keresése ehhez a cikkhez és forráshoz
+                const existingRows = await fetchAllValidationRows(
+                    [
+                        Query.equal('articleId', articleId),
+                        Query.equal('source', source)
+                    ],
+                    'useWorkflowValidation.persistFetch'
+                );
 
-            const hasContent = result.errors.length > 0 || result.warnings.length > 0;
-            const data = { errors: result.errors, warnings: result.warnings };
+                const hasContent = result.errors.length > 0 || result.warnings.length > 0;
+                const data = { errors: result.errors, warnings: result.warnings };
 
-            if (hasContent) {
-                if (existingRows.length > 0) {
-                    // Update
-                    await tables.updateRow({
-                        databaseId: DATABASE_ID,
-                        tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
-                        rowId: existingRows[0].$id,
-                        data
-                    });
-                } else {
-                    // Create
-                    await tables.createRow({
-                        databaseId: DATABASE_ID,
-                        tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
-                        rowId: ID.unique(),
-                        data: {
-                            articleId,
-                            publicationId,
-                            source: source,
-                            ...data
-                        }
-                    });
+                if (hasContent) {
+                    if (existingRows.length > 0) {
+                        await withRetry(
+                            () => tables.updateRow({
+                                databaseId: DATABASE_ID,
+                                tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
+                                rowId: existingRows[0].$id,
+                                data
+                            }),
+                            { operationName: `updatePreflight(${articleId})` }
+                        );
+                    } else {
+                        // Create — ID-t előre generáljuk, hogy retry esetén ne jöjjön létre duplikátum
+                        const generatedRowId = ID.unique();
+                        await withRetry(
+                            () => tables.createRow({
+                                databaseId: DATABASE_ID,
+                                tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
+                                rowId: generatedRowId,
+                                data: {
+                                    articleId,
+                                    publicationId,
+                                    source,
+                                    ...data
+                                }
+                            }),
+                            { operationName: `createPreflight(${articleId})` }
+                        );
+                    }
+                } else if (existingRows.length > 0) {
+                    await withRetry(
+                        () => tables.deleteRow({
+                            databaseId: DATABASE_ID,
+                            tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
+                            rowId: existingRows[0].$id
+                        }),
+                        { operationName: `deletePreflight(${articleId})` }
+                    );
                 }
-            } else if (existingRows.length > 0) {
-                // Nincs hiba → régi sor törlése
-                await tables.deleteRow({
-                    databaseId: DATABASE_ID,
-                    tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
-                    rowId: existingRows[0].$id
-                });
-            }
 
-            log(`[useWorkflowValidation] Eredmény mentve (article: ${articleId}, source: ${source}, hibák: ${result.errors.length}).`);
-        } catch (error) {
-            logError('[useWorkflowValidation] DB mentés sikertelen:', error);
-        }
+                log(`[useWorkflowValidation] Eredmény mentve (article: ${articleId}, source: ${source}, hibák: ${result.errors.length}).`);
+            } catch (error) {
+                logError('[useWorkflowValidation] DB mentés sikertelen:', error);
+            }
+        });
     }, []);
 
     /**

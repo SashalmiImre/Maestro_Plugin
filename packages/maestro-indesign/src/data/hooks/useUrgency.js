@@ -66,8 +66,9 @@ export const useUrgency = (articles, deadlines, publication) => {
     // Sürgősség kiszámítása + percenkénti frissítés
     useEffect(() => {
         const recalculate = () => {
-            // Évváltás detektálása — a currentYear state frissítése újra lefuttatja az ünnepnap-lekérést
-            setCurrentYear(new Date().getFullYear());
+            // Évváltás detektálása — csak ha tényleg változott az év (felesleges re-render védelem)
+            const year = new Date().getFullYear();
+            setCurrentYear(prev => prev !== year ? year : prev);
 
             if (!articles?.length || !deadlines?.length) {
                 setUrgencyMap(new Map());

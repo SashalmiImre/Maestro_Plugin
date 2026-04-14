@@ -29,7 +29,8 @@ import { uploadThumbnails, deleteOldThumbnails, cleanupTempFiles, getTempFolderP
  * Feliratkozik a `documentClosed` MaestroEvent-re és registerTask mintával
  * regisztrálja a thumbnail generálás feladatát.
  *
- * @returns {{ generateAndUploadThumbnails: Function }} A függvény közvetlenül is hívható (pl. addArticle).
+ * Nincs publikus visszatérési érték — a hook csak event-listener-t regisztrál.
+ * (addArticle saját inline thumbnail pipeline-t futtat a useArticles.js-ben.)
  */
 export const useThumbnails = () => {
     const { updateArticle } = useData();
@@ -38,9 +39,6 @@ export const useThumbnails = () => {
 
     // Konkurencia-védelem: egyszerre egy cikken fut
     const inProgressRef = useRef(new Set());
-
-    // callbacksRef a stabil event handler referenciához (useWorkflowValidation mintája)
-    const callbacksRef = useRef({});
 
     /**
      * Thumbnail generálás, feltöltés és DB frissítés.
@@ -119,15 +117,19 @@ export const useThumbnails = () => {
         } finally {
             inProgressRef.current.delete(article.$id);
 
-            // Temp mappa takarítás
+            // Temp mappa takarítás — fire-and-forget: ne blokkolja a registerTask
+            // Promise-t (a dokumentum már bezárult, a fő munkafolyamat kész).
             if (tempFolderPath) {
-                await cleanupTempFiles(tempFolderPath);
+                cleanupTempFiles(tempFolderPath).catch(err => {
+                    logWarn('[useThumbnails] Temp mappa takarítás sikertelen:', err);
+                });
             }
         }
     };
 
-    // Stabil referencia frissítése
-    callbacksRef.current.generateAndUploadThumbnails = generateAndUploadThumbnails;
+    // Stabil referencia a handler-hez (addEventListener callback ne legyen re-bound)
+    const generateAndUploadThumbnailsRef = useRef(generateAndUploadThumbnails);
+    generateAndUploadThumbnailsRef.current = generateAndUploadThumbnails;
 
     /**
      * Event feliratkozás — documentClosed
@@ -136,7 +138,7 @@ export const useThumbnails = () => {
         const handleDocumentClosed = (event) => {
             const { article, filePath, registerTask } = event.detail;
             registerTask(
-                callbacksRef.current.generateAndUploadThumbnails(article, filePath)
+                generateAndUploadThumbnailsRef.current(article, filePath)
             );
         };
 
@@ -146,6 +148,4 @@ export const useThumbnails = () => {
             window.removeEventListener(MaestroEvent.documentClosed, handleDocumentClosed);
         };
     }, []);
-
-    return { generateAndUploadThumbnails };
 };

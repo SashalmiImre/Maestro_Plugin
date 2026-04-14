@@ -4,6 +4,13 @@ import { useUserValidations } from './useUserValidations.js';
 import { VALIDATION_TYPES } from '../../core/utils/messageConstants.js';
 import { VALIDATION_SOURCES } from '../../core/utils/validationConstants.js';
 
+const SEVERITY = {
+    [VALIDATION_TYPES.ERROR]: 3,
+    [VALIDATION_TYPES.WARNING]: 2,
+    [VALIDATION_TYPES.INFO]: 1,
+    [VALIDATION_TYPES.SUCCESS]: 0
+};
+
 /**
  * Hook to get unified validation items (System + User Validations) for an article.
  * Handles merging, sorting, and override logic (downgrading system errors).
@@ -33,8 +40,7 @@ export const useUnifiedValidation = (article) => {
             .map(item => ({
                 ...item,
                 type: Object.values(VALIDATION_TYPES).includes(item.type) ? item.type : VALIDATION_TYPES.ERROR,
-                isSystem: true,
-                createdAt: new Date().toISOString() // System errors are active "now"
+                isSystem: true
             }));
     }, [validationResults, article?.$id]);
 
@@ -75,27 +81,17 @@ export const useUnifiedValidation = (article) => {
         }));
     }, [validations]);
 
-    // 5. Unified List
+    // 5. Unified List — sorrend: (1) system felül severity szerint, (2) user createdAt desc.
     const unifiedList = useMemo(() => {
         return [...activeSystemItems, ...userItems].sort((a, b) => {
-            // Sort by Date (newest first)
-            // Use createdAt if available, otherwise assume new
-            const dateA = a.createdAt ? new Date(a.createdAt) : new Date();
-            const dateB = b.createdAt ? new Date(b.createdAt) : new Date();
-            
-            // Ha a dátumok megegyeznek (pl. egyszerre jönnek rendszerüzenetek),
-            // akkor a típust vesszük másodlagos rendezőnek (Hiba > Warning)
-            if (dateA.getTime() === dateB.getTime()) {
-                const severity = { 
-                    [VALIDATION_TYPES.ERROR]: 3, 
-                    [VALIDATION_TYPES.WARNING]: 2, 
-                    [VALIDATION_TYPES.INFO]: 1, 
-                    [VALIDATION_TYPES.SUCCESS]: 0 
-                };
-                return (severity[b.type] || 0) - (severity[a.type] || 0);
+            if (a.isSystem !== b.isSystem) return a.isSystem ? -1 : 1;
+            if (a.isSystem) {
+                return (SEVERITY[b.type] || 0) - (SEVERITY[a.type] || 0);
             }
-
-            return dateB - dateA;
+            const tA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+            const tB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+            if (tA !== tB) return tB - tA;
+            return (SEVERITY[b.type] || 0) - (SEVERITY[a.type] || 0);
         });
     }, [activeSystemItems, userItems]);
 

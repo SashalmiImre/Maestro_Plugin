@@ -42,9 +42,9 @@ export function invalidateGroupMembersCache() {
  * @param {string} groupSlug - A csoport slug-ja
  */
 export function invalidateGroupMembersCacheForSlug(groupSlug) {
-    // A cache kulcs `${slug}::${officeId}` formátumú — az összes matchelőt töröljük
+    // Cache kulcs: `${slug}\u0000${officeId}` — NUL szeparátor, mert slug-ban nem fordulhat elő.
     for (const key of Object.keys(CACHE)) {
-        if (key.startsWith(`${groupSlug}::`)) delete CACHE[key];
+        if (key.startsWith(`${groupSlug}\u0000`)) delete CACHE[key];
     }
 }
 
@@ -137,7 +137,7 @@ export const useGroupMembers = (groupSlug) => {
             return;
         }
 
-        const cacheKey = `${groupSlug}::${activeEditorialOfficeId}`;
+        const cacheKey = `${groupSlug}\u0000${activeEditorialOfficeId}`;
 
         // Cache ellenőrzés
         const cached = CACHE[cacheKey];

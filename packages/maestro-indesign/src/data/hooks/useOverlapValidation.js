@@ -26,7 +26,8 @@ import { VALIDATION_SOURCES } from "../../core/utils/validationConstants.js";
 import { VALIDATION_TYPES } from "../../core/utils/messageConstants.js";
 import { log, logError } from "../../core/utils/logger.js";
 import { withRetry } from "../../core/utils/promiseUtils.js";
-import { DATA_QUERY_CONFIG, TOAST_TYPES } from "../../core/utils/constants.js";
+import { fetchAllValidationRows, queuePersist } from "../../core/utils/validationPersist.js";
+import { TOAST_TYPES } from "../../core/utils/constants.js";
 
 // Egyetlen megosztott példány
 const structureValidator = new PublicationStructureValidator();
@@ -38,40 +39,113 @@ const structureValidator = new PublicationStructureValidator();
 const LAYOUT_CHANGED_DEBOUNCE_MS = 250;
 
 /**
- * Lapozva lekéri az összes validációs sort az Appwrite-ból a megadott szűrőkkel.
- * PAGE_SIZE-os kötegekben halad, amíg az utolsó köteg kisebb, mint PAGE_SIZE.
+ * A struktúra-validációs eredmények upsert-je egy publikációra.
+ * Belül Promise.allSettled + withRetry — részleges hiba esetén throw-ol
+ * (a hívó queuePersist wrapper logolja).
  */
-async function fetchAllValidationRows(baseQueries) {
-    const allRows = [];
-    let offset = 0;
+async function persistStructureValidation(publicationId, resultsMap) {
+    // 1. Meglévő validációs dokumentumok lekérése ehhez a publikációhoz
+    const existingRows = await fetchAllValidationRows(
+        [
+            Query.equal('publicationId', publicationId),
+            Query.equal('source', VALIDATION_SOURCES.STRUCTURE)
+        ],
+        'useOverlapValidation.persistFetch'
+    );
 
-    while (true) {
-        const response = await withRetry(
-            () => tables.listRows({
-                databaseId: DATABASE_ID,
-                tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
-                queries: [
-                    ...baseQueries,
-                    Query.limit(DATA_QUERY_CONFIG.PAGE_SIZE),
-                    Query.offset(offset)
-                ]
-            }),
-            { operationName: "fetchValidationRows" }
-        );
-
-        const items = response?.documents || response?.rows;
-        if (!Array.isArray(items)) {
-            logError('[useOverlapValidation] Hibás válasz a tables.listRows-tól:', response);
-            break;
-        }
-
-        allRows.push(...items);
-
-        if (items.length < DATA_QUERY_CONFIG.PAGE_SIZE) break;
-        offset += DATA_QUERY_CONFIG.PAGE_SIZE;
+    const existingByArticle = new Map();
+    for (const doc of existingRows) {
+        existingByArticle.set(doc.articleId, doc.$id);
     }
 
-    return allRows;
+    const operations = [];
+
+    // 2. Eredménnyel rendelkező cikkek: update vagy create
+    for (const [articleId, result] of resultsMap) {
+        if (result.errors.length === 0 && result.warnings.length === 0) continue;
+
+        const data = {
+            errors: result.errors,
+            warnings: result.warnings
+        };
+
+        if (existingByArticle.has(articleId)) {
+            const rowId = existingByArticle.get(articleId);
+            operations.push({
+                label: `update validation for article ${articleId}`,
+                run: () => withRetry(
+                    () => tables.updateRow({
+                        databaseId: DATABASE_ID,
+                        tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
+                        rowId,
+                        data
+                    }),
+                    { operationName: `updateValidation(${articleId})` }
+                )
+            });
+            existingByArticle.delete(articleId);
+        } else {
+            // Create — ID-t előre generáljuk, hogy retry esetén ne jöjjön létre duplikátum
+            const generatedRowId = ID.unique();
+            operations.push({
+                label: `create validation for article ${articleId}`,
+                run: () => withRetry(
+                    () => tables.createRow({
+                        databaseId: DATABASE_ID,
+                        tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
+                        rowId: generatedRowId,
+                        data: {
+                            articleId,
+                            publicationId,
+                            source: VALIDATION_SOURCES.STRUCTURE,
+                            ...data
+                        }
+                    }),
+                    { operationName: `createValidation(${articleId})` }
+                )
+            });
+        }
+    }
+
+    // 3. Maradék régi dokumentumok törlése (cikkek, amikhez már nincs hiba/warning)
+    for (const [, docId] of existingByArticle) {
+        operations.push({
+            label: `delete validation doc ${docId}`,
+            run: () => withRetry(
+                () => tables.deleteRow({
+                    databaseId: DATABASE_ID,
+                    tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
+                    rowId: docId
+                }),
+                { operationName: `deleteValidation(${docId})` }
+            )
+        });
+    }
+
+    if (operations.length === 0) return;
+
+    // 4. Párhuzamos végrehajtás — a withRetry már kezel próbálkozásokat
+    const results = await Promise.allSettled(operations.map(op => op.run()));
+    const failed = results
+        .map((result, i) => ({ result, op: operations[i] }))
+        .filter(({ result }) => result.status === 'rejected');
+
+    if (failed.length === 0) {
+        log(`[useOverlapValidation] ${operations.length} DB művelet végrehajtva (pub: ${publicationId}).`);
+        return;
+    }
+
+    for (const { result, op } of failed) {
+        logError(
+            `[useOverlapValidation] DB művelet sikertelen (pub: ${publicationId}, op: ${op.label}):`,
+            result.reason
+        );
+    }
+
+    throw new Error(
+        `${failed.length}/${operations.length} DB művelet végleg sikertelen (pub: ${publicationId}). ` +
+        `Részleges mentés történt, a validációs állapot inkonzisztens lehet.`
+    );
 }
 
 /**
@@ -110,9 +184,10 @@ export const useOverlapValidation = () => {
     useEffect(() => {
         const loadExistingValidations = async () => {
             try {
-                const allRows = await fetchAllValidationRows([
-                    Query.equal('source', VALIDATION_SOURCES.STRUCTURE)
-                ]);
+                const allRows = await fetchAllValidationRows(
+                    [Query.equal('source', VALIDATION_SOURCES.STRUCTURE)],
+                    'useOverlapValidation.loadExisting'
+                );
 
                 if (allRows.length === 0) return;
 
@@ -161,117 +236,19 @@ export const useOverlapValidation = () => {
     /**
      * Validációs eredmények mentése az Appwrite-ba.
      * Upsert logika: meglévőket frissíti, újakat létrehozza, eltűnteket törli.
+     *
+     * Per-publikáció queuePersist védelem: ugyanarra a publicationId-re érkező
+     * egymás utáni hívások sorba fűződnek, így a fetch+write párok nem keverednek.
+     * Fire-and-forget hívásoknak szánva — a belső hiba ide nem dob tovább, csak logol.
      */
-    const persistToDatabase = useCallback(async (publicationId, resultsMap) => {
-        try {
-            // 1. Meglévő validációs dokumentumok lekérése ehhez a publikációhoz
-            const existingRows = await fetchAllValidationRows([
-                Query.equal('publicationId', publicationId),
-                Query.equal('source', VALIDATION_SOURCES.STRUCTURE)
-            ]);
-
-            const existingByArticle = new Map();
-            for (const doc of existingRows) {
-                existingByArticle.set(doc.articleId, doc.$id);
+    const persistToDatabase = useCallback((publicationId, resultsMap) => {
+        return queuePersist(`structure::${publicationId}`, async () => {
+            try {
+                return await persistStructureValidation(publicationId, resultsMap);
+            } catch (error) {
+                logError('[useOverlapValidation] Appwrite mentés sikertelen:', error);
             }
-
-            const operations = [];
-
-            // 2. Eredménnyel rendelkező cikkek: update vagy create
-            for (const [articleId, result] of resultsMap) {
-                if (result.errors.length === 0 && result.warnings.length === 0) continue;
-
-                const data = {
-                    errors: result.errors,
-                    warnings: result.warnings
-                };
-
-                if (existingByArticle.has(articleId)) {
-                    // Update
-                    const rowId = existingByArticle.get(articleId);
-                    operations.push({
-                        label: `update validation for article ${articleId}`,
-                        run: () => withRetry(
-                            () => tables.updateRow({
-                                databaseId: DATABASE_ID,
-                                tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
-                                rowId,
-                                data
-                            }),
-                            { operationName: `updateValidation(${articleId})` }
-                        )
-                    });
-                    existingByArticle.delete(articleId);
-                } else {
-                    // Create — ID-t előre generáljuk, hogy retry esetén ne jöjjön létre duplikátum
-                    const generatedRowId = ID.unique();
-                    operations.push({
-                        label: `create validation for article ${articleId}`,
-                        run: () => withRetry(
-                            () => tables.createRow({
-                                databaseId: DATABASE_ID,
-                                tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
-                                rowId: generatedRowId,
-                                data: {
-                                    articleId,
-                                    publicationId,
-                                    source: VALIDATION_SOURCES.STRUCTURE,
-                                    ...data
-                                }
-                            }),
-                            { operationName: `createValidation(${articleId})` }
-                        )
-                    });
-                }
-            }
-
-            // 3. Maradék régi dokumentumok törlése (cikkek, amikhez már nincs hiba/warning)
-            for (const [, docId] of existingByArticle) {
-                operations.push({
-                    label: `delete validation doc ${docId}`,
-                    run: () => withRetry(
-                        () => tables.deleteRow({
-                            databaseId: DATABASE_ID,
-                            tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
-                            rowId: docId
-                        }),
-                        { operationName: `deleteValidation(${docId})` }
-                    )
-                });
-            }
-
-            // 4. Párhuzamos végrehajtás Promise.allSettled-del
-            //    A withRetry már kezel minden egyes műveletnél 3 próbálkozást,
-            //    ezért itt nem kell külön retry logika.
-            if (operations.length > 0) {
-                const results = await Promise.allSettled(operations.map(op => op.run()));
-
-                const failed = results
-                    .map((result, i) => ({ result, op: operations[i] }))
-                    .filter(({ result }) => result.status === 'rejected');
-
-                if (failed.length === 0) {
-                    log(`[useOverlapValidation] ${operations.length} DB művelet végrehajtva (pub: ${publicationId}).`);
-                    return;
-                }
-
-                // Véglegesen sikertelen műveletek logolása (a withRetry már 3x próbálkozott)
-                for (const { result, op } of failed) {
-                    logError(
-                        `[useOverlapValidation] DB művelet sikertelen (pub: ${publicationId}, op: ${op.label}):`,
-                        result.reason
-                    );
-                }
-
-                throw new Error(
-                    `${failed.length}/${operations.length} DB művelet végleg sikertelen (pub: ${publicationId}). ` +
-                    `Részleges mentés történt, a validációs állapot inkonzisztens lehet.`
-                );
-            }
-        } catch (error) {
-            logError('[useOverlapValidation] Appwrite mentés sikertelen:', error);
-            throw error;
-        }
+        });
     }, []);
 
     /**
@@ -540,11 +517,8 @@ export const useOverlapValidation = () => {
             // Csak struktúra-validációkat dolgozunk fel
             if (payload.source !== VALIDATION_SOURCES.STRUCTURE) return;
 
-            // Csak az aktív publikáció cikkeit érintő validációk relevánsak
-            const currentArticles = articlesRef.current;
-            const isRelevant = currentArticles.some(a => a.$id === payload.articleId);
-            if (!isRelevant) return;
-
+            // Nincs articleId match szűrés — a cikk Realtime event később is érkezhet.
+            // A ValidationContext addig tartja az eredményt; scope-váltáskor úgyis reset-el.
             if (event.includes(".create") || event.includes(".update")) {
                 const items = [];
                 if (payload.errors && payload.errors.length > 0) {

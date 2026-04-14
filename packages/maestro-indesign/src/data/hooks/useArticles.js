@@ -63,9 +63,11 @@ export const useArticles = (publicationId, publicationRoot) => {
     publicationsRef.current = publications;
 
     // Csapattagok listája — ghost lock detektáláshoz (törölt felhasználók lockjai)
-    const { members: allMembers } = useAllGroupMembers();
+    const { members: allMembers, loading: allMembersLoading } = useAllGroupMembers();
     const allMembersRef = useRef(allMembers);
     allMembersRef.current = allMembers;
+    const allMembersLoadingRef = useRef(allMembersLoading);
+    allMembersLoadingRef.current = allMembersLoading;
     
     // Értesítések kezelése (Toast üzenetek)
     const { showToast } = useToast();
@@ -247,15 +249,14 @@ export const useArticles = (publicationId, publicationRoot) => {
                 }
             } catch (e) {
                 logWarn("[useArticles] Thumbnail feltöltés sikertelen:", e);
-            } finally {
-                if (thumbnailTempFolder) {
-                    try {
-                        await cleanupTempFiles(thumbnailTempFolder);
-                    } catch (cleanupErr) {
-                        logWarn("[useArticles] Temp fájlok törlése sikertelen:", cleanupErr);
-                    }
-                }
             }
+        }
+
+        // Temp mappa takarítás akkor is, ha az export elbukott (fire-and-forget, ne blokkoljon).
+        if (thumbnailTempFolder) {
+            cleanupTempFiles(thumbnailTempFolder).catch(cleanupErr => {
+                logWarn("[useArticles] Temp fájlok törlése sikertelen:", cleanupErr);
+            });
         }
 
         // --- 6. Adatbázis ellenőrzés ---
@@ -332,10 +333,16 @@ export const useArticles = (publicationId, publicationRoot) => {
                         applyArticleUpdate(freshArticle);
                         if (freshArticle.lockOwnerId && freshArticle.lockOwnerId !== user.$id) {
                             // Ghost lock detektálás: ha a lock owner nem található a csapattagok között,
-                            // valószínűleg törölt felhasználóról van szó — automatikus takarítás
+                            // valószínűleg törölt felhasználóról van szó — automatikus takarítás.
+                            // Várjuk meg a csoporttagok betöltését (max 2s), különben az üres
+                            // `members` lista téves ghost-lock döntést okozna.
+                            const waitStart = Date.now();
+                            while (allMembersLoadingRef.current && Date.now() - waitStart < 2000) {
+                                await new Promise(resolve => setTimeout(resolve, 50));
+                            }
                             const members = allMembersRef.current;
-                            const isKnownMember = members.length > 0 && members.some(m => m.userId === freshArticle.lockOwnerId);
-                            if (!isKnownMember && members.length > 0) {
+                            const isKnownMember = members.some(m => m.userId === freshArticle.lockOwnerId);
+                            if (!isKnownMember) {
                                 log(`[useArticles] Ghost lock detektálva (${freshArticle.lockOwnerId}) — automatikus törlés`);
                                 const cleaned = await callUpdateArticleCF(
                                     freshArticle.$id,
@@ -391,7 +398,7 @@ export const useArticles = (publicationId, publicationRoot) => {
             logError("Cikk megnyitása sikertelen:", e);
             throw e; // Továbbdobjuk a hibát, hogy a UI megjeleníthesse
         }
-    }, []);
+    }, [applyArticleUpdate]);
 
     /**
      * Cikk átnevezése.
@@ -454,9 +461,12 @@ export const useArticles = (publicationId, publicationRoot) => {
             }
 
             // DocumentMonitor loop megelőzése a programozott mentésnél.
-            // A flag-et a DocumentMonitor.handleSave állítja vissza false-ra az elején,
-            // mielőtt visszatér (early return), így pontosan egy mentési eseményt ugrik át.
-            if (wasDocumentOpen) window.maestroSkipMonitor = true;
+            // A számlálót a DocumentMonitor.handleSave dekrementálja, így több párhuzamos
+            // programozott mentést is pontosan egyszer-egyszer kihagy (nincs flag-ütközés).
+            // Hiba esetén visszavonjuk — sikertelen save nem tüzel afterSave eseményt.
+            if (wasDocumentOpen) {
+                window.maestroSkipCount = (window.maestroSkipCount || 0) + 1;
+            }
             const result = app.doScript(script, SCRIPT_LANGUAGE_JAVASCRIPT, []);
 
             if (typeof result === 'string' && result.startsWith('ERROR:')) {
@@ -464,6 +474,9 @@ export const useArticles = (publicationId, publicationRoot) => {
             }
 
         } catch (fileError) {
+            if (wasDocumentOpen) {
+                window.maestroSkipCount = Math.max(0, (window.maestroSkipCount || 0) - 1);
+            }
             logError("[useArticles] Fájl átnevezési hiba:", fileError);
             showToast('A fájl átnevezése sikertelen', TOAST_TYPES.ERROR, fileError.message || 'Ismeretlen hiba történt a fájl átnevezése közben.');
             throw fileError;
