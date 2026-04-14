@@ -21,7 +21,7 @@ tags: [feladatok]
 - [x] 2. **core/utils/ (infra)** — logger, errorUtils, pathUtils, promiseUtils, constants, messageConstants
 - [x] 3. **core/utils/workflow/** — workflowEngine, workflowPermissions
 - [x] 4. **core/utils/validators/** — ValidatorBase, összes validator, validationRunner
-- [ ] 5. **core/utils/indesign/** — ExtendScript generátorok, scriptHelpers, indesignUtils
+- [x] 5. **core/utils/indesign/** — ExtendScript generátorok, scriptHelpers, indesignUtils
 - [ ] 6. **core/contexts/** — DataContext, UserContext, ValidationContext, ConnectionContext, ScopeContext
 - [ ] 7. **data/hooks/** — useArticles, useOverlapValidation, useUnifiedValidation, useElementPermission, stb.
 - [ ] 8. **ui/features/** — articles, publications, workspace komponensek

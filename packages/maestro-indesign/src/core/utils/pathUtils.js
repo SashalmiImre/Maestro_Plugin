@@ -30,23 +30,32 @@ const normalizePath = (path) => {
 
 /**
  * Escapeli a fájl útvonalat az ExtendScript-ben való biztonságos használathoz.
- * Kifejezetten single-quoted string literálokhoz ('...') készíti elő.
- * Kezeli a backslash-eket (Windows) és az aposztrófokat.
- * 
+ * Single-quoted string literálokhoz ('...') készíti elő.
+ * Kezeli a backslash-eket (Windows) és az aposztrófokat — a backslash ESCAPE-je
+ * mindig elsőnek fut, hogy a további escape-ek ne duplázzák újra.
+ *
  * @param {string} filePath - A natív fájl útvonal.
- * @returns {string} Az escapelt útvonal, ami biztonságosan beilleszthető ExtendScript kódba.
- * 
+ * @returns {string} Az escapelt útvonal, ami biztonságosan beilleszthető ExtendScript `'...'` literálba.
+ *
  * @example
  * // Windows:
  * escapePathForExtendScript("C:\\Users\\file.indd") // Eredmény: "C:\\\\Users\\\\file.indd"
- * 
+ *
  * // Mac (aposztróf kezelése):
  * escapePathForExtendScript("/Users/imre/file's.indd") // Eredmény: "/Users/imre/file\\'s.indd"
  */
 export const escapePathForExtendScript = (filePath) => {
     if (!filePath) return "";
-    // Először a backslash-eket duplázzuk, majd az aposztrófokat escapeljük
-    return filePath.split('\\').join('\\\\').split("'").join("\\'");
+    // Backslash elsőnek — utána a többi escape nem üt vissza.
+    // Line terminator-ok (\r, \n, \u2028, \u2029) is escape-elve, mert elvileg legális
+    // fájlnév-karakterek, és nyers állapotban törnék a generált ExtendScript literált.
+    return filePath
+        .split('\\').join('\\\\')
+        .split('\r').join('\\r')
+        .split('\n').join('\\n')
+        .split('\u2028').join('\\u2028')
+        .split('\u2029').join('\\u2029')
+        .split("'").join("\\'");
 };
 
 

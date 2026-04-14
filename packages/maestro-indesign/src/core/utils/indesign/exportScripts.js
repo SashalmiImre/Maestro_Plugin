@@ -49,7 +49,7 @@ export function generateExportPdfScript(sourcePath, outputPath, presetName) {
                 if (!parentFolder.exists) parentFolder.create();
 
                 // 4. CONFIG & EXPORT
-                var presetName = "${escapedPresetName}";
+                var presetName = '${escapedPresetName}';
                 var usedPreset = null;
 
                 if (presetName && presetName !== "") {
@@ -185,7 +185,7 @@ export function generatePrintPdfScript(sourcePath, outputFolderPath, layoutExpor
                 }
 
                 // 4. MAPPA LÉTREHOZÁSA
-                var outputFolder = new Folder("${escapedOutputFolder}");
+                var outputFolder = new Folder('${escapedOutputFolder}');
                 if (!outputFolder.exists) outputFolder.create();
 
                 // 5. PDF EXPORT BEÁLLÍTÁSOK (Levilágítás — PDF/X-1a:2001)
@@ -248,7 +248,7 @@ export function generatePrintPdfScript(sourcePath, outputFolderPath, layoutExpor
 
                 // 6. OLDALANKÉNTI EXPORT
                 var paddingLen = ${paddingLength};
-                var layoutId = "${escapedLayoutId}";
+                var layoutId = '${escapedLayoutId}';
                 var exportedCount = 0;
                 var errors = [];
 
@@ -337,7 +337,7 @@ export function generateCollectImagesScript(targetFolderPath, publicationRootPat
                 // 1. DOKUMENTUM ELÉRÉSE
                 ${sourceFilePath ? openLogic : docTargetLogic}
 
-                var targetFolder = new Folder("${escapedTarget}");
+                var targetFolder = new Folder('${escapedTarget}');
                 var folderCreated = false;
 
                 function ensureFolder() {
@@ -347,7 +347,7 @@ export function generateCollectImagesScript(targetFolderPath, publicationRootPat
                     }
                 }
 
-                var pubFolder = new Folder("${escapedPubRoot}");
+                var pubFolder = new Folder('${escapedPubRoot}');
                 var pubPath = pubFolder.fsName;
 
                 var collectedCount = 0;
