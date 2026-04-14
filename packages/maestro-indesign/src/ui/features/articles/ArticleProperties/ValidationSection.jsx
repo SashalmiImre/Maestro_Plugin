@@ -322,18 +322,19 @@ export const ValidationSection = ({ article, disabled, permissions }) => {
             .filter(([key]) => key !== RECIPIENT_TYPES.USER)
             .map(([key, label]) => ({ id: key, name: label }));
 
-        // Deduplicate users
-        const allUsers = [
-            ...editors.map(m => ({ ...m, role: 'Szerkesztő' })),
-            ...designers.map(m => ({ ...m, role: 'Tervező' })),
-            ...imageEditors.map(m => ({ ...m, role: 'Képszerkesztő' }))
-        ];
-        const uniqueUsers = allUsers.filter((u, i, a) => a.findIndex(x => x.userId === u.userId) === i);
-
-        const memberItems = uniqueUsers.map(m => ({
-            id: m.userId,
-            name: `${m.userName} (${m.role})`
-        }));
+        // Deduplicate users — Set-alapú, O(n) (korábban findIndex-szel O(n²) volt)
+        const seen = new Set();
+        const memberItems = [];
+        const appendUniqueMembers = (members, role) => {
+            for (const m of members) {
+                if (seen.has(m.userId)) continue;
+                seen.add(m.userId);
+                memberItems.push({ id: m.userId, name: `${m.userName} (${role})` });
+            }
+        };
+        appendUniqueMembers(editors, 'Szerkesztő');
+        appendUniqueMembers(designers, 'Tervező');
+        appendUniqueMembers(imageEditors, 'Képszerkesztő');
 
         return { groups: groupItems, members: memberItems };
     }, [editors, designers, imageEditors]);

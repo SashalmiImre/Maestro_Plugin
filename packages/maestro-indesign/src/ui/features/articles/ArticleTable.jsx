@@ -108,6 +108,8 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
     // Escape-hatch a CustomTable renderVersion prop-hoz: minden columns-referencia-váltáskor
     // (pl. getAllActiveItems frissül új validációs adattal) növeljük a számlálót,
     // hogy az areRowPropsEqual kényszervégre hajtsa az összes sor újrarenderelését.
+    // A számláló render közben frissül (prevColumnsRef-fel idempotens, strict mode-safe),
+    // hogy a CustomTable ugyanabban a render ciklusban kapja az új értéket.
     const renderVersionRef = useRef(0);
     const prevColumnsRef = useRef(null);
 

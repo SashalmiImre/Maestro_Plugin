@@ -280,12 +280,9 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
                 }
             }
 
-            // 6. Bezárás (csak ha mi nyitottuk)
-            if (!wasAlreadyOpen) {
-                executeInDesignScript(generateCloseDocumentScript(filePath), "Closing document (restoring state)");
-            }
-
-            // Adatbázis frissítés
+            // Adatbázis frissítés — a bezárás ELŐTT, hogy a fizikai fájl és a DB konzisztens
+            // maradjon akkor is, ha a close lépés sikertelen (pl. InDesign hiba). A save már
+            // lefutott (5. lépés), a fájl lemezen az új állapotban van — a DB-nek ezt kell tükröznie.
             const updateData = {
                 startPage: extractResult.success ? extractResult.startPage : newStartPage,
                 endPage: extractResult.success ? extractResult.endPage : (article.endPage ? article.endPage + offset : null),
@@ -296,6 +293,15 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
             log('[ArticleProperties] Updating database with:', updateData);
 
             const updated = await updateArticle(article.$id, updateData);
+
+            // 6. Bezárás (csak ha mi nyitottuk) — best-effort, a DB már konzisztens
+            if (!wasAlreadyOpen) {
+                try {
+                    executeInDesignScript(generateCloseDocumentScript(filePath), "Closing document (restoring state)");
+                } catch (closeErr) {
+                    logWarn('[ArticleProperties] Dokumentum bezárás sikertelen a sikeres átszámozás után (nem blokkoló):', closeErr);
+                }
+            }
 
             showToast('Oldalszámok frissítve', TOAST_TYPES.SUCCESS);
 
