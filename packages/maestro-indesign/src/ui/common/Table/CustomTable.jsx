@@ -128,14 +128,12 @@ const getAlignmentStyle = (align) => ({
 // -- CUSTOM HOOK --
 const useColumnResize = () => {
     const [columnWidths, setColumnWidths] = React.useState({});
-    const resizingRef = React.useRef({ isResizing: false, handleMouseMove: null, handleMouseUp: null });
+    const resizingRef = React.useRef({ isResizing: false, cleanup: null });
 
     React.useEffect(() => {
         return () => {
-            if (resizingRef.current.isResizing) {
-                document.removeEventListener("mousemove", resizingRef.current.handleMouseMove);
-                document.removeEventListener("mouseup", resizingRef.current.handleMouseUp);
-                document.body.style.cursor = "";
+            if (resizingRef.current.isResizing && resizingRef.current.cleanup) {
+                resizingRef.current.cleanup();
             }
         };
     }, []);
@@ -152,16 +150,20 @@ const useColumnResize = () => {
             setColumnWidths(prev => ({ ...prev, [columnId]: `${newWidth}px` }));
         };
 
-        const handleMouseUp = () => {
+        const cleanup = () => {
             document.removeEventListener("mousemove", handleMouseMove);
-            document.removeEventListener("mouseup", handleMouseUp);
+            document.removeEventListener("mouseup", cleanup);
+            document.documentElement.removeEventListener("mouseleave", cleanup);
             document.body.style.cursor = "";
-            resizingRef.current = { isResizing: false, handleMouseMove: null, handleMouseUp: null };
+            resizingRef.current = { isResizing: false, cleanup: null };
         };
 
-        resizingRef.current = { isResizing: true, handleMouseMove, handleMouseUp };
+        resizingRef.current = { isResizing: true, cleanup };
         document.addEventListener("mousemove", handleMouseMove);
-        document.addEventListener("mouseup", handleMouseUp);
+        document.addEventListener("mouseup", cleanup);
+        // Safety: ha a kurzor elhagyja a dokumentum területét (pl. InDesign modal, panel váltás),
+        // a mouseup elveszhet — mouseleave-ra is cleanup, hogy ne ragadjon a col-resize cursor.
+        document.documentElement.addEventListener("mouseleave", cleanup);
         document.body.style.cursor = "col-resize";
     }, []);
 
@@ -254,7 +256,9 @@ const TableRow = React.memo(({
  * @param {Function} props.onRowDoubleClick - (item) => void
  * @param {Function} [props.getRowStyle] - (item) => style object — egyedi sor stílushoz (pl. sürgősség színkódolás)
  * @param {number|string} [props.renderVersion] - Escape-hatch: a szülő lépteti, ha a renderCell
- *   closure-ok megváltoztak (pl. új context adat), kikényszerítve az összes sor újrarenderelését.
+ *   closure-ok kontextus-függő adatot zárnak be (pl. új context érték, validációs állapot).
+ *   A szülő komponens felelőssége, mert az `areRowPropsEqual` comparator a `columns` prop
+ *   referencia-változását nem veszi figyelembe (szándékos, hogy a stabil sorok ne renderelődjenek újra).
  * @param {object} props.style - Container style overrides
  */
 export const CustomTable = ({

@@ -12,41 +12,43 @@ export const Toast = ({ id, message, type, details, onClose, duration }) => {
     const pausedDurationRef = useRef(0);
     const pauseStartRef = useRef(null);
 
-    // Stable close handler
+    // Ref a friss onClose-hoz — ha a parent instabil callback-et ad, a dismiss useEffect
+    // nem reset-elődne a handleClose identitás változása miatt (különben a toast sose tűnik el).
+    const onCloseRef = useRef(onClose);
+    const idRef = useRef(id);
+    useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+    useEffect(() => { idRef.current = id; }, [id]);
+
     const handleClose = useCallback(() => {
         if (exitTimerRef.current) return;
 
         setIsExiting(true);
         exitTimerRef.current = setTimeout(() => {
-            onClose(id);
-        }, UI_TIMING.TOAST_EXIT_ANIMATION_MS); // Match animation duration
-    }, [id, onClose]);
+            if (onCloseRef.current) onCloseRef.current(idRef.current);
+        }, UI_TIMING.TOAST_EXIT_ANIMATION_MS);
+    }, []);
 
     // Handle auto-dismiss with hover pause
     useEffect(() => {
         const DISMISS_DURATION = duration || (type === 'error' && details ? UI_TIMING.TOAST_ERROR_DURATION_MS : UI_TIMING.TOAST_DEFAULT_DURATION_MS);
 
         if (isHovered) {
-            // Clear timer when hovering and record pause start
             if (dismissTimerRef.current) {
                 clearTimeout(dismissTimerRef.current);
                 dismissTimerRef.current = null;
             }
             pauseStartRef.current = Date.now();
         } else {
-            // Calculate paused duration if we were paused
             if (pauseStartRef.current) {
                 const pauseInterval = Date.now() - pauseStartRef.current;
                 pausedDurationRef.current += pauseInterval;
                 pauseStartRef.current = null;
             }
 
-            // Calculate remaining time: Total Duration - (Time since creation - Total time paused)
             const elapsedActive = Date.now() - creationTimeRef.current - pausedDurationRef.current;
             const remaining = DISMISS_DURATION - elapsedActive;
 
             if (remaining <= 0) {
-                // Time already expired, dismiss immediately
                 handleClose();
             } else {
                 dismissTimerRef.current = setTimeout(() => {

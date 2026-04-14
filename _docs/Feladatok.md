@@ -25,7 +25,7 @@ tags: [feladatok]
 - [x] 6. **core/contexts/** — DataContext, UserContext, ValidationContext, ConnectionContext, ScopeContext
 - [x] 7. **data/hooks/** — useArticles, useOverlapValidation, useUnifiedValidation, useElementPermission, stb.
 - [x] 8. **ui/features/** — articles, publications, workspace komponensek
-- [ ] 9. **ui/common/** — CollapsibleSection, ConfirmDialog, ValidatedTextField, Table, Toast
+- [x] 9. **ui/common/** — CollapsibleSection, ConfirmDialog, ValidatedTextField, Table, Toast
 - [ ] 10. **maestro-shared/** — workflowRuntime, constants, urgency, pageGapUtils, contributorHelpers
 
 ### Cross-module interakciók (a modul-harden UTÁN)
