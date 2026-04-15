@@ -194,6 +194,25 @@ export function AuthorizationProvider({ children }) {
     const membershipsGenRef = useRef(0);
 
     /**
+     * Auth generáció-számláló. Minden `setUser(...)` előtti aszinkron
+     * hydrate (login / checkUserStatus / recovery refresh) bumpolja belépéskor,
+     * a logout / sessionExpired event is bumpolja — így egy in-flight
+     * hydrate válasza nem tud egy közben kijelentkeztetett usert
+     * resurrectelni. A záró setUser ellenőrzi, hogy a saját generációja
+     * még aktuális-e; ha nem, a választ eldobjuk.
+     */
+    const authGenRef = useRef(0);
+
+    /**
+     * GroupSlugs fetch generáció-számláló. A `refreshGroupSlugs` minden hívása
+     * bumpolja, és csak az utoljára indított hívás commit-ol. Így gyors
+     * egymás utáni triggerek (scopeChanged + groupMembershipChanged) közül
+     * nem írhat felül egy korábbi, más office-ra indult válasz egy későbbi
+     * setUser-t — védi a per-office groupSlugs konzisztenciát.
+     */
+    const groupSlugsGenRef = useRef(0);
+
+    /**
      * Memberships betöltése + state frissítése egyetlen helyen. Stale guard:
      * minden hívás egyedi generációt kap, és csak akkor commit-ol, ha időközben
      * nem fut újabb hívás. Tranziens hibánál az előző sikeres state-et megtartjuk
@@ -247,22 +266,45 @@ export function AuthorizationProvider({ children }) {
     const { startConnecting, setConnected } = useConnection();
 
     /**
+     * Aktív editorialOfficeId kiolvasása localStorage-ból. A ScopeContext
+     * bootstrap-eli és minden scope váltáskor szinkron írja ide (még a
+     * `scopeChanged` dispatch ELŐTT), így azok a hívók, akiknek nincs a
+     * payload-jukban az officeId (pl. groupMembershipChanged, Realtime account
+     * memberships), innen kaphatják meg. A helper kizárólag a hívó oldalt
+     * szolgálja — az `enrichUserWithGroups` / `refreshGroupSlugs` már
+     * paraméterként kapja, hogy ne függjön rejtve a perzisztenciától.
+     */
+    const getPersistedOfficeId = () => {
+        try {
+            return window.localStorage.getItem(STORAGE_OFFICE_KEY);
+        } catch (e) {
+            return null;
+        }
+    };
+
+    /**
      * Csoporttagságot frissít groupMemberships + groups query alapján és
      * setUser-rel alkalmazza. Ha az adat nem változott, nem okoz re-rendert.
-     * Az editorialOfficeId-t localStorage-ből olvassa (a ScopeContext is
-     * innen bootstrapel, és a UserProvider fölötte van a hierarchiában).
+     *
+     * Generáció-guard: minden hívás bumpolja a `groupSlugsGenRef`-et, és a
+     * fetch UTÁN csak akkor commit-ol, ha még ő a legutolsó hívás. Enélkül
+     * egy lassú office-A fetch felülírhatná egy gyorsabb office-B választ
+     * (pl. scopeChanged + groupMembershipChanged gyors egymás utáni trigger).
      *
      * @param {string} logLabel - Naplózásban megjelenő kontextus-azonosító.
+     * @param {string|null} officeId - Az aktív szerkesztőség ID-ja (a hívó
+     *     paraméterként adja át — vagy event payload-ból, vagy localStorage-ból).
      */
-    const refreshGroupSlugs = async (logLabel) => {
+    const refreshGroupSlugs = async (logLabel, officeId) => {
         // userRef-ből olvassuk a $id-t, hogy a handler (pl. groupMembershipChanged)
         // soha ne a bezárt closure stale user-ére lőjön. Logout közben
         // userRef.current === null → korai kilépés (guard alább).
         const currentUserId = userRef.current?.$id;
         if (!currentUserId) return;
+        const gen = ++groupSlugsGenRef.current;
         try {
-            const officeId = window.localStorage.getItem(STORAGE_OFFICE_KEY);
             if (!officeId) {
+                // Sync ág — nincs await, gen ellenőrzés itt felesleges (épp most bumpoltunk).
                 setUser(prev => {
                     if (!prev) return prev;
                     if (sameGroupSlugs(prev.groupSlugs, [])) return prev;
@@ -271,6 +313,10 @@ export function AuthorizationProvider({ children }) {
                 return;
             }
             const groupSlugs = await fetchGroupSlugsForUser(currentUserId, officeId);
+            if (gen !== groupSlugsGenRef.current) {
+                log(`[UserContext] Stale groupSlugs válasz eldobva (${logLabel})`);
+                return;
+            }
             setUser(prev => {
                 if (!prev) return prev;
                 if (sameGroupSlugs(prev.groupSlugs, groupSlugs)) return prev;
@@ -289,11 +335,11 @@ export function AuthorizationProvider({ children }) {
      * (canUserMoveArticle, elementPermissions) használja.
      *
      * @param {Object} userData - Appwrite user objektum
+     * @param {string|null} officeId - Az aktív szerkesztőség ID-ja
      * @returns {Promise<Object>} Gazdagított user objektum groupSlugs mezővel
      */
-    const enrichUserWithGroups = async (userData) => {
+    const enrichUserWithGroups = async (userData, officeId) => {
         try {
-            const officeId = window.localStorage.getItem(STORAGE_OFFICE_KEY);
             if (!officeId) {
                 return { ...userData, groupSlugs: [] };
             }
@@ -309,10 +355,14 @@ export function AuthorizationProvider({ children }) {
      * Paralel lefuttatja a `groupSlugs` enrichment-et és az org/office memberships
      * betöltését. A memberships hibáját **nem** propagálja — a `membershipsError`
      * state-en keresztül jelenik meg a `ScopedWorkspace`-nek.
+     *
+     * @param {Object} userData - Appwrite user objektum
+     * @param {string|null} officeId - Az aktív szerkesztőség ID-ja (a hívó
+     *     tipikusan localStorage-ból olvassa — a ScopeContext már bootstrap-elt).
      */
-    const hydrateUserWithMemberships = async (userData) => {
+    const hydrateUserWithMemberships = async (userData, officeId) => {
         const [enrichedUser] = await Promise.all([
-            enrichUserWithGroups(userData),
+            enrichUserWithGroups(userData, officeId),
             loadAndSetMemberships(userData.$id).catch(() => null)
         ]);
         return enrichedUser;
@@ -331,6 +381,10 @@ export function AuthorizationProvider({ children }) {
         // Egyszeri újrapróbálkozás védelem: a clearLocalSession + executeLogin
         // kombináció legfeljebb egyszer futhat le egy login hívás során.
         let retried = false;
+
+        // Staleness guard: közben érkező logout / sessionExpired ezt bumpolja,
+        // így a hydrate válasza nem tud egy nullázott usert resurrectelni.
+        const gen = ++authGenRef.current;
 
         try {
             try {
@@ -380,7 +434,11 @@ export function AuthorizationProvider({ children }) {
                 }
             }
             const currentUser = await account.get();
-            const enrichedUser = await hydrateUserWithMemberships(currentUser);
+            const enrichedUser = await hydrateUserWithMemberships(currentUser, getPersistedOfficeId());
+            if (gen !== authGenRef.current) {
+                log('[UserContext] Stale login válasz eldobva — közben logout/sessionExpired történt');
+                throw new Error('stale_login');
+            }
             setUser(enrichedUser);
             return enrichedUser;
         } catch (error) {
@@ -405,6 +463,10 @@ export function AuthorizationProvider({ children }) {
             // Inkrementálás: egy még in-flight fetchMemberships(régi user) válasza
             // ne tudja visszaírni a state-et a logout után.
             membershipsGenRef.current += 1;
+            // Auth gen bump: egy még in-flight hydrate (login / checkUserStatus /
+            // recovery refresh) válasza ne tudjon a logout UTÁN setUser-rel
+            // resurrect-elni egy már nullázott usert.
+            authGenRef.current += 1;
             setUser(null);
             setOrganizations([]);
             setEditorialOffices([]);
@@ -471,6 +533,10 @@ export function AuthorizationProvider({ children }) {
             // Invalidáljuk az esetleg in-flight memberships fetch-et is (a stale
             // válasz nem írhatja felül a state-et).
             membershipsGenRef.current += 1;
+            // Auth gen bump: egy in-flight hydrate (recovery handleRefresh /
+            // mount checkUserStatus) ne tudjon setUser-rel a sessionExpired UTÁN
+            // visszahozni egy törölt session userét.
+            authGenRef.current += 1;
             setOrganizations([]);
             setEditorialOffices([]);
             setMembershipsError(null);
@@ -498,7 +564,11 @@ export function AuthorizationProvider({ children }) {
             // (pl. users.ID.memberships.ID.create / .delete)
             const hasMembershipEvent = events?.some(e => e.includes('.memberships.'));
             if (hasMembershipEvent) {
-                await refreshGroupSlugs('Realtime / account csatorna');
+                // Az `account` Realtime payload nem tartalmazza az aktív office-t,
+                // ezért a perzisztált értékből olvassuk — ez a ScopeContext által
+                // szinkron írt aktuális officeId. A refreshGroupSlugs gen guard-ja
+                // megvédi, ha közben scope-váltás történik.
+                await refreshGroupSlugs('Realtime / account csatorna', getPersistedOfficeId());
                 return;
             }
 
@@ -544,9 +614,17 @@ export function AuthorizationProvider({ children }) {
         if (!user) return;
 
         const handleRefresh = async () => {
+            // Staleness guard: recovery alatt érkező sessionExpired / logout /
+            // új login a bumpolással invalidálja a még futó hydrate-et, így
+            // az in-flight válasz nem tud egy közben nullázott usert resurrectelni.
+            const gen = ++authGenRef.current;
             try {
                 const updatedUser = await account.get();
-                const enrichedUser = await hydrateUserWithMemberships(updatedUser);
+                const enrichedUser = await hydrateUserWithMemberships(updatedUser, getPersistedOfficeId());
+                if (gen !== authGenRef.current) {
+                    log('[UserContext] Stale recovery hydrate válasz eldobva');
+                    return;
+                }
                 // Csak akkor frissítünk, ha az adat tényleg változott.
                 // Enélkül az account.get() mindig új referenciát ad, ami felesleges
                 // re-rendereket okoz a teljes fában (LockManager useEffect[user] stb.)
@@ -575,8 +653,17 @@ export function AuthorizationProvider({ children }) {
     useEffect(() => {
         if (!user) return;
 
-        const handleGroupChange = () => refreshGroupSlugs('Realtime');
-        const handleScopeChange = () => refreshGroupSlugs('scopeChanged');
+        // groupMembershipChanged: a payload-ban nincs office (collection-szintű
+        // event), ezért a perzisztált officeId-t használjuk.
+        const handleGroupChange = () => refreshGroupSlugs('Realtime', getPersistedOfficeId());
+        // scopeChanged: a ScopeContext a payload-ban explicit küldi az új
+        // editorialOfficeId-t (ld. ScopeContext.setActiveOffice). Ezt
+        // preferáljuk a localStorage olvasás helyett — közvetlen forrás,
+        // és nincs feltevés a perzisztencia sorrendjéről.
+        const handleScopeChange = (event) => {
+            const officeId = event?.detail?.editorialOfficeId ?? getPersistedOfficeId();
+            refreshGroupSlugs('scopeChanged', officeId);
+        };
 
         window.addEventListener(MaestroEvent.groupMembershipChanged, handleGroupChange);
         window.addEventListener(MaestroEvent.scopeChanged, handleScopeChange);
@@ -589,21 +676,35 @@ export function AuthorizationProvider({ children }) {
     // Kezdeti állapot ellenőrzése (pl. oldal újratöltés után)
     useEffect(() => {
         const checkUserStatus = async () => {
+            // Staleness guard: a mount alatt érkező logout / sessionExpired
+            // (pl. már lejárt cookie) ne tudjon egy stale account.get választ
+            // setUser-rel resurrect-elni. A login() is bumpol — ha a user közben
+            // explicit bejelentkezik, a régebbi anonymous próbálkozás eldobódik.
+            const gen = ++authGenRef.current;
             try {
                 startConnecting("Felhasználó betöltése...");
                 const accountDetails = await account.get();
-                const enrichedUser = await hydrateUserWithMemberships(accountDetails);
+                const enrichedUser = await hydrateUserWithMemberships(accountDetails, getPersistedOfficeId());
+                if (gen !== authGenRef.current) {
+                    log('[UserContext] Stale checkUserStatus válasz eldobva');
+                    return;
+                }
                 setUser(enrichedUser);
-                setConnected();
             } catch (error) {
                 // Nincs bejelentkezve vagy hálózati hiba, de vendég/kijelentkezettként kezeljük a kontextus szempontjából
+                if (gen !== authGenRef.current) return;
                 membershipsGenRef.current += 1;
                 setUser(null);
                 setOrganizations([]);
                 setEditorialOffices([]);
                 setMembershipsError(null);
-                setConnected();
             } finally {
+                // setConnected() finally-ben fut, hogy a stale `return` (gen mismatch
+                // logout/sessionExpired miatt) is feloldja a "Felhasználó betöltése..."
+                // overlay-t — különben az isConnecting=true beragadna a Login képernyő
+                // mögött, mert sem a logout sem a sessionExpired handler nem nyúl
+                // a ConnectionContext-hez.
+                setConnected();
                 setLoading(false);
             }
         };
