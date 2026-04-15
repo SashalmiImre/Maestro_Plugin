@@ -293,37 +293,56 @@ A `ScopeProvider` csak a bejelentkezett ágon jelenik meg. A `ScopedWorkspace` d
 ## 4. Write-Through Adatfolyam
 
 A DataContext központi write-through API-t biztosít: a komponensek a DataContext metódusain
-keresztül írnak (createArticle, updateArticle, stb.), ami DB írás UTÁN azonnal frissíti
-a helyi state-et a szerver válaszával (optimistic update). A Realtime esemény is megérkezik,
-de a `$updatedAt` staleness guard kiszűri az elavult eventeket.
+keresztül írnak (createArticle, updateArticle, createValidation, updateValidation, stb.),
+ami szerver válasz UTÁN azonnal frissíti a helyi state-et (optimistic update). A Realtime
+esemény is megérkezik, de a `$updatedAt` staleness guard kiszűri az elavult eventeket.
+
+**Cikkek** (`updateArticle`): az írás a `callUpdateArticleCF` helperen keresztül az
+`update-article` Cloud Function-re megy (office scope + workflow + csoport jogosultság
+szerver-oldali ellenőrzéssel). A CF szinkron válasza az `applyArticleUpdate(result)` helperen
+át alkalmazódik, amely tartalmazza a staleness guardot.
+
+**Validációk** (`updateValidation`): közvetlen DB írás (`tables.updateRow`) — a user-saját
+üzenetek collection-jén nincs CF kényszer. A szerver válasz az `applyValidationUpdate(result)`
+helperen át alkalmazódik, szintén staleness guarddal.
 
 ```text
 Felhasználó akció (Hook / Komponens)
   │
-  └─→ DataContext write-through metódus (pl. updateArticle)
+  └─→ DataContext write-through metódus (pl. updateArticle / updateValidation)
        │
-       ├─→ 1. Appwrite DB write (tables.updateRow)
-       │        → szerver válasz (friss dokumentum)
+       ├─→ 1. Szerver írás
+       │      • updateArticle   → callUpdateArticleCF → CF (szerver-oldali guard + DB write)
+       │      • updateValidation → tables.updateRow (közvetlen)
+       │      → szerver válasz (friss dokumentum)
        │
-       ├─→ 2. Optimistic: setArticles() a szerver válaszával → UI AZONNAL frissül
+       ├─→ 2. Apply-helper: applyArticleUpdate / applyValidationUpdate
+       │        → $updatedAt guard + setArticles/setValidations → UI frissül
        │
        └─→ 3. Realtime WebSocket event (később megérkezik)
               └─→ DataContext realtime handler
                     └─→ $updatedAt guard: ha helyi adat frissebb → KIHAGYÁS
 ```
 
-### applyArticleUpdate — Külső írók számára
+### applyArticleUpdate / applyValidationUpdate — Közös apply-helperek
 
-A `WorkflowEngine` (executeTransition, lockDocument, unlockDocument, toggleMarker)
-közvetlenül ír az adatbázisba. Ezek hívói az `applyArticleUpdate(serverDocument)` metódussal
-frissítik a helyi state-et DB hívás nélkül — a szerver válaszát közvetlenül alkalmazzák.
+Az `applyArticleUpdate(serverDocument)` és `applyValidationUpdate(serverDocument)` a
+központi apply-pontok. Minden optimistic update ezeken keresztül fut — akár a DataContext
+saját write-through metódusából (`updateArticle`, `updateValidation`), akár külső
+hívóból (`WorkflowEngine.executeTransition/lockDocument/unlockDocument/toggleMarker`,
+`LockManager.cleanupOrphanedLocks`, `DocumentMonitor.verifyDocumentInBackground`).
+
+Mindkét helper:
+- `$updatedAt` staleness guardot alkalmaz (frissebb helyi adatot nem ír felül),
+- csak akkor ír, ha a dokumentum már létezik a helyi tömbben (no-op idegen ID-ra),
+- normalizálja a validációs payload-ot (`id` + `$id` egységesítés).
 
 ```text
-WorkflowEngine hívó (pl. DocumentMonitor, ArticleProperties)
+Külső hívó (pl. WorkflowEngine, LockManager, DocumentMonitor)
   │
-  ├─→ 1. WorkflowEngine.lockDocument() → DB write → szerver válasz
+  ├─→ 1. Szerver művelet (CF vagy direkt DB) → szerver válasz
   │
-  └─→ 2. applyArticleUpdate(serverDocument) → setArticles() → UI frissül
+  └─→ 2. applyArticleUpdate / applyValidationUpdate → staleness guard → UI frissül
 ```
 
 ### $updatedAt Staleness Guard
@@ -340,8 +359,13 @@ if (article.$updatedAt && payload.$updatedAt && article.$updatedAt > payload.$up
 
 ### Lock/unlock — egységes realtime flow
 
-A `WorkflowEngine.lockDocument()` és `unlockDocument()` sima `updateRow` hívásokat használnak
-(tranzakció nélkül), amelyek megbízhatóan triggerelnek Appwrite realtime eventeket.
+A `WorkflowEngine.lockDocument()` és `unlockDocument()` a `callUpdateArticleCF` helperen
+keresztül az `update-article` Cloud Function-t hívják. A CF-nek fast-path kivétele van
+a lock mezőkre (`lockType`/`lockOwnerId`): saját lock beállítás/feloldás esetén a workflow +
+csoport jogosultsági check ki van hagyva, így a LockManager és DocumentMonitor orphan
+cleanup / SYSTEM lock útvonalai fail-closed kompatibilisek maradnak. Office membership
+check MINDIG fut — cross-office lock-lopás nem lehetséges.
+
 A valódi fájlszintű zárolást az InDesign `.idlk` mechanizmusa végzi — a DB lock informatív
 jellegű (a UI-ban mutatja, ki szerkeszti éppen a fájlt).
 
@@ -350,10 +374,12 @@ LockManager lock/unlock
   │
   └─→ WorkflowEngine.lockDocument() / unlockDocument()
        │
-       └─→ tables.updateRow()  (sima DB update, nincs tranzakció)
+       └─→ callUpdateArticleCF() → update-article CF (fast-path: lock-only payload)
             │
-            └─→ Appwrite Realtime event
-                 └─→ DataContext setArticles() → React renderel
+            ├─→ applyArticleUpdate(result) → staleness guard → UI frissül (optimistic)
+            │
+            └─→ Appwrite Realtime event (később)
+                 └─→ DataContext realtime handler → staleness guard → KIHAGYÁS
 ```
 
 Ez ugyanaz az adatfolyam, amit az `executeTransition` (állapotváltás) és a `toggleMarker` is követ.

@@ -10,9 +10,13 @@
  *   de csak az AKTÍV kiadványhoz tartozó cikkeket és validációkat tölti be.
  * - Write-through minta: a komponensek ide írnak vissza, a DataContext szinkronizálja az adatbázissal,
  *   majd optimistikusan frissíti a helyi state-et a szerver válaszával.
- * - $updatedAt staleness guard: a Realtime handler kihagyja az elavult eseményeket.
- * - applyArticleUpdate: külső írók (pl. WorkflowEngine hívók) a szerver válaszával
- *   közvetlenül frissíthetik a helyi state-et DB hívás nélkül.
+ * - $updatedAt staleness guard: a Realtime handler ÉS az írási útvonalak (update*)
+ *   kihagyják az elavult eseményeket / válaszokat, hogy egy párhuzamos írás a
+ *   saját CF válaszunkkal ne íródjon felül.
+ * - applyArticleUpdate / applyValidationUpdate: belső helperek (cikk / validáció)
+ *   a szerver válasz staleness-guarddal védett alkalmazására. Az applyArticleUpdate
+ *   exportált is — külső írók (pl. WorkflowEngine, LockManager, DocumentMonitor)
+ *   DB hívás nélkül frissíthetik vele a helyi state-et.
  */
 
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from "react";
@@ -635,44 +639,6 @@ export const DataProvider = ({ children }) => {
     }, [withScope]);
 
     /**
-     * Cikk frissítése az adatbázisban az `update-article` Cloud Function-ön keresztül.
-     *
-     * A Plugin NEM ír közvetlenül az `articles` collection-be — minden írás
-     * ezen a CF-en fut át, amely szerver-oldalon validál és jogosultságot
-     * ellenőriz (Fázis 9 follow-up). Fail-closed: ha a CF `permissionDenied`-et
-     * jelez, a hívó `PermissionDeniedError`-t kap, és a hívó oldal kezeli
-     * (toast + optimista UI revert).
-     *
-     * @param {string} articleId - A frissítendő cikk azonosítója.
-     * @param {Object} data - A frissítendő mezők (csak engedett whitelist).
-     * @returns {Promise<Object>} A szerver által visszaadott frissített dokumentum.
-     * @throws {PermissionDeniedError} Ha a szerver 403-mal utasítja el a kérést.
-     */
-    const updateArticle = useCallback(async (articleId, data) => {
-        const result = await callUpdateArticleCF(articleId, data, "DataContext: updateArticle");
-        setArticles(prev => prev.map(article => article.$id === articleId ? result : article).sort(compareByName));
-        return result;
-    }, []);
-
-    /**
-     * Cikk törlése az adatbázisból.
-     *
-     * @param {string} articleId - A törlendő cikk azonosítója.
-     */
-    const deleteArticle = useCallback(async (articleId) => {
-        await withTimeout(
-            tables.deleteRow({
-                databaseId: DATABASE_ID,
-                tableId: COLLECTIONS.ARTICLES,
-                rowId: articleId
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: deleteArticle"
-        );
-        setArticles(prev => prev.filter(article => article.$id !== articleId));
-    }, []);
-
-    /**
      * Helyi cikk-state frissítése egy szerver-válasz dokumentummal, DB hívás nélkül.
      * Külső írók számára (pl. WorkflowEngine.executeTransition, lockDocument, unlockDocument),
      * akik már végrehajtották a DB írást és a szerver válaszával szeretnék frissíteni a helyi adatot.
@@ -692,9 +658,73 @@ export const DataProvider = ({ children }) => {
         }).sort(compareByName));
     }, []);
 
+    /**
+     * Cikk frissítése az adatbázisban az `update-article` Cloud Function-ön keresztül.
+     *
+     * A Plugin NEM ír közvetlenül az `articles` collection-be — minden írás
+     * ezen a CF-en fut át, amely szerver-oldalon validál és jogosultságot
+     * ellenőriz (Fázis 9 follow-up). Fail-closed: ha a CF `permissionDenied`-et
+     * jelez, a hívó `PermissionDeniedError`-t kap, és a hívó oldal kezeli
+     * (toast + optimista UI revert).
+     *
+     * A helyi állapot frissítése az `applyArticleUpdate`-en keresztül történik,
+     * amely `$updatedAt` staleness guardot alkalmaz — így egy párhuzamos másik
+     * user CF írása (magasabb `$updatedAt`-tel, Realtime-on már érkezett) nem
+     * íródik felül a saját, régebbi CF válaszunkkal.
+     *
+     * @param {string} articleId - A frissítendő cikk azonosítója.
+     * @param {Object} data - A frissítendő mezők (csak engedett whitelist).
+     * @returns {Promise<Object>} A szerver által visszaadott frissített dokumentum.
+     * @throws {PermissionDeniedError} Ha a szerver 403-mal utasítja el a kérést.
+     */
+    const updateArticle = useCallback(async (articleId, data) => {
+        const result = await callUpdateArticleCF(articleId, data, "DataContext: updateArticle");
+        applyArticleUpdate(result);
+        return result;
+    }, [applyArticleUpdate]);
+
+    /**
+     * Cikk törlése az adatbázisból.
+     *
+     * @param {string} articleId - A törlendő cikk azonosítója.
+     */
+    const deleteArticle = useCallback(async (articleId) => {
+        await withTimeout(
+            tables.deleteRow({
+                databaseId: DATABASE_ID,
+                tableId: COLLECTIONS.ARTICLES,
+                rowId: articleId
+            }),
+            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
+            "DataContext: deleteArticle"
+        );
+        setArticles(prev => prev.filter(article => article.$id !== articleId));
+    }, []);
+
     // ═══════════════════════════════════════════════════════════════════════════
     // Write-Through API — Felhasználói Validációk (User Validations)
     // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Helyi validation-state frissítése egy szerver-válasz dokumentummal, DB hívás nélkül.
+     * Az `applyArticleUpdate`-hez analóg minta: `$updatedAt` staleness guardot alkalmaz,
+     * és normalizálja az `id`+`$id` duplát (a UI a duál mezőt használja).
+     *
+     * @param {Object} serverDocument - A szerver által visszaadott frissített validáció.
+     */
+    const applyValidationUpdate = useCallback((serverDocument) => {
+        if (!serverDocument?.$id) return;
+        const normalized = { ...serverDocument, id: serverDocument.$id, $id: serverDocument.$id };
+        setValidations(prev => prev.map(validation => {
+            if (validation.$id !== normalized.$id) return validation;
+            // $updatedAt elavulás-védelem: ne írjunk felül frissebb adatot régebbivel
+            if (validation.$updatedAt && normalized.$updatedAt && validation.$updatedAt > normalized.$updatedAt) {
+                logWarn(`[DataContext] applyValidationUpdate elavult dokumentum kihagyva (${validation.$id})`);
+                return validation;
+            }
+            return normalized;
+        }));
+    }, []);
 
     /**
      * Új validációs bejegyzés létrehozása.
@@ -724,6 +754,11 @@ export const DataProvider = ({ children }) => {
     /**
      * Validációs bejegyzés frissítése.
      *
+     * A helyi állapotot az `applyValidationUpdate`-en keresztül frissíti —
+     * `$updatedAt` staleness guarddal, hogy egy párhuzamos írás (Realtime-on
+     * már érkezett, magasabb `$updatedAt`-tel) ne íródjon felül a saját,
+     * régebbi szerver válaszunkkal.
+     *
      * @param {string} validationId - A frissítendő validáció azonosítója.
      * @param {Object} data - A frissítendő mezők.
      * @returns {Promise<Object>} A frissített dokumentum.
@@ -739,10 +774,9 @@ export const DataProvider = ({ children }) => {
             FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: updateValidation"
         );
-        const normalized = { ...result, id: result.$id, $id: result.$id };
-        setValidations(prev => prev.map(validation => validation.$id === validationId ? normalized : validation));
+        applyValidationUpdate(result);
         return result;
-    }, []);
+    }, [applyValidationUpdate]);
 
     /**
      * Validációs bejegyzés törlése.
@@ -803,11 +837,14 @@ export const DataProvider = ({ children }) => {
             // Post-write CF korlát: a validate-publication-update CF az írás UTÁN
             // fut, ezért egy érvénytelen aktiválás rövid ideig (~1-2s) látszhat
             // a pluginban, mielőtt a server-side revert megérkezik egy második
-            // Realtime eseményen. A $updatedAt staleness guard és a Realtime
-            // sorrend garantálja, hogy a revert felülírja a kezdeti aktivációt
-            // (a revert $updatedAt-ja mindig frissebb). A cikkek szerkesztése
-            // addig is blokkolva van, mert a scope query-k (workflow, validations)
-            // nem találnak semmit a még nem létező DB állapothoz.
+            // Realtime eseményen. Normál Appwrite kézbesítési sorrend mellett a
+            // $updatedAt staleness guard biztosítja, hogy a revert felülírja a
+            // kezdeti aktivációt (a revert $updatedAt-ja frissebb). Halott
+            // socket / reconnect / failover alatt viszont egy elveszett revert
+            // esemény átmenetileg stale aktivált állapotot hagyhat — ez csak a
+            // következő Realtime update vagy fetch konvergálás után oldódik.
+            // A cikkek szerkesztése addig is blokkolva van, mert a scope query-k
+            // (workflow, validations) nem találnak semmit a még nem létező DB állapothoz.
             if (event.includes(COLLECTIONS.PUBLICATIONS)) {
                 if (isOutOfScope(event, payload)) return;
 
