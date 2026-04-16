@@ -68,6 +68,9 @@ maestro-server/
     ├── validate-publication-update/   ← Kiadvány módosítás validáció (default contributor-ok, rootPath)
     │   ├── package.json
     │   └── src/main.js
+    ├── set-publication-root-path/     ← Publikáció rootPath beállító CF (null→kanonikus, Plugin folder picker)
+    │   ├── package.json
+    │   └── src/main.js
     ├── cascade-delete/                ← Kaszkád törlés (cikk: üzenetek, validációk, thumbnailek; kiadvány: cikkek, layoutok, deadline-ok)
     │   ├── appwrite.config.json
     │   ├── package.json
@@ -97,6 +100,7 @@ maestro-server/
 | `article-update-guard` | Article Update Guard | node-18.0 | 30s | `articles.*.update` |
 | `validate-article-creation` | Validate Article Creation | node-18.0 | 15s | `articles.*.create` |
 | `validate-publication-update` | Validate Publication Update | node-18.0 | 15s | `publications.*.create/update` |
+| `set-publication-root-path` | Set Publication Root Path | node-18.0 | 15s | Kliens hívás (HTTP, `execute: ["users"]`) |
 | `cascade-delete` | Cascade Delete | node-18.0 | 15s | `articles/publications.*.delete` |
 | `cleanup-orphaned-locks` | Cleanup Orphaned Locks | node-18.0 | 30s | Schedule: `0 3 * * *` |
 | `cleanup-orphaned-thumbnails` | Cleanup Orphaned Thumbnails | node-18.0 | 120s | Schedule: `0 4 * * 0` |
@@ -123,6 +127,7 @@ maestro-server/
 | `article-update-guard` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `GROUPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID` |
 | `validate-article-creation` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID` |
 | `validate-publication-update` | `DATABASE_ID`, `PUBLICATIONS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `DEADLINES_COLLECTION_ID` |
+| `set-publication-root-path` | `DATABASE_ID`, `PUBLICATIONS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `ORGANIZATION_MEMBERSHIPS_COLLECTION_ID` |
 | `cascade-delete` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `USER_VALIDATIONS_COLLECTION_ID`, `SYSTEM_VALIDATIONS_COLLECTION_ID`, `DEADLINES_COLLECTION_ID`, `LAYOUTS_COLLECTION_ID`, `THUMBNAILS_BUCKET_ID` |
 | `cleanup-orphaned-locks` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID` |
 | `cleanup-orphaned-thumbnails` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `THUMBNAILS_BUCKET_ID` |
@@ -139,6 +144,7 @@ maestro-server/
 | `article-update-guard` | `databases.read`, `databases.write`, `users.read` |
 | `validate-article-creation` | `databases.read`, `databases.write`, `users.read` |
 | `validate-publication-update` | `databases.read`, `databases.write`, `users.read` |
+| `set-publication-root-path` | `databases.read`, `databases.write`, `users.read` |
 | `cascade-delete` | `databases.read`, `databases.write`, `files.read`, `files.write` |
 | `cleanup-orphaned-locks` | `databases.read`, `databases.write`, `users.read` |
 | `cleanup-orphaned-thumbnails` | `databases.read`, `files.read`, `files.write` |
@@ -212,6 +218,40 @@ Kiadvány létrehozás/módosításkor fut. `defaultContributors` JSON parse →
 **Scope ellenőrzés (B.8):** create eseménynél hiányzó scope mezők vagy nem-tag caller → publikáció törlése. Update path: nem-tag caller csak logolódik (teljes field-level revert Fázis 6 hatáskör).
 
 **Aktiválás validáció (Dashboard Redesign Fázis 5):** Minden create és update eseménynél, ha a friss dokumentum `isActivated === true`, a CF lefuttatja a `validatePublicationActivationInline()`-t (inline másolat a `maestro-shared/publicationActivation.js`-ből). Ez ellenőrzi: (a) `workflowId` kitöltött, (b) legalább egy deadline létezik, (c) a deadline-ok a teljes `coverageStart..coverageEnd` tartományt átfedés nélkül lefedik és formátum-helyesek. A deadline-ok a `DEADLINES_COLLECTION_ID`-ból kerülnek lekérdezésre (`Query.equal('publicationId', $id)`, limit 500). **Fail-closed**: ha a `DEADLINES_COLLECTION_ID` env var hiányzik, vagy a deadline lekérés dob, vagy a validáció sikertelen → a CF revertel `{ isActivated: false, activatedAt: null }`-re. Ez garantálja, hogy érvénytelen állapot soha nem maradhat a DB-ben, még akkor sem, ha a Dashboard UI-t megkerülik direkt REST hívással.
+
+### set-publication-root-path
+
+HTTP endpoint (`execute: ["users"]`) a Plugin folder picker modaljából hívva (`functions.createExecution(..., async: false)`). A Plugin `users` role NEM rendelkezik direkt `publications.update` joggal (Fázis 9), ezért minden rootPath beállítás ezen a CF-en keresztül történik. Szűk hatókörű: kizárólag null → nem-null kanonikus írás.
+
+**Bemenet** (req.body JSON): `{ publicationId, rootPath }`. A `rootPath` kanonikus formátumú (`/ShareName/opcionális/relatív/path`) — natív mount prefix vagy drive betű tiltott.
+
+**Kimenet** (res.json):
+- Siker: `{ success: true, action: 'applied', document }` (200).
+- Permission denied: `{ success: false, permissionDenied: true, reason, requiredGroups: [] }` (403).
+- Hiba: `{ success: false, reason, ...extra }` megfelelő státuszkóddal.
+
+**Ellenőrzések (sorrendben, fail-closed):**
+1. **Payload parse** — `publicationId` string kötelező; invalid → `invalid_payload` / `missing_publication_id` (400).
+2. **Auth** — `x-appwrite-user-id` header kötelező; hiány → `unauthenticated` (401).
+3. **Env var guard** — hiány → `misconfigured` (500) + `missing` lista.
+4. **Kanonikus rootPath validáció** — inline `isCanonicalRootPath()` helper (`MAX_ROOT_PATH_LENGTH = 1024` char). Részletes `detail` a hibaüzenetben:
+   - `not_string` — nem string (hiány vagy rossz típus)
+   - `empty` — trim utáni üres string (vagy csak `/` perjel, szegmens nélkül)
+   - `too_long` — a trim-elt hossz > 1024 karakter (CPU-szivárgás elleni védelem)
+   - `contains_backslash` — `\` karakter a stringben (Windows natív)
+   - `no_leading_slash` — nem `/`-vel kezdődik
+   - `drive_letter` — `Z:/` stílusú natív Windows path
+   - `legacy_mount_prefix` — `/Volumes/...` vagy `C:/Volumes/...` kezdetű
+   - `path_traversal` — `.` vagy `..` szegmens
+5. **Publication fetch** — 404 → `publication_not_found`; egyéb hiba → `publication_fetch_failed` (500).
+6. **Scope mezők** — `organizationId` + `editorialOfficeId` kötelező a pub-on; hiány → `missing_scope` (422, data integrity hiba).
+7. **Jogosultság** — (a) office admin: `editorialOfficeMemberships.role === 'admin'` a pub office-ában, VAGY (b) org owner/admin: `organizationMemberships.role ∈ {owner, admin}` a pub org-jában. Egyik sem → `permissionDenied` (403). Membership lookup hiba → fail-closed permissionDenied. **Az auth a null check ELŐTT fut** — különben a 409 `root_path_already_set` leakelné a pub állapotát bármely auth'd hívónak, aki ismer/találgat egy publicationId-t.
+8. **Null check** — ha `pub.rootPath` már be van állítva (nem üres trim után) → `root_path_already_set` (409). A válasz NEM tartalmazza a `currentRootPath`-ot (az auth-szűrés után is tiszta felszínt tartunk; a hívó a pub read API-val úgyis lekérdezheti). Nincs idempotens "ugyanaz az érték" ág.
+9. **DB write** — `databases.updateDocument()` az API key-jel. 404 → `publication_not_found`; egyéb hiba → `write_failed` (500).
+
+**Sentinel nincs**: a `validate-publication-update` post-event CF a rootPath-t csak logolja (nem revertel), így nincs visszacsatolási veszély.
+
+**Hibakódok**: `invalid_payload` (400), `missing_publication_id` (400), `unauthenticated` (401), `misconfigured` (500), `invalid_root_path` (400, + `detail`), `publication_not_found` (404), `publication_fetch_failed` (500), `missing_scope` (422), `permissionDenied` (403), `root_path_already_set` (409), `write_failed` (500), `internal_error` (500).
 
 ### cascade-delete
 
