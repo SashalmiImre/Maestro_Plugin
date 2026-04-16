@@ -94,6 +94,20 @@ export const GeneralSection = ({ article, user, workflow, onFieldUpdate, onPageN
         return teams.some(slug => getContributor(article.contributors, slug));
     })();
 
+    // Aktív lock (USER = megnyitott fájl, SYSTEM = verifikáció alatt) → nincs állapotváltás.
+    // A lock azt jelzi, hogy a dokumentum foglalt; a CF is elutasítaná, de UI-szinten is blokkoljuk.
+    const isLocked = Boolean(article.lockType);
+
+    // Közös disabled + title a két átmenet-gombhoz (backward/forward).
+    const transitionDisabled = isIgnored || isSyncing || isLocked || !canTransition || !hasRequiredContributor ? true : undefined;
+    const transitionTitle = isLocked
+        ? "Zárd be az InDesign dokumentumot az állapotváltáshoz"
+        : !canTransition
+            ? "Nincs jogosultságod az állapotváltáshoz"
+            : !hasRequiredContributor
+                ? "Előbb rendelj hozzá felelős munkatársat"
+                : undefined;
+
     // Local state for Name field to allow "Enter to save" behavior
     const [localName, setLocalName] = useState(article.name || "");
 
@@ -356,8 +370,8 @@ export const GeneralSection = ({ article, user, workflow, onFieldUpdate, onPageN
                                             size="m"
                                             style={{ borderRadius: "12px 0 0 12px", width: "100%" }}
                                             onClick={() => onStateTransition(backwardTransition.to)}
-                                            disabled={isIgnored || isSyncing || !canTransition || !hasRequiredContributor ? true : undefined}
-                                            title={!canTransition ? "Nincs jogosultságod az állapotváltáshoz" : !hasRequiredContributor ? "Előbb rendelj hozzá felelős munkatársat" : undefined}
+                                            disabled={transitionDisabled}
+                                            title={transitionTitle}
                                         >
                                             ← {backwardTransition.label}
                                         </sp-button>
@@ -394,8 +408,8 @@ export const GeneralSection = ({ article, user, workflow, onFieldUpdate, onPageN
                                             size="m"
                                             style={{ borderRadius: "0 12px 12px 0", width: "100%" }}
                                             onClick={() => onStateTransition(forwardTransition.to)}
-                                            disabled={isIgnored || isSyncing || !canTransition || !hasRequiredContributor ? true : undefined}
-                                            title={!canTransition ? "Nincs jogosultságod az állapotváltáshoz" : !hasRequiredContributor ? "Előbb rendelj hozzá felelős munkatársat" : undefined}
+                                            disabled={transitionDisabled}
+                                            title={transitionTitle}
                                         >
                                             {forwardTransition.label} →
                                         </sp-button>

@@ -9,9 +9,8 @@
  */
 
 import { callUpdateArticleCF } from "../updateArticleClient.js";
-import { PermissionDeniedError } from "../errorUtils.js";
+import { PermissionDeniedError, isNetworkError } from "../errorUtils.js";
 import { getAvailableTransitions as rtGetAvailableTransitions } from "maestro-shared/workflowRuntime.js";
-import { canUserMoveArticle } from "./workflowPermissions.js";
 import { LOCK_TYPE } from "../constants.js";
 import { validate } from "../validationRunner.js";
 import { VALIDATOR_TYPES } from "../validationConstants.js";
@@ -23,6 +22,10 @@ import { log, logError, logWarn } from "../logger.js";
 function _handleCFError(error, context) {
     if (error instanceof PermissionDeniedError) {
         return { success: false, error: error.message, permissionDenied: true };
+    }
+    if (isNetworkError(error)) {
+        logWarn(context, error);
+        return { success: false, error: error.message, networkError: true };
     }
     logError(context, error);
     return { success: false, error: error.message };
@@ -71,44 +74,49 @@ export class WorkflowEngine {
 
     /**
      * Végrehajt egy állapotátmenetet a cikken.
-     * Frissíti a cikk állapotát az adatbázisban és naplózza az eseményt.
+     *
+     * A jogosultsági hint-ellenőrzést a hívó UI végzi (gomb disabled + preflight handler);
+     * a végleges engedélyezés a CF szerver-oldalán történik. Itt a drága validáció (preflight,
+     * file-accessible stb.) az egyetlen kliens-oldali kapuőr a CF hívás előtt.
      *
      * @param {Object} workflow - A compiled workflow JSON (snapshot — a hívó a belépéskor rögzíti).
      * @param {Object} article - A cikk objektum.
      * @param {string} targetState - A célállapot string ID-ja.
-     * @param {Object} user - A felhasználó, aki végrehajtja a váltást.
-     * @param {string[]} userGroupSlugs - A felhasználó csoporttagságai.
+     * @param {Object} user - A felhasználó, aki végrehajtja a váltást (naplózáshoz).
      * @param {string} publicationRootPath - A kiadvány gyökér útvonala.
-     * @returns {Promise<Object>} { success, document?, error?, permissionDenied? }
+     * @returns {Promise<Object>} { success, document?, error?, permissionDenied?, validation? }
+     *   A `validation` csak akkor szerepel, ha a kliens-oldali validáció bukott (tartalmazza:
+     *   `errors`, `warnings`, `skipped`, `unmountedDrives` — hogy a UI pontos toast-ot tudjon formálni).
      */
-    static async executeTransition(workflow, article, targetState, user, userGroupSlugs, publicationRootPath) {
+    static async executeTransition(workflow, article, targetState, user, publicationRootPath) {
         if (!workflow || !article) {
             logWarn("[WorkflowEngine] executeTransition: hiányzó workflow vagy article");
             return { success: false, error: "Hiányzó workflow konfiguráció vagy cikk." };
         }
 
         try {
-            // 0. Jogosultsági ellenőrzés (a validáció ELŐTT — a drága preflight ne fusson feleslegesen)
-            const permission = canUserMoveArticle(workflow, article.state, userGroupSlugs);
-            if (!permission.allowed) {
-                return { success: false, error: permission.reason, permissionDenied: true };
-            }
-
-            // 1. Átmenet validálása
+            // 1. Kliens-oldali átmenet-validáció (drága: preflight, file-accessible)
             const validation = await WorkflowEngine.validateTransition(workflow, article, targetState, publicationRootPath);
             if (!validation.isValid) {
-                return { success: false, error: validation.errors.join(", ") };
+                return {
+                    success: false,
+                    error: validation.errors?.join(", ") || "Az állapotváltás validációja sikertelen.",
+                    validation
+                };
             }
 
             log(`[WorkflowEngine] Cikk (${article.$id}) állapotváltása: ${article.state} → ${targetState}, felhasználó: ${user?.name || user?.$id || 'ismeretlen'}`);
 
-            // 2. Cikk frissítése az update-article CF-en keresztül
+            // 2. Cikk frissítése az update-article CF-en keresztül (CF a végső jogosultsági gate)
             const result = await callUpdateArticleCF(article.$id, {
                 state: targetState,
                 previousState: article.state
             }, "WorkflowEngine: executeTransition");
 
-            // Állapotváltás jelzése az event rendszeren keresztül
+            // Állapotváltás jelzése az event rendszeren keresztül.
+            // Figyelem: a `result` a CF válasz pillanatnyi állapota — a feliratkozók a DataContext
+            // élő state-jéből olvassák ki a cikket (event-payload csak az $id átadására szolgál),
+            // hogy egy azonnal befutó Realtime update ne legyen felülírva elavult snapshottal.
             try {
                 dispatchMaestroEvent(MaestroEvent.stateChanged, {
                     article: result,

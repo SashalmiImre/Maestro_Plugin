@@ -404,6 +404,16 @@ Fájl kiválasztása → `useArticles.addArticle` → útvonal validáció (kiad
 - **Nyitott dokumentum**: `generateRenameOpenDocumentScript()` → dokumentum keresése `fullName` útvonal alapján (fallback: `name`) → `doc.save(newFile)` (Save As) → régi fájl törlése (hibakezeléssel) → DB update. A `maestroSkipCount` számláló megakadályozza, hogy a DocumentMonitor reagáljon a programozott mentésre.
 - **Rollback**: Ha a DB frissítés sikertelen, a fájl visszanevezése automatikus.
 
+### Workflow Állapotátmenet
+`GeneralSection` gomb kattintás (disabled ha `isLocked` / `!canTransition` / `!hasRequiredContributor` / `isSyncing`) → `ArticleProperties.handleStateTransition` → `transitionInFlightRef` guard (ref, nem state — a React setState nem véd a duplakattintástól) → `hasErrors` / `canUserMoveArticle` hint / `filePath` ellenőrzés → `WorkflowEngine.executeTransition(workflow, article, targetState, user, publicationRootPath)`.
+
+- **Egyetlen kliens-oldali validáció**: A drága preflight + file-accessible csak az engine-ben fut (a UI korábban explicit `validateTransition`-t is hívott — ezt a dupla futást megszüntettük).
+- **Kategorizált hiba-visszajelzés**: Az engine `{ success, document?, error?, permissionDenied?, networkError?, validation? }` alakot ad vissza. A UI négy ágra toast-ol: (1) `validation.skipped` → csatolatlan meghajtó, (2) `validation.errors` → pontos validációs hibalista, (3) `permissionDenied` → „Nincs jogosultságod…", (4) `networkError` → „Hálózati hiba" retry-javaslattal. A catch-ág `isNetworkError(error)` alapján különíti el a váratlan throw-okat.
+- **Háromszintű védelem**: UI gomb disabled → UI handler hint (sync, olcsó) → CF szerver-oldali gate (végleges engedélyezés). Az engine-ből a kliens-oldali `canUserMoveArticle` check eltávolítva — felesleges volt, a CF a végső kapu.
+- **Lock blokkolás**: Ha `article.lockType` aktív (USER vagy SYSTEM), a gombok disabled, tooltip: „Zárd be az InDesign dokumentumot az állapotváltáshoz".
+- **`stateChanged` MaestroEvent**: A payload cikk-objektuma a CF szinkron válaszából származik (legfrissebb állapot). A `useWorkflowValidation` handler `articlesRef.current.some($id)` existence check-kel szűri ki a közben eltűnt (pub switch / törlés) cikkeket.
+- **CF protokoll-védelem**: `callUpdateArticleCF` dob, ha a CF `success:true`-t ad, de `document` nélkül — nem hagyhatunk üres optimista state-et.
+
 ### Realtime Adatfolyam
 Appwrite DB változás → WebSocket esemény → `realtimeClient.js` → `DataContext` handler → `setArticles()`/`setPublications()` → React újra-renderelési kaszkád.
 

@@ -269,6 +269,15 @@ export const useWorkflowValidation = () => {
 
         const handleStateChanged = (event) => {
             const { article, previousState, newState } = event.detail;
+            if (!article?.$id) return;
+
+            // A cikk ref-alapú ellenőrzése: ha időközben kiesett a scope-ból
+            // (pub switch / törlés), az eseményre nem reagálunk.
+            // A payload cikk-objektumát a CF szinkron válaszából kapjuk — ez a legfrissebb
+            // állapot, még a DataContext applyArticleUpdate előtti pillanatban is.
+            const stillExists = articlesRef.current.some(a => a.$id === article.$id);
+            if (!stillExists) return;
+
             const wf = workflowRef.current;
             const prevValidations = getStateValidations(wf, previousState);
             const newValidations = getStateValidations(wf, newState);

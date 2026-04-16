@@ -59,5 +59,10 @@ export async function callUpdateArticleCF(articleId, data, label = 'update-artic
         throw err;
     }
 
+    // success:true, de document hiányzik → protokollsértés, dobunk, ne hagyjunk üres optimista state-et.
+    if (!response.document) {
+        throw new Error('update-article CF sikerjelzést adott dokumentum nélkül.');
+    }
+
     return response.document;
 }
