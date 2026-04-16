@@ -29,6 +29,47 @@ import { log, logWarn, logError } from "../../../core/utils/logger.js";
  */
 const VALIDATION_TASKS_TIMEOUT_MS = 30000;
 
+/**
+ * Unlock finally retry konfiguráció.
+ *
+ * A DocumentMonitor finally blokkja a SYSTEM lockot feloldja a DB-ben. Recovery
+ * alatti átmeneti hálózati hiba (timeout) esetén az orphaned SYSTEM lock
+ * blokkolja a többi felhasználó `openArticle` hívását (ghost-lock cleanup a
+ * saját user.$id-re nem aktiválódik, mert az owner tagja az office-nak).
+ * A `cleanupOrphanedLocks` csak a plugin következő indulásakor tisztít — addig
+ * a fájl user-blokkolt más gépekről. Retry-val zárjuk a hálózati eredetű
+ * orphan ablakot.
+ */
+const UNLOCK_RETRY_MAX_ATTEMPTS = 3;
+const UNLOCK_RETRY_BASE_DELAY_MS = 1000;
+
+/**
+ * Dokumentum feloldás újrapróbálkozással, csak átmeneti hálózati hibákra.
+ * Üzleti hibák (permission, nem saját lock) azonnal tovább tér vissza.
+ *
+ * @param {Object} lockedArticle - A DB-ben zárolt cikk (lock CF válaszából).
+ * @param {Object} user - A lock tulajdonosa.
+ * @returns {Promise<Object>} Az `unlockDocument` utolsó eredménye.
+ */
+const unlockWithRetry = async (lockedArticle, user) => {
+    let lastResult = null;
+    for (let attempt = 1; attempt <= UNLOCK_RETRY_MAX_ATTEMPTS; attempt++) {
+        lastResult = await WorkflowEngine.unlockDocument(lockedArticle, user);
+        if (lastResult?.success) return lastResult;
+        if (!lastResult?.networkError || attempt === UNLOCK_RETRY_MAX_ATTEMPTS) {
+            return lastResult;
+        }
+        const delayMs = UNLOCK_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        logWarn(
+            `[DocumentMonitor] Unlock retry ${attempt}/${UNLOCK_RETRY_MAX_ATTEMPTS} ` +
+            `— ${delayMs}ms múlva:`,
+            lastResult?.error
+        );
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+    return lastResult;
+};
+
 
 
 /**
@@ -230,10 +271,18 @@ export const DocumentMonitor = () => {
             // Maestro zárolás feloldása / optimistic update visszavonása
             try {
                 if (lockedArticle) {
-                    // Normál útvonal: DB-ben megerősített lock feloldása
-                    const unlockResult = await WorkflowEngine.unlockDocument(lockedArticle, user);
+                    // Normál útvonal: DB-ben megerősített lock feloldása.
+                    // Retry-val védjük az orphan SYSTEM lock user-blokkoló
+                    // hatása ellen (recovery közbeni átmeneti hálózati hibák).
+                    const unlockResult = await unlockWithRetry(lockedArticle, user);
                     if (unlockResult?.success && unlockResult.document) {
                         applyArticleUpdate(unlockResult.document);
+                    } else if (!unlockResult?.success) {
+                        logError(
+                            "[DocumentMonitor] Unlock retry kimerítve — orphaned SYSTEM lock " +
+                            "marad a DB-ben (cleanupOrphanedLocks a következő plugin-indításkor tisztít):",
+                            unlockResult?.error
+                        );
                     }
                 } else {
                     // DB lock nem sikerült — optimistic update visszavonása
