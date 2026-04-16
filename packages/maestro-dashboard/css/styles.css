@@ -595,13 +595,6 @@ html, body {
     margin: 4px 8px;
 }
 
-.bc-dropdown-empty {
-    padding: 12px;
-    font-size: 12px;
-    color: var(--text-disabled);
-    text-align: center;
-}
-
 /* ─── Közös popover elemek (dropdown menük, avatar menü) ──────────────────── */
 
 .popup-item {

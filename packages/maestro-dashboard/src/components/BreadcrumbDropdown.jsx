@@ -117,7 +117,7 @@ export default function BreadcrumbDropdown({
                             >
                                 {settingsLabel}
                             </button>
-                            <div className="bc-dropdown-divider" />
+                            {sortedItems.length > 0 && <div className="bc-dropdown-divider" />}
                         </>
                     )}
                     {sortedItems.map(item => (
@@ -131,9 +131,6 @@ export default function BreadcrumbDropdown({
                             {item.name}
                         </button>
                     ))}
-                    {sortedItems.length === 0 && (
-                        <div className="bc-dropdown-empty">Nincs elérhető elem</div>
-                    )}
                     {onCreate && (
                         <>
                             {sortedItems.length > 0 && <div className="bc-dropdown-divider" />}
