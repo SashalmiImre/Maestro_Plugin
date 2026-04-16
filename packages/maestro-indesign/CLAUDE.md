@@ -112,6 +112,7 @@
     - A `WorkflowEngine.lockDocument()` / `unlockDocument()` metódusokat használja → sima `updateRow` → Realtime.
     - **Kétfázisú unlock**: A `registerTask` minta lehetővé teszi, hogy a validátorok befejezzék a munkájukat a zárolás feloldása előtt.
     - **Optimistic SYSTEM lock**: A `DocumentMonitor.verifyDocumentInBackground()` a DB `lockDocument` hívás ELŐTT azonnal beállítja a SYSTEM lockot a helyi state-ben (`applyArticleUpdate`), így a „MAESTRO" felirat azonnal megjelenik az ArticleTable-ben. Ha a DB lock sikertelen, a `finally` blokk visszavonja az optimistic update-et.
+    - **`unlockWithRetry` finally védelem**: A `DocumentMonitor` `finally` blokkja a SYSTEM lock feloldását `unlockWithRetry` helperrel hívja (3× exponenciális backoff: 1s→2s→4s, csak `networkError: true` flagre retry). Indoklás: recovery közbeni átmeneti hálózati hiba esetén az orphaned SYSTEM lock **USER-BLOKKOLÓ** — másik user `openArticle` hívásában a ghost-lock cleanup saját user.$id-re nem aktiválódik (owner tagja az office-nak), így a fájl csak a lock owner következő plugin-indításakor (`cleanupOrphanedLocks`) szabadul fel. A retry bezárja a hálózati eredetű orphan ablakot. Worst case 3s extra háttér-delay a finally-ben (nem UI-blokkoló). Üzleti hiba (permission, nem saját lock) azonnal tér vissza retry nélkül.
 
 4. **Validációs Rendszer**
     - **Egységes Architektúra**: Összefésüli a rendszer validációkat (Preflight, Overlap) és a felhasználói üzeneteket egyetlen listába.
