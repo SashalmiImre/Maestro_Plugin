@@ -177,8 +177,8 @@ maestro-dashboard/
 │   │
 │   └── components/
 │       ├── LoginView.jsx         ← (legacy – auth route-okra migrálva)
-│       ├── BreadcrumbHeader.jsx  ← Scope/publication dropdown fejléc + onCreate/onSettings
-│       ├── BreadcrumbDropdown.jsx ← Reusable dropdown (+ divider + action item)
+│       ├── BreadcrumbHeader.jsx  ← Scope/publication dropdown fejléc + onSettings
+│       ├── BreadcrumbDropdown.jsx ← Reusable dropdown („Beállítások" + ABC rendezett elemek)
 │       ├── Modal.jsx             ← Közös modal shell (size, title, ESC/overlay close)
 │       ├── Tabs.jsx              ← Vízszintes tab váltó
 │       ├── ConfirmDialog.jsx     ← useConfirm() Promise-alapú dialógus

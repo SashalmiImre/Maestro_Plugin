@@ -17,7 +17,6 @@ import { useData } from '../contexts/DataContext.jsx';
 import { useModal } from '../contexts/ModalContext.jsx';
 import BreadcrumbDropdown from './BreadcrumbDropdown.jsx';
 import UserAvatar from './UserAvatar.jsx';
-import CreatePublicationModal from './publications/CreatePublicationModal.jsx';
 import PublicationSettingsModal from './publications/PublicationSettingsModal.jsx';
 import OrganizationSettingsModal from './organization/OrganizationSettingsModal.jsx';
 import EditorialOfficeSettingsModal from './organization/EditorialOfficeSettingsModal.jsx';
@@ -84,14 +83,7 @@ export default function BreadcrumbHeader({
         }
     }
 
-    // ── Kiadvány modalok ──────────────────────────────────────────────────
-    function handleCreatePublication() {
-        openModal(<CreatePublicationModal />, {
-            size: 'md',
-            title: 'Új kiadvány'
-        });
-    }
-
+    // ── Kiadvány modal ────────────────────────────────────────────────────
     function handlePublicationSettings() {
         if (!activePublicationId) return;
         const activePub = publications.find(p => p.$id === activePublicationId);
@@ -156,8 +148,6 @@ export default function BreadcrumbHeader({
                     items={pubItems}
                     onSelect={onPublicationSelect}
                     onSettings={activePublicationId ? handlePublicationSettings : undefined}
-                    onCreate={activeEditorialOfficeId ? handleCreatePublication : undefined}
-                    createLabel="Új kiadvány"
                 />
             </div>
 

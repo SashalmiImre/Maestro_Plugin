@@ -3,8 +3,7 @@
  *
  * Újrafelhasználható dropdown a breadcrumb fejléchez. Click-re nyílik,
  * outside click-re zárul. Felül opcionális „Beállítások" menüpont + divider,
- * alatta ABC rendezett opciók, legalul pedig opcionális „+ Új" menüpont
- * (pl. új kiadvány) második divider-rel elválasztva.
+ * alatta ABC rendezett opciók.
  *
  * Használat:
  *   <BreadcrumbDropdown
@@ -13,8 +12,6 @@
  *     items={[{ id: '1', name: 'Org A' }, ...]}
  *     onSelect={setActiveOrg}
  *     onSettings={() => openOrgSettings()}
- *     onCreate={() => openCreateOrg()}
- *     createLabel="Új szervezet"
  *   />
  */
 
@@ -29,8 +26,6 @@ import usePopoverClose from '../hooks/usePopoverClose.js';
  * @param {Function} props.onSelect — callback: (id) => void
  * @param {Function} [props.onSettings] — ha megadott, „Beállítások" menüpont jelenik meg
  * @param {string} [props.settingsLabel='Beállítások'] — beállítás menüpont szövege
- * @param {Function} [props.onCreate] — ha megadott, „+ Új" menüpont jelenik meg a lista alatt
- * @param {string} [props.createLabel='Új létrehozása'] — új menüpont szövege
  * @param {boolean} [props.disabled=false] — letiltva-e
  * @param {string} [props.className] — extra CSS osztály a trigger gombra
  */
@@ -41,8 +36,6 @@ export default function BreadcrumbDropdown({
     onSelect,
     onSettings,
     settingsLabel = 'Beállítások',
-    onCreate,
-    createLabel = 'Új létrehozása',
     disabled = false,
     className = ''
 }) {
@@ -64,8 +57,8 @@ export default function BreadcrumbDropdown({
         [items, activeId]
     );
 
-    // Csak 1 elem + nincs settings + nincs create → nem kell dropdown, statikus címke
-    const isStatic = items.length <= 1 && !onSettings && !onCreate;
+    // Csak 1 elem + nincs settings → nem kell dropdown, statikus címke
+    const isStatic = items.length <= 1 && !onSettings;
 
     function handleToggle() {
         if (!disabled && !isStatic) setIsOpen(prev => !prev);
@@ -79,11 +72,6 @@ export default function BreadcrumbDropdown({
     function handleSettings() {
         setIsOpen(false);
         onSettings();
-    }
-
-    function handleCreate() {
-        setIsOpen(false);
-        onCreate();
     }
 
     return (
@@ -131,19 +119,6 @@ export default function BreadcrumbDropdown({
                             {item.name}
                         </button>
                     ))}
-                    {onCreate && (
-                        <>
-                            {sortedItems.length > 0 && <div className="bc-dropdown-divider" />}
-                            <button
-                                type="button"
-                                className="bc-dropdown-item bc-dropdown-create"
-                                onClick={handleCreate}
-                            >
-                                <span className="bc-dropdown-create-icon" aria-hidden="true">+</span>
-                                {createLabel}
-                            </button>
-                        </>
-                    )}
                 </div>
             )}
         </div>

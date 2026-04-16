@@ -2289,24 +2289,3 @@ html, body {
     opacity: 0.6;
 }
 
-/* ─── Breadcrumb dropdown „+ Új" menüpont ──────────────────────────────── */
-
-.bc-dropdown-create {
-    color: var(--accent-solid);
-    font-weight: 500;
-}
-
-.bc-dropdown-create:hover {
-    background: var(--bg-hover);
-}
-
-.bc-dropdown-create-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 14px;
-    margin-right: 6px;
-    font-size: 14px;
-    font-weight: 700;
-}
-
