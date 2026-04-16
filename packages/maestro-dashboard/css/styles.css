@@ -594,15 +594,6 @@ html, body {
     background: rgba(255, 180, 171, 0.08);
 }
 
-.bc-dropdown-settings {
-    color: var(--text-muted);
-    font-size: 12px;
-}
-
-.bc-dropdown-settings-icon {
-    font-size: 14px;
-}
-
 .bc-dropdown-divider {
     height: 1px;
     background: var(--border);

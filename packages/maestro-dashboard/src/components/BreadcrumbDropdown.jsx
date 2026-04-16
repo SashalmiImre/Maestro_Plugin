@@ -2,9 +2,9 @@
  * Maestro Dashboard — BreadcrumbDropdown
  *
  * Újrafelhasználható dropdown a breadcrumb fejléchez. Click-re nyílik,
- * outside click-re zárul. Felül opcionális „Beállítások" menüpont
- * (fogaskerék ikon) + divider, alatta ABC rendezett opciók, legalul pedig
- * opcionális „+ Új" menüpont (pl. új kiadvány) második divider-rel elválasztva.
+ * outside click-re zárul. Felül opcionális „Beállítások" menüpont + divider,
+ * alatta ABC rendezett opciók, legalul pedig opcionális „+ Új" menüpont
+ * (pl. új kiadvány) második divider-rel elválasztva.
  *
  * Használat:
  *   <BreadcrumbDropdown
@@ -110,10 +110,9 @@ export default function BreadcrumbDropdown({
                         <>
                             <button
                                 type="button"
-                                className="bc-dropdown-item bc-dropdown-settings"
+                                className="bc-dropdown-item"
                                 onClick={handleSettings}
                             >
-                                <span className="bc-dropdown-settings-icon" aria-hidden="true">⚙</span>
                                 {settingsLabel}
                             </button>
                             <div className="bc-dropdown-divider" />

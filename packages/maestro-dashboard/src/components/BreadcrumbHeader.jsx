@@ -136,7 +136,6 @@ export default function BreadcrumbHeader({
                     items={orgItems}
                     onSelect={handleOrgSelect}
                     onSettings={activeOrganizationId ? handleOrganizationSettings : undefined}
-                    settingsLabel="Szervezet beállításai"
                 />
 
                 <span className="breadcrumb-separator" aria-hidden="true">/</span>
@@ -147,7 +146,6 @@ export default function BreadcrumbHeader({
                     items={officeItems}
                     onSelect={handleOfficeSelect}
                     onSettings={activeEditorialOfficeId ? handleEditorialOfficeSettings : undefined}
-                    settingsLabel="Szerkesztőség beállításai"
                 />
 
                 <span className="breadcrumb-separator" aria-hidden="true">/</span>
@@ -158,7 +156,6 @@ export default function BreadcrumbHeader({
                     items={pubItems}
                     onSelect={onPublicationSelect}
                     onSettings={activePublicationId ? handlePublicationSettings : undefined}
-                    settingsLabel="Kiadvány beállításai"
                     onCreate={activeEditorialOfficeId ? handleCreatePublication : undefined}
                     createLabel="Új kiadvány"
                 />
