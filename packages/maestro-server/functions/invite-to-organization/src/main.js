@@ -126,6 +126,7 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const VALID_ACTIONS = new Set([
     'bootstrap_organization', 'create', 'accept',
     'add_group_member', 'remove_group_member',
+    'create_group', 'rename_group', 'delete_group',
     'create_workflow', 'update_workflow', 'update_organization',
     'create_editorial_office', 'update_editorial_office',
     'delete_organization', 'delete_editorial_office'
@@ -133,6 +134,12 @@ const VALID_ACTIONS = new Set([
 
 // Kaszkád törlés batch mérete — lapozás a nagy dokumentum-mennyiségek kezeléséhez.
 const CASCADE_BATCH_LIMIT = 100;
+
+// Scan-eredmény felső korlát forrásonként (delete_group referencia-check).
+// Ha egy scan eléri, a hátralévő lapokat nem olvassuk — az admin UI-nak ennyi
+// példa bőven elég a "használatban van" állapot érzékeltetéséhez, és a payload
+// + memória bounded marad pathologikus (tízezer+ hivatkozás) esetekben is.
+const MAX_REFERENCES_PER_SCAN = 50;
 
 /**
  * Egy collection összes, adott mezőértékhez tartozó dokumentumát törli.
@@ -355,6 +362,124 @@ function slugifyName(name) {
 }
 
 /**
+ * Workflow compiled JSON slug-hivatkozás ellenőrzés a `delete_group` action-höz.
+ *
+ * A compiled JSON több, eltérő alakú helyen hivatkozhat csoport slug-okra
+ * (a defaultWorkflow.json schémája szerint):
+ *   - `statePermissions[stateId]: string[]`              (ki mozgathatja onnan)
+ *   - `leaderGroups: string[]`                           (ACL bypass)
+ *   - `transitions[].allowedGroups: string[]`            (átmenet végrehajtás)
+ *   - `commands[stateId][].allowedGroups: string[]`      (parancsok futtatása)
+ *   - `elementPermissions[kind][field].groups: string[]` (UI elem szerkesztés,
+ *     csak ha type === 'groups' — 'anyMember' / egyéb típusokat átugrunk)
+ *   - `contributorGroups: [{ slug, label }]`             (contributor szerepkörök;
+ *     tömb stringekből is elfogadott legacy/defensiv okból)
+ *   - `capabilities[capId]: string[]`                    (pl. canAddArticlePlan)
+ *
+ * Bármely match → true. Ismeretlen / hiányzó mezőket csendben átugorjuk, hogy
+ * verziózott schema bővítés ne crash-eljen.
+ *
+ * @param {Object} compiled - parsed workflow compiled JSON
+ * @param {string} targetSlug - a törlendő csoport slug-ja
+ * @returns {boolean} true, ha a slug bárhol szerepel
+ */
+function workflowReferencesSlug(compiled, targetSlug) {
+    if (!compiled || typeof compiled !== 'object') return false;
+
+    // leaderGroups: string[]
+    if (Array.isArray(compiled.leaderGroups) && compiled.leaderGroups.includes(targetSlug)) {
+        return true;
+    }
+
+    // contributorGroups: [{ slug, label }] — legacy string[] is elfogadott
+    if (Array.isArray(compiled.contributorGroups)) {
+        for (const entry of compiled.contributorGroups) {
+            if (typeof entry === 'string' && entry === targetSlug) return true;
+            if (entry && typeof entry === 'object' && entry.slug === targetSlug) return true;
+        }
+    }
+
+    // statePermissions[stateId]: string[]
+    if (compiled.statePermissions && typeof compiled.statePermissions === 'object') {
+        for (const slugs of Object.values(compiled.statePermissions)) {
+            if (Array.isArray(slugs) && slugs.includes(targetSlug)) return true;
+        }
+    }
+
+    // transitions[].allowedGroups: string[]
+    if (Array.isArray(compiled.transitions)) {
+        for (const t of compiled.transitions) {
+            if (t && Array.isArray(t.allowedGroups) && t.allowedGroups.includes(targetSlug)) {
+                return true;
+            }
+        }
+    }
+
+    // commands[stateId][].allowedGroups: string[]
+    if (compiled.commands && typeof compiled.commands === 'object') {
+        for (const cmdList of Object.values(compiled.commands)) {
+            if (!Array.isArray(cmdList)) continue;
+            for (const cmd of cmdList) {
+                if (cmd && Array.isArray(cmd.allowedGroups) && cmd.allowedGroups.includes(targetSlug)) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // elementPermissions[kind][field]: { type, groups? }
+    if (compiled.elementPermissions && typeof compiled.elementPermissions === 'object') {
+        for (const kind of Object.values(compiled.elementPermissions)) {
+            if (!kind || typeof kind !== 'object') continue;
+            for (const descriptor of Object.values(kind)) {
+                if (!descriptor || typeof descriptor !== 'object') continue;
+                if (descriptor.type === 'groups' && Array.isArray(descriptor.groups)
+                    && descriptor.groups.includes(targetSlug)) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    // capabilities[capId]: string[]
+    if (compiled.capabilities && typeof compiled.capabilities === 'object') {
+        for (const slugs of Object.values(compiled.capabilities)) {
+            if (Array.isArray(slugs) && slugs.includes(targetSlug)) return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * A `contributors` (articles) és `defaultContributors` (publications) JSON
+ * longtext mezők kulcs-szinten tárolják a csoport slug-okat (pl.
+ * `{"designers": "user_abc", "writers": null}`). Ha a csoportot töröljük és
+ * ilyen kulcs még van, a stranded slug kulcs láthatatlanná válik a UI-ban
+ * (a dashboard csak a létező csoportokat rendereli), így ezek a rekordok
+ * data-loss állapotba kerülnek. Ez a helper vizsgálja, hogy a JSON string
+ * bármilyen értékkel tartalmazza-e a target slug-ot kulcsként.
+ *
+ * hasOwnProperty: a `null` érték is reservation — a törlés-blokk ugyanúgy
+ * jogos, mintha aktív userId lenne rendelve.
+ *
+ * @param {string|null|undefined} contributorsJson - a mező nyers értéke
+ * @param {string} targetSlug - a törlendő csoport slug-ja
+ * @returns {boolean} true, ha a slug kulcsként megjelenik a JSON-ban
+ */
+function contributorJsonReferencesSlug(contributorsJson, targetSlug) {
+    if (!contributorsJson || typeof contributorsJson !== 'string') return false;
+    let parsed;
+    try {
+        parsed = JSON.parse(contributorsJson);
+    } catch {
+        return false;
+    }
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+    return Object.prototype.hasOwnProperty.call(parsed, targetSlug);
+}
+
+/**
  * Trimelt, hosszra szűrt string vagy null, ha üres.
  */
 function sanitizeString(value, maxLength) {
@@ -425,6 +550,9 @@ module.exports = async function ({ req, res, log, error }) {
         // meglévő action-ök (bootstrap/invite/workflow) tovább működjenek, ha
         // az env var még nincs beállítva a Console-on.
         const publicationsCollectionId = process.env.PUBLICATIONS_COLLECTION_ID;
+        // Fázis 9 — a delete_group action contributor-scan ellenőrzéshez kell
+        // (articles.contributors JSON slug-kulcsokat tárol). Action-szintű guard.
+        const articlesCollectionId = process.env.ARTICLES_COLLECTION_ID;
 
         // ── Fail-fast env var guard ──
         const missingEnvVars = [];
@@ -1246,6 +1374,477 @@ module.exports = async function ({ req, res, log, error }) {
                 action: 'removed',
                 groupId,
                 userId
+            });
+        }
+
+        // ════════════════════════════════════════════════════════
+        // ACTION = 'create_group'
+        // ════════════════════════════════════════════════════════
+        //
+        // Új (custom) csoport létrehozása egy szerkesztőséghez. Owner/admin only.
+        // A slug `slugifyName(name)`-ből származik, max 3 próba random suffix-szel
+        // ütközés esetén. A caller automatikusan tagja lesz a csoportnak (seed
+        // membership, hogy ne legyen árva csoport közvetlenül a létrehozás után).
+        //
+        // TOCTOU trade-off: ugyanaz mint a többi name/slug uniqueness action-nél —
+        // párhuzamos két admin ugyanazzal a névvel race eshetőséget generálhat.
+        // A slug szinten az Appwrite unique attribute megvéd; display name szinten
+        // elfogadott kompromisszum (ld. update_editorial_office komment).
+        if (action === 'create_group') {
+            const { editorialOfficeId } = payload;
+            const sanitizedName = sanitizeString(payload.name, NAME_MAX_LENGTH);
+
+            if (!editorialOfficeId || !sanitizedName) {
+                return fail(res, 400, 'missing_fields', {
+                    required: ['editorialOfficeId', 'name']
+                });
+            }
+
+            // 1) Office lookup → organizationId
+            let officeDoc;
+            try {
+                officeDoc = await databases.getDocument(databaseId, officesCollectionId, editorialOfficeId);
+            } catch (err) {
+                if (err?.code === 404) return fail(res, 404, 'office_not_found');
+                error(`[CreateGroup] office fetch hiba: ${err.message}`);
+                return fail(res, 500, 'office_fetch_failed');
+            }
+
+            // 2) Caller jogosultság — org owner/admin
+            const callerMembership = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', officeDoc.organizationId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.select(['role']),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (callerMembership.documents.length === 0) {
+                return fail(res, 403, 'not_a_member');
+            }
+            const callerRole = callerMembership.documents[0].role;
+            if (callerRole !== 'owner' && callerRole !== 'admin') {
+                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            }
+
+            // 3) Display name uniqueness az office-on belül
+            const nameConflict = await databases.listDocuments(
+                databaseId,
+                groupsCollectionId,
+                [
+                    sdk.Query.equal('editorialOfficeId', editorialOfficeId),
+                    sdk.Query.equal('name', sanitizedName),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (nameConflict.documents.length > 0) {
+                return fail(res, 409, 'name_taken');
+            }
+
+            // 4) Group létrehozás — slug auto-generálás + ütközéskor retry random
+            //    suffix-szel (office-scope unique a slug az Appwrite compound indexen).
+            const baseSlug = slugifyName(sanitizedName);
+            let newGroupDoc = null;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                const candidateSlug = attempt === 0
+                    ? baseSlug
+                    : `${baseSlug.slice(0, SLUG_MAX_LENGTH - 5)}-${crypto.randomBytes(2).toString('hex')}`;
+                try {
+                    newGroupDoc = await databases.createDocument(
+                        databaseId,
+                        groupsCollectionId,
+                        sdk.ID.unique(),
+                        {
+                            organizationId: officeDoc.organizationId,
+                            editorialOfficeId,
+                            name: sanitizedName,
+                            slug: candidateSlug,
+                            isDefault: false
+                        }
+                    );
+                    break;
+                } catch (err) {
+                    const isUnique = err?.type === 'document_already_exists' || /unique/i.test(err?.message || '');
+                    if (isUnique && attempt < 2) continue;
+                    error(`[CreateGroup] group create hiba (slug=${candidateSlug}, attempt=${attempt}): ${err.message}`);
+                    if (isUnique) return fail(res, 409, 'group_slug_taken');
+                    return fail(res, 500, 'group_create_failed');
+                }
+            }
+
+            // 5) Caller seed membership — így nincs árva csoport. Ha a caller nem
+            //    office-tag (org admin de nem office tag), skip-eljük a seed-et,
+            //    de a group létrejön — a későbbi add_group_member eléri.
+            const callerOfficeMembership = await databases.listDocuments(
+                databaseId,
+                officeMembershipsCollectionId,
+                [
+                    sdk.Query.equal('editorialOfficeId', editorialOfficeId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.limit(1)
+                ]
+            );
+            let seedMembershipId = null;
+            if (callerOfficeMembership.documents.length > 0) {
+                try {
+                    let callerUser = null;
+                    try { callerUser = await usersApi.get(callerId); } catch { /* non-blocking */ }
+                    const memDoc = await databases.createDocument(
+                        databaseId,
+                        groupMembershipsCollectionId,
+                        sdk.ID.unique(),
+                        {
+                            groupId: newGroupDoc.$id,
+                            userId: callerId,
+                            editorialOfficeId,
+                            organizationId: officeDoc.organizationId,
+                            role: 'member',
+                            addedByUserId: callerId,
+                            userName: callerUser?.name || '',
+                            userEmail: callerUser?.email || ''
+                        }
+                    );
+                    seedMembershipId = memDoc.$id;
+                } catch (err) {
+                    // Seed bukás nem rollback-eli a groupot — a UI-ban látható,
+                    // hozzá lehet adni kézzel.
+                    error(`[CreateGroup] seed membership hiba (group=${newGroupDoc.$id}): ${err.message}`);
+                }
+            }
+
+            log(`[CreateGroup] User ${callerId} létrehozta "${sanitizedName}" (${newGroupDoc.slug}) csoportot az office ${editorialOfficeId}-ban`);
+
+            return res.json({
+                success: true,
+                action: 'created',
+                group: newGroupDoc,
+                seedMembershipId
+            });
+        }
+
+        // ════════════════════════════════════════════════════════
+        // ACTION = 'rename_group'
+        // ════════════════════════════════════════════════════════
+        //
+        // Csoport display name szerkesztése. A `slug` SOHA nem változik —
+        // a workflow `compiled` JSON (statePermissions, leaderGroups,
+        // elementPermissions, contributorGroups) slug-okra hivatkozik, slug
+        // változás kaszkád-patch-et igényelne a workflowkon. Ez szándékos
+        // invariáns: slug stabil, display name szabadon szerkeszthető.
+        //
+        // DEFAULT_GROUPS-ot is lehet átnevezni (csak a label változik, slug marad).
+        if (action === 'rename_group') {
+            const { groupId } = payload;
+            const sanitizedName = sanitizeString(payload.name, NAME_MAX_LENGTH);
+
+            if (!groupId || !sanitizedName) {
+                return fail(res, 400, 'missing_fields', {
+                    required: ['groupId', 'name']
+                });
+            }
+
+            // 1) Group lookup → scope feloldás
+            let groupDoc;
+            try {
+                groupDoc = await databases.getDocument(databaseId, groupsCollectionId, groupId);
+            } catch (err) {
+                if (err?.code === 404) return fail(res, 404, 'group_not_found');
+                error(`[RenameGroup] group fetch hiba: ${err.message}`);
+                return fail(res, 500, 'group_fetch_failed');
+            }
+
+            // 2) Caller jogosultság — org owner/admin
+            const callerMembership = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', groupDoc.organizationId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.select(['role']),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (callerMembership.documents.length === 0) {
+                return fail(res, 403, 'not_a_member');
+            }
+            const callerRole = callerMembership.documents[0].role;
+            if (callerRole !== 'owner' && callerRole !== 'admin') {
+                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            }
+
+            // 3) Uniqueness — ha nem self-match, office-on belül egyedi display name
+            if (sanitizedName !== groupDoc.name) {
+                const nameConflict = await databases.listDocuments(
+                    databaseId,
+                    groupsCollectionId,
+                    [
+                        sdk.Query.equal('editorialOfficeId', groupDoc.editorialOfficeId),
+                        sdk.Query.equal('name', sanitizedName),
+                        sdk.Query.limit(1)
+                    ]
+                );
+                const conflict = nameConflict.documents.find(d => d.$id !== groupId);
+                if (conflict) {
+                    return fail(res, 409, 'name_taken');
+                }
+            }
+
+            // 4) Frissítés — CSAK a name mező, slug változatlan
+            try {
+                await databases.updateDocument(
+                    databaseId,
+                    groupsCollectionId,
+                    groupId,
+                    { name: sanitizedName }
+                );
+            } catch (err) {
+                error(`[RenameGroup] updateDocument hiba: ${err.message}`);
+                return fail(res, 500, 'update_failed');
+            }
+
+            log(`[RenameGroup] User ${callerId} átnevezte group ${groupId} (${groupDoc.slug}) → "${sanitizedName}"`);
+
+            return res.json({
+                success: true,
+                action: 'renamed',
+                groupId,
+                name: sanitizedName,
+                slug: groupDoc.slug
+            });
+        }
+
+        // ════════════════════════════════════════════════════════
+        // ACTION = 'delete_group'
+        // ════════════════════════════════════════════════════════
+        //
+        // Csoport törlése. Blocking ellenőrzések:
+        //   1. DEFAULT_GROUPS slug-ok NEM törölhetők (onboarding invariáns — a
+        //      compiled workflow default állapotok ezekre hivatkoznak).
+        //   2. Ha bármely workflow `compiled` JSON-ja hivatkozza a slug-ot
+        //      (statePermissions, leaderGroups, elementPermissions,
+        //      contributorGroups, transitions, commands, capabilities),
+        //      `group_in_use` hibával elutasítjuk.
+        //   3. Ha bármely publikáció `defaultContributors` vagy cikk
+        //      `contributors` JSON-ja kulcsként tartalmazza a slug-ot,
+        //      `group_in_use` hibával elutasítjuk. Enélkül a delete stranded
+        //      JSON kulcsokat hagyna, amiket a UI nem lát (data loss).
+        //
+        // Ha átmegy, kaszkád törlés: groupMembership → group → compensating sweep
+        // (a sweep elkapja az add_group_member race miatt közben befurakodott
+        // orphan membership-eket, mielőtt success-t adunk vissza).
+        if (action === 'delete_group') {
+            const { groupId } = payload;
+            if (!groupId) {
+                return fail(res, 400, 'missing_fields', { required: ['groupId'] });
+            }
+
+            // Action-szintű env var guard — a contributor scan nélkül a data-loss
+            // kockázat valós, ezért a publications + articles collection ID-k
+            // kötelezőek. Ha nincsenek beállítva, a Console admin figyelmeztetést
+            // kap és a törlés blokkolódik.
+            const missingForDelete = [];
+            if (!publicationsCollectionId) missingForDelete.push('PUBLICATIONS_COLLECTION_ID');
+            if (!articlesCollectionId) missingForDelete.push('ARTICLES_COLLECTION_ID');
+            if (missingForDelete.length > 0) {
+                error(`[DeleteGroup] Hiányzó env var(ok): ${missingForDelete.join(', ')}`);
+                return fail(res, 500, 'misconfigured', { missing: missingForDelete });
+            }
+
+            // 1) Group lookup
+            let groupDoc;
+            try {
+                groupDoc = await databases.getDocument(databaseId, groupsCollectionId, groupId);
+            } catch (err) {
+                if (err?.code === 404) return fail(res, 404, 'group_not_found');
+                error(`[DeleteGroup] group fetch hiba: ${err.message}`);
+                return fail(res, 500, 'group_fetch_failed');
+            }
+
+            // 2) Default group védelem
+            const isDefault = groupDoc.isDefault === true
+                || DEFAULT_GROUPS.some(g => g.slug === groupDoc.slug);
+            if (isDefault) {
+                return fail(res, 403, 'default_group_protected', { slug: groupDoc.slug });
+            }
+
+            // 3) Caller jogosultság — org owner/admin
+            const callerMembership = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', groupDoc.organizationId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.select(['role']),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (callerMembership.documents.length === 0) {
+                return fail(res, 403, 'not_a_member');
+            }
+            const callerRole = callerMembership.documents[0].role;
+            if (callerRole !== 'owner' && callerRole !== 'admin') {
+                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            }
+
+            // 4) Workflow hivatkozás ellenőrzés — az office összes workflow-ja,
+            //    compiled JSON-ban a slug string-keresés. A loop csak akkor áll le,
+            //    ha (a) nincs több lap, (b) elértük a MAX_REFERENCES_PER_SCAN cap-et
+            //    (van már elég match a UI-nak — blokkolunk). A scan teljessége
+            //    data-loss kritikus: fals "nincs hivatkozás" → orphan slug marad.
+            const usedInWorkflows = [];
+            const targetSlug = groupDoc.slug;
+            let cursor = null;
+            workflowLoop:
+            while (true) {
+                const queries = [
+                    sdk.Query.equal('editorialOfficeId', groupDoc.editorialOfficeId),
+                    sdk.Query.select(['$id', 'name', 'compiled']),
+                    sdk.Query.limit(CASCADE_BATCH_LIMIT)
+                ];
+                if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
+
+                const workflowBatch = await databases.listDocuments(databaseId, workflowsCollectionId, queries);
+                if (workflowBatch.documents.length === 0) break;
+
+                for (const wf of workflowBatch.documents) {
+                    if (!wf.compiled || typeof wf.compiled !== 'string') continue;
+                    let compiled;
+                    try {
+                        compiled = JSON.parse(wf.compiled);
+                    } catch {
+                        continue;
+                    }
+                    if (workflowReferencesSlug(compiled, targetSlug)) {
+                        usedInWorkflows.push({ $id: wf.$id, name: wf.name });
+                        if (usedInWorkflows.length >= MAX_REFERENCES_PER_SCAN) break workflowLoop;
+                    }
+                }
+
+                if (workflowBatch.documents.length < CASCADE_BATCH_LIMIT) break;
+                cursor = workflowBatch.documents[workflowBatch.documents.length - 1].$id;
+            }
+
+            // 5) Publikációk defaultContributors scan — a slug JSON kulcsként
+            //    szerepelhet. Teljes lapozás (data-loss critical), scan cap csak
+            //    a már talált matchekre.
+            const usedInPublications = [];
+            let pubCursor = null;
+            pubLoop:
+            while (true) {
+                const queries = [
+                    sdk.Query.equal('editorialOfficeId', groupDoc.editorialOfficeId),
+                    sdk.Query.select(['$id', 'name', 'defaultContributors']),
+                    sdk.Query.limit(CASCADE_BATCH_LIMIT)
+                ];
+                if (pubCursor) queries.push(sdk.Query.cursorAfter(pubCursor));
+
+                const pubBatch = await databases.listDocuments(databaseId, publicationsCollectionId, queries);
+                if (pubBatch.documents.length === 0) break;
+
+                for (const pub of pubBatch.documents) {
+                    if (contributorJsonReferencesSlug(pub.defaultContributors, targetSlug)) {
+                        usedInPublications.push({ $id: pub.$id, name: pub.name });
+                        if (usedInPublications.length >= MAX_REFERENCES_PER_SCAN) break pubLoop;
+                    }
+                }
+
+                if (pubBatch.documents.length < CASCADE_BATCH_LIMIT) break;
+                pubCursor = pubBatch.documents[pubBatch.documents.length - 1].$id;
+            }
+
+            // 6) Cikkek contributors scan — ugyanez slug JSON kulcs alapján.
+            //    Articles jóval több lehet, mint pub — teljes scan + cap a
+            //    memória- és response-time védelemre.
+            const usedInArticles = [];
+            let artCursor = null;
+            artLoop:
+            while (true) {
+                const queries = [
+                    sdk.Query.equal('editorialOfficeId', groupDoc.editorialOfficeId),
+                    sdk.Query.select(['$id', 'name', 'contributors']),
+                    sdk.Query.limit(CASCADE_BATCH_LIMIT)
+                ];
+                if (artCursor) queries.push(sdk.Query.cursorAfter(artCursor));
+
+                const artBatch = await databases.listDocuments(databaseId, articlesCollectionId, queries);
+                if (artBatch.documents.length === 0) break;
+
+                for (const art of artBatch.documents) {
+                    if (contributorJsonReferencesSlug(art.contributors, targetSlug)) {
+                        usedInArticles.push({ $id: art.$id, name: art.name });
+                        if (usedInArticles.length >= MAX_REFERENCES_PER_SCAN) break artLoop;
+                    }
+                }
+
+                if (artBatch.documents.length < CASCADE_BATCH_LIMIT) break;
+                artCursor = artBatch.documents[artBatch.documents.length - 1].$id;
+            }
+
+            if (usedInWorkflows.length > 0 || usedInPublications.length > 0 || usedInArticles.length > 0) {
+                return fail(res, 409, 'group_in_use', {
+                    slug: targetSlug,
+                    workflows: usedInWorkflows,
+                    publications: usedInPublications,
+                    articles: usedInArticles
+                });
+            }
+
+            // 7) Kaszkád törlés — groupMemberships
+            let deletedMemberships = 0;
+            try {
+                const cascadeResult = await deleteByQuery(
+                    databases,
+                    databaseId,
+                    groupMembershipsCollectionId,
+                    'groupId',
+                    groupId
+                );
+                deletedMemberships = cascadeResult.deleted;
+            } catch (err) {
+                error(`[DeleteGroup] groupMemberships kaszkád hiba (group=${groupId}): ${err.message}`);
+                return fail(res, 500, 'cascade_delete_failed');
+            }
+
+            // 8) Group törlés
+            try {
+                await databases.deleteDocument(databaseId, groupsCollectionId, groupId);
+            } catch (err) {
+                error(`[DeleteGroup] group delete hiba: ${err.message}`);
+                return fail(res, 500, 'delete_failed');
+            }
+
+            // 9) Compensating sweep — add_group_member race védelem.
+            //    Az add_group_member flow előbb megy végig a validáción (group
+            //    létezik) majd később hozza létre a membership-et; a két hívás
+            //    között a delete_group befejezheti a cascade-et. Ilyen orphan
+            //    membership-et itt kitakarítjuk, mielőtt success-t adunk vissza.
+            //    Nem blokkoló: ha a sweep elbukik, a csoport már törölve.
+            let orphanCleaned = 0;
+            try {
+                const sweepResult = await deleteByQuery(
+                    databases,
+                    databaseId,
+                    groupMembershipsCollectionId,
+                    'groupId',
+                    groupId
+                );
+                orphanCleaned = sweepResult.deleted;
+                if (orphanCleaned > 0) {
+                    log(`[DeleteGroup] Compensating sweep: ${orphanCleaned} orphan membership törölve race miatt (group=${groupId}).`);
+                }
+            } catch (err) {
+                error(`[DeleteGroup] compensating sweep hiba (nem blokkoló, group=${groupId}): ${err.message}`);
+            }
+
+            log(`[DeleteGroup] User ${callerId} törölte "${groupDoc.name}" (${targetSlug}) csoportot (memberships=${deletedMemberships + orphanCleaned})`);
+
+            return res.json({
+                success: true,
+                action: 'deleted',
+                groupId,
+                deletedMemberships: deletedMemberships + orphanCleaned
             });
         }
 

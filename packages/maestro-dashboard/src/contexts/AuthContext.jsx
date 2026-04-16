@@ -661,6 +661,89 @@ export function AuthProvider({ children }) {
         );
     }, [user?.$id]);
 
+    /**
+     * Csoporttagság hozzáadása (org owner/admin). Idempotens — ha a user már
+     * tagja a csoportnak, a CF `already_member` választ ad.
+     *
+     * @param {string} groupId
+     * @param {string} userId
+     */
+    const addGroupMember = useCallback(async (groupId, userId) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'add_group_member',
+            { groupId, userId },
+            'group_member_add_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * Csoporttagság eltávolítása (org owner/admin). Idempotens — ha nincs ilyen
+     * membership, a CF `already_removed` választ ad.
+     *
+     * @param {string} groupId
+     * @param {string} userId
+     */
+    const removeGroupMember = useCallback(async (groupId, userId) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'remove_group_member',
+            { groupId, userId },
+            'group_member_remove_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * Új csoport létrehozása egy szerkesztőségben (org owner/admin). A CF
+     * `create_group` action-jét hívja. A válasz tartalmazza a teljes group
+     * dokumentumot — a hívó azonnal hozzáfűzheti a helyi state-hez a Realtime
+     * push előtt. A caller seed-membership-et kap automatikusan.
+     *
+     * @param {string} editorialOfficeId
+     * @param {string} name
+     */
+    const createGroup = useCallback(async (editorialOfficeId, name) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'create_group',
+            { editorialOfficeId, name },
+            'group_create_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * Csoport átnevezése (org owner/admin). Csak a display name változik,
+     * a slug stabil marad — a workflow `compiled` JSON slug-okra hivatkozik.
+     *
+     * @param {string} groupId
+     * @param {string} name
+     */
+    const renameGroup = useCallback(async (groupId, name) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'rename_group',
+            { groupId, name },
+            'group_update_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * Csoport törlése (org owner/admin). DEFAULT_GROUPS-ot nem lehet törölni.
+     * Ha bármely workflow compiled JSON-ja, publikáció defaultContributors-e
+     * vagy cikk contributors-a hivatkozza a slug-ot, a CF `group_in_use`
+     * hibát ad vissza a hivatkozó rekordok listájával.
+     *
+     * @param {string} groupId
+     */
+    const deleteGroup = useCallback(async (groupId) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'delete_group',
+            { groupId },
+            'group_delete_failed'
+        );
+    }, [user?.$id]);
+
     const value = useMemo(() => ({
         user,
         loading,
@@ -684,7 +767,12 @@ export function AuthProvider({ children }) {
         deleteEditorialOffice,
         createEditorialOffice,
         renameOrganization,
-        renameEditorialOffice
+        renameEditorialOffice,
+        addGroupMember,
+        removeGroupMember,
+        createGroup,
+        renameGroup,
+        deleteGroup
     }), [
         user,
         loading,
@@ -708,7 +796,12 @@ export function AuthProvider({ children }) {
         deleteEditorialOffice,
         createEditorialOffice,
         renameOrganization,
-        renameEditorialOffice
+        renameEditorialOffice,
+        addGroupMember,
+        removeGroupMember,
+        createGroup,
+        renameGroup,
+        deleteGroup
     ]);
 
     return (
