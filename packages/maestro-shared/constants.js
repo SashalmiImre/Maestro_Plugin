@@ -35,3 +35,22 @@ export const MARKERS = {
     NONE: 0,
     IGNORE: 1
 };
+
+/**
+ * Workflow láthatóság (#30).
+ * - ORGANIZATION: az adott org bármely office-ának tagjai látják
+ * - EDITORIAL_OFFICE: csak az adott office tagjai látják (default)
+ *
+ * @enum {string}
+ */
+export const WORKFLOW_VISIBILITY = {
+    ORGANIZATION: 'organization',
+    EDITORIAL_OFFICE: 'editorial_office'
+};
+
+export const WORKFLOW_VISIBILITY_VALUES = [
+    WORKFLOW_VISIBILITY.ORGANIZATION,
+    WORKFLOW_VISIBILITY.EDITORIAL_OFFICE
+];
+
+export const WORKFLOW_VISIBILITY_DEFAULT = WORKFLOW_VISIBILITY.EDITORIAL_OFFICE;

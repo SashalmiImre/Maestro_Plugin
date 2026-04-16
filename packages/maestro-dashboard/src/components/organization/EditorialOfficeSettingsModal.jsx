@@ -7,13 +7,13 @@
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { Databases, Query } from 'appwrite';
 import { getClient, useAuth } from '../../contexts/AuthContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import Tabs from '../Tabs.jsx';
 import EditorialOfficeGeneralTab from './EditorialOfficeGeneralTab.jsx';
 import EditorialOfficeGroupsTab from './EditorialOfficeGroupsTab.jsx';
+import EditorialOfficeWorkflowTab from './EditorialOfficeWorkflowTab.jsx';
 import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 
 const TAB_DEFS = [
@@ -45,7 +45,6 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
         orgMemberships
     } = useAuth();
     const { closeModal } = useModal();
-    const navigate = useNavigate();
 
     const office = editorialOffices?.find(o => o.$id === editorialOfficeId) || null;
     const org = office ? organizations?.find(o => o.$id === office.organizationId) || null : null;
@@ -56,7 +55,7 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
     const [groups, setGroups] = useState([]);
     const [groupMemberships, setGroupMemberships] = useState([]);
     const [officeMembers, setOfficeMembers] = useState([]);
-    const [hasWorkflow, setHasWorkflow] = useState(false);
+    const [workflows, setWorkflows] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [loadError, setLoadError] = useState('');
 
@@ -96,6 +95,12 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
         const gen = ++loadGenRef.current;
 
         try {
+            // Workflows query: csak saját office workflow-i (visibility-től
+            // függetlenül — legacy null és `organization` own-office is ide esik).
+            // Szándékosan szcópolt: az `organization` láthatóság a Plugin-oldali
+            // cross-office fogyasztás miatt létezik (DataContext Query.or), a
+            // kezelés mindig az ownership office `Beállítások > Workflow` fülén
+            // történik — így a scope_mismatch footgun elkerülve.
             const [groupsResult, membershipsResult, officeMembersResult, workflowsResult] = await Promise.all([
                 databases.listDocuments({
                     databaseId: DATABASE_ID,
@@ -126,8 +131,7 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
                     collectionId: COLLECTIONS.WORKFLOWS,
                     queries: [
                         Query.equal('editorialOfficeId', editorialOfficeId),
-                        Query.select(['$id']),
-                        Query.limit(1)
+                        Query.limit(100)
                     ]
                 })
             ]);
@@ -137,7 +141,7 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
             setGroups(groupsResult.documents);
             setGroupMemberships(membershipsResult.documents);
             setOfficeMembers(officeMembersResult.documents);
-            setHasWorkflow(workflowsResult.documents.length > 0);
+            setWorkflows(workflowsResult.documents);
         } catch (err) {
             if (gen !== loadGenRef.current) return;
             console.error('[EditorialOfficeSettingsModal] Adatok betöltése sikertelen:', err);
@@ -150,11 +154,6 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
     useEffect(() => {
         loadData();
     }, [loadData]);
-
-    function handleOpenWorkflowDesigner() {
-        closeModal();
-        navigate(`/admin/office/${editorialOfficeId}/workflow`);
-    }
 
     // --- Render ---
 
@@ -203,34 +202,13 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
                 )}
 
                 {activeTab === 'workflow' && (
-                    <>
-                        {isLoading ? (
-                            <div className="form-empty-state">Betöltés…</div>
-                        ) : (
-                            <div style={{ marginBottom: 20 }}>
-                                <h3 style={{ margin: '0 0 8px 0', fontSize: 14, fontWeight: 600 }}>
-                                    Workflow
-                                </h3>
-
-                                {hasWorkflow ? (
-                                    <button
-                                        type="button"
-                                        onClick={handleOpenWorkflowDesigner}
-                                        style={{
-                                            fontSize: 12, color: '#adc6ff', textDecoration: 'none',
-                                            background: 'none', border: 'none', cursor: 'pointer', padding: 0
-                                        }}
-                                    >
-                                        Workflow tervező megnyitása →
-                                    </button>
-                                ) : (
-                                    <p style={{ fontSize: 12, color: '#888', margin: '4px 0' }}>
-                                        Nincs workflow konfigurálva.
-                                    </p>
-                                )}
-                            </div>
-                        )}
-                    </>
+                    <EditorialOfficeWorkflowTab
+                        office={office}
+                        workflows={workflows}
+                        isLoading={isLoading}
+                        isOrgAdmin={isOrgAdmin}
+                        onReload={loadData}
+                    />
                 )}
             </div>
         </div>

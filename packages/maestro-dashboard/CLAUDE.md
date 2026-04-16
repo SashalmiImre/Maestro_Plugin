@@ -201,7 +201,10 @@ maestro-dashboard/
 │           ├── GeneralTab.jsx              ← Név szerkesztés, szerkesztőségek + „+ Új", DangerZone kaszkád számokkal
 │           ├── UsersTab.jsx                ← Invite flow, függő meghívók, tagok szerepkör szerint csoportosítva
 │           ├── CreateEditorialOfficeModal.jsx ← Új szerkesztőség (név + opcionális workflow klón org-szintről)
-│           └── EditorialOfficeSettingsModal.jsx ← (Fázis 8) szerkesztőség beállítások
+│           ├── EditorialOfficeSettingsModal.jsx ← Szerkesztőség beállítások shell (3 tab: Általános / Csoportok / Workflow)
+│           ├── EditorialOfficeGeneralTab.jsx    ← (#28) név rename, „Új kiadvány", DangerZone
+│           ├── EditorialOfficeGroupsTab.jsx     ← (#29) csoport CRUD + tag×csoport mátrix
+│           └── EditorialOfficeWorkflowTab.jsx   ← (#30) workflow CRUD + visibility dropdown (2-way: organization/editorial_office)
 │
 ├── shared -> ../maestro-shared   ← Symlink a közös csomagra
 └── dist/                         ← Vite build output (gitignore-olt)

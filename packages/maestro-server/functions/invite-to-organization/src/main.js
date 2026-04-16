@@ -127,10 +127,20 @@ const VALID_ACTIONS = new Set([
     'bootstrap_organization', 'create', 'accept',
     'add_group_member', 'remove_group_member',
     'create_group', 'rename_group', 'delete_group',
-    'create_workflow', 'update_workflow', 'update_organization',
+    'bootstrap_workflow_schema',
+    'create_workflow', 'update_workflow',
+    'update_workflow_metadata',
+    'delete_workflow', 'duplicate_workflow',
+    'update_organization',
     'create_editorial_office', 'update_editorial_office',
     'delete_organization', 'delete_editorial_office'
 ]);
+
+// Workflow láthatóság enum — MVP 2-way (lásd _docs/Feladatok.md #30).
+// A négy-way modell (public / private) későbbi iterációban nyitható meg,
+// amikor valid user story lesz rá.
+const WORKFLOW_VISIBILITY_VALUES = ['organization', 'editorial_office'];
+const WORKFLOW_VISIBILITY_DEFAULT = 'editorial_office';
 
 // Kaszkád törlés batch mérete — lapozás a nagy dokumentum-mennyiségek kezeléséhez.
 const CASCADE_BATCH_LIMIT = 100;
@@ -140,6 +150,60 @@ const CASCADE_BATCH_LIMIT = 100;
 // példa bőven elég a "használatban van" állapot érzékeltetéséhez, és a payload
 // + memória bounded marad pathologikus (tízezer+ hivatkozás) esetekben is.
 const MAX_REFERENCES_PER_SCAN = 50;
+
+/**
+ * Workflow doc létrehozás a #30-as mezőkkel (`visibility`, `createdBy`),
+ * schema-safe fallback-kel. Ha a `bootstrap_workflow_schema` még nem futott le
+ * egy upgrade alatt álló env-ben, az Appwrite `document_invalid_structure` (400)
+ * hibát dob az új mezőkre — ilyenkor a helper a mezők nélkül retry-ol, hogy
+ * a seed + interaktív create/duplicate flow ne essen ki (legacy kompatibilitás).
+ *
+ * Rollout-biztonság (#30 harden P1). A `visibility` paraméter kötelező, hogy
+ * a hívó (seed: default; interaktív create: user-whitelisted; duplicate:
+ * forrásról öröklött + fallback) adja, a `createdBy` mindig a callerId.
+ *
+ * A fallback CSAK a default visibility-re megengedett (null → `editorial_office`
+ * olvasási szemantika: nincs adatvesztés). Ha a hívó `organization` visibility-t
+ * kér és a schema még hiányzik, a hiba propagál — különben a user által kért
+ * org-wide láthatóság csendben `editorial_office`-ra degradálódna (silent downgrade).
+ */
+async function createWorkflowDoc(
+    databases, databaseId, workflowsCollectionId, docId, baseFields, visibility, callerId, log
+) {
+    try {
+        return await databases.createDocument(
+            databaseId,
+            workflowsCollectionId,
+            docId,
+            {
+                ...baseFields,
+                visibility,
+                createdBy: callerId
+            }
+        );
+    } catch (err) {
+        const msg = err?.message || '';
+        const isSchemaMissing =
+            (err?.type === 'document_invalid_structure' || err?.code === 400)
+            && /visibility|createdBy|unknown attribute/i.test(msg);
+        if (!isSchemaMissing) {
+            throw err;
+        }
+        if (visibility !== WORKFLOW_VISIBILITY_DEFAULT) {
+            // Nem tudjuk biztonságosan elmenteni a nem-default visibility-t —
+            // az eredeti hiba terjedjen a hívóra (az `bootstrap_workflow_schema`
+            // futtatása után retry-olható).
+            throw err;
+        }
+        log(`[WorkflowDoc] Schema hiányos (visibility/createdBy) — legacy retry without #30 fields. docId=${docId}`);
+        return databases.createDocument(
+            databaseId,
+            workflowsCollectionId,
+            docId,
+            baseFields
+        );
+    }
+}
 
 /**
  * Egy collection összes, adott mezőértékhez tartozó dokumentumát törli.
@@ -860,7 +924,8 @@ module.exports = async function ({ req, res, log, error }) {
             let newWorkflowId = null;
             try {
                 const workflowDocId = `wf-${newOfficeId}`;
-                const workflowDoc = await databases.createDocument(
+                const workflowDoc = await createWorkflowDoc(
+                    databases,
                     databaseId,
                     workflowsCollectionId,
                     workflowDocId,
@@ -871,7 +936,10 @@ module.exports = async function ({ req, res, log, error }) {
                         version: 1,
                         compiled: JSON.stringify(DEFAULT_WORKFLOW),
                         updatedByUserId: callerId
-                    }
+                    },
+                    WORKFLOW_VISIBILITY_DEFAULT,
+                    callerId,
+                    log
                 );
                 newWorkflowId = workflowDoc.$id;
 
@@ -1849,14 +1917,118 @@ module.exports = async function ({ req, res, log, error }) {
         }
 
         // ════════════════════════════════════════════════════════
+        // ACTION = 'bootstrap_workflow_schema'
+        // ════════════════════════════════════════════════════════
+        //
+        // Egyszeri, idempotens séma-bővítés: `visibility` enum + `createdBy`
+        // string attribútumok a `workflows` collection-re. A #30 feature
+        // telepítésekor a user futtatja le (Appwrite Console → Function →
+        // Execute vagy curl). Ha az attribútumok már léteznek, skip + success.
+        //
+        // Auth: caller kell hogy legyen valamely szervezet `owner`-e — az
+        // adminisztratív művelet jellege miatt admin role is szándékosan
+        // kizárva.
+        //
+        // Megjegyzés: az attribútum-létrehozás **aszinkron** a szerveren
+        // (processing → available átmenet néhány másodperc). A sikeres válasz
+        // UTÁN a user várjon ~5-10s-t, mielőtt create_workflow-t hívna.
+        if (action === 'bootstrap_workflow_schema') {
+            // 1. Caller legalább egy org owner-e
+            const ownerships = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.equal('role', 'owner'),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (ownerships.documents.length === 0) {
+                return fail(res, 403, 'insufficient_role', {
+                    requiredRole: 'owner'
+                });
+            }
+
+            const created = [];
+            const skipped = [];
+
+            // 2. visibility enum attribútum
+            try {
+                await databases.createEnumAttribute(
+                    databaseId,
+                    workflowsCollectionId,
+                    'visibility',
+                    WORKFLOW_VISIBILITY_VALUES,
+                    true,                          // required
+                    WORKFLOW_VISIBILITY_DEFAULT,   // default
+                    false                          // array
+                );
+                created.push('visibility');
+            } catch (err) {
+                // Appwrite attribute_already_exists vagy hasonló → skip
+                if (err?.code === 409 || /already exists/i.test(err?.message || '')) {
+                    skipped.push('visibility');
+                } else {
+                    error(`[BootstrapWorkflowSchema] visibility létrehozás hiba: ${err.message}`);
+                    return fail(res, 500, 'schema_visibility_failed', { error: err.message });
+                }
+            }
+
+            // 3. createdBy string attribútum (user $id = 36 char)
+            try {
+                await databases.createStringAttribute(
+                    databaseId,
+                    workflowsCollectionId,
+                    'createdBy',
+                    36,                            // size
+                    false,                         // required — legacy row-okon null
+                    null,                          // default
+                    false                          // array
+                );
+                created.push('createdBy');
+            } catch (err) {
+                if (err?.code === 409 || /already exists/i.test(err?.message || '')) {
+                    skipped.push('createdBy');
+                } else {
+                    error(`[BootstrapWorkflowSchema] createdBy létrehozás hiba: ${err.message}`);
+                    return fail(res, 500, 'schema_createdby_failed', { error: err.message });
+                }
+            }
+
+            log(`[BootstrapWorkflowSchema] User ${callerId}: created=[${created.join(',')}] skipped=[${skipped.join(',')}]`);
+
+            return res.json({
+                success: true,
+                created,
+                skipped,
+                note: 'Az attribútumok feldolgozása ~5-10s. Várj a create_workflow hívás előtt.'
+            });
+        }
+
+        // ════════════════════════════════════════════════════════
         // ACTION = 'create_workflow'
         // ════════════════════════════════════════════════════════
         //
         // Új workflow létrehozása egy meglévő szerkesztőséghez. Owner/admin only.
         // A Dashboard Workflow Designer „+ Új workflow" gombja hívja.
+        //
+        // Opcionális `visibility` (default `editorial_office`): a listázási
+        // láthatóság szabályozása. A `createdBy` automatikusan a callerId
+        // (kliens NEM küldheti — biztonsági ok, a mező ownership-et reprezentál).
         if (action === 'create_workflow') {
             const { editorialOfficeId } = payload;
             const sanitizedName = sanitizeString(payload.name, NAME_MAX_LENGTH);
+
+            // Visibility whitelist check — ha a kliens kap érvénytelen értéket,
+            // fail-fast (ne tároljunk szemetet a DB-ben).
+            const visibility = payload.visibility !== undefined
+                ? payload.visibility
+                : WORKFLOW_VISIBILITY_DEFAULT;
+            if (!WORKFLOW_VISIBILITY_VALUES.includes(visibility)) {
+                return fail(res, 400, 'invalid_visibility', {
+                    allowed: WORKFLOW_VISIBILITY_VALUES
+                });
+            }
 
             if (!editorialOfficeId || !sanitizedName) {
                 return fail(res, 400, 'missing_fields', {
@@ -1920,10 +2092,13 @@ module.exports = async function ({ req, res, log, error }) {
             compiledClone.version = 1;
 
             // 5. Workflow doc létrehozás — az ID automatikus (nem `wf-${officeId}`,
-            // mert egy office-on belül több workflow is létezhet)
+            // mert egy office-on belül több workflow is létezhet).
+            // A `createWorkflowDoc` helper schema-safe fallback-et ad a rollout
+            // ablakra (ha a `bootstrap_workflow_schema` még nem futott le).
             let newWorkflowDoc;
             try {
-                newWorkflowDoc = await databases.createDocument(
+                newWorkflowDoc = await createWorkflowDoc(
+                    databases,
                     databaseId,
                     workflowsCollectionId,
                     sdk.ID.unique(),
@@ -1934,20 +2109,25 @@ module.exports = async function ({ req, res, log, error }) {
                         version: 1,
                         compiled: JSON.stringify(compiledClone),
                         updatedByUserId: callerId
-                    }
+                    },
+                    visibility,
+                    callerId,
+                    log
                 );
             } catch (createErr) {
                 error(`[CreateWorkflow] createDocument hiba: ${createErr.message}`);
                 return fail(res, 500, 'create_failed');
             }
 
-            log(`[CreateWorkflow] User ${callerId} új workflow-t hozott létre: id=${newWorkflowDoc.$id}, name="${sanitizedName}", office=${editorialOfficeId}`);
+            log(`[CreateWorkflow] User ${callerId} új workflow-t hozott létre: id=${newWorkflowDoc.$id}, name="${sanitizedName}", office=${editorialOfficeId}, visibility=${visibility}`);
 
             return res.json({
                 success: true,
                 action: 'created',
                 workflowId: newWorkflowDoc.$id,
-                name: sanitizedName
+                name: sanitizedName,
+                visibility,
+                createdBy: callerId
             });
         }
 
@@ -2152,7 +2332,8 @@ module.exports = async function ({ req, res, log, error }) {
             let newWorkflowId = null;
             if (sourceWorkflowDoc) {
                 try {
-                    const workflowDoc = await databases.createDocument(
+                    const workflowDoc = await createWorkflowDoc(
+                        databases,
                         databaseId,
                         workflowsCollectionId,
                         sdk.ID.unique(),
@@ -2165,7 +2346,10 @@ module.exports = async function ({ req, res, log, error }) {
                                 ? sourceWorkflowDoc.compiled
                                 : JSON.stringify(sourceWorkflowDoc.compiled),
                             updatedByUserId: callerId
-                        }
+                        },
+                        WORKFLOW_VISIBILITY_DEFAULT,
+                        callerId,
+                        log
                     );
                     newWorkflowId = workflowDoc.$id;
                     await databases.updateDocument(
@@ -2352,6 +2536,500 @@ module.exports = async function ({ req, res, log, error }) {
                 version: newVersion,
                 workflowId: workflowDoc.$id,
                 name: renameTo || workflowDoc.name
+            });
+        }
+
+        // ════════════════════════════════════════════════════════
+        // ACTION = 'update_workflow_metadata'
+        // ════════════════════════════════════════════════════════
+        //
+        // Workflow metaadat frissítés (név + visibility) compiled JSON
+        // érintés nélkül. A WorkflowTab dropdownjai és az inline rename
+        // hívja. Külön action (nem az update_workflow bővítése), mert
+        // nincs szükség verzió-bumpra / compiled newline-ra.
+        //
+        // Auth: org owner/admin (az update_workflow-val azonos gate).
+        // Payload: { editorialOfficeId, workflowId, name?, visibility? }
+        if (action === 'update_workflow_metadata') {
+            const { editorialOfficeId, workflowId } = payload;
+            const renameTo = payload.name !== undefined
+                ? sanitizeString(payload.name, NAME_MAX_LENGTH)
+                : null;
+            const visibility = payload.visibility;
+
+            if (!editorialOfficeId || !workflowId) {
+                return fail(res, 400, 'missing_fields', {
+                    required: ['editorialOfficeId', 'workflowId']
+                });
+            }
+            if (payload.name !== undefined && !renameTo) {
+                return fail(res, 400, 'invalid_name');
+            }
+            if (visibility !== undefined && !WORKFLOW_VISIBILITY_VALUES.includes(visibility)) {
+                return fail(res, 400, 'invalid_visibility', {
+                    allowed: WORKFLOW_VISIBILITY_VALUES
+                });
+            }
+            if (!renameTo && visibility === undefined) {
+                return fail(res, 400, 'nothing_to_update');
+            }
+
+            // 1. Office lookup → organizationId
+            let office;
+            try {
+                office = await databases.listDocuments(
+                    databaseId,
+                    officesCollectionId,
+                    [
+                        sdk.Query.equal('$id', editorialOfficeId),
+                        sdk.Query.limit(1)
+                    ]
+                );
+            } catch (err) {
+                return fail(res, 404, 'office_not_found');
+            }
+            if (office.documents.length === 0) {
+                return fail(res, 404, 'office_not_found');
+            }
+            const orgId = office.documents[0].organizationId;
+
+            // 2. Caller jogosultság: org owner/admin
+            const callerMembership = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', orgId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (callerMembership.documents.length === 0) {
+                return fail(res, 403, 'not_a_member');
+            }
+            const callerRole = callerMembership.documents[0].role;
+            if (callerRole !== 'owner' && callerRole !== 'admin') {
+                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            }
+
+            // 3. Workflow doc betöltés + scope match
+            let workflowDoc;
+            try {
+                workflowDoc = await databases.getDocument(
+                    databaseId,
+                    workflowsCollectionId,
+                    workflowId
+                );
+            } catch (err) {
+                return fail(res, 404, 'workflow_not_found');
+            }
+            if (workflowDoc.editorialOfficeId !== editorialOfficeId) {
+                return fail(res, 403, 'scope_mismatch');
+            }
+
+            // 4. Rename unique check (csak ha változik)
+            if (renameTo && renameTo !== workflowDoc.name) {
+                const nameClash = await databases.listDocuments(
+                    databaseId,
+                    workflowsCollectionId,
+                    [
+                        sdk.Query.equal('editorialOfficeId', editorialOfficeId),
+                        sdk.Query.equal('name', renameTo),
+                        sdk.Query.limit(1)
+                    ]
+                );
+                const clashDoc = nameClash.documents[0];
+                if (clashDoc && clashDoc.$id !== workflowDoc.$id) {
+                    return fail(res, 400, 'name_taken', { name: renameTo });
+                }
+            }
+
+            // 5. Update payload összeállítás (csak a változó mezők)
+            const updateData = { updatedByUserId: callerId };
+            if (renameTo && renameTo !== workflowDoc.name) {
+                updateData.name = renameTo;
+            }
+            if (visibility !== undefined && visibility !== workflowDoc.visibility) {
+                updateData.visibility = visibility;
+            }
+
+            // Ha minden mező no-op (rename to same / visibility to same),
+            // success válasz (idempotens), nem kell DB hit.
+            if (Object.keys(updateData).length === 1) {
+                return res.json({
+                    success: true,
+                    workflowId: workflowDoc.$id,
+                    name: workflowDoc.name,
+                    visibility: workflowDoc.visibility,
+                    action: 'noop'
+                });
+            }
+
+            // 5a. Visibility downgrade blocking scan.
+            // `organization` → `editorial_office` váltás elárvítaná az
+            // egyéb office-ok publikációit (Plugin Query.or már nem adná
+            // vissza a workflow doc-ot, a cikkek workflow=null-ra esnének).
+            // Scan a szervezet összes publikációját és szűrjük a saját
+            // office-on kívülieket. Analóg a delete_workflow `workflow_in_use`
+            // scan-nel. Pagination + match-cap a MAX_REFERENCES_PER_SCAN-nel.
+            if (
+                updateData.visibility === 'editorial_office'
+                && workflowDoc.visibility === 'organization'
+            ) {
+                if (!publicationsCollectionId) {
+                    error('[UpdateWorkflowMetadata] PUBLICATIONS_COLLECTION_ID env var hiányzik');
+                    return fail(res, 500, 'env_missing', {
+                        required: 'PUBLICATIONS_COLLECTION_ID'
+                    });
+                }
+
+                const orphanedPublications = [];
+                let downgradeCursor = null;
+
+                downgradeScanLoop:
+                while (true) {
+                    const queries = [
+                        sdk.Query.equal('workflowId', workflowId),
+                        sdk.Query.equal('organizationId', orgId),
+                        sdk.Query.select(['$id', 'name', 'editorialOfficeId']),
+                        sdk.Query.limit(CASCADE_BATCH_LIMIT)
+                    ];
+                    if (downgradeCursor) queries.push(sdk.Query.cursorAfter(downgradeCursor));
+
+                    const batch = await databases.listDocuments(
+                        databaseId,
+                        publicationsCollectionId,
+                        queries
+                    );
+                    if (batch.documents.length === 0) break;
+                    for (const doc of batch.documents) {
+                        if (doc.editorialOfficeId === editorialOfficeId) continue;
+                        orphanedPublications.push({
+                            $id: doc.$id,
+                            name: doc.name,
+                            editorialOfficeId: doc.editorialOfficeId
+                        });
+                        if (orphanedPublications.length >= MAX_REFERENCES_PER_SCAN) {
+                            break downgradeScanLoop;
+                        }
+                    }
+                    if (batch.documents.length < CASCADE_BATCH_LIMIT) break;
+                    downgradeCursor = batch.documents[batch.documents.length - 1].$id;
+                }
+
+                if (orphanedPublications.length > 0) {
+                    return fail(res, 400, 'visibility_downgrade_blocked', {
+                        orphanedPublications,
+                        count: orphanedPublications.length
+                    });
+                }
+            }
+
+            await databases.updateDocument(
+                databaseId,
+                workflowsCollectionId,
+                workflowDoc.$id,
+                updateData
+            );
+
+            log(`[UpdateWorkflowMetadata] Workflow ${workflowDoc.$id}: ${Object.keys(updateData).filter(k => k !== 'updatedByUserId').join(',')} változott (by ${callerId})`);
+
+            return res.json({
+                success: true,
+                workflowId: workflowDoc.$id,
+                name: updateData.name || workflowDoc.name,
+                visibility: updateData.visibility || workflowDoc.visibility
+            });
+        }
+
+        // ════════════════════════════════════════════════════════
+        // ACTION = 'delete_workflow'
+        // ════════════════════════════════════════════════════════
+        //
+        // Workflow törlése. A WorkflowTab „Törlés" gombja hívja.
+        //
+        // Blocking check: nem törölhető, ha bármely publikáció (office-on
+        // belül VAGY az org-on belül, ha visibility='organization') a
+        // workflow-ra hivatkozik (`publications.workflowId`). Válasz:
+        // `workflow_in_use` + érintett publikációk listája.
+        //
+        // Auth: org owner/admin. A `createdBy` alapú ownership NEM gate
+        // MVP-ben (nincs private visibility).
+        if (action === 'delete_workflow') {
+            const { editorialOfficeId, workflowId } = payload;
+
+            if (!editorialOfficeId || !workflowId) {
+                return fail(res, 400, 'missing_fields', {
+                    required: ['editorialOfficeId', 'workflowId']
+                });
+            }
+            if (!publicationsCollectionId) {
+                error('[DeleteWorkflow] PUBLICATIONS_COLLECTION_ID env var hiányzik');
+                return fail(res, 500, 'env_missing', {
+                    required: 'PUBLICATIONS_COLLECTION_ID'
+                });
+            }
+
+            // 1. Office lookup → organizationId
+            let office;
+            try {
+                office = await databases.listDocuments(
+                    databaseId,
+                    officesCollectionId,
+                    [
+                        sdk.Query.equal('$id', editorialOfficeId),
+                        sdk.Query.limit(1)
+                    ]
+                );
+            } catch (err) {
+                return fail(res, 404, 'office_not_found');
+            }
+            if (office.documents.length === 0) {
+                return fail(res, 404, 'office_not_found');
+            }
+            const orgId = office.documents[0].organizationId;
+
+            // 2. Caller jogosultság: org owner/admin
+            const callerMembership = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', orgId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (callerMembership.documents.length === 0) {
+                return fail(res, 403, 'not_a_member');
+            }
+            const callerRole = callerMembership.documents[0].role;
+            if (callerRole !== 'owner' && callerRole !== 'admin') {
+                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            }
+
+            // 3. Workflow doc betöltés + scope match
+            let workflowDoc;
+            try {
+                workflowDoc = await databases.getDocument(
+                    databaseId,
+                    workflowsCollectionId,
+                    workflowId
+                );
+            } catch (err) {
+                return fail(res, 404, 'workflow_not_found');
+            }
+            if (workflowDoc.editorialOfficeId !== editorialOfficeId) {
+                return fail(res, 403, 'scope_mismatch');
+            }
+
+            // 4. Publikáció-hivatkozás scan. Organization-visibility esetén az
+            // egész org publikációit nézzük (cross-office hivatkozás), különben
+            // csak az office-t. Pagination + match-cap a MAX_REFERENCES_PER_SCAN-nel
+            // (bounded payload + memória).
+            const isOrgScope = workflowDoc.visibility === 'organization';
+            const usedByPublications = [];
+            let cursor = null;
+
+            pubScanLoop:
+            while (true) {
+                const queries = [
+                    sdk.Query.equal('workflowId', workflowId),
+                    sdk.Query.select(['$id', 'name', 'editorialOfficeId']),
+                    sdk.Query.limit(CASCADE_BATCH_LIMIT)
+                ];
+                if (isOrgScope) {
+                    queries.push(sdk.Query.equal('organizationId', orgId));
+                } else {
+                    queries.push(sdk.Query.equal('editorialOfficeId', editorialOfficeId));
+                }
+                if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
+
+                const batch = await databases.listDocuments(
+                    databaseId,
+                    publicationsCollectionId,
+                    queries
+                );
+                if (batch.documents.length === 0) break;
+                for (const doc of batch.documents) {
+                    usedByPublications.push({ $id: doc.$id, name: doc.name });
+                    if (usedByPublications.length >= MAX_REFERENCES_PER_SCAN) {
+                        break pubScanLoop;
+                    }
+                }
+                if (batch.documents.length < CASCADE_BATCH_LIMIT) break;
+                cursor = batch.documents[batch.documents.length - 1].$id;
+            }
+
+            if (usedByPublications.length > 0) {
+                return fail(res, 400, 'workflow_in_use', {
+                    usedByPublications,
+                    count: usedByPublications.length
+                });
+            }
+
+            // 5. Törlés (a Plugin DataContext Realtime handlere reagál a .delete
+            // event-re, a `workflows[]`-ből eltávolítja).
+            try {
+                await databases.deleteDocument(
+                    databaseId,
+                    workflowsCollectionId,
+                    workflowId
+                );
+            } catch (delErr) {
+                error(`[DeleteWorkflow] deleteDocument hiba (${workflowId}): ${delErr.message}`);
+                return fail(res, 500, 'delete_failed');
+            }
+
+            log(`[DeleteWorkflow] User ${callerId} törölte a workflow-t: id=${workflowId}, name="${workflowDoc.name}", office=${editorialOfficeId}`);
+
+            return res.json({
+                success: true,
+                action: 'deleted',
+                workflowId,
+                name: workflowDoc.name
+            });
+        }
+
+        // ════════════════════════════════════════════════════════
+        // ACTION = 'duplicate_workflow'
+        // ════════════════════════════════════════════════════════
+        //
+        // Workflow duplikálás („Más néven mentés"): az eredeti compiled
+        // JSON másolódik egy új workflow doc-ba. A duplikátum visibility-je
+        // ÖRÖKLŐDIK a forrásról (user döntés #30 indulásakor).
+        //
+        // Auth: org owner/admin.
+        // Payload: { editorialOfficeId, workflowId, name } — az új név
+        //          kötelező, az office-on belül unique.
+        if (action === 'duplicate_workflow') {
+            const { editorialOfficeId, workflowId } = payload;
+            const sanitizedName = sanitizeString(payload.name, NAME_MAX_LENGTH);
+
+            if (!editorialOfficeId || !workflowId || !sanitizedName) {
+                return fail(res, 400, 'missing_fields', {
+                    required: ['editorialOfficeId', 'workflowId', 'name']
+                });
+            }
+
+            // 1. Office lookup → organizationId
+            let office;
+            try {
+                office = await databases.listDocuments(
+                    databaseId,
+                    officesCollectionId,
+                    [
+                        sdk.Query.equal('$id', editorialOfficeId),
+                        sdk.Query.limit(1)
+                    ]
+                );
+            } catch (err) {
+                return fail(res, 404, 'office_not_found');
+            }
+            if (office.documents.length === 0) {
+                return fail(res, 404, 'office_not_found');
+            }
+            const orgId = office.documents[0].organizationId;
+
+            // 2. Caller jogosultság: org owner/admin
+            const callerMembership = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', orgId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (callerMembership.documents.length === 0) {
+                return fail(res, 403, 'not_a_member');
+            }
+            const callerRole = callerMembership.documents[0].role;
+            if (callerRole !== 'owner' && callerRole !== 'admin') {
+                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            }
+
+            // 3. Forrás workflow doc
+            let sourceDoc;
+            try {
+                sourceDoc = await databases.getDocument(
+                    databaseId,
+                    workflowsCollectionId,
+                    workflowId
+                );
+            } catch (err) {
+                return fail(res, 404, 'workflow_not_found');
+            }
+            if (sourceDoc.editorialOfficeId !== editorialOfficeId) {
+                return fail(res, 403, 'scope_mismatch');
+            }
+
+            // 4. Új név unique check az office-on belül
+            const nameClash = await databases.listDocuments(
+                databaseId,
+                workflowsCollectionId,
+                [
+                    sdk.Query.equal('editorialOfficeId', editorialOfficeId),
+                    sdk.Query.equal('name', sanitizedName),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (nameClash.documents.length > 0) {
+                return fail(res, 400, 'name_taken', { name: sanitizedName });
+            }
+
+            // 5. Compiled klón — version reset (new doc, own version line)
+            let compiledClone;
+            try {
+                const source = typeof sourceDoc.compiled === 'string'
+                    ? JSON.parse(sourceDoc.compiled)
+                    : sourceDoc.compiled;
+                compiledClone = JSON.parse(JSON.stringify(source || {}));
+                compiledClone.version = 1;
+            } catch (parseErr) {
+                error(`[DuplicateWorkflow] forrás compiled JSON parse hiba (${workflowId}): ${parseErr.message}`);
+                return fail(res, 500, 'source_compiled_invalid');
+            }
+
+            // 6. Visibility öröklés. Whitelist check a legacy (null / ismeretlen
+            // érték) row-ok kezelésére — fallback a default-ra.
+            const inheritedVisibility = WORKFLOW_VISIBILITY_VALUES.includes(sourceDoc.visibility)
+                ? sourceDoc.visibility
+                : WORKFLOW_VISIBILITY_DEFAULT;
+
+            // 7. Új doc — schema-safe helper (rollout-biztonság)
+            let newDoc;
+            try {
+                newDoc = await createWorkflowDoc(
+                    databases,
+                    databaseId,
+                    workflowsCollectionId,
+                    sdk.ID.unique(),
+                    {
+                        editorialOfficeId,
+                        organizationId: orgId,
+                        name: sanitizedName,
+                        version: 1,
+                        compiled: JSON.stringify(compiledClone),
+                        updatedByUserId: callerId
+                    },
+                    inheritedVisibility,
+                    callerId,
+                    log
+                );
+            } catch (createErr) {
+                error(`[DuplicateWorkflow] createDocument hiba: ${createErr.message}`);
+                return fail(res, 500, 'duplicate_failed');
+            }
+
+            log(`[DuplicateWorkflow] User ${callerId} duplikált: forrás=${workflowId} → új=${newDoc.$id}, name="${sanitizedName}", visibility=${inheritedVisibility}`);
+
+            return res.json({
+                success: true,
+                action: 'duplicated',
+                workflowId: newDoc.$id,
+                sourceWorkflowId: workflowId,
+                name: sanitizedName,
+                visibility: inheritedVisibility,
+                createdBy: callerId
             });
         }
 

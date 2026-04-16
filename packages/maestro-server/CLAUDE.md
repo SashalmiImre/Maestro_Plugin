@@ -235,7 +235,7 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 
 **Bemeneti payload**:
 ```json
-{ "action": "bootstrap_organization" | "create" | "accept" | "add_group_member" | "remove_group_member" | "create_workflow" | "update_workflow" | "delete_organization" | "delete_editorial_office", ... }
+{ "action": "bootstrap_organization" | "create" | "accept" | "add_group_member" | "remove_group_member" | "create_workflow" | "update_workflow" | "update_workflow_metadata" | "delete_workflow" | "duplicate_workflow" | "bootstrap_workflow_schema" | "delete_organization" | "delete_editorial_office", ... }
 ```
 
 **Biztonsági megjegyzés**: Korábban létezett egy `organization-membership-guard` trigger CF, amely egy `modifiedByClientId === 'server-guard'` sentinellel engedélyezte az invite-eredetű membership-eket. Ez **kliens-forgeable** volt — bármely hitelesített user beállíthatta a payload-ban. A Codex adversarial review jelezte a kritikus sebezhetőséget, és a javítás ACL-alapú védelemre váltott (B.5 utolsó iteráció, 2026-04-07).
@@ -323,6 +323,40 @@ A guard function-ök a `workflows` collection `compiled` JSON mezőjéből olvas
 **Compiled JSON struktúra**: `states`, `transitions`, `validations`, `commands`, `elementPermissions`, `contributorGroups`, `leaderGroups`, `statePermissions`, `capabilities`.
 
 **Contributor mezők (Fázis 3)**: A `contributors` (articles) és `defaultContributors` (publications) JSON longtext mező, a kulcsa a csoport `slug`-ja (pl. `{"designers":"userId1","editors":"userId2"}`). A CF-ek `JSON.parse()` → kulcs iterálás → userId validáció mintát használják.
+
+### Visibility + createdBy (#30)
+
+Két új attribútum a `workflows` collection-ön:
+
+| Mező | Típus | Default | Célja |
+|------|-------|---------|-------|
+| `visibility` | enum (`organization`, `editorial_office`) | `editorial_office` | A workflow láthatósági hatóköre a Plugin / Dashboard fetch query-ben. |
+| `createdBy` | string (36, nullable) | null | A létrehozó user `$id`-je (informatív; legacy row-okon null). |
+
+**2-way MVP szemantika**:
+- `organization`: az adott org bármely office tagja látja a workflow-t (cross-office szabvány).
+- `editorial_office`: csak az adott office tagjai látják (alapértelmezett, régi viselkedés).
+
+**Idempotens schema bootstrap** — `bootstrap_workflow_schema` CF action:
+- Owner-only (any org-ban owner role elég).
+- `databases.createEnumAttribute` + `createStringAttribute` — 409 catch → skip (idempotens).
+- Legacy row-ok `visibility=null` → a Plugin / CF fallback `'editorial_office'`-ra értékeli.
+
+**Új CF action-ök (#30)**:
+- `update_workflow_metadata` — `{ editorialOfficeId, workflowId, name?, visibility? }`, org admin/owner auth, office scope match, name uniqueness per office, visibility whitelist. **Downgrade blocking scan**: `organization` → `editorial_office` váltásnál a szervezet más office-aiban lévő publikációkat ellenőrzi (`publications.workflowId === workflowId` + `organizationId === orgId` + `editorialOfficeId !== callerOffice`) — ha van, `visibility_downgrade_blocked` + `orphanedPublications: [{$id, name, editorialOfficeId}]`. Analóg cap/pagination mint a `delete_workflow` scan.
+- `duplicate_workflow` — `{ editorialOfficeId, workflowId, name }`, org admin/owner auth, a `compiled` JSON másolódik, `visibility` az eredetiről öröklődik (whitelist fallback), `createdBy = caller`, `version = 1`.
+- `delete_workflow` — `{ editorialOfficeId, workflowId }`, org admin/owner auth. **Blocking scan**: a workflow-ra hivatkozó publikációk listája (`publications.workflowId === workflowId`) — ha van, `workflow_in_use` + `usedByPublications: [...]`. Hatókör: ha `visibility='organization'`, az egész org minden office-át scan-eli; egyébként csak a saját office-t. Cap: `MAX_REFERENCES_PER_SCAN=50` (korai kilépés), `CASCADE_BATCH_LIMIT=100` (paginált listDocuments).
+- `create_workflow` kiegészítés: új row `visibility` (default `editorial_office`) + `createdBy = caller`.
+
+**Plugin 2-way fetch query** (`DataContext.jsx`):
+```js
+Query.or([
+    Query.and([Query.equal("visibility", "organization"), Query.equal("organizationId", currentOrgId)]),
+    Query.and([Query.equal("visibility", "editorial_office"), Query.equal("editorialOfficeId", currentOfficeId)])
+])
+```
+
+A Realtime handler `isVisible` logikával ugyanezt a kétágú szűrést alkalmazza minden `.create`/`.update` eseményre (legacy null → `editorial_office` fallback).
 
 ---
 

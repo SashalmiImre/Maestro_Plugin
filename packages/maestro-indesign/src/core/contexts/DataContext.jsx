@@ -89,7 +89,7 @@ export const DataProvider = ({ children }) => {
     // A derived `workflow` memo a publication.workflowId alapján oldja fel,
     // a parse a memo-ban történik — így a Realtime handler olcsó.
     const [workflows, setWorkflows] = useState([]);
-    const workflowFetchedForOfficeRef = useRef(null);
+    const workflowFetchedForScopeRef = useRef(null);
 
     // 4. Loading indikátorok
     const [isLoading, setIsLoading] = useState(true); // Globális loading (initial)
@@ -163,6 +163,7 @@ export const DataProvider = ({ children }) => {
         // és nem generálódik újra pub-váltáskor (elkerüli a dupla fetch-et).
         const currentPubId = activePublicationIdRef.current;
         const currentOfficeId = activeEditorialOfficeIdRef.current;
+        const currentOrgId = activeOrganizationIdRef.current;
 
         // Scope-guard: ha még nincs aktív szerkesztőség, üres state + initialized,
         // hogy a Realtime feliratkozás indulhasson. A scope megjelenésekor az
@@ -284,11 +285,17 @@ export const DataProvider = ({ children }) => {
                 );
             }
 
-            // 2d. Workflow-k lekérése (nem-kritikus) — csak ha office változott vagy
+            // 2d. Workflow-k lekérése (nem-kritikus) — csak ha scope változott vagy
             // még nincs meg. Része a kritikus Promise.all-nak, hogy a
             // `isInitialized=true` csak betöltött workflow után billenjen — különben
             // a Realtime handler átmenetileg `workflow=null`-t látna.
-            const needsWorkflowFetch = workflowFetchedForOfficeRef.current !== currentOfficeId;
+            //
+            // 2-way visibility (#30):
+            //   - `editorial_office`: csak az aktív office workflow-i
+            //   - `organization`: az aktív org bármely office-ának workflow-i
+            // A scope fetch cache kulcsa `${orgId}|${officeId}` — org-váltás is invalidál.
+            const workflowScopeKey = `${currentOrgId}|${currentOfficeId}`;
+            const needsWorkflowFetch = workflowFetchedForScopeRef.current !== workflowScopeKey;
             const workflowsPromise = needsWorkflowFetch
                 ? withRetry(
                     () => withTimeout(
@@ -296,7 +303,24 @@ export const DataProvider = ({ children }) => {
                             databaseId: DATABASE_ID,
                             tableId: COLLECTIONS.WORKFLOWS,
                             queries: [
-                                Query.equal("editorialOfficeId", currentOfficeId),
+                                Query.or([
+                                    Query.and([
+                                        Query.equal("visibility", "organization"),
+                                        Query.equal("organizationId", currentOrgId)
+                                    ]),
+                                    Query.and([
+                                        Query.equal("visibility", "editorial_office"),
+                                        Query.equal("editorialOfficeId", currentOfficeId)
+                                    ]),
+                                    // Legacy null → editorial_office fallback (illeszkedik a
+                                    // Realtime handler `payload.visibility || 'editorial_office'`
+                                    // szemantikájához). Rollout-ablak: schema bootstrap előtt
+                                    // létezett sorokat is láthatóvá teszi.
+                                    Query.and([
+                                        Query.isNull("visibility"),
+                                        Query.equal("editorialOfficeId", currentOfficeId)
+                                    ])
+                                ]),
                                 Query.orderAsc("name"),
                                 Query.limit(100)
                             ]
@@ -362,11 +386,11 @@ export const DataProvider = ({ children }) => {
                 if (workflowsResult.status === 'fulfilled' && workflowsResult.value) {
                     const rows = workflowsResult.value.documents || workflowsResult.value.rows || [];
                     setWorkflows(rows);
-                    workflowFetchedForOfficeRef.current = currentOfficeId;
+                    workflowFetchedForScopeRef.current = workflowScopeKey;
                     if (rows.length === 0) {
-                        logWarn('[DataContext] Nincs workflow doc ehhez az office-hoz:', currentOfficeId);
+                        logWarn('[DataContext] Nincs látható workflow doc ebben a scope-ban:', workflowScopeKey);
                     } else {
-                        log(`[DataContext] Workflow-k betöltve (${rows.length} doc, office=${currentOfficeId})`);
+                        log(`[DataContext] Workflow-k betöltve (${rows.length} doc, scope=${workflowScopeKey})`);
                     }
                 } else {
                     logError('[DataContext] Workflow lekérése sikertelen:', workflowsResult.reason);
@@ -1040,12 +1064,30 @@ export const DataProvider = ({ children }) => {
             }
 
             // --- Workflow ---
-            // Office-szintű workflow doc változás → a workflows[] array-t frissítjük.
+            // 2-way visibility (#30) alapján szűrünk: a payload látható, ha
+            //  - visibility='editorial_office' ÉS editorialOfficeId === aktív office, VAGY
+            //  - visibility='organization' ÉS organizationId === aktív org.
+            // Legacy payload visibility=null → 'editorial_office' default.
             // A derived `workflow` memo automatikusan újraszámolódik a publikáció
             // workflowId-ja alapján, a workflowChanged event dispatch külön useEffect-ben.
             else if (event.includes(COLLECTIONS.WORKFLOWS)) {
-                if (payload.editorialOfficeId && payload.editorialOfficeId !== activeEditorialOfficeIdRef.current) {
-                    return; // Más szerkesztőség workflow-ja — ignoráljuk
+                const payloadVisibility = payload.visibility || 'editorial_office';
+                const currentOfficeId = activeEditorialOfficeIdRef.current;
+                const currentOrgId = activeOrganizationIdRef.current;
+                const isVisible = (
+                    (payloadVisibility === 'editorial_office' && payload.editorialOfficeId === currentOfficeId)
+                    || (payloadVisibility === 'organization' && payload.organizationId === currentOrgId)
+                );
+                if (!isVisible) {
+                    // Visible → invisible átmenetkor a sort kivesszük a state-ből
+                    // (pl. másik office `organization` → `editorial_office` átminősítés),
+                    // különben ragadna. A `.delete` alul amúgy is $id alapján szűr.
+                    if (event.includes(".update")) {
+                        setWorkflows(prev => prev.filter(w => w.$id !== payload.$id));
+                    }
+                    if (!event.includes(".delete")) {
+                        return;
+                    }
                 }
                 if (event.includes(".create")) {
                     log(`[DataContext] Workflow doc létrehozva (Realtime): ${payload.$id}`);
