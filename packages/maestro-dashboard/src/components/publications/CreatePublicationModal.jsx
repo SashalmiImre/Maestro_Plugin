@@ -8,7 +8,8 @@
  *
  * Mezők:
  *   - Név (kötelező)
- *   - Gyökérmappa (kötelező, kanonikus formátum: /ShareName/relative/path)
+ *   - Gyökérmappa (opcionális, kanonikus formátum ha megadva: /ShareName/relative/path).
+ *     A Plugin állítja be natív folder picker után — a Dashboardon opcionális.
  *   - Fedés kezdete / vége (két number input — oldalszám)
  *   - Hétvégék kihagyása (checkbox)
  *   - Workflow (dropdown, auto-disabled ha csak egy workflow van)
@@ -32,7 +33,7 @@ export default function CreatePublicationModal() {
 
     // ─── Form állapot ───────────────────────────────────────────────────────
     const [name, setName] = useState('');
-    const [rootPath, setRootPath] = useState('/');
+    const [rootPath, setRootPath] = useState('');
     const [coverageStart, setCoverageStart] = useState('1');
     const [coverageEnd, setCoverageEnd] = useState('');
     const [excludeWeekends, setExcludeWeekends] = useState(true);
@@ -58,12 +59,13 @@ export default function CreatePublicationModal() {
 
         if (!name.trim()) next.name = 'A név nem lehet üres.';
 
-        if (!rootPath.trim()) {
-            next.rootPath = 'A gyökérmappa nem lehet üres.';
-        } else if (!rootPath.startsWith('/')) {
-            next.rootPath = 'A gyökérmappának / karakterrel kell kezdődnie.';
-        } else if (rootPath.trim() === '/') {
-            next.rootPath = 'Adj meg egy kanonikus útvonalat (pl. /Story/2026/March).';
+        const trimmedRoot = rootPath.trim();
+        if (trimmedRoot !== '') {
+            if (!trimmedRoot.startsWith('/')) {
+                next.rootPath = 'A gyökérmappának / karakterrel kell kezdődnie.';
+            } else if (trimmedRoot === '/') {
+                next.rootPath = 'Adj meg egy kanonikus útvonalat (pl. /Story/2026/March).';
+            }
         }
 
         const startNum = parseInt(coverageStart, 10);
@@ -101,15 +103,20 @@ export default function CreatePublicationModal() {
         setSubmitError('');
 
         try {
-            const publication = await createPublication({
+            // Üres rootPath esetén a kulcs kimarad, hogy az Appwrite attribútum nullra default-áljon
+            // (empty string más downstream ellenőrzéseket triggerelhetne).
+            const trimmedRoot = rootPath.trim();
+            const payload = {
                 name: name.trim(),
-                rootPath: rootPath.trim(),
                 coverageStart: parseInt(coverageStart, 10),
                 coverageEnd: parseInt(coverageEnd, 10),
                 excludeWeekends,
                 workflowId,
                 isActivated: false
-            });
+            };
+            if (trimmedRoot !== '') payload.rootPath = trimmedRoot;
+
+            const publication = await createPublication(payload);
 
             // Automatikus „A" layout — ha elbukik, a kiadvány már létrejött,
             // csak figyelmeztetést mutatunk (layout kézzel létrehozható).
@@ -162,7 +169,7 @@ export default function CreatePublicationModal() {
 
             {/* Gyökérmappa */}
             <div className="form-group">
-                <label htmlFor="cp-rootpath">Gyökérmappa</label>
+                <label htmlFor="cp-rootpath">Gyökérmappa (opcionális)</label>
                 <input
                     id="cp-rootpath"
                     type="text"
@@ -172,8 +179,12 @@ export default function CreatePublicationModal() {
                     className={touched.rootPath && errors.rootPath ? 'invalid-input' : ''}
                     placeholder="/Story/2026/March"
                 />
-                {touched.rootPath && errors.rootPath && (
+                {touched.rootPath && errors.rootPath ? (
                     <div className="form-error">{errors.rootPath}</div>
+                ) : (
+                    <div className="form-hint">
+                        A Plugin fogja beállítani, amikor a felhasználó először megnyitja a kiadványt.
+                    </div>
                 )}
             </div>
 

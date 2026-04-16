@@ -115,7 +115,7 @@ Appwrite Realtime WS  ───→  setArticles(prev => ...) updater
 A Dashboard Redesign Fázis 4 (2026-04-10) bevezette a teljes kiadvány CRUD-ot: létrehozás, beállítás-szerkesztés, layoutok, határidők és közreműködők kezelése. A plugin `PublicationProperties` komponensei Fázis 5-ig párhuzamosan működnek, onnantól a plugin kiadvány-szinten read-only lesz.
 
 **Belépési pontok** (mindkettő a `BreadcrumbHeader`-ből):
-- `CreatePublicationModal` — új kiadvány létrehozása (név, gyökérmappa, coverage, workflow), automatikusan létrehoz egy „A" layout-ot. Az új kiadvány `isActivated=false` — Fázis 5 aktiválja a pluginban.
+- `CreatePublicationModal` — új kiadvány létrehozása (név, opcionális gyökérmappa, coverage, workflow), automatikusan létrehoz egy „A" layout-ot. Az új kiadvány `isActivated=false` — Fázis 5 aktiválja a pluginban. A `rootPath` opcionális (task 31): ha üres, a kulcs kimarad a payload-ból és az Appwrite attribútum default null; a natív útvonalat a Plugin állítja be később (task 34).
 - `PublicationSettingsModal` — 4 fülés container (`Általános` / `Layoutok` / `Határidők` / `Közreműködők`) meglévő kiadvány szerkesztésére. A modal stale prop helyett a `publications[]` listából húzza a legfrissebb állapotot `publicationId` alapján.
 
 **Validáció**:
@@ -190,7 +190,7 @@ maestro-dashboard/
 │       ├── LayoutView.jsx        ← Flatplan nézet (zoom, spreadek)
 │       ├── PageSlot.jsx          ← ★ React.memo egyetlen oldal-slot
 │       ├── publications/         ← Fázis 4 kiadvány CRUD modal-ok
-│       │   ├── CreatePublicationModal.jsx  ← Új kiadvány (név, rootPath, coverage, workflow, auto „A" layout)
+│       │   ├── CreatePublicationModal.jsx  ← Új kiadvány (név, rootPath opcionális, coverage, workflow, auto „A" layout)
 │       │   ├── PublicationSettingsModal.jsx ← Kiadvány beállítások container (4 tab)
 │       │   ├── GeneralTab.jsx              ← Név, coverage, rootPath (r/o), excludeWeekends, workflow
 │       │   ├── LayoutsTab.jsx              ← Layout CRUD, auto-naming, cascading delete

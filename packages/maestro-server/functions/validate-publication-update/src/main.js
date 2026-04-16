@@ -9,7 +9,9 @@ const sdk = require("node-appwrite");
  * 1. Scope mezők (organizationId + editorialOfficeId) jelen vannak-e — create only (B.8)
  * 2. Caller membership — a user tagja-e a kiadvány editorialOfficeId-jának (B.8)
  * 3. Default contributor ID-k — létező felhasználókra mutatnak-e
- * 4. rootPath formátum — kanonikus-e (nem /Volumes-szal kezdődik, nincs drive letter)
+ * 4. rootPath formátum — kanonikus-e (nem /Volumes-szal kezdődik, nincs drive letter).
+ *    Opcionális mező: null rootPath nem triggerel ellenőrzést, csak a nem-null
+ *    legacy formátum logolódik (a kanonikus értéket a Plugin állítja be).
  * 5. Aktiválási előfeltételek (Fázis 5) — ha isActivated=true, szükséges a
  *    workflowId + érvényes határidő-fedés. Invalid esetén a CF deaktiválja
  *    a publikációt (isActivated=false, activatedAt=null).
@@ -169,6 +171,9 @@ function validatePublicationActivationInline(publication, deadlines) {
     const errors = [];
     if (!publication?.workflowId) {
         errors.push('A kiadványhoz workflow-t kell választani.');
+    }
+    if (!publication?.rootPath || !publication.rootPath.trim()) {
+        errors.push('A kiadvány gyökérmappáját a Pluginból kell beállítani aktiválás előtt.');
     }
     if (!deadlines || deadlines.length === 0) {
         errors.push('Legalább egy határidőt meg kell adni.');
