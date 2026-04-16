@@ -58,8 +58,10 @@ export default function BreadcrumbDropdown({
     );
 
     const sortedItems = useMemo(
-        () => [...items].sort((a, b) => a.name.localeCompare(b.name, 'hu')),
-        [items]
+        () => items
+            .filter(item => item.id !== activeId)
+            .sort((a, b) => a.name.localeCompare(b.name, 'hu')),
+        [items, activeId]
     );
 
     // Csak 1 elem + nincs settings + nincs create → nem kell dropdown, statikus címke
@@ -122,9 +124,8 @@ export default function BreadcrumbDropdown({
                         <button
                             key={item.id}
                             type="button"
-                            className={`bc-dropdown-item ${item.id === activeId ? 'active' : ''}`}
+                            className="bc-dropdown-item"
                             role="option"
-                            aria-selected={item.id === activeId}
                             onClick={() => handleSelect(item.id)}
                         >
                             {item.name}

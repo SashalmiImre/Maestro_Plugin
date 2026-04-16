@@ -581,11 +581,6 @@ html, body {
     color: var(--text-primary);
 }
 
-.bc-dropdown-item.active {
-    color: var(--accent);
-    font-weight: 600;
-}
-
 .bc-dropdown-item.danger {
     color: var(--c-error);
 }
