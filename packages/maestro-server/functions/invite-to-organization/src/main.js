@@ -1952,14 +1952,18 @@ module.exports = async function ({ req, res, log, error }) {
             const created = [];
             const skipped = [];
 
-            // 2. visibility enum attribútum
+            // 2. visibility enum attribútum.
+            // Appwrite 1.9+: a `required=true` és `default` kombináció
+            // hibát dob (`attribute_default_unsupported`). `required=false`
+            // + default → új doc explicit vagy default értéket kap,
+            // legacy row-ok null-ja a consumer fallback-en át `editorial_office`.
             try {
                 await databases.createEnumAttribute(
                     databaseId,
                     workflowsCollectionId,
                     'visibility',
                     WORKFLOW_VISIBILITY_VALUES,
-                    true,                          // required
+                    false,                         // required
                     WORKFLOW_VISIBILITY_DEFAULT,   // default
                     false                          // array
                 );
