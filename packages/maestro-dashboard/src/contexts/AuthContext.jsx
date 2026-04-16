@@ -438,16 +438,20 @@ export function AuthProvider({ children }) {
      * 2. ProtectedRoute „Újra" gomb: ha a memberships fetch korábban
      *    hibára futott (`membershipsError`), a user manuálisan újrapróbálhatja.
      *
-     * A `loadAndSetMemberships` kezeli a state-et és az error flag-et — itt
-     * csak swallow-oljuk a thrown error-t, mert a hívó UI a state-ből olvas.
+     * `true`-t ad vissza, ha a reload sikeres — `false`-t, ha elbukott.
+     * A `loadAndSetMemberships` már beállította a `membershipsError`-t és a
+     * `organizations`/`editorialOffices` listák érintetlenek maradnak.
+     * A hívó dönthet: továbblépjen-e a happy path-on (pl. scope váltás új
+     * office-ra, success toast), vagy jelezze a user felé, hogy a létrehozás
+     * sikeres volt, de a lista szinkron nem (oldalfrissítés javasolt).
      */
     const reloadMemberships = useCallback(async () => {
-        if (!user?.$id) return;
+        if (!user?.$id) return false;
         try {
             await loadAndSetMemberships(user.$id);
+            return true;
         } catch {
-            // A loadAndSetMemberships már beállította a membershipsError-t,
-            // a hívó UI a state-ből fogja látni az új hibaállapotot.
+            return false;
         }
     }, [user?.$id, loadAndSetMemberships]);
 
@@ -601,6 +605,43 @@ export function AuthProvider({ children }) {
         return callInviteFunction('delete_editorial_office', { editorialOfficeId }, 'delete_office_failed');
     }, [user?.$id]);
 
+    /**
+     * Új szerkesztőség létrehozása egy meglévő szervezetben (owner/admin).
+     *
+     * A CF `create_editorial_office` action-jét hívja. Létrehozza az office-t,
+     * hozzáadja a caller-t admin officeMembership-ként, lelement 7 default
+     * csoportot a caller groupMembership-jeivel, és opcionálisan klónoz egy
+     * meglévő (org-scope) workflow-t az új office alá.
+     *
+     * @param {string} organizationId
+     * @param {string} name — az új szerkesztőség megjelenítendő neve
+     * @param {string} [sourceWorkflowId] — opcionális workflow doc ID klónozáshoz
+     * @returns {Promise<{editorialOfficeId, organizationId, name, slug, workflowId: string|null, groupsSeeded: number, workflowSeeded: boolean}>}
+     */
+    const createEditorialOffice = useCallback(async (organizationId, name, sourceWorkflowId) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        const payload = { organizationId, name };
+        if (sourceWorkflowId) payload.sourceWorkflowId = sourceWorkflowId;
+        return callInviteFunction('create_editorial_office', payload, 'office_create_failed');
+    }, [user?.$id]);
+
+    /**
+     * Szervezet átnevezése (owner/admin). A CF `update_organization` action-jét
+     * hívja. Sikeres válasz után a `reloadMemberships()`-t a hívó maga futtassa,
+     * hogy az AuthContext `organizations` listája a Realtime előtt is frissüljön.
+     *
+     * @param {string} organizationId
+     * @param {string} name
+     */
+    const renameOrganization = useCallback(async (organizationId, name) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'update_organization',
+            { organizationId, name },
+            'organization_update_failed'
+        );
+    }, [user?.$id]);
+
     const value = useMemo(() => ({
         user,
         loading,
@@ -621,7 +662,9 @@ export function AuthProvider({ children }) {
         acceptInvite,
         createInvite,
         deleteOrganization,
-        deleteEditorialOffice
+        deleteEditorialOffice,
+        createEditorialOffice,
+        renameOrganization
     }), [
         user,
         loading,
@@ -642,7 +685,8 @@ export function AuthProvider({ children }) {
         acceptInvite,
         createInvite,
         deleteOrganization,
-        deleteEditorialOffice
+        deleteEditorialOffice,
+        createEditorialOffice
     ]);
 
     return (

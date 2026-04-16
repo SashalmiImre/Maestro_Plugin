@@ -21,8 +21,8 @@ tags: [feladatok]
 
 #### B. Szervezet beállítás panel (OrganizationSettingsModal tab-osítás)
 
-- [ ] 26. **Általános tab**: szervezet név szerkesztése + „Új szerkesztőség" gomb (modal a létrehozáshoz) + szervezet törlés (DangerZone).
-- [ ] 27. **Felhasználók tab**: aktuális invite flow + függő meghívók + szervezeti tagok listája ide költöztetve.
+- [x] 26. **Általános tab**: szervezet név szerkesztése + „Új szerkesztőség" gomb (modal a létrehozáshoz) + szervezet törlés (DangerZone).
+- [x] 27. **Felhasználók tab**: aktuális invite flow + függő meghívók + szervezeti tagok listája ide költöztetve.
 
 #### C. Szerkesztőség beállítás panel (EditorialOfficeSettingsModal tab-osítás)
 

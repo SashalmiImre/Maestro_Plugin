@@ -1972,6 +1972,14 @@ html, body {
     color: #ef9a9a;
 }
 
+/* Mező alatti magyarázó szöveg */
+.form-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 6px;
+    line-height: 1.4;
+}
+
 /* Üres állapot */
 .form-empty-state {
     padding: 20px 0;

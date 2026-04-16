@@ -47,11 +47,28 @@ const crypto = require("crypto");
  *     - Payload: { groupId, userId }
  *     - Idempotens: ha nem létezik, success `already_removed`.
  *
+ *   ACTION='create_workflow' — admin új workflow-t hoz létre egy szerkesztőség
+ *     számára (default workflow klón). A név unique az office-on belül.
+ *     - Caller jogosultság: org owner/admin (office → org lookup).
+ *     - Payload: { editorialOfficeId, name }
+ *     - Return: { success: true, workflowId, name }
+ *
  *   ACTION='update_workflow' — admin frissíti a workflow compiled + graph JSON-t.
  *     - Caller jogosultság: org owner/admin (office → org lookup).
  *     - Payload: { editorialOfficeId, compiled, graph, version }
  *     - Optimistic concurrency: doc.version !== payload.version → version_conflict.
  *     - Return: { success: true, version: newVersion }
+ *
+ *   ACTION='create_editorial_office' — org owner/admin új szerkesztőséget hoz
+ *     létre egy meglévő szervezetben. Az action létrehozza a caller-hez tartozó
+ *     office-tagságot (admin role), 7 alapértelmezett csoportot, és mindegyikhez
+ *     a caller groupMembership-jét. Opcionális `sourceWorkflowId`: ha megadva és
+ *     a forrás ugyanabban az org-ban van, a compiled JSON klónozódik egy új
+ *     workflow doc-ba az új office alá, és az office.workflowId beáll. Ha nincs
+ *     megadva, az office workflow nélkül jön létre — a user a #30 Workflow tab-on
+ *     rendelheti hozzá. A slug a névből auto-generálódik (Hungarian transliteráció).
+ *     - Payload: { organizationId, name, sourceWorkflowId? }
+ *     - Return: { success: true, editorialOfficeId, workflowId, groupsSeeded }
  *
  *   ACTION='delete_editorial_office' — org owner/admin törli a szerkesztőséget
  *     az összes alárendelt publikációval, workflow-val, csoporttal, csoport-
@@ -103,6 +120,7 @@ const VALID_ACTIONS = new Set([
     'bootstrap_organization', 'create', 'accept',
     'add_group_member', 'remove_group_member',
     'create_workflow', 'update_workflow', 'update_organization',
+    'create_editorial_office',
     'delete_organization', 'delete_editorial_office'
 ]);
 
@@ -303,6 +321,30 @@ const NAME_MAX_LENGTH = 128;
  */
 function fail(res, statusCode, reason, extra = {}) {
     return res.json({ success: false, reason, ...extra }, statusCode);
+}
+
+/**
+ * Hungarian ékezetes karakterek ASCII-ra fordítása a slug-képzéshez.
+ */
+const HUN_ACCENT_MAP = {
+    'á': 'a', 'é': 'e', 'í': 'i', 'ó': 'o', 'ö': 'o', 'ő': 'o',
+    'ú': 'u', 'ü': 'u', 'ű': 'u'
+};
+
+/**
+ * Egyszerű slugify: kisbetű, magyar transliteráció, nem-alfanumerikus → '-',
+ * több kötőjel egyesítve, végek levágva, SLUG_MAX_LENGTH-ra vágva.
+ * Ha a kimenet üres vagy nem felel meg SLUG_REGEX-nek, random fallback-et ad.
+ */
+function slugifyName(name) {
+    const lower = String(name).toLowerCase();
+    const trans = lower.replace(/[áéíóöőúüű]/g, ch => HUN_ACCENT_MAP[ch] || ch);
+    const base = trans.replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    const truncated = base.slice(0, SLUG_MAX_LENGTH);
+    if (!truncated || !SLUG_REGEX.test(truncated)) {
+        return `office-${crypto.randomBytes(3).toString('hex')}`;
+    }
+    return truncated;
 }
 
 /**
@@ -1300,6 +1342,249 @@ module.exports = async function ({ req, res, log, error }) {
                 action: 'created',
                 workflowId: newWorkflowDoc.$id,
                 name: sanitizedName
+            });
+        }
+
+        // ════════════════════════════════════════════════════════
+        // ACTION = 'create_editorial_office'
+        // ════════════════════════════════════════════════════════
+        //
+        // Új szerkesztőség létrehozása egy meglévő szervezeten belül.
+        // A bootstrap_organization 3–7. lépéseit replikálja (office doc +
+        // officeMembership admin role + 7 default group + caller groupMembership-k
+        // + opcionális workflow klón), külön org létrehozás nélkül.
+        //
+        // Caller: a szervezet `owner` vagy `admin` role-lal rendelkező tagja.
+        //
+        // Rollback: minden lépés hibája esetén a korábbi rekordokat best-effort
+        // visszatöröljük (mint a bootstrap_organization).
+        if (action === 'create_editorial_office') {
+            const { organizationId } = payload;
+            const sanitizedName = sanitizeString(payload.name, NAME_MAX_LENGTH);
+            const sourceWorkflowId = typeof payload.sourceWorkflowId === 'string' && payload.sourceWorkflowId
+                ? payload.sourceWorkflowId
+                : null;
+
+            if (!organizationId || !sanitizedName) {
+                return fail(res, 400, 'missing_fields', {
+                    required: ['organizationId', 'name']
+                });
+            }
+
+            // 1. Caller jogosultság — org owner/admin.
+            const callerMembership = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', organizationId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.select(['role']),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (callerMembership.documents.length === 0) {
+                return fail(res, 403, 'not_a_member');
+            }
+            const callerRole = callerMembership.documents[0].role;
+            if (callerRole !== 'owner' && callerRole !== 'admin') {
+                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            }
+
+            // 2. Opcionális workflow forrás validáció — még az office létrehozás
+            //    ELŐTT, hogy invalid source esetén ne kelljen rollback-elni.
+            let sourceWorkflowDoc = null;
+            if (sourceWorkflowId) {
+                try {
+                    sourceWorkflowDoc = await databases.getDocument(
+                        databaseId,
+                        workflowsCollectionId,
+                        sourceWorkflowId
+                    );
+                } catch (err) {
+                    if (err?.code === 404) return fail(res, 404, 'source_workflow_not_found');
+                    error(`[CreateOffice] source workflow fetch hiba: ${err.message}`);
+                    return fail(res, 500, 'source_workflow_fetch_failed');
+                }
+                if (sourceWorkflowDoc.organizationId !== organizationId) {
+                    return fail(res, 403, 'source_workflow_scope_mismatch');
+                }
+            }
+
+            // 3. Office létrehozás — slug auto-generálás + ütközéskor retry
+            //    random suffix-szel. Max 3 próba.
+            const baseSlug = slugifyName(sanitizedName);
+            let newOfficeId = null;
+            let usedSlug = null;
+            for (let attempt = 0; attempt < 3; attempt++) {
+                const candidateSlug = attempt === 0
+                    ? baseSlug
+                    : `${baseSlug.slice(0, SLUG_MAX_LENGTH - 5)}-${crypto.randomBytes(2).toString('hex')}`;
+                try {
+                    const officeDoc = await databases.createDocument(
+                        databaseId,
+                        officesCollectionId,
+                        sdk.ID.unique(),
+                        {
+                            organizationId,
+                            name: sanitizedName,
+                            slug: candidateSlug
+                        }
+                    );
+                    newOfficeId = officeDoc.$id;
+                    usedSlug = candidateSlug;
+                    break;
+                } catch (err) {
+                    const isUnique = err?.type === 'document_already_exists' || /unique/i.test(err?.message || '');
+                    if (isUnique && attempt < 2) continue;
+                    error(`[CreateOffice] office create hiba (slug=${candidateSlug}, attempt=${attempt}): ${err.message}`);
+                    if (isUnique) return fail(res, 409, 'office_slug_taken');
+                    return fail(res, 500, 'office_create_failed');
+                }
+            }
+
+            // 4. officeMembership — admin role a caller-hez.
+            let newOfficeMembershipId = null;
+            try {
+                const memDoc = await databases.createDocument(
+                    databaseId,
+                    officeMembershipsCollectionId,
+                    sdk.ID.unique(),
+                    {
+                        editorialOfficeId: newOfficeId,
+                        organizationId,
+                        userId: callerId,
+                        role: 'admin'
+                    }
+                );
+                newOfficeMembershipId = memDoc.$id;
+            } catch (err) {
+                error(`[CreateOffice] officeMembership create hiba: ${err.message}`);
+                try { await databases.deleteDocument(databaseId, officesCollectionId, newOfficeId); }
+                catch (e) { error(`[CreateOffice] office rollback sikertelen: ${e.message}`); }
+                return fail(res, 500, 'office_membership_create_failed');
+            }
+
+            // 5. 7 default group az új office-hoz.
+            const createdGroupIds = [];
+            try {
+                for (const groupDef of DEFAULT_GROUPS) {
+                    const groupDoc = await databases.createDocument(
+                        databaseId,
+                        groupsCollectionId,
+                        sdk.ID.unique(),
+                        {
+                            slug: groupDef.slug,
+                            name: groupDef.name,
+                            editorialOfficeId: newOfficeId,
+                            organizationId,
+                            createdByUserId: callerId
+                        }
+                    );
+                    createdGroupIds.push(groupDoc.$id);
+                }
+            } catch (err) {
+                error(`[CreateOffice] groups create hiba (${createdGroupIds.length}/${DEFAULT_GROUPS.length} kész): ${err.message}`);
+                for (const gId of createdGroupIds) {
+                    try { await databases.deleteDocument(databaseId, groupsCollectionId, gId); }
+                    catch (e) { error(`[CreateOffice] group rollback sikertelen (${gId}): ${e.message}`); }
+                }
+                try { await databases.deleteDocument(databaseId, officeMembershipsCollectionId, newOfficeMembershipId); }
+                catch (e) { error(`[CreateOffice] officeMembership rollback sikertelen: ${e.message}`); }
+                try { await databases.deleteDocument(databaseId, officesCollectionId, newOfficeId); }
+                catch (e) { error(`[CreateOffice] office rollback sikertelen: ${e.message}`); }
+                return fail(res, 500, 'groups_create_failed');
+            }
+
+            // 6. groupMemberships — a caller tagja lesz mindegyiknek.
+            let callerUser;
+            try {
+                callerUser = await usersApi.get(callerId);
+            } catch (e) {
+                log(`[CreateOffice] Caller user lookup hiba (groupMemberships userName/userEmail): ${e.message}`);
+                callerUser = { name: '', email: '' };
+            }
+
+            const createdGmIds = [];
+            try {
+                for (const gId of createdGroupIds) {
+                    const gmDoc = await databases.createDocument(
+                        databaseId,
+                        groupMembershipsCollectionId,
+                        sdk.ID.unique(),
+                        {
+                            groupId: gId,
+                            userId: callerId,
+                            editorialOfficeId: newOfficeId,
+                            organizationId,
+                            role: 'member',
+                            addedByUserId: callerId,
+                            userName: callerUser.name || '',
+                            userEmail: callerUser.email || ''
+                        }
+                    );
+                    createdGmIds.push(gmDoc.$id);
+                }
+            } catch (err) {
+                error(`[CreateOffice] groupMemberships create hiba (${createdGmIds.length}/${createdGroupIds.length} kész): ${err.message}`);
+                for (const gmId of createdGmIds) {
+                    try { await databases.deleteDocument(databaseId, groupMembershipsCollectionId, gmId); }
+                    catch (e) { error(`[CreateOffice] groupMembership rollback sikertelen (${gmId}): ${e.message}`); }
+                }
+                for (const gId of createdGroupIds) {
+                    try { await databases.deleteDocument(databaseId, groupsCollectionId, gId); }
+                    catch (e) { error(`[CreateOffice] group rollback sikertelen (${gId}): ${e.message}`); }
+                }
+                try { await databases.deleteDocument(databaseId, officeMembershipsCollectionId, newOfficeMembershipId); }
+                catch (e) { error(`[CreateOffice] officeMembership rollback sikertelen: ${e.message}`); }
+                try { await databases.deleteDocument(databaseId, officesCollectionId, newOfficeId); }
+                catch (e) { error(`[CreateOffice] office rollback sikertelen: ${e.message}`); }
+                return fail(res, 500, 'group_memberships_create_failed');
+            }
+
+            // 7. Opcionális workflow klón. Nem kritikus — ha elhasal, az office
+            //    workflow nélkül marad (felhasználó később #30-ban rendelhet hozzá).
+            let newWorkflowId = null;
+            if (sourceWorkflowDoc) {
+                try {
+                    const workflowDoc = await databases.createDocument(
+                        databaseId,
+                        workflowsCollectionId,
+                        sdk.ID.unique(),
+                        {
+                            editorialOfficeId: newOfficeId,
+                            organizationId,
+                            name: sourceWorkflowDoc.name || 'Alapértelmezett workflow',
+                            version: 1,
+                            compiled: typeof sourceWorkflowDoc.compiled === 'string'
+                                ? sourceWorkflowDoc.compiled
+                                : JSON.stringify(sourceWorkflowDoc.compiled),
+                            updatedByUserId: callerId
+                        }
+                    );
+                    newWorkflowId = workflowDoc.$id;
+                    await databases.updateDocument(
+                        databaseId,
+                        officesCollectionId,
+                        newOfficeId,
+                        { workflowId: newWorkflowId }
+                    );
+                } catch (err) {
+                    error(`[CreateOffice] workflow klón hiba: ${err.message}`);
+                }
+            }
+
+            log(`[CreateOffice] User ${callerId} új office-t hozott létre: id=${newOfficeId} ("${sanitizedName}", slug=${usedSlug}), org=${organizationId}, groups=${createdGroupIds.length}, memberships=${createdGmIds.length}, workflow=${newWorkflowId || 'none'}`);
+
+            return res.json({
+                success: true,
+                action: 'created',
+                editorialOfficeId: newOfficeId,
+                organizationId,
+                name: sanitizedName,
+                slug: usedSlug,
+                workflowId: newWorkflowId,
+                groupsSeeded: createdGroupIds.length,
+                workflowSeeded: !!newWorkflowId
             });
         }
 

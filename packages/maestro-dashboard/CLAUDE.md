@@ -189,13 +189,19 @@ maestro-dashboard/
 │       ├── ArticleRow.jsx        ← ★ React.memo egyetlen sor
 │       ├── LayoutView.jsx        ← Flatplan nézet (zoom, spreadek)
 │       ├── PageSlot.jsx          ← ★ React.memo egyetlen oldal-slot
-│       └── publications/         ← Fázis 4 kiadvány CRUD modal-ok
-│           ├── CreatePublicationModal.jsx  ← Új kiadvány (név, rootPath, coverage, workflow, auto „A" layout)
-│           ├── PublicationSettingsModal.jsx ← Kiadvány beállítások container (4 tab)
-│           ├── GeneralTab.jsx              ← Név, coverage, rootPath (r/o), excludeWeekends, workflow
-│           ├── LayoutsTab.jsx              ← Layout CRUD, auto-naming, cascading delete
-│           ├── DeadlinesTab.jsx            ← Határidő CRUD, validáció (maestro-shared/deadlineValidator)
-│           └── ContributorsTab.jsx         ← Default contributors per contributorGroup (smart update)
+│       ├── publications/         ← Fázis 4 kiadvány CRUD modal-ok
+│       │   ├── CreatePublicationModal.jsx  ← Új kiadvány (név, rootPath, coverage, workflow, auto „A" layout)
+│       │   ├── PublicationSettingsModal.jsx ← Kiadvány beállítások container (4 tab)
+│       │   ├── GeneralTab.jsx              ← Név, coverage, rootPath (r/o), excludeWeekends, workflow
+│       │   ├── LayoutsTab.jsx              ← Layout CRUD, auto-naming, cascading delete
+│       │   ├── DeadlinesTab.jsx            ← Határidő CRUD, validáció (maestro-shared/deadlineValidator)
+│       │   └── ContributorsTab.jsx         ← Default contributors per contributorGroup (smart update)
+│       └── organization/         ← Szervezet / szerkesztőség beállítás modal-ok (#26, #27)
+│           ├── OrganizationSettingsModal.jsx ← Container (Általános / Felhasználók tab), localStorage perzisztencia
+│           ├── GeneralTab.jsx              ← Név szerkesztés, szerkesztőségek + „+ Új", DangerZone kaszkád számokkal
+│           ├── UsersTab.jsx                ← Invite flow, függő meghívók, tagok szerepkör szerint csoportosítva
+│           ├── CreateEditorialOfficeModal.jsx ← Új szerkesztőség (név + opcionális workflow klón org-szintről)
+│           └── EditorialOfficeSettingsModal.jsx ← (Fázis 8) szerkesztőség beállítások
 │
 ├── shared -> ../maestro-shared   ← Symlink a közös csomagra
 └── dist/                         ← Vite build output (gitignore-olt)
@@ -209,7 +215,7 @@ maestro-dashboard/
 - `user` — aktuális felhasználó objektum (vagy `null`)
 - `loading` — session ellenőrzés folyamatban
 - `login(email, password)` / `logout()` / `register(name, email, password)`
-- `organizations`, `editorialOffices`, `membershipsError`, `reloadMemberships()` — a user által elérhető scope-ok (`organizationMemberships` + `editorialOfficeMemberships` query).
+- `organizations`, `editorialOffices`, `membershipsError`, `reloadMemberships()` — a user által elérhető scope-ok (`organizationMemberships` + `editorialOfficeMemberships` query). A `reloadMemberships()` `true`/`false`-t ad vissza (sikeres reload vs. hiba; hiba esetén a `membershipsError` state is beállítódik). CRUD-típusú hívók (új office, szervezet átnevezés/törlés) a bool alapján döntenek a scope váltás / success toast megjelenítéséről.
 
 ### ScopeContext
 - `activeOrganizationId`, `activeEditorialOfficeId` — localStorage-ben perzisztált multi-tenant scope (kulcsok: `maestro.dashboard.activeOrganizationId` / `maestro.dashboard.activeEditorialOfficeId`).
@@ -231,6 +237,7 @@ maestro-dashboard/
 ### ModalContext
 - `openModal(element, { size, title, onBeforeClose })` — stack-alapú, több modal egymásra nyitható (pl. CreatePublicationModal fölé ConfirmDialog).
 - `closeModal()` — a legfelső modal zárása; `onBeforeClose` aszinkron guard-ot kaphat (pl. dirty state megerősítő).
+- **Scope-váltás auto-close**: a teljes modal stack automatikusan bezáródik, ha az aktív szervezet vagy szerkesztőség ID megváltozik. A `CreateEditorialOfficeModal` sikeres `switchScopeOnSuccess` flow szándékosan erre támaszkodik — a parent `OrganizationSettingsModal` is eltűnik az új office-ra váltáskor.
 
 ### ToastContext
 - `showToast(message, type, duration)` — toast értesítés (`success` / `error` / `warning` / `info`).
