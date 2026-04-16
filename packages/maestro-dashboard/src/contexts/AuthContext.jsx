@@ -642,6 +642,25 @@ export function AuthProvider({ children }) {
         );
     }, [user?.$id]);
 
+    /**
+     * Szerkesztőség átnevezése (org owner/admin). A CF `update_editorial_office`
+     * action-jét hívja. Slug NEM változik (stabilitás — cikkek / publikációk az
+     * office $id-re hivatkoznak). A hívó maga futtassa a `reloadMemberships()`-t
+     * a sikeres válasz után, hogy az `editorialOffices` lista a Realtime előtt
+     * is frissüljön.
+     *
+     * @param {string} editorialOfficeId
+     * @param {string} name
+     */
+    const renameEditorialOffice = useCallback(async (editorialOfficeId, name) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'update_editorial_office',
+            { editorialOfficeId, name },
+            'office_update_failed'
+        );
+    }, [user?.$id]);
+
     const value = useMemo(() => ({
         user,
         loading,
@@ -664,7 +683,8 @@ export function AuthProvider({ children }) {
         deleteOrganization,
         deleteEditorialOffice,
         createEditorialOffice,
-        renameOrganization
+        renameOrganization,
+        renameEditorialOffice
     }), [
         user,
         loading,
@@ -686,7 +706,9 @@ export function AuthProvider({ children }) {
         createInvite,
         deleteOrganization,
         deleteEditorialOffice,
-        createEditorialOffice
+        createEditorialOffice,
+        renameOrganization,
+        renameEditorialOffice
     ]);
 
     return (

@@ -70,6 +70,13 @@ const crypto = require("crypto");
  *     - Payload: { organizationId, name, sourceWorkflowId? }
  *     - Return: { success: true, editorialOfficeId, workflowId, groupsSeeded }
  *
+ *   ACTION='update_editorial_office' — org owner/admin átnevezi a szerkesztőséget.
+ *     A slug változatlan marad (stabilitás: office slug cikkek és publikációk
+ *     nem követik). Uniqueness check: ugyanazon org-on belül nem lehet két
+ *     azonos megjelenítendő nevű office.
+ *     - Payload: { editorialOfficeId, name }
+ *     - Return: { success: true, editorialOfficeId, name }
+ *
  *   ACTION='delete_editorial_office' — org owner/admin törli a szerkesztőséget
  *     az összes alárendelt publikációval, workflow-val, csoporttal, csoport-
  *     tagsággal és office-tagsággal együtt. A publikációkat doc-onként törli,
@@ -120,7 +127,7 @@ const VALID_ACTIONS = new Set([
     'bootstrap_organization', 'create', 'accept',
     'add_group_member', 'remove_group_member',
     'create_workflow', 'update_workflow', 'update_organization',
-    'create_editorial_office',
+    'create_editorial_office', 'update_editorial_office',
     'delete_organization', 'delete_editorial_office'
 ]);
 
@@ -1805,6 +1812,105 @@ module.exports = async function ({ req, res, log, error }) {
                 success: true,
                 action: 'updated',
                 organizationId,
+                name: sanitizedName
+            });
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // ACTION = 'update_editorial_office'
+        // ════════════════════════════════════════════════════════════════
+        //
+        // Szerkesztőség átnevezése. A slug változatlan — a cikk / publikáció
+        // rekordok nem hivatkoznak a slugra (csak az office $id-re), így a
+        // megjelenítendő név szabadon cserélhető. Uniqueness: ugyanazon org-on
+        // belül nem lehet két azonos `name`-ű office (case-insensitive check-et
+        // kerülünk, hogy a case-distinct név még használható legyen — a UI-ban
+        // a user látja, hogy pontosan milyen név ütközik).
+        if (action === 'update_editorial_office') {
+            const { editorialOfficeId, name } = payload;
+
+            if (!editorialOfficeId || !name) {
+                return fail(res, 400, 'missing_fields', {
+                    required: ['editorialOfficeId', 'name']
+                });
+            }
+
+            const sanitizedName = sanitizeString(name, NAME_MAX_LENGTH);
+            if (!sanitizedName) {
+                return fail(res, 400, 'invalid_name');
+            }
+
+            // 1) Office létezés check
+            let officeDoc;
+            try {
+                officeDoc = await databases.getDocument(
+                    databaseId,
+                    officesCollectionId,
+                    editorialOfficeId
+                );
+            } catch (fetchErr) {
+                if (fetchErr.code === 404) return fail(res, 404, 'office_not_found');
+                error(`[UpdateOffice] getDocument hiba: ${fetchErr.message}`);
+                return fail(res, 500, 'office_fetch_failed');
+            }
+
+            // 2) Caller jogosultság — org owner/admin
+            const callerMembership = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', officeDoc.organizationId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.select(['role']),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (callerMembership.documents.length === 0) {
+                return fail(res, 403, 'not_a_member');
+            }
+            const callerRole = callerMembership.documents[0].role;
+            if (callerRole !== 'owner' && callerRole !== 'admin') {
+                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            }
+
+            // 3) Uniqueness check — ugyanazon org más office-a nem foglalhatja
+            //    ugyanezt a nevet. A saját office self-match-et kizárjuk, hogy
+            //    idempotens rename (változatlan név → 200 OK, noop) ne dobjon.
+            if (sanitizedName !== officeDoc.name) {
+                const conflictQuery = await databases.listDocuments(
+                    databaseId,
+                    officesCollectionId,
+                    [
+                        sdk.Query.equal('organizationId', officeDoc.organizationId),
+                        sdk.Query.equal('name', sanitizedName),
+                        sdk.Query.limit(1)
+                    ]
+                );
+                const conflict = conflictQuery.documents.find(d => d.$id !== editorialOfficeId);
+                if (conflict) {
+                    return fail(res, 409, 'name_taken');
+                }
+            }
+
+            // 4) Frissítés
+            try {
+                await databases.updateDocument(
+                    databaseId,
+                    officesCollectionId,
+                    editorialOfficeId,
+                    { name: sanitizedName }
+                );
+            } catch (updateErr) {
+                error(`[UpdateOffice] updateDocument hiba: ${updateErr.message}`);
+                return fail(res, 500, 'update_failed');
+            }
+
+            log(`[UpdateOffice] User ${callerId} átnevezte office ${editorialOfficeId} → "${sanitizedName}"`);
+
+            return res.json({
+                success: true,
+                action: 'updated',
+                editorialOfficeId,
                 name: sanitizedName
             });
         }
