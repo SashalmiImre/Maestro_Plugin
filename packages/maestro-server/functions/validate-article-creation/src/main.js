@@ -37,16 +37,47 @@ const FORBIDDEN_CHARS = /[\\/:*?"<>|]/;
 
 /**
  * Betölti a compiled workflow-ból az érvényes állapot ID-kat.
+ * Preferencia-sorrend (Feladat #37):
+ * 1. `parentPublication.compiledWorkflowSnapshot` — aktivált publikáció snapshot-ja,
+ *    így a Plugin által a snapshot-ból választott initial state-et elfogadjuk
+ *    akkor is, ha a live workflow-ban már nem létezik ugyanaz az állapot.
+ * 2. `parentPublication.workflowId` — legacy / snapshot-hiányos aktivált pub.
+ * 3. Office első workflow-ja — csak ha nincs workflowId (seeding / onboarding).
  */
-async function loadValidStates(databases, databaseId, workflowsCollectionId, editorialOfficeId, log) {
-    if (!editorialOfficeId) return null;
+async function loadValidStates(databases, databaseId, workflowsCollectionId, parentPublication, log) {
+    const snapshot = parentPublication?.compiledWorkflowSnapshot;
+    if (typeof snapshot === 'string' && snapshot.length > 0) {
+        try {
+            const compiled = JSON.parse(snapshot);
+            const states = Array.isArray(compiled.states) ? compiled.states : [];
+            if (states.length > 0) return new Set(states.map(s => s.id));
+        } catch (e) {
+            log(`[Workflow] Snapshot parse hiba (pub=${parentPublication?.$id}): ${e.message} — fallback live workflow-ra`);
+        }
+    }
+
+    const workflowId = parentPublication?.workflowId;
+    const officeId = parentPublication?.editorialOfficeId;
     try {
-        const result = await databases.listDocuments(databaseId, workflowsCollectionId, [
-            sdk.Query.equal('editorialOfficeId', editorialOfficeId),
-            sdk.Query.limit(1)
-        ]);
-        if (result.documents.length === 0) return null;
-        const doc = result.documents[0];
+        let doc = null;
+        if (workflowId) {
+            try {
+                const fetched = await databases.getDocument(databaseId, workflowsCollectionId, workflowId);
+                if (!officeId || fetched.editorialOfficeId === officeId) doc = fetched;
+                else log(`[Workflow] Cross-tenant leak blokkolva (wf=${workflowId}, office=${fetched.editorialOfficeId} ≠ ${officeId})`);
+            } catch (e) {
+                if (e.code !== 404) throw e;
+                log(`[Workflow] publication.workflowId=${workflowId} not found — office fallback`);
+            }
+        }
+        if (!doc && officeId) {
+            const result = await databases.listDocuments(databaseId, workflowsCollectionId, [
+                sdk.Query.equal('editorialOfficeId', officeId),
+                sdk.Query.limit(1)
+            ]);
+            if (result.documents.length > 0) doc = result.documents[0];
+        }
+        if (!doc) return null;
         const compiled = typeof doc.compiled === 'string' ? JSON.parse(doc.compiled) : doc.compiled;
         const states = Array.isArray(compiled.states) ? compiled.states : [];
         return new Set(states.map(s => s.id));
@@ -212,7 +243,7 @@ module.exports = async function ({ req, res, log, error }) {
         const corrections = {};
 
         // ── 5. Állapot validáció ──
-        const validStates = await loadValidStates(databases, databaseId, workflowsCollectionId, payload.editorialOfficeId, log);
+        const validStates = await loadValidStates(databases, databaseId, workflowsCollectionId, parentPublication, log);
         if (validStates && payload.state && !validStates.has(payload.state)) {
             // Érvénytelen állapot → első állapot
             const initialState = validStates.values().next().value || "designing";

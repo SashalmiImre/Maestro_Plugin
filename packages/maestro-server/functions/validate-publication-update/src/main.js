@@ -15,6 +15,15 @@ const sdk = require("node-appwrite");
  * 5. Aktiválási előfeltételek (Fázis 5) — ha isActivated=true, szükséges a
  *    workflowId + érvényes határidő-fedés. Invalid esetén a CF deaktiválja
  *    a publikációt (isActivated=false, activatedAt=null).
+ * 5a. Workflow compiled snapshot rögzítése (#37) — sikeres aktiválás után a
+ *    CF a workflow `compiled` JSON-ját a `compiledWorkflowSnapshot` mezőbe
+ *    írja. Fail-closed: ha a workflow lookup hibára fut, deaktivál. Minden
+ *    aktiválásnál (re-aktiválás is) felülírja a snapshot-ot — új aktiválás
+ *    új pillanatképet eredményez.
+ * 6b. Snapshot immutability guard (#37) — ha a kliens payload közvetlenül
+ *    érinti a `compiledWorkflowSnapshot` mezőt ÉS a caller nem a server
+ *    guard, a publikáció deaktiválódik és a mező null-ra kerül. Új aktiválás
+ *    kényszerítés → a §5a újraírja a helyes snapshot-ot.
  *
  * Érvénytelen contributor → nullázás.
  * rootPath probléma → csak logolás (nem javítjuk, lehet migráció folyamatban).
@@ -423,6 +432,58 @@ module.exports = async function ({ req, res, log, error }) {
             }
         }
 
+        // ── 5a. Workflow compiled snapshot rögzítése (#37) ──
+        // Sikeres aktiválás (§5 zöld) után a publikáció `compiledWorkflowSnapshot`
+        // mezőjébe írjuk a workflow aktuális `compiled` JSON-ját. Ez rögzíti
+        // az aktiváláskori workflow verziót — a publikáció teljes élete ezen
+        // a pillanatképen fut, a workflow későbbi módosításai nem érintik.
+        //
+        // KIZÁRÓLAG aktiválási payload-ra (a kliens az `isActivated` mezőt
+        // érinti) vagy snapshot-hiány backfill-re fut. Normál szerkesztés
+        // (name, coverage stb.) NEM triggereli a snapshot újraírást —
+        // különben egy időközben módosított workflow szivárogna be a
+        // futó publikáció snapshot-jába, elrontva a feature lényegét.
+        //
+        // Fail-closed: ha a workflow lookup vagy scope check megbukik, deaktiválunk.
+        const isActivationPayload = Object.prototype.hasOwnProperty.call(payload, 'isActivated');
+        const snapshotMissing = !freshDoc.compiledWorkflowSnapshot;
+        if (
+            freshDoc.isActivated === true
+            && corrections.isActivated === undefined
+            && (isActivationPayload || snapshotMissing)
+        ) {
+            if (!workflowsCollectionId || !freshDoc.workflowId) {
+                error(`[Snapshot] ${freshDoc.$id} deaktiválva — hiányzó workflowsCollectionId (${!!workflowsCollectionId}) vagy workflowId (${!!freshDoc.workflowId})`);
+                corrections.isActivated = false;
+                corrections.activatedAt = null;
+            } else {
+                try {
+                    const wf = await databases.getDocument(
+                        databaseId, workflowsCollectionId, freshDoc.workflowId
+                    );
+                    if (wf.editorialOfficeId !== freshDoc.editorialOfficeId) {
+                        error(`[Snapshot] ${freshDoc.$id} deaktiválva — workflow scope mismatch (${wf.editorialOfficeId} ≠ ${freshDoc.editorialOfficeId})`);
+                        corrections.isActivated = false;
+                        corrections.activatedAt = null;
+                    } else if (typeof wf.compiled !== 'string' || wf.compiled.length === 0) {
+                        error(`[Snapshot] ${freshDoc.$id} deaktiválva — workflow ${wf.$id} compiled üres`);
+                        corrections.isActivated = false;
+                        corrections.activatedAt = null;
+                    } else if (freshDoc.compiledWorkflowSnapshot !== wf.compiled) {
+                        // Csak akkor írunk, ha ténylegesen különbözik — idempotens
+                        // re-aktiválás ugyanazzal a workflow-val nem triggerel
+                        // felesleges SERVER_GUARD korrekciós update-et.
+                        corrections.compiledWorkflowSnapshot = wf.compiled;
+                        log(`[Snapshot] ${freshDoc.$id} snapshot rögzítve (workflow=${wf.$id}, size=${wf.compiled.length})`);
+                    }
+                } catch (e) {
+                    error(`[Snapshot] ${freshDoc.$id} deaktiválva — workflow lookup hiba: ${e.message}`);
+                    corrections.isActivated = false;
+                    corrections.activatedAt = null;
+                }
+            }
+        }
+
         // ── 6. Workflow immutabilitás cikkekkel rendelkező aktív publikáción (Fázis 6) ──
         // Post-event CF nem látja a pre-update állapotot. Ha isActivated=true
         // ÉS van cikk, a workflowId-nek létező + az office-hoz tartozó workflow-ra
@@ -483,6 +544,30 @@ module.exports = async function ({ req, res, log, error }) {
                     corrections.activatedAt = null;
                 }
             }
+        }
+
+        // ── 6b. compiledWorkflowSnapshot immutability guard (#37) ──
+        //
+        // A snapshot mezőt csak a CF (SERVER_GUARD) írhatja — aktiváláskor az §5a
+        // fejezet. Post-event CF nem lát pre-state-et, így közvetlen mező-revert
+        // nem lehetséges. Megbízható detekció: a payload csak a kliens által
+        // érintett mezőket tartalmazza — ha a `compiledWorkflowSnapshot` szerepel
+        // a payload-ban ÉS a caller nem SERVER_GUARD, invariáns-sértés történt.
+        // Válasz: deaktiválás + snapshot null-ra → új aktiválás kényszerítés,
+        // ahol az §5a CF-oldalról újra ráírja a workflow aktuális `compiled`-ját.
+        //
+        // A modifiedByClientId === SERVER_GUARD_ID eset már a függvény elején
+        // skip-pel elkap (saját korrekciós hívás), ide csak a külső hívások
+        // futnak be.
+        if (
+            Object.prototype.hasOwnProperty.call(payload, 'compiledWorkflowSnapshot')
+            && payload.modifiedByClientId !== SERVER_GUARD_ID
+            && corrections.isActivated === undefined
+        ) {
+            error(`[SnapshotGuard] ${freshDoc.$id} deaktiválva — kliens módosította a compiledWorkflowSnapshot mezőt (caller=${callerId || 'unknown'})`);
+            corrections.isActivated = false;
+            corrections.activatedAt = null;
+            corrections.compiledWorkflowSnapshot = null;
         }
 
         // ── 7. Korrekciók alkalmazása ──

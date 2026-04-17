@@ -126,7 +126,7 @@ maestro-server/
 | `update-article` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `GROUPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID` |
 | `article-update-guard` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `GROUPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID` |
 | `validate-article-creation` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID` |
-| `validate-publication-update` | `DATABASE_ID`, `PUBLICATIONS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `DEADLINES_COLLECTION_ID` |
+| `validate-publication-update` | `DATABASE_ID`, `PUBLICATIONS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `DEADLINES_COLLECTION_ID`, `ARTICLES_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID` |
 | `set-publication-root-path` | `DATABASE_ID`, `PUBLICATIONS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `ORGANIZATION_MEMBERSHIPS_COLLECTION_ID` |
 | `cascade-delete` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `USER_VALIDATIONS_COLLECTION_ID`, `SYSTEM_VALIDATIONS_COLLECTION_ID`, `DEADLINES_COLLECTION_ID`, `LAYOUTS_COLLECTION_ID`, `THUMBNAILS_BUCKET_ID` |
 | `cleanup-orphaned-locks` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID` |
@@ -219,6 +219,10 @@ Kiadvány létrehozás/módosításkor fut. `defaultContributors` JSON parse →
 
 **Aktiválás validáció (Dashboard Redesign Fázis 5):** Minden create és update eseménynél, ha a friss dokumentum `isActivated === true`, a CF lefuttatja a `validatePublicationActivationInline()`-t (inline másolat a `maestro-shared/publicationActivation.js`-ből). Ez ellenőrzi: (a) `workflowId` kitöltött, (b) legalább egy deadline létezik, (c) a deadline-ok a teljes `coverageStart..coverageEnd` tartományt átfedés nélkül lefedik és formátum-helyesek. A deadline-ok a `DEADLINES_COLLECTION_ID`-ból kerülnek lekérdezésre (`Query.equal('publicationId', $id)`, limit 500). **Fail-closed**: ha a `DEADLINES_COLLECTION_ID` env var hiányzik, vagy a deadline lekérés dob, vagy a validáció sikertelen → a CF revertel `{ isActivated: false, activatedAt: null }`-re. Ez garantálja, hogy érvénytelen állapot soha nem maradhat a DB-ben, még akkor sem, ha a Dashboard UI-t megkerülik direkt REST hívással.
 
+**Workflow snapshot rögzítése (§5a, #37):** Sikeres aktiválási átmenet vagy snapshot-hiányos aktív publikáció esetén a CF beolvassa a `workflowId`-hoz tartozó `workflows.compiled` JSON-t és a `publications.compiledWorkflowSnapshot` mezőbe írja. Trigger-szűk: csak `payload.isActivated` érintés vagy `freshDoc.compiledWorkflowSnapshot` hiány → nem fut normál szerkesztési update-nél (így egy időközben módosított workflow nem szivárog be az élő publikáció snapshotjába). Fail-closed: workflow lookup hiba vagy office scope mismatch → deaktiválás. Idempotens: azonos tartalomra nem ír, elkerüli a felesleges SERVER_GUARD korrekciós kört. Szükséges env var: `WORKFLOWS_COLLECTION_ID`.
+
+**Snapshot immutability guard (§6b, #37):** Ha a kliens payload tartalmazza a `compiledWorkflowSnapshot` kulcsot ÉS a caller nem SERVER_GUARD, invariáns-sértés → deaktiválás + snapshot null-ra. A post-event CF nem lát pre-state-et, ezért közvetlen mező-revert nem lehetséges; a deaktiválás új aktiválást kényszerít, ahol az §5a a workflow aktuális `compiled`-ját ráírja. Normál szerkesztés (name, coverage, contributors stb.) nem érinti a mezőt, így a guard csak explicit visszaélés ellen véd.
+
 ### set-publication-root-path
 
 HTTP endpoint (`execute: ["users"]`) a Plugin folder picker modaljából hívva (`functions.createExecution(..., async: false)`). A Plugin `users` role NEM rendelkezik direkt `publications.update` joggal (Fázis 9), ezért minden rootPath beállítás ezen a CF-en keresztül történik. Szűk hatókörű: kizárólag null → nem-null kanonikus írás.
@@ -275,7 +279,7 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 
 **Bemeneti payload**:
 ```json
-{ "action": "bootstrap_organization" | "create" | "accept" | "add_group_member" | "remove_group_member" | "create_workflow" | "update_workflow" | "update_workflow_metadata" | "delete_workflow" | "duplicate_workflow" | "bootstrap_workflow_schema" | "delete_organization" | "delete_editorial_office", ... }
+{ "action": "bootstrap_organization" | "create" | "accept" | "add_group_member" | "remove_group_member" | "create_workflow" | "update_workflow" | "update_workflow_metadata" | "delete_workflow" | "duplicate_workflow" | "bootstrap_workflow_schema" | "bootstrap_publication_schema" | "delete_organization" | "delete_editorial_office", ... }
 ```
 
 **Biztonsági megjegyzés**: Korábban létezett egy `organization-membership-guard` trigger CF, amely egy `modifiedByClientId === 'server-guard'` sentinellel engedélyezte az invite-eredetű membership-eket. Ez **kliens-forgeable** volt — bármely hitelesített user beállíthatta a payload-ban. A Codex adversarial review jelezte a kritikus sebezhetőséget, és a javítás ACL-alapú védelemre váltott (B.5 utolsó iteráció, 2026-04-07).
@@ -381,6 +385,16 @@ Két új attribútum a `workflows` collection-ön:
 - Owner-only (any org-ban owner role elég).
 - `databases.createEnumAttribute` + `createStringAttribute` — 409 catch → skip (idempotens).
 - Legacy row-ok `visibility=null` → a Plugin / CF fallback `'editorial_office'`-ra értékeli.
+
+**Idempotens publications schema bootstrap** — `bootstrap_publication_schema` CF action (#36):
+- Owner-only (any org-ban owner role elég).
+- `databases.createStringAttribute(publications, 'compiledWorkflowSnapshot', 1_000_000, required=false, default=null)` — 409 catch → skip.
+- A mezőt a `validate-publication-update` CF §5a írja aktiválási sikeres átmenetnél (a workflow `compiled` JSON pillanatképe). Onnantól immutable (§6b guard). Legacy (snapshot nélküli) aktív publikációkon null marad — a Plugin a `workflowId` cache-re fallback-el (Feladat #38).
+
+**Snapshot-preferáló workflow lookup** (CF hardening, #37):
+- `update-article` CF `getWorkflowForPublication()` — ha a publikációnak van `compiledWorkflowSnapshot`-ja, a CF kizárólag azt parse-olja (snap cache kulcs: `snap:${pubId}:${length}`). Csak snapshot hiányában / parse hibánál esik vissza a live `workflowId` lookup-ra. A workflow Dashboard-oldali módosításai így NEM érintik az aktivált publikáció cikk-validációit.
+- `validate-article-creation` CF `loadValidStates(parentPublication)` — ugyanez a preferencia: a snapshot-ból vett states set elfogadja a Plugin által a pillanatkép alapján választott initial state-et akkor is, ha a live workflow-ból már hiányzik.
+- `article-update-guard` CF (post-event safety net) `getWorkflowForPublication()` — snapshot preferencia a teljes stack konzisztenciájáért: plugin, write-path CF és guard mind ugyanazt a workflow verziót látják.
 
 **Új CF action-ök (#30)**:
 - `update_workflow_metadata` — `{ editorialOfficeId, workflowId, name?, visibility? }`, org admin/owner auth, office scope match, name uniqueness per office, visibility whitelist. **Downgrade blocking scan**: `organization` → `editorial_office` váltásnál a szervezet más office-aiban lévő publikációkat ellenőrzi (`publications.workflowId === workflowId` + `organizationId === orgId` + `editorialOfficeId !== callerOffice`) — ha van, `visibility_downgrade_blocked` + `orphanedPublications: [{$id, name, editorialOfficeId}]`. Analóg cap/pagination mint a `delete_workflow` scan.

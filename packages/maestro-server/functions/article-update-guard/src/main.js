@@ -69,6 +69,13 @@ function cacheSet(key, compiled) {
 /**
  * Betölti a compiled workflow JSON-t egy publikáció számára.
  *
+ * Preferencia (Feladat #37/#38): `publication.compiledWorkflowSnapshot`
+ * (aktiváláskor rögzített pillanatkép). Ha jelen van, kizárólag ezt
+ * használjuk — a Dashboard-oldali workflow módosítások így NEM érintik a
+ * már aktivált publikáció safety-net validációját. A post-event guard
+ * így egy ritmusban marad az `update-article` CF-fel és a Plugin
+ * klienssel.
+ *
  * Elsődleges (Fázis 7): `publication.workflowId` alapján a `workflows`
  * collection-ből, cross-tenant védelemmel (a workflow `editorialOfficeId`-jának
  * egyeznie kell a publikáció office-ával). Ha a workflowId explicit beállított,
@@ -84,7 +91,7 @@ function cacheSet(key, compiled) {
  * @param {sdk.Databases} databases
  * @param {string} databaseId
  * @param {string} workflowsCollectionId
- * @param {{ editorialOfficeId?: string, workflowId?: string }} parentPublication
+ * @param {{ editorialOfficeId?: string, workflowId?: string, compiledWorkflowSnapshot?: string }} parentPublication
  * @param {Function} log
  * @returns {Promise<Object|null>}
  */
@@ -92,6 +99,23 @@ async function getWorkflowForPublication(databases, databaseId, workflowsCollect
     if (!parentPublication) return null;
     const officeId = parentPublication.editorialOfficeId;
     const workflowId = parentPublication.workflowId;
+    const snapshot = parentPublication.compiledWorkflowSnapshot;
+
+    // 0. Snapshot preferencia (#37/#38) — aktivált publikációk rögzített workflow verziója
+    if (typeof snapshot === 'string' && snapshot.length > 0) {
+        const snapCacheKey = `snap:${parentPublication.$id}:${snapshot.length}`;
+        const cachedSnap = cacheGet(snapCacheKey);
+        if (cachedSnap) return cachedSnap;
+        try {
+            const compiled = JSON.parse(snapshot);
+            cacheSet(snapCacheKey, compiled);
+            return compiled;
+        } catch (e) {
+            log(`[Workflow] Snapshot parse hiba (pub=${parentPublication.$id}): ${e.message} — fallback workflowId-ra`);
+            // Ne állítsunk be fallback változót; a következő blokk ugyanazt a
+            // workflowId lookup-ot futtatja le, mintha snapshot sem létezne.
+        }
+    }
 
     // 1. Primary: publication.workflowId — fail-closed, nincs cross-workflow fallback
     if (workflowId) {

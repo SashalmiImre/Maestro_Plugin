@@ -99,13 +99,35 @@ function cacheSet(key, compiled) {
 
 /**
  * Betölti a compiled workflow JSON-t egy publikáció számára.
- * Primary: publication.workflowId (cross-tenant védelem). Legacy fallback:
- * office első workflow-ja — csak ha a publication.workflowId explicit null.
+ * Preferencia-sorrend (Feladat #37/#38):
+ * 1. `publication.compiledWorkflowSnapshot` (aktiváláskori rögzített pillanatkép) —
+ *    ha jelen van, kizárólag ezt használjuk. A Dashboard-oldali workflow módosítások
+ *    így NEM érintik a már aktivált publikáció cikk-validációit.
+ * 2. `publication.workflowId` (legacy / snapshot-hiányos aktivált pub) — live workflow doc.
+ * 3. Office első workflow-ja — csak ha a `publication.workflowId` explicit null.
  */
 async function getWorkflowForPublication(databases, databaseId, workflowsCollectionId, parentPublication, log) {
     if (!parentPublication) return null;
     const officeId = parentPublication.editorialOfficeId;
     const workflowId = parentPublication.workflowId;
+    const snapshot = parentPublication.compiledWorkflowSnapshot;
+
+    // Snapshot elsődleges (#37/#38) — a publikáció életét a rögzített verzión
+    // futtatjuk, nem a Dashboard-ról esetleg módosult live workflow-n.
+    if (typeof snapshot === 'string' && snapshot.length > 0) {
+        const snapCacheKey = `snap:${parentPublication.$id}:${snapshot.length}`;
+        const cachedSnap = cacheGet(snapCacheKey);
+        if (cachedSnap) return cachedSnap;
+        try {
+            const compiled = JSON.parse(snapshot);
+            cacheSet(snapCacheKey, compiled);
+            return compiled;
+        } catch (e) {
+            log(`[Workflow] Snapshot parse hiba (pub=${parentPublication.$id}): ${e.message} — fallback workflowId-ra`);
+            // Fallback a workflowId-ra — a snapshot sérült, de a cikk ne blokkolódjon
+            // teljesen, ha a live workflow elérhető. A Plugin is ezt a mintát követi.
+        }
+    }
 
     if (workflowId) {
         const cacheKey = `wf:${workflowId}`;
