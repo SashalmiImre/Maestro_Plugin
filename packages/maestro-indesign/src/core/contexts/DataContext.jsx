@@ -521,7 +521,8 @@ export const DataProvider = ({ children }) => {
 
     // Parse cache docId szerint — stabil compiled referencia, ha két publikáció
     // ugyanarra a workflow doc-ra mutat (publikáció-váltáskor nincs fals
-    // workflowChanged event).
+    // workflowChanged event). Legacy fallback: ha a publikációnak még nincs
+    // `compiledWorkflowSnapshot`-ja, ebből a cache-ből oldódik fel a workflow.
     const workflowCache = useMemo(() => {
         const cache = new Map();
         for (const doc of workflows) {
@@ -537,21 +538,48 @@ export const DataProvider = ({ children }) => {
         return cache;
     }, [workflows]);
 
-    // Az aktív publikáció workflowId-ja — külön memo, hogy a workflow memo
-    // ne invalidálódjon minden publikáció-mutációnál (lock flip, rename stb.).
-    const activeWorkflowId = useMemo(() => {
+    // Az aktív publikáció doc — stabil identitás, amíg a konkrét pub objektum
+    // nem cserélődik. Kiszűri a publikáció-lista mutációját (lock flip, rename
+    // más publikáción), így a snapshot / workflowId memo-k csak tényleges
+    // aktív-pub váltásra vagy az aktív pub cseréjére invalidálódnak.
+    const activePublication = useMemo(() => {
         if (!activePublicationId) return null;
-        const activePub = publications.find(p => p.$id === activePublicationId);
-        return activePub?.workflowId || null;
+        return publications.find(p => p.$id === activePublicationId) || null;
     }, [publications, activePublicationId]);
 
-    // Derived workflow — fail-closed: ha a workflowId érvénytelen vagy nincs,
-    // null. A plugin `!workflow` ágakra megy (cikk blokkolás). Egyezik a CF
-    // `article-update-guard` `getWorkflowForPublication()` viselkedésével.
+    // Aktiváláskor rögzített workflow pillanatkép (#38). A CF írja a
+    // `validate-publication-update` §5a-ban, onnantól immutable a publikáció
+    // élettartama alatt — a memo szűk deps-ei (snapshot string identitás)
+    // miatt az élő publikáción soha nem parse-olódik újra.
+    const activeSnapshotCompiled = useMemo(() => {
+        const snapshot = activePublication?.compiledWorkflowSnapshot;
+        if (!snapshot) return null;
+        try {
+            return typeof snapshot === 'string' ? JSON.parse(snapshot) : snapshot;
+        } catch (err) {
+            logError(`[DataContext] compiledWorkflowSnapshot parse hiba (${activePublication.$id}):`, err);
+            return null; // fail-closed → fallback a workflowId útvonalra
+        }
+    }, [activePublication?.$id, activePublication?.compiledWorkflowSnapshot]);
+
+    // Legacy (snapshot nélküli) publikáció workflowId útvonala. Ha van érvényes
+    // snapshot, ezt nem használjuk — ne zavarjon workflow-doc Realtime mutáció
+    // az aktivált publikáción.
+    const activeWorkflowId = useMemo(() => {
+        if (activeSnapshotCompiled) return null;
+        return activePublication?.workflowId || null;
+    }, [activePublication, activeSnapshotCompiled]);
+
+    // Derived workflow — snapshot-preferáló feloldás. Sorrend:
+    // 1. compiledWorkflowSnapshot (aktiválás pillanatképe — az élő publikáció
+    //    stabil, workflow-módosításoktól független kontextusa)
+    // 2. workflowCache[workflowId] (legacy publikáció, még nincs snapshot)
+    // 3. null (fail-closed — cikk blokkolás)
     const workflow = useMemo(() => {
+        if (activeSnapshotCompiled) return activeSnapshotCompiled;
         if (!activeWorkflowId) return null;
         return workflowCache.get(activeWorkflowId) || null;
-    }, [activeWorkflowId, workflowCache]);
+    }, [activeSnapshotCompiled, activeWorkflowId, workflowCache]);
 
     // workflowChanged dispatch a derived workflow identitás változására —
     // lefedi a Realtime eseményeket ÉS a publikáció-váltást is.
