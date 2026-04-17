@@ -33,7 +33,7 @@ export default function DangerZone({
             <p className="danger-zone-description">{description}</p>
             <button
                 type="button"
-                className="danger-zone-button"
+                className="danger-action"
                 onClick={onDelete}
                 disabled={isPending}
             >

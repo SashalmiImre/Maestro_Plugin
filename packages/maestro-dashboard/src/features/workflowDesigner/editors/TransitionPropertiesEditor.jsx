@@ -80,7 +80,7 @@ export default function TransitionPropertiesEditor({ edge, onDataChange, availab
             <div className="properties-editor__footer">
                 <button
                     type="button"
-                    className="designer-field__delete-btn"
+                    className="danger-action danger-action--block"
                     onClick={onDelete}
                 >
                     Átmenet törlése

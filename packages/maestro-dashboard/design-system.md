@@ -119,9 +119,24 @@ Minden interaktív elem:
 ### Primary Button
 Háttér `--accent-solid`, szöveg fehér, padding `--space-3 --space-5`, radius `--radius-md`. Disabled: `--text-disabled` háttér, `--text-muted` szöveg.
 
-### Danger Action
-Háttér `transparent`, szöveg `--c-error`, keret `1px solid --c-error`. Hover: `--c-error` 10%-os háttér.
-**Minden Veszélyes zóna** (Org/Office/Publication törlés, Workflow állapot törlés) ezt használja.
+### Danger Action (`.danger-action`)
+Subtle piros variáns egységes destruktív akciókhoz. CSS minta (styles.css):
+- Háttér `rgba(255, 180, 171, 0.10)` (`--c-error` 10%)
+- Keret `1px solid rgba(255, 180, 171, 0.30)`
+- Szín `var(--c-error)` (`#ffb4ab`)
+- Padding `var(--space-2) var(--space-4)`, radius `var(--radius-md)`, font-weight 600
+- Hover: háttér 18%-os, keret 50%-os
+- Disabled: `opacity: 0.5`, `cursor: not-allowed`
+
+**Block variáns** (`.danger-action--block`): full-width, side panel gombokhoz.
+
+**Használók**:
+- `DangerZone.jsx` — Org / Office / Publication kaszkád törlés.
+- `StatePropertiesEditor.jsx` — Workflow Designer állapot törlés.
+- `TransitionPropertiesEditor.jsx` — Workflow Designer átmenet törlés.
+
+> **Megjegyzés**: a `ConfirmDialog.jsx` `.confirm-dialog-btn-danger` külön minta marad
+> (dialog primary gomb, vizuálisan kiemelt). Tokenizálása külön iterációban.
 
 ### Modal
 - Háttér `--bg-overlay`
@@ -141,12 +156,13 @@ Háttér `transparent`, szöveg `--c-error`, keret `1px solid --c-error`. Hover:
 
 ## Hiányzó / TODO
 
-- [ ] Spacing tokenek bevezetése (sweep a `styles.css`-en)
-- [ ] Radius tokenek bevezetése
+- [x] Spacing tokenek bevezetése (#48)
+- [x] Radius tokenek bevezetése (#48)
 - [ ] Font-size skála kodifikálása
 - [ ] IconButton komponens stílus-szabvány (`aria-label` kötelező, 3 méret)
-- [ ] DangerAction egységesítés (Workflow Designer „Állapot törlése" is kerüljön rá)
+- [x] DangerAction egységesítés (#51) — Workflow Designer „Állapot törlése" és átmenet törlése is ezen.
 - [ ] Elevation/shadow tokenek (modal, popover, tooltip)
+- [ ] `ConfirmDialog.btn-danger` tokenizálás (hardcoded `#e53935` → token-alapú)
 
 ## Sync folyamat (Claude felületek között)
 

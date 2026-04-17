@@ -667,22 +667,7 @@
     cursor: not-allowed;
 }
 
-/* Törlés gomb */
-.designer-field__delete-btn {
-    width: 100%;
-    padding: 8px;
-    background: rgba(239, 68, 68, 0.1);
-    border: 1px solid rgba(239, 68, 68, 0.2);
-    border-radius: 6px;
-    color: #f87171;
-    cursor: pointer;
-    font-size: 12px;
-    transition: background 0.15s;
-}
-
-.designer-field__delete-btn:hover {
-    background: rgba(239, 68, 68, 0.2);
-}
+/* Törlés gomb — .danger-action (styles.css) */
 
 /* Hamarosan badge */
 .designer-field__badge-coming {

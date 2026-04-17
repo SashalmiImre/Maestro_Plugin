@@ -199,7 +199,7 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
             <div className="properties-editor__footer">
                 <button
                     type="button"
-                    className="designer-field__delete-btn"
+                    className="danger-action danger-action--block"
                     onClick={onDelete}
                 >
                     Állapot törlése
