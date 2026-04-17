@@ -181,9 +181,10 @@ function validatePublicationActivationInline(publication, deadlines) {
     if (!publication?.workflowId) {
         errors.push('A kiadványhoz workflow-t kell választani.');
     }
-    if (!publication?.rootPath || !publication.rootPath.trim()) {
-        errors.push('A kiadvány gyökérmappáját a Pluginból kell beállítani aktiválás előtt.');
-    }
+    // rootPath NEM feltétel — a Plugin narancs „Konfiguráció szükséges"
+    // állapotban jeleníti meg a rootPath-nélküli aktivált pubokat (#33),
+    // és a user a Pluginból (picker) vagy Dashboardból állítja be utólag.
+    // Aktiválás előtti rootPath-követelmény deadlockot okozna.
     if (!deadlines || deadlines.length === 0) {
         errors.push('Legalább egy határidőt meg kell adni.');
     } else {
