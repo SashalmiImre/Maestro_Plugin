@@ -50,20 +50,13 @@ export default function WorkflowPropertiesEditor({ version, metadata, onMetadata
                 </div>
             </div>
 
-            {/* Placeholder tabok — későbbi Fázisban kerülnek implementálásra */}
-            <div className="designer-collapsible">
-                <div className="designer-collapsible__header designer-collapsible__header--disabled">
-                    <span>Elem jogosultságok</span>
-                    <span className="designer-field__badge-coming">Hamarosan</span>
-                </div>
-            </div>
-
-            <div className="designer-collapsible">
-                <div className="designer-collapsible__header designer-collapsible__header--disabled">
-                    <span>Képességek</span>
-                    <span className="designer-field__badge-coming">Hamarosan</span>
-                </div>
-            </div>
+            {/*
+             * Korábban itt voltak az „Elem jogosultságok" és „Képességek"
+             * placeholder szekciók „Hamarosan" badge-dzsel. Amíg nincs
+             * funkció mögöttük, elrejtjük — a feature bevezetésekor
+             * visszakerülnek. Így a UI nem terhelődik funkciótlan
+             * elemekkel, és nem jelenik meg inkonzisztens frázishasználat.
+             */}
         </div>
     );
 }
