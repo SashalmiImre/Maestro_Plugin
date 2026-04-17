@@ -53,6 +53,37 @@ tags: [feladatok]
 - [ ] 40. **„Új szervezet…" menüpont** a user avatar dropdown-ban: modal-os create flow (név + slug). Jelenlegi `bootstrap_organization` CF újrahasznosítása.
 - [ ] 41. **„Maestro beállítások" menüpont**: modal, benne: saját szervezetek listája (váltás/kilépés), függőben lévő invite-ok (fogadás/elutasítás).
 
+#### G. Dashboard design review (2026-04-17)
+
+> Forrás: Claude design plugin (`/design-critique` + `/accessibility-review` + `/ux-copy` + `/design-system`). Screenshotok alapján készült audit, 17 view lefedve. Részletes design system dokumentum: [packages/maestro-dashboard/design-system.md](../packages/maestro-dashboard/design-system.md).
+
+**Kritikus (🔴) — blokkoló:**
+
+- [ ] 42. **Primary CTA kontraszt-fix (WCAG AA)**: `--accent-solid` (`#3b82f6`) + fehér szöveg = 3.7:1, bukik AA normal-t. Váltás `#2563eb`-re (5.1:1). Egysoros token-változás a `css/styles.css`-ben. Érint: login CTA, modal Létrehozás gombok, Meghívás, minden primary button.
+- [ ] 43. **IconButton `aria-label` konvenció**: minden ikon-only gomb kötelezően `aria-label`-et kap. Sweep lista: breadcrumb dropdown triggerek, szűrők nyitás, avatar menü, Workflow Designer node-akciók, jobb felső toolbar ikonok.
+- [ ] 44. **Landing empty state újratervezés**: a bejelentkezés utáni üres képernyő jelenleg csak egy szürke szöveget mutat, nincs elsődleges CTA. Új `<EmptyState>` komponens: címsor („Még nincs kiadványod"), leírás, primary gomb „Kiadvány létrehozása" (Office Settings → Általános tabot nyitja) + secondary link „Szervezet beállításai".
+- [ ] 45. **Breadcrumb „Kiadvány" gomb üres scope-ban**: jelenleg enabled de kattintásra no-op (silent zsákutca). Disabled állapot + tooltip („Először hozz létre egy kiadványt a Szerkesztőség beállításokban"), VAGY egysoros dropdown „Nincs kiadvány — Új létrehozása" linkkel.
+- [ ] 46. **Workflow node marker kódok accessibility**: FA/PN/FN/EP vizuális markerek screen reader-nek értelmezhetetlenek. `aria-label` a teljes validáció-névvel minden node-on. Opcionálisan hover-tooltip a canvason.
+
+**Mérsékelt (🟡):**
+
+- [ ] 47. **Org/Office breadcrumb egy-elemű dropdown megszüntetése**: ha a dropdown-ban csak „Beállítások" van, a breadcrumb gomb közvetlenül nyissa a modalt (dropdown kihagyva). Többtagú dropdown csak akkor, ha tényleg van választási lehetőség (több org/office).
+- [ ] 48. **Spacing + radius tokenek bevezetése**: `--space-1..8` (4–64px) és `--radius-sm/md/lg/xl` (4/6/8/12px) a `styles.css` `:root`-ba. Sweep a 2299 soros fájlon, cseréld a magic number-eket tokenekre. Részletek: [design-system.md](../packages/maestro-dashboard/design-system.md).
+- [ ] 49. **Workflow tab sor sűrítés**: 5 vezérlő/sor zsúfolt. Visibility combobox és „Tervező →" marad inline, Átnevezés/Duplikálás/Törlés kebab-menübe (⋯).
+- [ ] 50. **Filter „popover" vs teljes sáv inkonzisztencia**: a trigger gomb popover-elvárást ad, de a tartalom teljes szélességű sáv. Döntés: vagy valódi popover (a trigger mellett felnyíló panel), vagy a trigger cseréje toggle-sávra/accordion fejlécre.
+- [ ] 51. **DangerAction pattern egységesítés**: a Veszélyes zóna stílus (piros keret + subtle háttér) három helyen háromféle: Org/Office modalban keretes box, Workflow Designer „Állapot törlése"-nél sima szöveges gomb. Egységes `.danger-action` CSS class + dokumentáció a design-system.md-ben.
+- [ ] 52. **`--text-muted` kontraszt `--bg-elevated` felett**: 4.1:1, AA normal fail. Vagy világosítás `#9aa0b0`-ra (4.7:1), vagy ne használjuk elevated felszín felett.
+- [ ] 53. **State/validáció szín + szöveg kettős kódolás**: color-blind user-ek a 9 workflow állapotot nehezen különböztetik meg csak a színes dot alapján. State-specifikus ikon a dot mellé VAGY egyedi szöveges prefix a filter checkbox label-ben.
+- [ ] 54. **Elavult copy „bal oldali navigáció"**: Office Settings → Általános → Kiadványok szekció hivatkozik nem létező bal oldali navigációra. Javítás: „…a Kiadvány menüben (breadcrumb)…".
+- [ ] 55. **Magyar/angol keverés sweep**: „OWNEREK" (Org Settings → Felhasználók) → „Tulajdonosok". Teljes UI átnézés angol szavakért: `owners`, `admins`, `members`, `invites`, `flatplan`.
+- [ ] 56. **„Hamarosan" placeholder egységesítés**: jelenleg 3+ helyen szerepel (Jogosultság-sablonok, Elem jogosultságok, Képességek). Vagy rejtsd el, amíg nincs funkció, vagy egységes frázis + ETA.
+
+**Minor (🟢) — polish:**
+
+- [ ] 57. **Login/Register CTA szöveg redundancia**: tab + primary CTA ugyanaz a szöveg. CTA: „Belépés" / „Fiók létrehozása".
+- [ ] 58. **Új kiadvány modal disabled CTA hint**: disabled „Létrehozás" mellé inline help: „Add meg a nevet és válassz workflow-t."
+- [ ] 59. **Workflow állapot törlése confirm dialog**: copy: „Biztosan törlöd a(z) „{állapot neve}" állapotot? A cikkek, amelyek ebben az állapotban vannak, a kezdőállapotra kerülnek."
+
 ### Manuális smoke test checklist
 
 > Valós InDesign környezetben végigkattintani — a kód review nem helyettesíti.
