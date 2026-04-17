@@ -31,7 +31,7 @@ A runtime értékek a [css/styles.css](css/styles.css) `:root` blokkjában élne
 |---|---|---|
 | `--text-primary` | `#e2e2eb` | Fő szöveg (`on-surface`) |
 | `--text-secondary` | `#c2c6d6` | Másodlagos (`on-surface-variant`) |
-| `--text-muted` | `#8c909f` | Placeholder, metadata (`outline`) |
+| `--text-muted` | `#9aa0b0` | Placeholder, metadata (`outline`) — AA 4.7:1 a `--bg-elevated` felett |
 | `--text-disabled` | `#424754` | Disabled állapot (`outline-variant`) |
 
 ### Accent — interaktív

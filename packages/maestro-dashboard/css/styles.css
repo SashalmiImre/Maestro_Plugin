@@ -20,7 +20,7 @@
     /* Szöveg hierarchia */
     --text-primary:   #e2e2eb;   /* on-surface */
     --text-secondary: #c2c6d6;   /* on-surface-variant */
-    --text-muted:     #8c909f;   /* outline */
+    --text-muted:     #9aa0b0;   /* outline — AA 4.7:1 a --bg-elevated felett */
     --text-disabled:  #424754;   /* outline-variant */
 
     /* Accent — Stitch primary paletta */
