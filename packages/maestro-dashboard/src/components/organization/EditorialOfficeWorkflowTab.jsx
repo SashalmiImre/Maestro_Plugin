@@ -12,10 +12,11 @@
  * a metaadatokra (név, láthatóság) + lifecycle műveletekre fókuszál.
  */
 
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useConfirm } from '../ConfirmDialog.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
+import usePopoverClose from '../../hooks/usePopoverClose.js';
 import { WORKFLOW_VISIBILITY, WORKFLOW_VISIBILITY_DEFAULT } from '@shared/constants.js';
 import {
     createWorkflow,
@@ -62,6 +63,10 @@ export default function EditorialOfficeWorkflowTab({
 
     const [editingId, setEditingId] = useState(null);
     const [editDraft, setEditDraft] = useState('');
+
+    const [openKebabId, setOpenKebabId] = useState(null);
+    const kebabRef = useRef(null);
+    usePopoverClose(kebabRef, !!openKebabId, () => setOpenKebabId(null));
 
     const sortedWorkflows = useMemo(() => {
         return [...(workflows || [])].sort((a, b) => (a.name || '').localeCompare(b.name || '', 'hu'));
@@ -333,45 +338,101 @@ export default function EditorialOfficeWorkflowTab({
                                                     Tervező →
                                                 </button>
                                                 {isOrgAdmin && (
-                                                    <>
+                                                    <div
+                                                        ref={openKebabId === workflow.$id ? kebabRef : null}
+                                                        style={{ position: 'relative' }}
+                                                    >
                                                         <button
                                                             type="button"
-                                                            onClick={() => beginRename(workflow)}
+                                                            onClick={() => setOpenKebabId(prev => prev === workflow.$id ? null : workflow.$id)}
                                                             disabled={!!actionPending}
+                                                            title="További műveletek"
+                                                            aria-label="További műveletek"
+                                                            aria-haspopup="menu"
+                                                            aria-expanded={openKebabId === workflow.$id}
                                                             style={{
                                                                 background: 'none', color: '#ccc',
                                                                 border: '1px solid #666', padding: '2px 8px',
-                                                                borderRadius: 4, cursor: 'pointer', fontSize: 10
+                                                                borderRadius: 4, cursor: 'pointer',
+                                                                fontSize: 14, lineHeight: 1,
+                                                                minWidth: 26
                                                             }}
                                                         >
-                                                            Átnevezés
+                                                            {(isDuplicatePending || isDeletePending) ? '...' : '⋯'}
                                                         </button>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => handleDuplicate(workflow)}
-                                                            disabled={!!actionPending}
-                                                            style={{
-                                                                background: 'none', color: '#ccc',
-                                                                border: '1px solid #666', padding: '2px 8px',
-                                                                borderRadius: 4, cursor: 'pointer', fontSize: 10
-                                                            }}
-                                                        >
-                                                            {isDuplicatePending ? '...' : 'Duplikálás'}
-                                                        </button>
-                                                        <button
-                                                            type="button"
-                                                            onClick={() => handleDelete(workflow)}
-                                                            disabled={!!actionPending}
-                                                            style={{
-                                                                background: 'none', color: '#ef6060',
-                                                                border: '1px solid #7a2d2d',
-                                                                padding: '2px 8px', borderRadius: 4,
-                                                                cursor: 'pointer', fontSize: 10
-                                                            }}
-                                                        >
-                                                            {isDeletePending ? '...' : 'Törlés'}
-                                                        </button>
-                                                    </>
+                                                        {openKebabId === workflow.$id && (
+                                                            <ul
+                                                                role="menu"
+                                                                style={{
+                                                                    position: 'absolute',
+                                                                    top: 'calc(100% + 4px)', right: 0,
+                                                                    listStyle: 'none',
+                                                                    margin: 0, padding: 4,
+                                                                    background: 'var(--bg-elevated, #1e1f24)',
+                                                                    border: '1px solid var(--border, #3a3a3a)',
+                                                                    borderRadius: 6, minWidth: 150,
+                                                                    boxShadow: '0 4px 12px rgba(0,0,0,0.4)',
+                                                                    zIndex: 10
+                                                                }}
+                                                            >
+                                                                <li>
+                                                                    <button
+                                                                        type="button"
+                                                                        role="menuitem"
+                                                                        onClick={() => { setOpenKebabId(null); beginRename(workflow); }}
+                                                                        disabled={!!actionPending}
+                                                                        style={{
+                                                                            display: 'block', width: '100%',
+                                                                            textAlign: 'left',
+                                                                            background: 'none', color: '#ccc',
+                                                                            border: 'none', padding: '6px 10px',
+                                                                            borderRadius: 4, cursor: 'pointer',
+                                                                            fontSize: 12
+                                                                        }}
+                                                                    >
+                                                                        Átnevezés
+                                                                    </button>
+                                                                </li>
+                                                                <li>
+                                                                    <button
+                                                                        type="button"
+                                                                        role="menuitem"
+                                                                        onClick={() => { setOpenKebabId(null); handleDuplicate(workflow); }}
+                                                                        disabled={!!actionPending}
+                                                                        style={{
+                                                                            display: 'block', width: '100%',
+                                                                            textAlign: 'left',
+                                                                            background: 'none', color: '#ccc',
+                                                                            border: 'none', padding: '6px 10px',
+                                                                            borderRadius: 4, cursor: 'pointer',
+                                                                            fontSize: 12
+                                                                        }}
+                                                                    >
+                                                                        Duplikálás
+                                                                    </button>
+                                                                </li>
+                                                                <li>
+                                                                    <button
+                                                                        type="button"
+                                                                        role="menuitem"
+                                                                        onClick={() => { setOpenKebabId(null); handleDelete(workflow); }}
+                                                                        disabled={!!actionPending}
+                                                                        style={{
+                                                                            display: 'block', width: '100%',
+                                                                            textAlign: 'left',
+                                                                            background: 'none',
+                                                                            color: 'var(--c-error, #ef6060)',
+                                                                            border: 'none', padding: '6px 10px',
+                                                                            borderRadius: 4, cursor: 'pointer',
+                                                                            fontSize: 12
+                                                                        }}
+                                                                    >
+                                                                        Törlés
+                                                                    </button>
+                                                                </li>
+                                                            </ul>
+                                                        )}
+                                                    </div>
                                                 )}
                                             </div>
                                         </>
