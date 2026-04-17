@@ -195,6 +195,22 @@
     background: rgba(251, 146, 60, 0.25);
 }
 
+/* ─── Snapshot információs banner (#39) ─────────────────────────────────── */
+
+.workflow-designer-snapshot-info {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 8px 16px;
+    background: rgba(96, 165, 250, 0.12);
+    border-bottom: 1px solid rgba(96, 165, 250, 0.3);
+    color: #60a5fa;
+    font-size: 13px;
+    line-height: 1.4;
+    flex-shrink: 0;
+}
+
 /* ─── Fő tartalom ───────────────────────────────────────────────────────── */
 
 .workflow-designer-body {

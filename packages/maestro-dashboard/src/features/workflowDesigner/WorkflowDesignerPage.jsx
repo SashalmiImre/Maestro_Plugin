@@ -37,7 +37,7 @@ const DIRTY_CHANGE_TYPES = new Set(['remove', 'add', 'replace']);
 export default function WorkflowDesignerPage() {
     const { officeId, workflowId } = useParams();
     const navigate = useNavigate();
-    const { workflows: availableWorkflows } = useData();
+    const { workflows: availableWorkflows, publications } = useData();
     const { showToast } = useToast();
 
     // ── Workflow dokumentum ─────────────────────────────────────────────────
@@ -83,6 +83,21 @@ export default function WorkflowDesignerPage() {
     const defaultViewportRef = useRef(null);
     const versionRef = useRef(0);
     const originalStateIdsRef = useRef(new Set());
+
+    // ── Snapshot usage count (#39) ──────────────────────────────────────────
+    // Azok az aktivált publikációk, amelyek ezt a workflow-t már snapshot-olták
+    // (a saját `compiledWorkflowSnapshot` mezőjükben egy pillanatképet őriznek).
+    // A workflow módosításai ezekre a publikációkra NEM érvényesülnek — a
+    // designer banner figyelmezteti a szerkesztőt erről a szándékos viselkedésről.
+    const snapshotUsageCount = useMemo(() => {
+        if (!workflowDocId || !Array.isArray(publications)) return 0;
+        return publications.filter(p =>
+            p.isActivated === true
+            && p.workflowId === workflowDocId
+            && typeof p.compiledWorkflowSnapshot === 'string'
+            && p.compiledWorkflowSnapshot.length > 0
+        ).length;
+    }, [publications, workflowDocId]);
 
     // Version ref szinkronban tartása (Realtime handler-nek)
     useEffect(() => { versionRef.current = version; }, [version]);
@@ -613,6 +628,17 @@ export default function WorkflowDesignerPage() {
                     >
                         Újratöltés
                     </button>
+                </div>
+            )}
+
+            {/* Snapshot használat figyelmeztetés (#39) */}
+            {snapshotUsageCount > 0 && (
+                <div className="workflow-designer-snapshot-info">
+                    <span>
+                        Ezt a workflow-t már {snapshotUsageCount} aktív publikáció használja
+                        snapshot-ként — a mentett módosítások csak új aktiválásoknál érvényesülnek.
+                        A meglévő publikációk a saját, rögzített verziójukon futnak tovább.
+                    </span>
                 </div>
             )}
 

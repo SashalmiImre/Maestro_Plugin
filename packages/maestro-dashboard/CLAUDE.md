@@ -132,6 +132,12 @@ A Dashboard Redesign Fázis 4 (2026-04-10) bevezette a teljes kiadvány CRUD-ot:
 - A `publication.defaultContributors` JSON mező dropdown-onként szerkeszthető, mentés `updatePublication`-nel.
 - Smart update: ha vannak cikkek, ahol a kérdéses contributor slug `null`, a hook felajánlja a batch update-et (`useConfirm` → cikk frissítés).
 
+**Workflow snapshot aktiváláskor (#36–#39)**:
+- A `publications.compiledWorkflowSnapshot` string mező (JSON) a publikáció aktiválásakor rögzíti a workflow `compiled` pillanatképét. A schema-t a `bootstrap_publication_schema` CF action hozza létre (server, `invite-to-organization` CF, owner-only, idempotens).
+- Írás: a `validate-publication-update` CF §5a kizárólag aktiválási payload-on (`payload.isActivated` érintett) vagy snapshot-hiányos aktív publikáción backfill-ként. Normál szerkesztés (név, coverage) NEM írja újra a snapshot-ot — a workflow Dashboard-oldali módosításai nem szivárognak át futó publikációra.
+- Immutability: §6b guard — ha a payload közvetlenül érinti a `compiledWorkflowSnapshot` mezőt SERVER_GUARD nélkül, a CF deaktiválja a publikációt és null-ra billenti a mezőt, kényszerítve az új aktiválást (újabb §5a snapshot írást).
+- **WorkflowDesignerPage guard banner (#39)**: a `useData()`-ból olvasott `publications[]` alapján `snapshotUsageCount` memo számolja az `isActivated=true` + `workflowId === workflowDocId` + nem-üres `compiledWorkflowSnapshot` mezőjű publikációkat. Ha > 0, egy narancs informatív banner (`.workflow-designer-snapshot-info`) jelenik meg a `remoteVersionWarning` alatt — nem blokkol mentést, csak tájékoztat: a változás csak új aktiválásoknál érvényesül. Legacy (snapshot nélküli) aktív publikációk nem számítanak bele (azok a `workflowId` cache-re fallback-elnek a Pluginban).
+
 ---
 
 ## Projektstruktúra
