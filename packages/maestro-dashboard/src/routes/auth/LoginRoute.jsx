@@ -115,7 +115,7 @@ export default function LoginRoute() {
                     <Link to="/forgot-password" className="auth-link">Elfelejtett jelszó?</Link>
                 </div>
                 <button type="submit" className="login-btn" disabled={isSubmitting}>
-                    {isSubmitting ? 'Bejelentkezés...' : 'Bejelentkezés'}
+                    {isSubmitting ? 'Belépés...' : 'Belépés'}
                 </button>
                 {error && <div className="login-error">{error}</div>}
             </form>

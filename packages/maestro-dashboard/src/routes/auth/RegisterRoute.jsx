@@ -215,7 +215,7 @@ export default function RegisterRoute() {
                     />
                 </div>
                 <button type="submit" className="login-btn" disabled={isSubmitting}>
-                    {isSubmitting ? 'Regisztráció...' : 'Regisztráció'}
+                    {isSubmitting ? 'Fiók létrehozása...' : 'Fiók létrehozása'}
                 </button>
                 {error && <div className="login-error">{error}</div>}
             </form>
