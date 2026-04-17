@@ -343,8 +343,12 @@ export function DataProvider({ children }) {
             if (prev.some((p) => p.$id === doc.$id)) return prev;
             return [...prev, doc].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
         });
+        // Frissen létrehozott kiadvány legyen az aktív — így a modal zárása
+        // után azonnal a szerkesztő felületre kerül a user, és a modalból
+        // utólag létrehozott default layout is az aktív pub-hoz kerül be.
+        await switchPublication(doc.$id);
         return doc;
-    }, [databases, withScope]);
+    }, [databases, withScope, switchPublication]);
 
     const updatePublication = useCallback(async (id, data) => {
         const doc = await databases.updateDocument({
