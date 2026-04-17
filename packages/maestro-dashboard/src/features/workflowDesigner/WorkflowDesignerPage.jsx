@@ -553,8 +553,13 @@ export default function WorkflowDesignerPage() {
             {/* Toolbar */}
             <div className="workflow-designer-toolbar">
                 <div className="workflow-designer-toolbar__left">
-                    <Link to="/" className="workflow-designer-toolbar__back" title="Vissza a kiadványokhoz">
-                        ←
+                    <Link
+                        to="/"
+                        className="workflow-designer-toolbar__back"
+                        title="Vissza a kiadványokhoz"
+                        aria-label="Vissza a kiadványokhoz"
+                    >
+                        <span aria-hidden="true">←</span>
                     </Link>
                     <input
                         type="text"

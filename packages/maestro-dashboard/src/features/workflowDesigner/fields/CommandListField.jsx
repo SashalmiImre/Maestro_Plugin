@@ -54,8 +54,9 @@ export default function CommandListField({ label, value = [], availableGroups = 
                             className="designer-field__remove-btn"
                             onClick={() => handleRemove(cmd.id)}
                             title="Parancs eltávolítása"
+                            aria-label={`${COMMAND_REGISTRY[cmd.id]?.label || cmd.id} parancs eltávolítása`}
                         >
-                            ✕
+                            <span aria-hidden="true">✕</span>
                         </button>
                     </div>
                     <div className="designer-field__chips">
@@ -98,8 +99,9 @@ export default function CommandListField({ label, value = [], availableGroups = 
                         className="designer-field__add-btn"
                         onClick={handleAdd}
                         disabled={!addingId}
+                        aria-label="Kiválasztott parancs hozzáadása"
                     >
-                        +
+                        <span aria-hidden="true">+</span>
                     </button>
                 </div>
             )}

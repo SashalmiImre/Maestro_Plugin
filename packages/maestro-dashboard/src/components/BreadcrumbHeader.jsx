@@ -172,8 +172,9 @@ export default function BreadcrumbHeader({
                         to="/"
                         className={`view-btn ${activeView === 'table' ? 'active' : ''}`}
                         title="Táblázat nézet"
+                        aria-label="Táblázat nézet"
                     >
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
                             <line x1="3" y1="6" x2="21" y2="6"/>
                             <line x1="3" y1="12" x2="21" y2="12"/>
                             <line x1="3" y1="18" x2="21" y2="18"/>
@@ -183,8 +184,9 @@ export default function BreadcrumbHeader({
                         to="/layout"
                         className={`view-btn ${activeView === 'layout' ? 'active' : ''}`}
                         title="Elrendezés nézet"
+                        aria-label="Elrendezés nézet"
                     >
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden="true">
                             <rect x="3" y="3" width="7" height="7" rx="1"/>
                             <rect x="14" y="3" width="7" height="7" rx="1"/>
                             <rect x="3" y="14" width="7" height="7" rx="1"/>
@@ -200,9 +202,11 @@ export default function BreadcrumbHeader({
                 <button
                     className={`filter-toggle-btn ${isFilterActive ? 'active' : ''}`}
                     title="Szűrők"
+                    aria-label={isFilterActive ? 'Szűrők bezárása' : 'Szűrők megnyitása'}
+                    aria-expanded={isFilterActive}
                     onClick={onFilterToggle}
                 >
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                         <polygon points="22,3 2,3 10,12.46 10,19 14,21 14,12.46"/>
                     </svg>
                 </button>

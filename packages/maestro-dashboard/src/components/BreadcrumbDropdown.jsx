@@ -83,6 +83,7 @@ export default function BreadcrumbDropdown({
                 disabled={disabled}
                 aria-haspopup={!isStatic ? 'listbox' : undefined}
                 aria-expanded={isOpen}
+                aria-label={activeName ? `${label}: ${activeName}` : `${label} választó`}
             >
                 <span className="bc-dropdown-label">
                     {activeName || label}
