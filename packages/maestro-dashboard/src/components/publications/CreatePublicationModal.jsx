@@ -91,6 +91,20 @@ export default function CreatePublicationModal() {
 
     const hasErrors = Object.keys(errors).length > 0;
 
+    // ─── Disabled CTA hint — mit kell még kitöltenie a usernek (#58) ────────
+    const disabledHint = useMemo(() => {
+        if (!hasErrors) return '';
+        const needsName = !name.trim();
+        const needsWorkflow = workflows.length > 0 && !workflowId;
+        if (needsName && needsWorkflow) return 'Add meg a nevet és válassz workflow-t.';
+        if (needsName) return 'Add meg a kiadvány nevét.';
+        if (needsWorkflow) return 'Válassz egy workflow-t.';
+        if (errors.workflowId) return errors.workflowId;
+        if (errors.coverageStart || errors.coverageEnd) return 'Ellenőrizd a lefedett oldalakat.';
+        if (errors.rootPath) return 'Ellenőrizd a gyökérmappa útvonalat.';
+        return '';
+    }, [hasErrors, name, workflowId, workflows.length, errors]);
+
     // ─── Submit ─────────────────────────────────────────────────────────────
     async function handleSubmit(e) {
         e?.preventDefault?.();
@@ -268,6 +282,11 @@ export default function CreatePublicationModal() {
 
             {/* Akciók */}
             <div className="modal-actions">
+                {disabledHint && !isSubmitting && (
+                    <span className="help-text" role="status">
+                        {disabledHint}
+                    </span>
+                )}
                 <button
                     type="button"
                     className="btn-secondary"
