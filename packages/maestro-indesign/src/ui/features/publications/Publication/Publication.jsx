@@ -277,8 +277,10 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
 
         isSavingRootPathRef.current = true;
         setIsSavingRootPath(true);
+        let succeeded = false;
         try {
             await callSetPublicationRootPathCF(publication.$id, pendingRootPath.canonical);
+            succeeded = true;
             // Siker — Realtime hozza a publication.rootPath frissítést, a banner (és benne a gomb) automatikusan eltűnik.
             // Ha a Realtime késik vagy megszakadt, a dupla-klikk védelem úgyis a szerver CF-be ütközik
             // (`root_path_already_set` → barátságos dialog), nem hagyjuk a usert permanensen disabled gombbal.
@@ -310,11 +312,14 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
             setDialogConfig({ title, message, isAlert: true });
             setDialogOpen(true);
         } finally {
-            // Minden terminal ágon engedjük el a zárat. Ha Realtime még nem konvergált, a gomb
-            // még látszik egy pillanatig — dupla-klikk esetén a szerver `root_path_already_set`
-            // dialoggal tér vissza, ami barátságosabb, mint permanensen disabled állapot.
-            isSavingRootPathRef.current = false;
-            setIsSavingRootPath(false);
+            // Sikernél NEM engedjük el a zárat — a Realtime hamarosan levetíti `isConfigured=true`-ra,
+            // és a teljes banner eltűnik. Ha ezt a pillanatot megtöltjük gombbal, a user rákattint,
+            // és predictable `root_path_already_set` race-t kap. Csak hibánál engedjük vissza a
+            // kísérletet.
+            if (!succeeded) {
+                isSavingRootPathRef.current = false;
+                setIsSavingRootPath(false);
+            }
         }
     }, [pendingRootPath, publication.$id]);
 
@@ -443,10 +448,10 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
                     <div style={{
                         backgroundColor: "var(--spectrum-global-color-orange-500)",
                         color: "white",
-                        padding: "8px 12px 18px 12px",
+                        padding: "8px 12px 24px 12px",
                         borderRadius: "4px",
                         marginTop: "8px",
-                        marginBottom: "4px",
+                        marginBottom: "8px",
                         display: "flex",
                         alignItems: "flex-start"
                     }}>
@@ -464,28 +469,19 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
                             <div style={{ fontSize: "11px", opacity: 0.85, marginBottom: "8px" }}>
                                 A kiadvány gyökérmappája még nincs beállítva. A beállításig cikkfelvétel és -megnyitás nem lehetséges.
                             </div>
-                            <button
-                                type="button"
-                                onClick={handleSetRootPathClick}
-                                disabled={isSavingRootPath}
-                                onFocus={() => setIsRootPathButtonFocused(true)}
-                                onBlur={() => setIsRootPathButtonFocused(false)}
-                                style={{
-                                    background: "white",
-                                    color: "var(--spectrum-global-color-orange-600)",
-                                    border: "none",
-                                    borderRadius: "3px",
-                                    padding: "4px 12px",
-                                    fontSize: "11px",
-                                    fontWeight: "bold",
-                                    cursor: isSavingRootPath ? "default" : "pointer",
-                                    opacity: isSavingRootPath ? 0.6 : 1,
-                                    outline: isRootPathButtonFocused ? "2px solid white" : "none",
-                                    outlineOffset: isRootPathButtonFocused ? "2px" : "0"
-                                }}
-                            >
-                                {isSavingRootPath ? "Mentés…" : "Gyökérmappa beállítása"}
-                            </button>
+                            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                                <sp-button
+                                    variant="primary"
+                                    size="s"
+                                    onClick={handleSetRootPathClick}
+                                    disabled={isSavingRootPath || undefined}
+                                    onFocus={() => setIsRootPathButtonFocused(true)}
+                                    onBlur={() => setIsRootPathButtonFocused(false)}
+                                    style={{ "--spectrum-button-m-text-color": "white" }}
+                                >
+                                    {isSavingRootPath ? "Mentés…" : "Gyökérmappa beállítása"}
+                                </sp-button>
+                            </div>
                         </div>
                     </div>
                 )
