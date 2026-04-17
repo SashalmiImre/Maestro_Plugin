@@ -7,6 +7,8 @@
 
 import React, { memo } from 'react';
 import { Handle, Position } from '@xyflow/react';
+import { VALIDATOR_REGISTRY } from '@shared/validatorRegistry.js';
+import { COMMAND_REGISTRY } from '@shared/commandRegistry.js';
 
 /**
  * Validátor ID rövidítések a badge-ekhez.
@@ -15,12 +17,19 @@ function validatorBadge(v) {
     const id = typeof v === 'string' ? v : v?.validator;
     if (!id) return null;
     switch (id) {
-        case 'file_accessible':       return 'FA';
-        case 'page_number_check':     return 'PN';
-        case 'filename_verification': return 'FN';
-        case 'preflight_check':       return 'PF';
-        default:                      return id.slice(0, 2).toUpperCase();
+        case 'file_accessible':       return { code: 'FA', id };
+        case 'page_number_check':     return { code: 'PN', id };
+        case 'filename_verification': return { code: 'FN', id };
+        case 'preflight_check':       return { code: 'PF', id };
+        default:                      return { code: id.slice(0, 2).toUpperCase(), id };
     }
+}
+
+/**
+ * Parancs ID-ból generált 2-3 betűs kód (első betűk minden szóból).
+ */
+function commandBadge(id) {
+    return id.split('_').map(w => w[0]).join('').toUpperCase();
 }
 
 /**
@@ -47,15 +56,18 @@ function StateNode({ data, selected }) {
         if (!Array.isArray(list)) continue;
         for (const v of list) {
             const badge = validatorBadge(v);
-            if (badge && !seen.has(badge)) {
-                seen.add(badge);
+            if (badge && !seen.has(badge.code)) {
+                seen.add(badge.code);
                 validatorBadges.push(badge);
             }
         }
     }
 
     // Parancs badge-ek (első 3)
-    const commandBadges = (commands || []).slice(0, 3).map(c => c.id);
+    const commandBadges = (commands || []).slice(0, 3).map(c => ({
+        code: commandBadge(c.id),
+        id: c.id
+    }));
 
     return (
         <div
@@ -80,24 +92,56 @@ function StateNode({ data, selected }) {
                 {/* Badge-ek */}
                 {(validatorBadges.length > 0 || commandBadges.length > 0) && (
                     <div className="state-node__badges">
-                        {validatorBadges.map(b => (
-                            <span key={b} className="state-node__badge state-node__badge--validator" title={b}>
-                                {b}
-                            </span>
-                        ))}
-                        {commandBadges.map(c => (
-                            <span key={c} className="state-node__badge state-node__badge--command" title={c}>
-                                {c.split('_').map(w => w[0]).join('').toUpperCase()}
-                            </span>
-                        ))}
+                        {validatorBadges.map(({ code, id }) => {
+                            const label = VALIDATOR_REGISTRY[id]?.label ?? id;
+                            return (
+                                <span
+                                    key={code}
+                                    className="state-node__badge state-node__badge--validator"
+                                    title={`${label} (${code})`}
+                                    aria-label={`Validátor: ${label}`}
+                                >
+                                    {code}
+                                </span>
+                            );
+                        })}
+                        {commandBadges.map(({ code, id }) => {
+                            const label = COMMAND_REGISTRY[id]?.label ?? id;
+                            return (
+                                <span
+                                    key={id}
+                                    className="state-node__badge state-node__badge--command"
+                                    title={`${label} (${code})`}
+                                    aria-label={`Parancs: ${label}`}
+                                >
+                                    {code}
+                                </span>
+                            );
+                        })}
                     </div>
                 )}
 
                 {/* Státusz ikonok */}
                 {(isInitial || isTerminal) && (
                     <div className="state-node__status">
-                        {isInitial && <span className="state-node__status-icon state-node__status-icon--initial" title="Kezdőállapot">●</span>}
-                        {isTerminal && <span className="state-node__status-icon state-node__status-icon--terminal" title="Végállapot">■</span>}
+                        {isInitial && (
+                            <span
+                                className="state-node__status-icon state-node__status-icon--initial"
+                                title="Kezdőállapot"
+                                aria-label="Kezdőállapot"
+                            >
+                                <span aria-hidden="true">●</span>
+                            </span>
+                        )}
+                        {isTerminal && (
+                            <span
+                                className="state-node__status-icon state-node__status-icon--terminal"
+                                title="Végállapot"
+                                aria-label="Végállapot"
+                            >
+                                <span aria-hidden="true">■</span>
+                            </span>
+                        )}
                     </div>
                 )}
             </div>
