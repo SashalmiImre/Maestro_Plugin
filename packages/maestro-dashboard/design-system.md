@@ -80,7 +80,7 @@ A runtime értékek a [css/styles.css](css/styles.css) `:root` blokkjában élne
 | `--font-xl` | 24px | Page title |
 | `--font-2xl` | 32px | Brand (MAESTRO) |
 
-## Spacing (javasolt — **még hiányzik** a kódból)
+## Spacing (kódban)
 
 | Token | Érték |
 |---|---|
@@ -93,7 +93,9 @@ A runtime értékek a [css/styles.css](css/styles.css) `:root` blokkjában élne
 | `--space-7` | 48px |
 | `--space-8` | 64px |
 
-## Radius (javasolt — **még hiányzik** a kódból)
+**Sweep állapota (#48)**: a `border-radius`, `gap`, és single-value `padding` property-ket már `var(--space-*)` / `var(--radius-*)` tokenekre cseréltük a `styles.css`-ben. A shorthand értékek (pl. `padding: 8px 16px`) és a component-szintű `padding-left/right` property-k inkrementálisan tokenizálandók, amikor az érintett komponens módosul.
+
+## Radius (kódban)
 
 | Token | Érték | Használat |
 |---|---|---|
