@@ -74,7 +74,7 @@ tags: [feladatok]
 - [x] 51. **DangerAction pattern egységesítés**: a Veszélyes zóna stílus (piros keret + subtle háttér) három helyen háromféle: Org/Office modalban keretes box, Workflow Designer „Állapot törlése"-nél sima szöveges gomb. Egységes `.danger-action` CSS class + dokumentáció a design-system.md-ben.
 - [x] 52. **`--text-muted` kontraszt `--bg-elevated` felett**: 4.1:1, AA normal fail. Vagy világosítás `#9aa0b0`-ra (4.7:1), vagy ne használjuk elevated felszín felett.
 - [ ] 53. **State/validáció szín + szöveg kettős kódolás**: color-blind user-ek a 9 workflow állapotot nehezen különböztetik meg csak a színes dot alapján. State-specifikus ikon a dot mellé VAGY egyedi szöveges prefix a filter checkbox label-ben.
-- [ ] 54. **Elavult copy „bal oldali navigáció"**: Office Settings → Általános → Kiadványok szekció hivatkozik nem létező bal oldali navigációra. Javítás: „…a Kiadvány menüben (breadcrumb)…".
+- [x] 54. **Elavult copy „bal oldali navigáció"**: Office Settings → Általános → Kiadványok szekció hivatkozik nem létező bal oldali navigációra. Javítás: „…a Kiadvány menüben (breadcrumb)…".
 - [ ] 55. **Magyar/angol keverés sweep**: „OWNEREK" (Org Settings → Felhasználók) → „Tulajdonosok". Teljes UI átnézés angol szavakért: `owners`, `admins`, `members`, `invites`, `flatplan`.
 - [ ] 56. **„Hamarosan" placeholder egységesítés**: jelenleg 3+ helyen szerepel (Jogosultság-sablonok, Elem jogosultságok, Képességek). Vagy rejtsd el, amíg nincs funkció, vagy egységes frázis + ETA.
 

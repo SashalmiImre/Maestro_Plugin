@@ -244,8 +244,8 @@ export default function EditorialOfficeGeneralTab({ office, org, callerRole }) {
                     )}
                 </div>
                 <p style={{ fontSize: 12, color: '#888', margin: '4px 0' }}>
-                    A kiadványok listája és részletes beállításai a bal oldali navigációban
-                    érhetők el.
+                    A kiadványok listája és részletes beállításai a Kiadvány menüben
+                    (breadcrumb fejléc) érhetők el.
                 </p>
             </div>
 
