@@ -4,7 +4,7 @@
  * A szervezet beállítás modal „Felhasználók" füle:
  *   - Felhasználó meghívása (email + role + opcionális üzenet) — admin/owner
  *   - Függő meghívók listája link-másolással — admin/owner
- *   - Tagok listája csoportosítva: Ownerek / Adminok / Tagok
+ *   - Tagok listája csoportosítva: Tulajdonosok / Adminok / Tagok
  *
  * A member névfeloldás az aktív szerkesztőségen kívüli tagokra nem mindig
  * működik (a `groupMemberships` scope editorial office-ra van szűrve) —
@@ -307,7 +307,7 @@ export default function UsersTab({
                     </p>
                 ) : (
                     <>
-                        {renderMemberGroup('Ownerek', grouped.owner, '#adc6ff')}
+                        {renderMemberGroup('Tulajdonosok', grouped.owner, '#adc6ff')}
                         {renderMemberGroup('Adminok', grouped.admin, '#ccc')}
                         {renderMemberGroup('Tagok', grouped.member, '#999')}
                     </>
