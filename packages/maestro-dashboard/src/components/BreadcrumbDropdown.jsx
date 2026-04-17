@@ -61,9 +61,16 @@ export default function BreadcrumbDropdown({
 
     // Csak 1 elem + nincs settings → nem kell dropdown, statikus címke
     const isStatic = items.length <= 1 && !onSettings;
+    // Csak 1 elem + van settings → dropdown helyett közvetlen settings modal
+    const isDirectSettings = items.length <= 1 && !!onSettings;
 
     function handleToggle() {
-        if (!disabled && !isStatic) setIsOpen(prev => !prev);
+        if (disabled || isStatic) return;
+        if (isDirectSettings) {
+            onSettings();
+            return;
+        }
+        setIsOpen(prev => !prev);
     }
 
     function handleSelect(id) {
@@ -80,18 +87,22 @@ export default function BreadcrumbDropdown({
         <div className="bc-dropdown" ref={containerRef}>
             <button
                 type="button"
-                className={`bc-dropdown-trigger ${isOpen ? 'open' : ''} ${isStatic ? 'static' : ''} ${className}`}
+                className={`bc-dropdown-trigger ${isOpen ? 'open' : ''} ${isStatic || isDirectSettings ? 'static' : ''} ${className}`}
                 onClick={handleToggle}
                 disabled={disabled}
-                title={disabled ? disabledTitle : undefined}
-                aria-haspopup={!isStatic ? 'listbox' : undefined}
-                aria-expanded={isOpen}
-                aria-label={activeName ? `${label}: ${activeName}` : `${label} választó`}
+                title={disabled ? disabledTitle : (isDirectSettings ? settingsLabel : undefined)}
+                aria-haspopup={isDirectSettings ? 'dialog' : (!isStatic ? 'listbox' : undefined)}
+                aria-expanded={isOpen || undefined}
+                aria-label={
+                    isDirectSettings
+                        ? `${activeName || label} — ${settingsLabel}`
+                        : (activeName ? `${label}: ${activeName}` : `${label} választó`)
+                }
             >
                 <span className="bc-dropdown-label">
                     {activeName || label}
                 </span>
-                {!isStatic && (
+                {!isStatic && !isDirectSettings && (
                     <span className="bc-dropdown-chevron" aria-hidden="true">
                         {isOpen ? '▴' : '▾'}
                     </span>
