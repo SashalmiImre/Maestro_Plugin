@@ -162,6 +162,8 @@ export default function BreadcrumbHeader({
                     items={pubItems}
                     onSelect={onPublicationSelect}
                     onSettings={isActivePubInScope ? handlePublicationSettings : undefined}
+                    disabled={pubItems.length === 0 && !isActivePubInScope}
+                    disabledTitle="Először hozz létre egy kiadványt a Szerkesztőség beállításokban"
                 />
             </div>
 

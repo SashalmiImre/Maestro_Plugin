@@ -27,6 +27,7 @@ import usePopoverClose from '../hooks/usePopoverClose.js';
  * @param {Function} [props.onSettings] — ha megadott, „Beállítások" menüpont jelenik meg
  * @param {string} [props.settingsLabel='Beállítások'] — beállítás menüpont szövege
  * @param {boolean} [props.disabled=false] — letiltva-e
+ * @param {string} [props.disabledTitle] — tooltip, ha disabled (pl. üres scope magyarázata)
  * @param {string} [props.className] — extra CSS osztály a trigger gombra
  */
 export default function BreadcrumbDropdown({
@@ -37,6 +38,7 @@ export default function BreadcrumbDropdown({
     onSettings,
     settingsLabel = 'Beállítások',
     disabled = false,
+    disabledTitle,
     className = ''
 }) {
     const [isOpen, setIsOpen] = useState(false);
@@ -81,6 +83,7 @@ export default function BreadcrumbDropdown({
                 className={`bc-dropdown-trigger ${isOpen ? 'open' : ''} ${isStatic ? 'static' : ''} ${className}`}
                 onClick={handleToggle}
                 disabled={disabled}
+                title={disabled ? disabledTitle : undefined}
                 aria-haspopup={!isStatic ? 'listbox' : undefined}
                 aria-expanded={isOpen}
                 aria-label={activeName ? `${label}: ${activeName}` : `${label} választó`}
