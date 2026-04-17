@@ -219,6 +219,8 @@
             "scopes": [
                 "databases.read",
                 "databases.write",
+                "documents.read",
+                "documents.write",
                 "users.read"
             ],
             "events": [],
