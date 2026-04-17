@@ -7,7 +7,7 @@
 
 import React from 'react';
 import { useData } from '../contexts/DataContext.jsx';
-import { getStateColor } from '@shared/workflowRuntime.js';
+import { getStateColor, getStateLabel } from '@shared/workflowRuntime.js';
 import ValidationIcons from './ValidationIcons.jsx';
 
 const PageSlot = React.memo(function PageSlot({ pageData, pageNum, validationItems }) {
@@ -35,6 +35,9 @@ const PageSlot = React.memo(function PageSlot({ pageData, pageNum, validationIte
     const stateColor = pageData.state != null
         ? (getStateColor(workflow, pageData.state) || '#999')
         : '#999';
+    const stateLabel = pageData.state != null
+        ? getStateLabel(workflow, pageData.state)
+        : 'Ismeretlen állapot';
     const ignoredClass = pageData.ignored ? ' ignored' : '';
     const fallbackClass = pageData.isFallback ? ' fallback' : '';
 
@@ -64,7 +67,13 @@ const PageSlot = React.memo(function PageSlot({ pageData, pageNum, validationIte
                     size={16}
                 />
             </div>
-            <div className="page-state-bar" style={{ backgroundColor: stateColor }} />
+            <div
+                className="page-state-bar"
+                style={{ backgroundColor: stateColor }}
+                title={`Állapot: ${stateLabel}`}
+                aria-label={`Állapot: ${stateLabel}`}
+                role="img"
+            />
             <div className="page-info">
                 <span className="page-number">{pageData.pageNum}</span>
                 <span className="article-name" title={pageData.articleName}>

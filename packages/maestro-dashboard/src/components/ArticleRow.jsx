@@ -102,13 +102,21 @@ function StateIndicator({ article }) {
     const color = isIgnored ? '#9E9E9E' : (config?.color || '#999');
     const label = config?.label || 'Ismeretlen';
     const suffix = isIgnored ? ' (Kimarad)' : '';
+    const fullLabel = label + suffix;
 
     return (
         <span
-            className="state-dot"
-            style={{ backgroundColor: color, color }}
-            title={label + suffix}
-        />
+            className="state-cell"
+            title={fullLabel}
+            aria-label={`Állapot: ${fullLabel}`}
+        >
+            <span
+                className="state-dot"
+                style={{ backgroundColor: color, color }}
+                aria-hidden="true"
+            />
+            <span className="state-label">{fullLabel}</span>
+        </span>
     );
 }
 

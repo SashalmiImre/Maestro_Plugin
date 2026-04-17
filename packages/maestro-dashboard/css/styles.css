@@ -1030,6 +1030,23 @@ html, body {
     border-radius: 50%;
     display: inline-block;
     filter: drop-shadow(0 0 4px currentColor);
+    flex-shrink: 0;
+}
+
+/* Státusz cella (pont + szöveg dual coding, #53 — color-blind support) */
+.state-cell {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+}
+
+.state-cell .state-label {
+    font-size: 12px;
+    color: var(--text-secondary, #b0b3c0);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 /* Validáció ikonok */
