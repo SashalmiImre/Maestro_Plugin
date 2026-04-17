@@ -1055,6 +1055,40 @@ html, body {
     font-size: 13px;
 }
 
+.empty-state--hero {
+    padding: var(--space-6);
+}
+
+.empty-state__content {
+    max-width: 480px;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.empty-state__title {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.empty-state__description {
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+    line-height: 1.5;
+}
+
+.empty-state__actions {
+    display: flex;
+    justify-content: center;
+    gap: var(--space-3);
+    margin-top: var(--space-2);
+    flex-wrap: wrap;
+}
+
 /* ─── Loading spinner ──────────────────────────────────────────────────────── */
 
 .loading-overlay {

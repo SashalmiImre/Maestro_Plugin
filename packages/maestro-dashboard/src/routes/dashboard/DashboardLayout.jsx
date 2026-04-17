@@ -15,22 +15,27 @@ import { useAuth } from '../../contexts/AuthContext.jsx';
 import { useData } from '../../contexts/DataContext.jsx';
 import { useScope } from '../../contexts/ScopeContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
+import { useModal } from '../../contexts/ModalContext.jsx';
 import { useFilters } from '../../hooks/useFilters.js';
 import { STORAGE_KEYS } from '../../config.js';
 import { buildPlaceholderRows } from '@shared/pageGapUtils.js';
 
 import BreadcrumbHeader from '../../components/BreadcrumbHeader.jsx';
 import FilterBar from '../../components/FilterBar.jsx';
+import EmptyState from '../../components/EmptyState.jsx';
+import EditorialOfficeSettingsModal from '../../components/organization/EditorialOfficeSettingsModal.jsx';
+import OrganizationSettingsModal from '../../components/organization/OrganizationSettingsModal.jsx';
 
 export default function DashboardLayout() {
     const { user } = useAuth();
-    const { activeEditorialOfficeId } = useScope();
+    const { activeOrganizationId, activeEditorialOfficeId } = useScope();
     const {
         publications, articles, activePublicationId,
         isLoading, fetchPublications, switchPublication,
         fetchAllGroupMembers, fetchWorkflow
     } = useData();
     const { showToast } = useToast();
+    const { openModal } = useModal();
 
     const [isFilterOpen, setIsFilterOpen] = useState(false);
     const [isInitialized, setIsInitialized] = useState(false);
@@ -118,6 +123,29 @@ export default function DashboardLayout() {
         }
     }, [switchPublication, showToast]);
 
+    // Üres állapot akciók — office beállítások (kiadvány létrehozás) / szervezet beállítások
+    const handleCreatePublication = useCallback(() => {
+        if (!activeEditorialOfficeId) {
+            showToast('Először válassz egy szerkesztőséget a fejlécben.', 'warning');
+            return;
+        }
+        openModal(
+            <EditorialOfficeSettingsModal
+                editorialOfficeId={activeEditorialOfficeId}
+                initialTab="general"
+            />,
+            { size: 'lg', title: 'Szerkesztőség beállításai' }
+        );
+    }, [activeEditorialOfficeId, openModal, showToast]);
+
+    const handleOpenOrgSettings = useCallback(() => {
+        if (!activeOrganizationId) return;
+        openModal(
+            <OrganizationSettingsModal organizationId={activeOrganizationId} />,
+            { size: 'lg', title: 'Szervezet beállításai' }
+        );
+    }, [activeOrganizationId, openModal]);
+
     // Szűrt cikkek
     const filteredArticles = useMemo(
         () => filters.applyFilters(articles, user),
@@ -180,7 +208,25 @@ export default function DashboardLayout() {
                             <span>Betöltés...</span>
                         </div>
                     ) : !activePublicationId ? (
-                        <div className="empty-state">Válassz egy kiadványt a fejléc dropdown-jából</div>
+                        publications.length === 0 ? (
+                            <EmptyState
+                                title="Még nincs kiadvány"
+                                description="Ebben a szerkesztőségben még nincs kiadvány. Hozz létre egyet, hogy elkezdhesd a szerkesztést."
+                                primaryAction={activeEditorialOfficeId ? {
+                                    label: 'Kiadvány létrehozása',
+                                    onClick: handleCreatePublication
+                                } : undefined}
+                                secondaryAction={activeOrganizationId ? {
+                                    label: 'Szervezet beállításai',
+                                    onClick: handleOpenOrgSettings
+                                } : undefined}
+                            />
+                        ) : (
+                            <EmptyState
+                                title="Válassz egy kiadványt"
+                                description="A fejléc Kiadvány menüjéből válaszd ki, melyik kiadványon szeretnél dolgozni."
+                            />
+                        )
                     ) : isLoading ? (
                         <div className="loading-overlay">
                             <div className="spinner" />
