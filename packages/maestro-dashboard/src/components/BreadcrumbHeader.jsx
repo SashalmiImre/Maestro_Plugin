@@ -57,11 +57,25 @@ export default function BreadcrumbHeader({
         [editorialOffices, activeOrganizationId]
     );
 
-    // Publikációk dropdown items
+    // Publikációk — csak az aktív szerkesztőséghez tartozók
     const pubItems = useMemo(
-        () => (publications || []).map(p => ({ id: p.$id, name: p.name })),
-        [publications]
+        () => (publications || [])
+            .filter(p => p.editorialOfficeId === activeEditorialOfficeId)
+            .map(p => ({ id: p.$id, name: p.name })),
+        [publications, activeEditorialOfficeId]
     );
+
+    // Scope-érvényesség: a Beállítások menüpontot csak akkor engedjük, ha
+    // az aktív ID valóban a jelenlegi szűrt listában van. Scope-váltás
+    // pillanatában (vagy üres scope-ban) a stale ID idegen rekord modalját
+    // nyitná meg — az `onSettings` undefined-olásával a BreadcrumbDropdown
+    // `isStatic` ágba kerül (nincs chevron, nincs menü).
+    const isActiveOrgInScope = !!activeOrganizationId &&
+        orgItems.some(o => o.id === activeOrganizationId);
+    const isActiveOfficeInScope = !!activeEditorialOfficeId &&
+        officeItems.some(o => o.id === activeEditorialOfficeId);
+    const isActivePubInScope = !!activePublicationId &&
+        pubItems.some(p => p.id === activePublicationId);
 
     // User avatar menü
     const userMenuItems = useMemo(() => [
@@ -127,7 +141,7 @@ export default function BreadcrumbHeader({
                     activeId={activeOrganizationId}
                     items={orgItems}
                     onSelect={handleOrgSelect}
-                    onSettings={activeOrganizationId ? handleOrganizationSettings : undefined}
+                    onSettings={isActiveOrgInScope ? handleOrganizationSettings : undefined}
                 />
 
                 <span className="breadcrumb-separator" aria-hidden="true">/</span>
@@ -137,7 +151,7 @@ export default function BreadcrumbHeader({
                     activeId={activeEditorialOfficeId}
                     items={officeItems}
                     onSelect={handleOfficeSelect}
-                    onSettings={activeEditorialOfficeId ? handleEditorialOfficeSettings : undefined}
+                    onSettings={isActiveOfficeInScope ? handleEditorialOfficeSettings : undefined}
                 />
 
                 <span className="breadcrumb-separator" aria-hidden="true">/</span>
@@ -147,7 +161,7 @@ export default function BreadcrumbHeader({
                     activeId={activePublicationId}
                     items={pubItems}
                     onSelect={onPublicationSelect}
-                    onSettings={activePublicationId ? handlePublicationSettings : undefined}
+                    onSettings={isActivePubInScope ? handlePublicationSettings : undefined}
                 />
             </div>
 

@@ -5,7 +5,7 @@
  * Appwrite REST lekérés + Realtime szinkronizáció.
  */
 
-import React, { createContext, useContext, useState, useCallback, useEffect, useRef, useMemo } from 'react';
+import React, { createContext, useContext, useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { Databases, Storage, Query, ID } from 'appwrite';
 import { getClient } from './AuthContext.jsx';
 import { useScope } from './ScopeContext.jsx';
@@ -39,10 +39,14 @@ export function DataProvider({ children }) {
 
     // Scope refek — a create metódusok olvassák, hogy callback closure-ök nélkül mindig
     // a legfrissebb aktív organization/office ID-ra injektáljanak scope mezőket.
+    // useLayoutEffect: commit fázisban, még MIELŐTT a gyerek komponensek useEffect-jei
+    // futnának. A DashboardLayout scope-effect-je ugyanis hamarabb fut a fa miatt
+    // (child-first), és ref-ből olvassa a fetchPublications-t → ha useEffect-tel
+    // szinkronizálnánk, stale office-szal fetchelne (A→B→A esetben A-n is üres lenne).
     const activeOrganizationIdRef = useRef(activeOrganizationId);
     const activeEditorialOfficeIdRef = useRef(activeEditorialOfficeId);
-    useEffect(() => { activeOrganizationIdRef.current = activeOrganizationId; }, [activeOrganizationId]);
-    useEffect(() => { activeEditorialOfficeIdRef.current = activeEditorialOfficeId; }, [activeEditorialOfficeId]);
+    useLayoutEffect(() => { activeOrganizationIdRef.current = activeOrganizationId; }, [activeOrganizationId]);
+    useLayoutEffect(() => { activeEditorialOfficeIdRef.current = activeEditorialOfficeId; }, [activeEditorialOfficeId]);
 
     // Appwrite szolgáltatások
     const servicesRef = useRef(null);
@@ -61,6 +65,12 @@ export function DataProvider({ children }) {
     // ─── Kiadványok lekérése ────────────────────────────────────────────────
 
     const fetchPublications = useCallback(async () => {
+        const editorialOfficeId = activeEditorialOfficeIdRef.current;
+        if (!editorialOfficeId) {
+            setPublications([]);
+            return [];
+        }
+
         const allDocuments = [];
         let offset = 0;
 
@@ -69,6 +79,7 @@ export function DataProvider({ children }) {
                 databaseId: DATABASE_ID,
                 collectionId: COLLECTIONS.PUBLICATIONS,
                 queries: [
+                    Query.equal('editorialOfficeId', editorialOfficeId),
                     Query.limit(PAGE_SIZE),
                     Query.offset(offset),
                     Query.orderAsc('name')
@@ -514,7 +525,12 @@ export function DataProvider({ children }) {
                         applyArticleEvent(eventType, payload, activePublicationIdRef, setArticles);
                         break;
                     case 'publications':
-                        applyPublicationEvent(eventType, payload, setPublications);
+                        applyPublicationEvent(
+                            eventType,
+                            payload,
+                            activeEditorialOfficeIdRef.current,
+                            setPublications
+                        );
                         // Ha a törölt publikáció éppen az aktív, a derived
                         // state-et és az aktív ID-t is törölni kell, hogy a
                         // UI ne maradjon árva doc-on ragadva. A Plugin
@@ -645,27 +661,35 @@ function applyArticleEvent(eventType, payload, pubIdRef, setArticles) {
     }
 }
 
-function applyPublicationEvent(eventType, payload, setPublications) {
+function applyPublicationEvent(eventType, payload, activeOfficeId, setPublications) {
     if (eventType === 'delete') {
         setPublications(prev => prev.filter(p => p.$id !== payload.$id));
-    } else {
-        setPublications(prev => {
-            const idx = prev.findIndex(p => p.$id === payload.$id);
-            if (idx >= 0) {
-                // Elavulás-védelem: ha a helyi példány frissebb, ne írjuk felül
-                // (pl. a write-through response után érkező régebbi realtime event).
-                const local = prev[idx];
-                if (local.$updatedAt && payload.$updatedAt &&
-                    new Date(local.$updatedAt) > new Date(payload.$updatedAt)) {
-                    return prev;
-                }
-                const next = [...prev];
-                next[idx] = payload;
-                return next;
-            }
-            return [...prev, payload];
-        });
+        return;
     }
+
+    // Scope-szűrés: idegen office payload-ját nem vesszük fel, és ha egy
+    // már listázott rekord scope-ja idegenre változott, eltávolítjuk.
+    const inScope = payload.editorialOfficeId === activeOfficeId;
+
+    setPublications(prev => {
+        const idx = prev.findIndex(p => p.$id === payload.$id);
+        if (!inScope) {
+            return idx >= 0 ? prev.filter(p => p.$id !== payload.$id) : prev;
+        }
+        if (idx >= 0) {
+            // Elavulás-védelem: ha a helyi példány frissebb, ne írjuk felül
+            // (pl. a write-through response után érkező régebbi realtime event).
+            const local = prev[idx];
+            if (local.$updatedAt && payload.$updatedAt &&
+                new Date(local.$updatedAt) > new Date(payload.$updatedAt)) {
+                return prev;
+            }
+            const next = [...prev];
+            next[idx] = payload;
+            return next;
+        }
+        return [...prev, payload];
+    });
 }
 
 function applyLayoutEvent(eventType, payload, pubIdRef, setLayouts) {
