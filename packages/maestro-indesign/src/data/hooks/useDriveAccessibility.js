@@ -59,7 +59,18 @@ export const useDriveAccessibility = (publications) => {
             const pubs = publicationsRef.current;
             if (!pubs || pubs.length === 0) return;
 
-            const nativePaths = pubs.map(pub => toNativePath(pub.rootPath));
+            // A rootPath === null publikációk „konfiguráció szükséges" állapotban vannak —
+            // nem elérhetőségi hiba, hanem külön dimenzió (a Publication komponens isConfigured
+            // prop-ja kezeli). Ezekre nem kell ExtendScript hívás, és nem kerülnek a map-be.
+            const configuredPubs = pubs.filter(pub => pub.rootPath);
+            if (configuredPubs.length === 0) {
+                // Identitás-őrzés: ha már üres a map, ne cseréljük új Map()-re — a referencia-stabilitás
+                // miatt a fogyasztó memo-k (PublicationList) nem renderelnek feleslegesen újra.
+                setAccessibilityMap(prev => (prev.size === 0 ? prev : new Map()));
+                return;
+            }
+
+            const nativePaths = configuredPubs.map(pub => toNativePath(pub.rootPath));
             let results;
             try {
                 results = await checkPathsAccessibleBatch(nativePaths);
@@ -71,7 +82,7 @@ export const useDriveAccessibility = (publications) => {
             }
 
             const nextMap = new Map();
-            pubs.forEach((pub, i) => {
+            configuredPubs.forEach((pub, i) => {
                 nextMap.set(pub.$id, results[i] ?? false);
             });
 

@@ -17,7 +17,12 @@ import { MaestroEvent, dispatchMaestroEvent } from "../../../../core/config/maes
 import { buildPlaceholderRows } from "../../../../core/utils/pageGapUtils.js";
 import { isContributor } from "maestro-shared/contributorHelpers.js";
 
-export const Publication = React.memo(({ publication, onShowProperties, onOpenInDashboard, isExpanded, onToggle, isDriveAccessible, filterState }) => {
+export const Publication = React.memo(({ publication, onShowProperties, onOpenInDashboard, isExpanded, onToggle, isConfigured, isDriveAccessible, filterState }) => {
+    // Két blokkoló ok egyesítve a fejléc színezéshez és a cikk-művelet tiltáshoz.
+    // Szemantikailag különbözőek — a banner-ek külön ágon jelennek meg:
+    //   - !isConfigured  → narancs „Konfiguráció szükséges" (rootPath még nincs beállítva, #33)
+    //   - !isDriveAccessible → piros „mappa nem érhető el" (rootPath be van állítva, de nem elérhető)
+    const isBlocked = !isConfigured || !isDriveAccessible;
     const { user } = useUser();
     const { workflow } = useData();
     const {
@@ -52,10 +57,13 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
         return filtered;
     }, [articles, statusFilters, showIgnored, showOnlyMine, userGroupSlugs, user?.$id]);
 
-    /** Helykitöltő sorok: a kiadvány terjedelmén belüli lefedetlen oldalcsoportok */
+    /** Helykitöltő sorok: a kiadvány terjedelmén belüli lefedetlen oldalcsoportok.
+     *  Unconfigured pub-nál üres — a „Konfiguráció szükséges" banner mellé egy teljes
+     *  flatplan-placeholder tábla ellentmondana. */
     const placeholderRows = useMemo(() => {
+        if (!isConfigured) return [];
         return buildPlaceholderRows(articles, publication, workflow);
-    }, [articles, publication, workflow]);
+    }, [articles, publication, workflow, isConfigured]);
 
     /** Táblázat adatai: szűrt cikkek + opcionálisan helykitöltők */
     const tableData = useMemo(() => {
@@ -104,6 +112,21 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
     }, [onToggle]);
 
     const handleOpenArticle = useCallback(async (article) => {
+        // Védelmi guard: blokkolt állapotban (nincs rootPath VAGY mappa nem elérhető) az
+        // openArticle `toAbsoluteArticlePath(filePath, null)` hívása hibás útvonalat adna,
+        // az `app.open()` elbukna. A + gomb disabled, de legacy cikkek dupla kattintása
+        // ide fut — ezért explicit dialog a valódi okkal.
+        if (isBlocked) {
+            setDialogConfig({
+                title: !isConfigured ? "Konfiguráció szükséges" : "A mappa nem érhető el",
+                message: !isConfigured
+                    ? "A kiadvány gyökérmappája még nincs beállítva — a cikk nem nyitható meg."
+                    : "A kiadvány mappája nem érhető el. Ellenőrizd a meghajtó csatlakoztatását.",
+                isAlert: true
+            });
+            setDialogOpen(true);
+            return;
+        }
         try {
             await openArticle(article, user);
         } catch (error) {
@@ -116,13 +139,14 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
             });
             setDialogOpen(true);
         }
-    }, [openArticle, user]);
+    }, [openArticle, user, isBlocked, isConfigured]);
 
     const handleAddArticleClick = useCallback(async (e) => {
         e?.stopPropagation?.();
-        // Védelmi guard: ha a mappa nem elérhető, a fájl-írás (saveACopy) elbukna —
-        // a UI-n a gomb disabled, de a billentyűzet-handler is ide fut, ezért itt is szűrünk.
-        if (!isDriveAccessible) return;
+        // Védelmi guard: ha a kiadvány blokkolt (nincs rootPath VAGY mappa nem elérhető),
+        // a fájl-írás (saveACopy) elbukna — a UI-n a gomb disabled, de a billentyűzet-handler
+        // is ide fut, ezért itt is szűrünk.
+        if (isBlocked) return;
         try {
             const fs = require("uxp").storage.localFileSystem;
             const files = await fs.getFileForOpening({
@@ -186,7 +210,21 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
             });
             setDialogOpen(true);
         }
-    }, [addArticle, isExpanded, onToggle, isDriveAccessible, publication.$id]);
+    }, [addArticle, isExpanded, onToggle, isBlocked, publication.$id]);
+
+    // Fejléc szín: kék (OK), narancs (konfiguráció szükséges), piros (mappa nem elérhető).
+    // Egy helyen dől el — alább három JSX pontnál ugyanezt az értéket használjuk.
+    const headerColor = !isBlocked
+        ? "var(--spectrum-global-color-blue-400)"
+        : (!isConfigured
+            ? "var(--spectrum-global-color-orange-500)"
+            : "var(--spectrum-global-color-red-400)");
+
+    const addArticleTooltip = !isConfigured
+        ? "A kiadvány gyökérmappája még nincs beállítva — cikkfelvétel jelenleg nem lehetséges"
+        : (!isDriveAccessible
+            ? "A kiadvány mappája nem elérhető — a cikkfelvétel most nem lehetséges"
+            : "Cikk hozzáadása");
 
     return (
         <div
@@ -222,9 +260,9 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
                 <div style={{ display: "flex", alignItems: "center" }}>
                     <div onClick={handleChevronClick} style={{
                         cursor: "pointer", display: "flex", alignItems: "center", marginRight: "8px",
-                        color: isDriveAccessible ? "var(--spectrum-global-color-blue-400)" : "var(--spectrum-global-color-red-400)"
+                        color: headerColor
                     }}>
-                        <sp-body style={{ margin: 0, color: isDriveAccessible ? "var(--spectrum-global-color-blue-400)" : "var(--spectrum-global-color-red-400)" }}>
+                        <sp-body style={{ margin: 0, color: headerColor }}>
                             {isExpanded ?
                                 <sp-icon-chevron-down size="s" style={{ width: "14px", height: "14px", display: "inline-block", verticalAlign: "middle" }}></sp-icon-chevron-down> :
                                 <sp-icon-chevron-right size="s" style={{ width: "14px", height: "14px", display: "inline-block", verticalAlign: "middle" }}></sp-icon-chevron-right>
@@ -234,11 +272,7 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
                     <sp-heading size="xxs"
                         onDoubleClick={handlePublicationDoubleClick}
                         title="Dupla kattintás: megnyitás a Dashboardon"
-                        style={{
-                            cursor: "pointer",
-                            margin: 0,
-                            color: isDriveAccessible ? "var(--spectrum-global-color-blue-400)" : "var(--spectrum-global-color-red-400)"
-                        }}>
+                        style={{ cursor: "pointer", margin: 0, color: headerColor }}>
                         {publication.name?.toUpperCase()}
                     </sp-heading>
                 </div>
@@ -247,24 +281,24 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
                     <div style={{ display: "flex", alignItems: "center" }}>
                         <div
                             role="button"
-                            tabIndex={isDriveAccessible ? 0 : -1}
-                            aria-disabled={!isDriveAccessible}
-                            onClick={isDriveAccessible ? handleAddArticleClick : undefined}
+                            tabIndex={isBlocked ? -1 : 0}
+                            aria-disabled={isBlocked}
+                            onClick={isBlocked ? undefined : handleAddArticleClick}
                             onKeyDown={(e) => {
-                                if (!isDriveAccessible) return;
+                                if (isBlocked) return;
                                 if (e.key === "Enter" || e.key === " ") {
                                     e.preventDefault();
                                     handleAddArticleClick();
                                 }
                             }}
                             aria-label="Cikk hozzáadása"
-                            title={isDriveAccessible ? "Cikk hozzáadása" : "A kiadvány mappája nem elérhető — a cikkfelvétel most nem lehetséges"}
+                            title={addArticleTooltip}
                             style={{
-                                cursor: isDriveAccessible ? "pointer" : "not-allowed",
+                                cursor: isBlocked ? "not-allowed" : "pointer",
                                 display: "flex",
                                 alignItems: "center",
                                 padding: "2px",
-                                opacity: isDriveAccessible ? 1 : 0.4,
+                                opacity: isBlocked ? 0.4 : 1,
                                 color: "var(--spectrum-global-color-blue-400)"
                             }}
                         >
@@ -299,7 +333,38 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
             </div>
 
             {
-                isExpanded && !isDriveAccessible && (
+                isExpanded && !isConfigured && (
+                    <div style={{
+                        backgroundColor: "var(--spectrum-global-color-orange-500)",
+                        color: "white",
+                        padding: "8px 12px 18px 12px",
+                        borderRadius: "4px",
+                        marginTop: "8px",
+                        marginBottom: "4px",
+                        display: "flex",
+                        alignItems: "flex-start"
+                    }}>
+                        <div style={{ flexShrink: 0, marginRight: "8px", marginTop: "1px", display: "flex", alignItems: "center" }}>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                                <circle cx="12" cy="12" r="10" fill="white" fillOpacity="0.3" />
+                                <path d="M12 8v5" stroke="white" strokeWidth="2" strokeLinecap="round" />
+                                <circle cx="12" cy="16" r="1.2" fill="white" />
+                            </svg>
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: "12px", fontWeight: "bold", marginBottom: "2px" }}>
+                                Konfiguráció szükséges
+                            </div>
+                            <div style={{ fontSize: "11px", opacity: 0.85 }}>
+                                A kiadvány gyökérmappája még nincs beállítva. A beállításig cikkfelvétel és -megnyitás nem lehetséges.
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
+
+            {
+                isExpanded && isConfigured && !isDriveAccessible && (
                     <div style={{
                         backgroundColor: "var(--spectrum-global-color-red-400)",
                         color: "white",

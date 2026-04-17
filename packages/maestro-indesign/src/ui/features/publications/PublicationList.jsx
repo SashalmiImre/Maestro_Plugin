@@ -152,19 +152,32 @@ export const PublicationList = ({ onShowProperties, onOpenInDashboard, filterSta
                     </div>
                 )}
 
-                {publications.map((pub) => (
-                    <Publication
-                        style={{ paddingBottom: "32px" }}
-                        key={pub.$id}
-                        publication={pub}
-                        onShowProperties={onShowProperties}
-                        onOpenInDashboard={onOpenInDashboard}
-                        isExpanded={expandedId === pub.$id}
-                        onToggle={() => toggleExpansion(pub.$id)}
-                        isDriveAccessible={accessibilityMap.get(pub.$id) ?? true}
-                        filterState={filterState}
-                    />
-                ))}
+                {publications.map((pub) => {
+                    // Konfigurációs állapot: a rootPath beállítva-e (#33). A folder picker
+                    // maga a #34 feladat — itt csak a vizuális állapot + művelet-tiltás.
+                    const isConfigured = Boolean(pub.rootPath);
+                    // Unconfigured pub-ok a useDriveAccessibility map-ből kimaradnak (külön dimenzió),
+                    // ilyenkor a `?? true` default biztosítja, hogy a „mappa nem elérhető" ág ne
+                    // aktiválódjon — a blokkolást és a banner-t az isConfigured=false ága viszi.
+                    const isDriveAccessible = isConfigured
+                        ? (accessibilityMap.get(pub.$id) ?? true)
+                        : true;
+
+                    return (
+                        <Publication
+                            style={{ paddingBottom: "32px" }}
+                            key={pub.$id}
+                            publication={pub}
+                            onShowProperties={onShowProperties}
+                            onOpenInDashboard={onOpenInDashboard}
+                            isExpanded={expandedId === pub.$id}
+                            onToggle={() => toggleExpansion(pub.$id)}
+                            isConfigured={isConfigured}
+                            isDriveAccessible={isDriveAccessible}
+                            filterState={filterState}
+                        />
+                    );
+                })}
             </div>
 
             <LockManager />
