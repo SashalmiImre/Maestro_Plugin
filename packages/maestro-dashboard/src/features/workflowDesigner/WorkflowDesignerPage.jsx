@@ -20,6 +20,7 @@ import { getClient } from '../../contexts/AuthContext.jsx';
 import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 import { useData } from '../../contexts/DataContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
+import { useConfirm } from '../../components/ConfirmDialog.jsx';
 import { compiledToGraph, graphToCompiled, extractGraphData } from './compiler.js';
 import { validateWorkflow } from './validator.js';
 import { saveWorkflow, createWorkflow } from './api.js';
@@ -39,6 +40,7 @@ export default function WorkflowDesignerPage() {
     const navigate = useNavigate();
     const { workflows: availableWorkflows, publications } = useData();
     const { showToast } = useToast();
+    const confirm = useConfirm();
 
     // ── Workflow dokumentum ─────────────────────────────────────────────────
     const [workflowDocId, setWorkflowDocId] = useState(null);
@@ -314,21 +316,39 @@ export default function WorkflowDesignerPage() {
         setIsGraphDirty(true);
     }, [selectedEdgeId, setEdges]);
 
-    const handleDeleteNode = useCallback(() => {
+    const handleDeleteNode = useCallback(async () => {
         if (!selectedNodeId) return;
+        const node = nodes.find(n => n.id === selectedNodeId);
+        const stateName = node?.data?.label || selectedNodeId;
+        const ok = await confirm({
+            title: 'Állapot törlése',
+            message: `Biztosan törlöd a(z) „${stateName}" állapotot? Az állapothoz tartozó összes átmenet is törlődik. Ha egy aktív kiadványban van cikk ebben az állapotban, az aktiválás után a mentés hibát adhat — előbb vidd át a cikkeket egy másik állapotba.`,
+            confirmLabel: 'Törlés',
+            variant: 'danger'
+        });
+        if (!ok) return;
         setNodes(prev => prev.filter(n => n.id !== selectedNodeId));
         // Kapcsolódó edge-ek törlése
         setEdges(prev => prev.filter(e => e.source !== selectedNodeId && e.target !== selectedNodeId));
         setSelectedNodeId(null);
         setIsGraphDirty(true);
-    }, [selectedNodeId, setNodes, setEdges]);
+    }, [selectedNodeId, nodes, confirm, setNodes, setEdges]);
 
-    const handleDeleteEdge = useCallback(() => {
+    const handleDeleteEdge = useCallback(async () => {
         if (!selectedEdgeId) return;
+        const edge = edges.find(e => e.id === selectedEdgeId);
+        const edgeLabel = edge?.data?.label || `${edge?.source} → ${edge?.target}`;
+        const ok = await confirm({
+            title: 'Átmenet törlése',
+            message: `Biztosan törlöd a(z) „${edgeLabel}" átmenetet?`,
+            confirmLabel: 'Törlés',
+            variant: 'danger'
+        });
+        if (!ok) return;
         setEdges(prev => prev.filter(e => e.id !== selectedEdgeId));
         setSelectedEdgeId(null);
         setIsGraphDirty(true);
-    }, [selectedEdgeId, setEdges]);
+    }, [selectedEdgeId, edges, confirm, setEdges]);
 
     const handleMetadataChange = useCallback((newMetadata) => {
         setMetadata(newMetadata);

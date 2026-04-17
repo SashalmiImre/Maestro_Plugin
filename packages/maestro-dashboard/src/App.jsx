@@ -64,7 +64,9 @@ function WorkflowDesignerWithProviders({ children }) {
     return (
         <ToastProvider>
             <DataProvider>
-                {children}
+                <ModalProvider>
+                    {children}
+                </ModalProvider>
             </DataProvider>
         </ToastProvider>
     );
