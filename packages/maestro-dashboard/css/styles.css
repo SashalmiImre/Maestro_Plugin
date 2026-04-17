@@ -27,7 +27,7 @@
     --accent:        #adc6ff;    /* primary */
     --accent-hover:  #4d8eff;    /* primary-container */
     --accent-subtle: rgba(173, 198, 255, 0.15);
-    --accent-solid:  #3b82f6;    /* interaktív háttér: sidebar blade, gombok */
+    --accent-solid:  #2563eb;    /* interaktív háttér: sidebar blade, gombok (WCAG AA 5.1:1 fehér szövegre) */
 
     /* Státusz */
     --c-error:   #ffb4ab;        /* error */
