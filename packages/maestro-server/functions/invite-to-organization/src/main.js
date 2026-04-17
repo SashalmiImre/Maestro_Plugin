@@ -128,6 +128,7 @@ const VALID_ACTIONS = new Set([
     'add_group_member', 'remove_group_member',
     'create_group', 'rename_group', 'delete_group',
     'bootstrap_workflow_schema',
+    'bootstrap_publication_schema',
     'create_workflow', 'update_workflow',
     'update_workflow_metadata',
     'delete_workflow', 'duplicate_workflow',
@@ -2006,6 +2007,82 @@ module.exports = async function ({ req, res, log, error }) {
                 created,
                 skipped,
                 note: 'Az attribútumok feldolgozása ~5-10s. Várj a create_workflow hívás előtt.'
+            });
+        }
+
+        // ════════════════════════════════════════════════════════
+        // ACTION = 'bootstrap_publication_schema'
+        // ════════════════════════════════════════════════════════
+        //
+        // Idempotens schema-bővítés a `publications` collection-re:
+        // `compiledWorkflowSnapshot` (string, nullable, ~1 MB). Aktiváláskor
+        // a workflow `compiled` JSON pillanatképét tároljuk — onnantól a
+        // publikáció élete a snapshot-on fut, a workflow későbbi módosításai
+        // már nem érintik. Lásd _docs/Feladatok.md #36.
+        //
+        // Owner-only — a `bootstrap_workflow_schema` mintáját követi. Csak
+        // org owner-ek hívhatják; a Dashboard-ról nem elérhető, manuálisan
+        // kell triggerelni egyszer az env-ben (curl vagy Console).
+        if (action === 'bootstrap_publication_schema') {
+            // 1. Caller legalább egy org owner-e
+            const ownerships = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.equal('role', 'owner'),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (ownerships.documents.length === 0) {
+                return fail(res, 403, 'insufficient_role', {
+                    requiredRole: 'owner'
+                });
+            }
+
+            // 2. publicationsCollectionId env var kötelező
+            if (!publicationsCollectionId) {
+                return fail(res, 500, 'misconfigured', {
+                    missing: ['PUBLICATIONS_COLLECTION_ID']
+                });
+            }
+
+            const created = [];
+            const skipped = [];
+
+            // 3. compiledWorkflowSnapshot string attribútum.
+            // Size: 1_000_000 char (~1 MB). A workflows.compiled jelenlegi mérete
+            // ~12 KB (8 állapotos default workflow); a sapka bőven fedi a bővítést
+            // (több állapot, részletesebb jogosultság-mátrix, capabilities).
+            // Nullable — legacy (már aktivált, snapshot nélküli) publikációkon
+            // null marad, a Plugin a workflowId cache-re fallback-el (Feladat #38).
+            try {
+                await databases.createStringAttribute(
+                    databaseId,
+                    publicationsCollectionId,
+                    'compiledWorkflowSnapshot',
+                    1000000,                       // size (~1 MB)
+                    false,                         // required
+                    null,                          // default
+                    false                          // array
+                );
+                created.push('compiledWorkflowSnapshot');
+            } catch (err) {
+                if (err?.code === 409 || /already exists/i.test(err?.message || '')) {
+                    skipped.push('compiledWorkflowSnapshot');
+                } else {
+                    error(`[BootstrapPublicationSchema] compiledWorkflowSnapshot létrehozás hiba: ${err.message}`);
+                    return fail(res, 500, 'schema_snapshot_failed', { error: err.message });
+                }
+            }
+
+            log(`[BootstrapPublicationSchema] User ${callerId}: created=[${created.join(',')}] skipped=[${skipped.join(',')}]`);
+
+            return res.json({
+                success: true,
+                created,
+                skipped,
+                note: 'Az attribútum feldolgozása ~5-10s. Várj a publikáció aktiválás előtt.'
             });
         }
 
