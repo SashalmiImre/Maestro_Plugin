@@ -732,15 +732,11 @@ html, body {
 /* ─── Szűrő sáv ───────────────────────────────────────────────────────────── */
 
 .filter-bar {
-    padding: 20px 24px;
-    border-bottom: none;
+    padding: var(--space-4) var(--space-5);
     background: var(--bg-surface);
-    border-radius: 16px;
-    margin: 16px 16px 0px 16px;
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     display: none;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
-    outline: 1px solid rgba(66, 71, 84, 0.10);
 }
 
 .filter-bar.active {
