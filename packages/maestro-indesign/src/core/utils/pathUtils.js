@@ -199,6 +199,38 @@ export const toNativePath = (canonicalPath) => {
 };
 
 /**
+ * Ellenőrzi, hogy egy natív útvonal az aktuális platform mount prefix-e ALATT
+ * van-e, azaz egy megosztás-alkönyvtárra mutat (pl. `/Volumes/Story`).
+ * A mount-prefix maga (`/Volumes`) NEM fogadható el — annak kanonikus alakja
+ * `/` lenne, ami nem valid `publication.rootPath`.
+ *
+ * A rootPath folder picker használja (#34). Csak megosztott meghajtón
+ * (Mac /Volumes, Win C:/Volumes) lévő, legalább egy szintet lejjebb eső
+ * mappát fogadunk el kanonizálásra, hogy cross-platform hordozható
+ * maradjon a DB-ben tárolt `publication.rootPath`.
+ *
+ * @param {string} nativePath - A vizsgálandó natív útvonal.
+ * @returns {boolean} True, ha a path a platform mount prefix-e alatt van (legalább egy alkönyvtár).
+ */
+export const isUnderMountPrefix = (nativePath) => {
+    if (!nativePath) return false;
+    // Trailing slash-ek levágása, hogy `/Volumes/` vagy `/Volumes//` ne csússzon át.
+    const processed = normalize(nativePath).replace(/\/+$/, "");
+    const prefix = getMountPrefix();
+    if (!processed.startsWith(prefix + "/")) return false;
+    // Legalább egy non-empty segment a prefix után (kizárva a prefix önmagát).
+    return processed.length > prefix.length + 1;
+};
+
+/**
+ * Az aktuális platform mount prefix-ét adja vissza (pl. "/Volumes" vagy "C:/Volumes").
+ * UI üzenetekhez és a folder picker felhasználói tájékoztatásához.
+ *
+ * @returns {string} A platform mount prefix.
+ */
+export const currentMountPrefix = () => getMountPrefix();
+
+/**
  * Abszolút article útvonal → relatív a kiadvány kanonikus rootPath-jához.
  *
  * Abszolút: /Story/.maestro/article.indd, root: /Story → .maestro/article.indd

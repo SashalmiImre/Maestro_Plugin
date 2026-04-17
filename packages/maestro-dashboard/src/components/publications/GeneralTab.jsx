@@ -266,7 +266,8 @@ export default function GeneralTab({ publication }) {
                 </div>
             </div>
 
-            {/* Gyökérmappa — csak olvasható */}
+            {/* Gyökérmappa — csak olvasható. A Plugin folder picker (#34) állítja be
+                az első megnyitáskor; a Dashboard nem szerkesztheti. */}
             <div className="form-group">
                 <label htmlFor="ps-rootpath">Gyökérmappa</label>
                 <input
@@ -275,8 +276,14 @@ export default function GeneralTab({ publication }) {
                     value={publication.rootPath || ''}
                     readOnly
                     className="form-input-readonly"
+                    placeholder="Még nincs beállítva"
                     title="A gyökérmappa a Dashboard-ról nem módosítható."
                 />
+                <div className="form-hint">
+                    {publication.rootPath
+                        ? 'A Pluginból beállítva. A gyökérmappa nem módosítható.'
+                        : 'Még nincs beállítva — a Pluginban a kiadvány „Gyökérmappa beállítása" gombjával állítható be.'}
+                </div>
             </div>
 
             {/* Hétvégék kihagyása */}

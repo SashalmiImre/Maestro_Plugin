@@ -16,6 +16,9 @@ import { logDebug, logError } from "../../../../core/utils/logger.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../../core/config/maestroEvents.js";
 import { buildPlaceholderRows } from "../../../../core/utils/pageGapUtils.js";
 import { isContributor } from "maestro-shared/contributorHelpers.js";
+import { toCanonicalPath, isUnderMountPrefix, currentMountPrefix } from "../../../../core/utils/pathUtils.js";
+import { callSetPublicationRootPathCF } from "../../../../core/utils/updatePublicationClient.js";
+import { PermissionDeniedError, isNetworkError } from "../../../../core/utils/errorUtils.js";
 
 export const Publication = React.memo(({ publication, onShowProperties, onOpenInDashboard, isExpanded, onToggle, isConfigured, isDriveAccessible, filterState }) => {
     // Két blokkoló ok egyesítve a fejléc színezéshez és a cikk-művelet tiltáshoz.
@@ -37,6 +40,13 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
     // Dialog state
     const [dialogOpen, setDialogOpen] = useState(false);
     const [dialogConfig, setDialogConfig] = useState({ title: "", message: "", isAlert: false });
+
+    // rootPath beállítás flow — külön confirm dialog a véglegesítéshez.
+    // `pendingRootPath` null, ha nincs nyitott confirm; { nativePath, canonical }, ha van.
+    const [pendingRootPath, setPendingRootPath] = useState(null);
+    const [isSavingRootPath, setIsSavingRootPath] = useState(false);
+    const isSavingRootPathRef = useRef(false);
+    const [isRootPathButtonFocused, setIsRootPathButtonFocused] = useState(false);
 
     // Szűrő állapot a központi filterState prop-ból
     const { statusFilters, showIgnored, showOnlyMine, showPlaceholders } = filterState;
@@ -212,6 +222,102 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
         }
     }, [addArticle, isExpanded, onToggle, isBlocked, publication.$id]);
 
+    // rootPath beállítás trigger (narancs bannerből): folder picker → mount-prefix check → confirm dialog.
+    // A tényleges CF hívás a `confirmSetRootPath`-ban fut.
+    const handleSetRootPathClick = useCallback(async () => {
+        if (isSavingRootPathRef.current) return;
+        try {
+            const fs = require("uxp").storage.localFileSystem;
+            const folder = await fs.getFolder();
+            if (!folder) return; // user cancel
+
+            const nativePath = folder.nativePath;
+            if (!nativePath) {
+                setDialogConfig({
+                    title: "Érvénytelen mappa",
+                    message: "A kiválasztott mappa útvonala nem olvasható.",
+                    isAlert: true
+                });
+                setDialogOpen(true);
+                return;
+            }
+
+            if (!isUnderMountPrefix(nativePath)) {
+                const prefix = currentMountPrefix();
+                setDialogConfig({
+                    title: "Nem megosztott meghajtó",
+                    message: `A gyökérmappának megosztott meghajtón kell lennie (${prefix}/... alatt). Kérd az IT-t a megosztás beállítására, vagy válassz másik mappát.`,
+                    isAlert: true
+                });
+                setDialogOpen(true);
+                return;
+            }
+
+            const canonical = toCanonicalPath(nativePath);
+            setPendingRootPath({ nativePath, canonical });
+        } catch (err) {
+            logError("[Publication] rootPath folder pick error:", err);
+            setDialogConfig({
+                title: "Hiba",
+                message: "Nem sikerült megnyitni a mappa-választót: " + err.message,
+                isAlert: true
+            });
+            setDialogOpen(true);
+        }
+    }, []);
+
+    const cancelSetRootPath = useCallback(() => {
+        if (isSavingRootPathRef.current) return; // ne engedjük bezárni CF közben
+        setPendingRootPath(null);
+    }, []);
+
+    const confirmSetRootPath = useCallback(async () => {
+        if (isSavingRootPathRef.current) return;
+        if (!pendingRootPath) return;
+
+        isSavingRootPathRef.current = true;
+        setIsSavingRootPath(true);
+        try {
+            await callSetPublicationRootPathCF(publication.$id, pendingRootPath.canonical);
+            // Siker — Realtime hozza a publication.rootPath frissítést, a banner (és benne a gomb) automatikusan eltűnik.
+            // Ha a Realtime késik vagy megszakadt, a dupla-klikk védelem úgyis a szerver CF-be ütközik
+            // (`root_path_already_set` → barátságos dialog), nem hagyjuk a usert permanensen disabled gombbal.
+            setPendingRootPath(null);
+        } catch (err) {
+            logError("[Publication] set-publication-root-path CF error:", err);
+            setPendingRootPath(null);
+
+            let title = "Hiba";
+            let message = "";
+            if (err instanceof PermissionDeniedError) {
+                title = "Nincs jogosultság";
+                message = "Nincs jogosultságod a gyökérmappa beállításához. Szólj a szerkesztőség adminjának vagy a szervezet tulajdonosának.";
+            } else if (err.cfReason === 'root_path_already_set') {
+                title = "Már beállítva";
+                message = "Ezt a gyökérmappát már beállították (valószínűleg egy másik felhasználó). Az oldal automatikusan frissül.";
+            } else if (err.cfReason === 'invalid_root_path') {
+                title = "Érvénytelen útvonal";
+                message = "A kiválasztott útvonal nem elfogadható. Válassz másik mappát.";
+            } else if (err.cfReason === 'publication_not_found') {
+                title = "Kiadvány nem található";
+                message = "A kiadvány időközben törölve lett.";
+            } else if (isNetworkError(err)) {
+                title = "Hálózati hiba";
+                message = "A beállítás nem mentődött el — próbáld újra.";
+            } else {
+                message = "Váratlan hiba: " + (err.message || "ismeretlen");
+            }
+            setDialogConfig({ title, message, isAlert: true });
+            setDialogOpen(true);
+        } finally {
+            // Minden terminal ágon engedjük el a zárat. Ha Realtime még nem konvergált, a gomb
+            // még látszik egy pillanatig — dupla-klikk esetén a szerver `root_path_already_set`
+            // dialoggal tér vissza, ami barátságosabb, mint permanensen disabled állapot.
+            isSavingRootPathRef.current = false;
+            setIsSavingRootPath(false);
+        }
+    }, [pendingRootPath, publication.$id]);
+
     // Fejléc szín: kék (OK), narancs (konfiguráció szükséges), piros (mappa nem elérhető).
     // Egy helyen dől el — alább három JSX pontnál ugyanezt az értéket használjuk.
     const headerColor = !isBlocked
@@ -355,9 +461,31 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
                             <div style={{ fontSize: "12px", fontWeight: "bold", marginBottom: "2px" }}>
                                 Konfiguráció szükséges
                             </div>
-                            <div style={{ fontSize: "11px", opacity: 0.85 }}>
+                            <div style={{ fontSize: "11px", opacity: 0.85, marginBottom: "8px" }}>
                                 A kiadvány gyökérmappája még nincs beállítva. A beállításig cikkfelvétel és -megnyitás nem lehetséges.
                             </div>
+                            <button
+                                type="button"
+                                onClick={handleSetRootPathClick}
+                                disabled={isSavingRootPath}
+                                onFocus={() => setIsRootPathButtonFocused(true)}
+                                onBlur={() => setIsRootPathButtonFocused(false)}
+                                style={{
+                                    background: "white",
+                                    color: "var(--spectrum-global-color-orange-600)",
+                                    border: "none",
+                                    borderRadius: "3px",
+                                    padding: "4px 12px",
+                                    fontSize: "11px",
+                                    fontWeight: "bold",
+                                    cursor: isSavingRootPath ? "default" : "pointer",
+                                    opacity: isSavingRootPath ? 0.6 : 1,
+                                    outline: isRootPathButtonFocused ? "2px solid white" : "none",
+                                    outlineOffset: isRootPathButtonFocused ? "2px" : "0"
+                                }}
+                            >
+                                {isSavingRootPath ? "Mentés…" : "Gyökérmappa beállítása"}
+                            </button>
                         </div>
                     </div>
                 )
@@ -412,6 +540,20 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
                 isAlert={dialogConfig.isAlert}
                 onConfirm={() => setDialogOpen(false)}
                 onCancel={() => setDialogOpen(false)}
+            />
+
+            <ConfirmDialog
+                isOpen={!!pendingRootPath}
+                title="Gyökérmappa beállítása"
+                message={pendingRootPath ? (
+                    `A(z) „${publication.name}" kiadvány gyökérmappája:\n\n` +
+                    `Kiválasztott: ${pendingRootPath.nativePath}\n` +
+                    `Kanonikus:    ${pendingRootPath.canonical}\n\n` +
+                    `FIGYELEM: a beállítás után a gyökérmappa nem módosítható. Csak akkor erősítsd meg, ha biztos vagy benne.`
+                ) : ""}
+                confirmLabel={isSavingRootPath ? "Mentés…" : "Beállítás"}
+                onConfirm={confirmSetRootPath}
+                onCancel={cancelSetRootPath}
             />
         </div >
     );

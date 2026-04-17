@@ -209,4 +209,7 @@ export function clearLocalSession() {
 /** Pre-event szinkron cikk-update endpoint (Fázis 9 follow-up). */
 export const UPDATE_ARTICLE_FUNCTION_ID = 'update-article';
 
+/** Publikáció gyökérmappa first-set endpoint (#32 — null→canonical, immutable). */
+export const SET_PUBLICATION_ROOT_PATH_FUNCTION_ID = 'set-publication-root-path';
+
 export { client, ID, Query };
