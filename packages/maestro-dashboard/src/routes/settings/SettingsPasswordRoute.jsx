@@ -157,7 +157,7 @@ export default function SettingsPasswordRoute() {
 
                 {/* Session hygiene: más eszközök kijelentkeztetése */}
                 {sessionCleanupDone ? (
-                    <p style={{ fontSize: 13, color: '#81c784', margin: '12px 0 0' }}>
+                    <p style={{ fontSize: 13, color: 'var(--c-success, #81c784)', margin: '12px 0 0' }}>
                         Minden más eszköz kijelentkeztetve.
                     </p>
                 ) : otherSessions && otherSessions.length > 0 ? (
@@ -167,8 +167,8 @@ export default function SettingsPasswordRoute() {
                         disabled={isCleaningUp}
                         style={{
                             marginTop: 12, padding: '8px 16px', fontSize: 13,
-                            borderRadius: 4, border: '1px solid #555',
-                            background: 'transparent', color: '#ccc', cursor: 'pointer',
+                            borderRadius: 4, border: '1px solid var(--outline-variant)',
+                            background: 'transparent', color: 'var(--text-secondary)', cursor: 'pointer',
                             opacity: isCleaningUp ? 0.6 : 1
                         }}
                     >
@@ -244,15 +244,15 @@ export default function SettingsPasswordRoute() {
                 >
                     <div
                         style={{
-                            background: '#1e1e1e', borderRadius: 8, padding: '24px 28px',
-                            maxWidth: 420, width: '90%', border: '1px solid #444'
+                            background: 'var(--bg-elevated)', borderRadius: 8, padding: '24px 28px',
+                            maxWidth: 420, width: '90%', border: '1px solid var(--border)'
                         }}
                         onClick={e => e.stopPropagation()}
                     >
-                        <h3 style={{ margin: '0 0 8px', fontSize: 15, fontWeight: 600, color: '#e0e0e0' }}>
+                        <h3 style={{ margin: '0 0 8px', fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>
                             Nem mentett változások
                         </h3>
-                        <p style={{ fontSize: 13, color: '#999', margin: '0 0 16px' }}>
+                        <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 16px' }}>
                             A jelszómezők ki vannak töltve. Biztosan elhagyod az oldalt?
                         </p>
                         <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
@@ -261,8 +261,8 @@ export default function SettingsPasswordRoute() {
                                 onClick={() => blocker.reset()}
                                 style={{
                                     padding: '6px 16px', fontSize: 13, borderRadius: 4,
-                                    border: '1px solid #555', background: 'transparent',
-                                    color: '#ccc', cursor: 'pointer'
+                                    border: '1px solid var(--outline-variant)', background: 'transparent',
+                                    color: 'var(--text-secondary)', cursor: 'pointer'
                                 }}
                             >
                                 Maradok
@@ -272,7 +272,7 @@ export default function SettingsPasswordRoute() {
                                 onClick={() => blocker.proceed()}
                                 style={{
                                     padding: '6px 16px', fontSize: 13, borderRadius: 4,
-                                    border: 'none', background: '#e53935', color: '#fff',
+                                    border: 'none', background: 'var(--c-danger, #e53935)', color: '#fff',
                                     cursor: 'pointer'
                                 }}
                             >

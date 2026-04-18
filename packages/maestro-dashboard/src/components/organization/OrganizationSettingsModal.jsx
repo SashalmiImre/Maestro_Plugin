@@ -19,6 +19,7 @@ import { Databases, Query } from 'appwrite';
 import { getClient, useAuth } from '../../contexts/AuthContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import Tabs from '../Tabs.jsx';
+import AnimatedAutoHeight from '../AnimatedAutoHeight.jsx';
 import GeneralTab from './GeneralTab.jsx';
 import UsersTab from './UsersTab.jsx';
 import { DATABASE_ID, COLLECTIONS } from '../../config.js';
@@ -227,34 +228,36 @@ export default function OrganizationSettingsModal({ organizationId, initialTab }
         <div className="publication-settings-modal">
             <Tabs tabs={TAB_DEFS} activeTab={activeTab} onTabChange={handleTabChange} />
 
-            <div className="publication-tab-content">
-                {loadError && (
-                    <div className="login-error" style={{ marginBottom: 12 }}>{loadError}</div>
-                )}
+            <AnimatedAutoHeight>
+                <div className="publication-tab-content">
+                    {loadError && (
+                        <div className="login-error" style={{ marginBottom: 12 }}>{loadError}</div>
+                    )}
 
-                {activeTab === 'general' && (
-                    <GeneralTab
-                        org={org}
-                        callerRole={callerRole}
-                        offices={offices}
-                        membersCount={members.length}
-                        pendingInvitesCount={pendingInvites.length}
-                        publicationsCount={publicationsCount}
-                        articlesCount={articlesCount}
-                    />
-                )}
+                    {activeTab === 'general' && (
+                        <GeneralTab
+                            org={org}
+                            callerRole={callerRole}
+                            offices={offices}
+                            membersCount={members.length}
+                            pendingInvitesCount={pendingInvites.length}
+                            publicationsCount={publicationsCount}
+                            articlesCount={articlesCount}
+                        />
+                    )}
 
-                {activeTab === 'users' && (
-                    <UsersTab
-                        org={org}
-                        callerRole={callerRole}
-                        members={members}
-                        pendingInvites={pendingInvites}
-                        userNameMap={userNameMap}
-                        onInviteSent={reloadInvites}
-                    />
-                )}
-            </div>
+                    {activeTab === 'users' && (
+                        <UsersTab
+                            org={org}
+                            callerRole={callerRole}
+                            members={members}
+                            pendingInvites={pendingInvites}
+                            userNameMap={userNameMap}
+                            onInviteSent={reloadInvites}
+                        />
+                    )}
+                </div>
+            </AnimatedAutoHeight>
         </div>
     );
 }

@@ -11,6 +11,7 @@ import { Databases, Query } from 'appwrite';
 import { getClient, useAuth } from '../../contexts/AuthContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import Tabs from '../Tabs.jsx';
+import AnimatedAutoHeight from '../AnimatedAutoHeight.jsx';
 import EditorialOfficeGeneralTab from './EditorialOfficeGeneralTab.jsx';
 import EditorialOfficeGroupsTab from './EditorialOfficeGroupsTab.jsx';
 import EditorialOfficeWorkflowTab from './EditorialOfficeWorkflowTab.jsx';
@@ -176,41 +177,43 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
         <div className="publication-settings-modal">
             <Tabs tabs={TAB_DEFS} activeTab={activeTab} onTabChange={handleTabChange} />
 
-            <div className="publication-tab-content">
-                {activeTab !== 'general' && loadError && (
-                    <div className="login-error" style={{ marginBottom: 12 }}>{loadError}</div>
-                )}
+            <AnimatedAutoHeight>
+                <div className="publication-tab-content">
+                    {activeTab !== 'general' && loadError && (
+                        <div className="login-error" style={{ marginBottom: 12 }}>{loadError}</div>
+                    )}
 
-                {activeTab === 'general' && (
-                    <EditorialOfficeGeneralTab
-                        office={office}
-                        org={org}
-                        callerRole={callerRole}
-                    />
-                )}
+                    {activeTab === 'general' && (
+                        <EditorialOfficeGeneralTab
+                            office={office}
+                            org={org}
+                            callerRole={callerRole}
+                        />
+                    )}
 
-                {activeTab === 'groups' && (
-                    <EditorialOfficeGroupsTab
-                        office={office}
-                        groups={groups}
-                        groupMemberships={groupMemberships}
-                        officeMembers={officeMembers}
-                        isLoading={isLoading}
-                        isOrgAdmin={isOrgAdmin}
-                        onReload={loadData}
-                    />
-                )}
+                    {activeTab === 'groups' && (
+                        <EditorialOfficeGroupsTab
+                            office={office}
+                            groups={groups}
+                            groupMemberships={groupMemberships}
+                            officeMembers={officeMembers}
+                            isLoading={isLoading}
+                            isOrgAdmin={isOrgAdmin}
+                            onReload={loadData}
+                        />
+                    )}
 
-                {activeTab === 'workflow' && (
-                    <EditorialOfficeWorkflowTab
-                        office={office}
-                        workflows={workflows}
-                        isLoading={isLoading}
-                        isOrgAdmin={isOrgAdmin}
-                        onReload={loadData}
-                    />
-                )}
-            </div>
+                    {activeTab === 'workflow' && (
+                        <EditorialOfficeWorkflowTab
+                            office={office}
+                            workflows={workflows}
+                            isLoading={isLoading}
+                            isOrgAdmin={isOrgAdmin}
+                            onReload={loadData}
+                        />
+                    )}
+                </div>
+            </AnimatedAutoHeight>
         </div>
     );
 }

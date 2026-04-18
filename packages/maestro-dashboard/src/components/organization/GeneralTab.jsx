@@ -168,7 +168,7 @@ export default function GeneralTab({
             )}
 
             {/* ═══ Szervezet neve ═══ */}
-            <div style={{ marginBottom: 20, borderBottom: '1px solid #333', paddingBottom: 16 }}>
+            <div style={{ marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
                 <h3 style={{ margin: '0 0 8px 0', fontSize: 14, fontWeight: 600 }}>
                     Szervezet neve
                 </h3>
@@ -184,7 +184,7 @@ export default function GeneralTab({
                             autoFocus
                             style={{
                                 flex: 1, fontSize: 13, padding: '6px 8px',
-                                background: '#222', color: '#ccc', border: '1px solid #555',
+                                background: 'var(--bg-base)', color: 'var(--text-primary)', border: '1px solid var(--outline-variant)',
                                 borderRadius: 4
                             }}
                             onKeyDown={e => {
@@ -196,7 +196,7 @@ export default function GeneralTab({
                             onClick={handleSaveName}
                             disabled={!!actionPending}
                             style={{
-                                background: '#2563eb', color: '#fff', border: 'none',
+                                background: 'var(--accent-solid)', color: '#fff', border: 'none',
                                 padding: '6px 14px', borderRadius: 4, cursor: 'pointer',
                                 fontSize: 12
                             }}
@@ -207,7 +207,7 @@ export default function GeneralTab({
                             onClick={() => setIsEditingName(false)}
                             disabled={!!actionPending}
                             style={{
-                                background: 'none', color: '#ccc', border: '1px solid #666',
+                                background: 'none', color: 'var(--text-secondary)', border: '1px solid var(--outline-variant)',
                                 padding: '6px 10px', borderRadius: 4, cursor: 'pointer',
                                 fontSize: 12
                             }}
@@ -218,7 +218,7 @@ export default function GeneralTab({
                 ) : (
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                         <span style={{ fontSize: 14 }}>{org?.name || '—'}</span>
-                        <span style={{ color: '#888', fontSize: 11 }}>({org?.slug})</span>
+                        <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>({org?.slug})</span>
                         {isOrgAdmin && (
                             <button
                                 onClick={() => {
@@ -227,8 +227,8 @@ export default function GeneralTab({
                                 }}
                                 disabled={!!actionPending}
                                 style={{
-                                    marginLeft: 'auto', background: 'none', border: '1px solid #666',
-                                    color: '#ccc', padding: '4px 10px', borderRadius: 4, cursor: 'pointer',
+                                    marginLeft: 'auto', background: 'none', border: '1px solid var(--outline-variant)',
+                                    color: 'var(--text-secondary)', padding: '4px 10px', borderRadius: 4, cursor: 'pointer',
                                     fontSize: 11
                                 }}
                             >
@@ -240,10 +240,10 @@ export default function GeneralTab({
             </div>
 
             {/* ═══ Szerkesztőségek + „+ Új" ═══ */}
-            <div style={{ marginBottom: 20, borderBottom: isOrgOwner ? '1px solid #333' : 'none', paddingBottom: 16 }}>
+            <div style={{ marginBottom: 20, borderBottom: isOrgOwner ? '1px solid var(--border)' : 'none', paddingBottom: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                     <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>
-                        Szerkesztőségek <span style={{ color: '#888', fontWeight: 400, fontSize: 12 }}>({offices.length})</span>
+                        Szerkesztőségek <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 12 }}>({offices.length})</span>
                     </h3>
                     {isOrgAdmin && (
                         <button
@@ -251,7 +251,7 @@ export default function GeneralTab({
                             onClick={handleOpenCreateOffice}
                             style={{
                                 marginLeft: 'auto',
-                                background: '#2563eb', color: '#fff', border: 'none',
+                                background: 'var(--accent-solid)', color: '#fff', border: 'none',
                                 padding: '4px 10px', borderRadius: 4, cursor: 'pointer',
                                 fontSize: 11
                             }}
@@ -262,7 +262,7 @@ export default function GeneralTab({
                 </div>
 
                 {offices.length === 0 ? (
-                    <p style={{ fontSize: 12, color: '#888', margin: '4px 0' }}>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0' }}>
                         Nincsenek szerkesztőségek.
                     </p>
                 ) : (
@@ -273,13 +273,13 @@ export default function GeneralTab({
                                 fontSize: 13, padding: '3px 0'
                             }}>
                                 <span>{office.name}</span>
-                                <span style={{ color: '#888', fontSize: 11 }}>({office.slug})</span>
+                                <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>({office.slug})</span>
                                 <button
                                     type="button"
                                     onClick={() => handleOpenWorkflowDesigner(office.$id)}
                                     style={{
                                         marginLeft: 'auto', fontSize: 11,
-                                        color: '#adc6ff', textDecoration: 'none',
+                                        color: 'var(--accent)', textDecoration: 'none',
                                         background: 'none', border: 'none', cursor: 'pointer',
                                         padding: 0
                                     }}

@@ -147,12 +147,12 @@ export default function UsersTab({
             }}>
                 <span>{displayName}</span>
                 {displayEmail && (
-                    <span style={{ color: '#888', fontSize: 11 }}>({displayEmail})</span>
+                    <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>({displayEmail})</span>
                 )}
                 {isSelf && (
                     <span style={{
-                        fontSize: 10, color: '#888',
-                        background: '#282a30', padding: '1px 6px', borderRadius: 3
+                        fontSize: 10, color: 'var(--text-muted)',
+                        background: 'var(--bg-elevated)', padding: '1px 6px', borderRadius: 3
                     }}>
                         te
                     </span>
@@ -172,7 +172,7 @@ export default function UsersTab({
                     textTransform: 'uppercase',
                     letterSpacing: '0.5px'
                 }}>
-                    {label} <span style={{ color: '#888', fontWeight: 400 }}>({list.length})</span>
+                    {label} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({list.length})</span>
                 </h4>
                 <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
                     {list.map(renderMemberRow)}
@@ -189,7 +189,7 @@ export default function UsersTab({
 
             {/* ═══ Felhasználó meghívása ═══ */}
             {isOrgAdmin && (
-                <div style={{ marginBottom: 20, borderBottom: '1px solid #333', paddingBottom: 16 }}>
+                <div style={{ marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
                     <h3 style={{ margin: '0 0 8px 0', fontSize: 14, fontWeight: 600 }}>
                         Felhasználó meghívása
                     </h3>
@@ -204,7 +204,7 @@ export default function UsersTab({
                             required
                             style={{
                                 flex: '1 1 200px', fontSize: 12, padding: '6px 8px',
-                                background: '#222', color: '#ccc', border: '1px solid #555',
+                                background: 'var(--bg-base)', color: 'var(--text-primary)', border: '1px solid var(--outline-variant)',
                                 borderRadius: 4
                             }}
                         />
@@ -214,7 +214,7 @@ export default function UsersTab({
                             disabled={!!actionPending}
                             style={{
                                 fontSize: 12, padding: '6px 8px',
-                                background: '#222', color: '#ccc', border: '1px solid #555',
+                                background: 'var(--bg-base)', color: 'var(--text-primary)', border: '1px solid var(--outline-variant)',
                                 borderRadius: 4
                             }}
                         >
@@ -230,7 +230,7 @@ export default function UsersTab({
                             rows={2}
                             style={{
                                 flex: '1 1 100%', fontSize: 12, padding: '6px 8px',
-                                background: '#222', color: '#ccc', border: '1px solid #555',
+                                background: 'var(--bg-base)', color: 'var(--text-primary)', border: '1px solid var(--outline-variant)',
                                 borderRadius: 4, resize: 'vertical', fontFamily: 'inherit'
                             }}
                         />
@@ -238,7 +238,7 @@ export default function UsersTab({
                             type="submit"
                             disabled={!!actionPending}
                             style={{
-                                background: '#2563eb', color: '#fff', border: 'none',
+                                background: 'var(--accent-solid)', color: '#fff', border: 'none',
                                 padding: '6px 14px', borderRadius: 4, cursor: 'pointer',
                                 fontSize: 12
                             }}
@@ -248,7 +248,7 @@ export default function UsersTab({
                     </form>
 
                     {inviteSuccess && (
-                        <div style={{ color: '#4ade80', fontSize: 12, marginTop: 6 }}>
+                        <div style={{ color: 'var(--c-success)', fontSize: 12, marginTop: 6 }}>
                             {inviteSuccess}
                         </div>
                     )}
@@ -257,9 +257,9 @@ export default function UsersTab({
 
             {/* ═══ Függő meghívók ═══ */}
             {isOrgAdmin && pendingInvites.length > 0 && (
-                <div style={{ marginBottom: 20, borderBottom: '1px solid #333', paddingBottom: 16 }}>
+                <div style={{ marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
                     <h3 style={{ margin: '0 0 8px 0', fontSize: 14, fontWeight: 600 }}>
-                        Függő meghívók <span style={{ color: '#888', fontWeight: 400, fontSize: 12 }}>({pendingInvites.length})</span>
+                        Függő meghívók <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 12 }}>({pendingInvites.length})</span>
                     </h3>
                     <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
                         {pendingInvites.map(inv => (
@@ -269,12 +269,12 @@ export default function UsersTab({
                             }}>
                                 <span>{inv.email}</span>
                                 <span style={{
-                                    fontSize: 10, color: '#888', background: '#282a30',
+                                    fontSize: 10, color: 'var(--text-muted)', background: 'var(--bg-elevated)',
                                     padding: '1px 6px', borderRadius: 3
                                 }}>
                                     {roleLabel(inv.role)}
                                 </span>
-                                <span style={{ color: '#888', fontSize: 11 }}>
+                                <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>
                                     Lejár: {new Date(inv.expiresAt).toLocaleDateString('hu-HU')}
                                 </span>
                                 <button
@@ -282,7 +282,7 @@ export default function UsersTab({
                                     disabled={!!actionPending}
                                     style={{
                                         marginLeft: 'auto', background: 'none',
-                                        border: '1px solid #666', color: '#ccc',
+                                        border: '1px solid var(--outline-variant)', color: 'var(--text-secondary)',
                                         padding: '2px 8px', borderRadius: 4, cursor: 'pointer',
                                         fontSize: 11
                                     }}
@@ -298,18 +298,18 @@ export default function UsersTab({
             {/* ═══ Tagok szerepkörönként ═══ */}
             <div style={{ marginBottom: 20 }}>
                 <h3 style={{ margin: '0 0 12px 0', fontSize: 14, fontWeight: 600 }}>
-                    Tagok <span style={{ color: '#888', fontWeight: 400, fontSize: 12 }}>({members.length})</span>
+                    Tagok <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 12 }}>({members.length})</span>
                 </h3>
 
                 {members.length === 0 ? (
-                    <p style={{ fontSize: 12, color: '#888', margin: '4px 0' }}>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0' }}>
                         Nincsenek tagok.
                     </p>
                 ) : (
                     <>
-                        {renderMemberGroup('Tulajdonosok', grouped.owner, '#adc6ff')}
-                        {renderMemberGroup('Adminok', grouped.admin, '#ccc')}
-                        {renderMemberGroup('Tagok', grouped.member, '#999')}
+                        {renderMemberGroup('Tulajdonosok', grouped.owner, 'var(--accent)')}
+                        {renderMemberGroup('Adminok', grouped.admin, 'var(--text-secondary)')}
+                        {renderMemberGroup('Tagok', grouped.member, 'var(--text-muted)')}
                     </>
                 )}
             </div>

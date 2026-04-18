@@ -13,6 +13,7 @@ import React, { useState, useMemo } from 'react';
 import { useData } from '../../contexts/DataContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import Tabs from '../Tabs.jsx';
+import AnimatedAutoHeight from '../AnimatedAutoHeight.jsx';
 import GeneralTab from './GeneralTab.jsx';
 import LayoutsTab from './LayoutsTab.jsx';
 import DeadlinesTab from './DeadlinesTab.jsx';
@@ -59,12 +60,14 @@ export default function PublicationSettingsModal({ publicationId, initialTab = '
         <div className="publication-settings-modal">
             <Tabs tabs={TAB_DEFS} activeTab={activeTab} onTabChange={setActiveTab} />
 
-            <div className="publication-tab-content">
-                {activeTab === 'general' && <GeneralTab publication={publication} />}
-                {activeTab === 'layouts' && <LayoutsTab publication={publication} />}
-                {activeTab === 'deadlines' && <DeadlinesTab publication={publication} />}
-                {activeTab === 'contributors' && <ContributorsTab publication={publication} />}
-            </div>
+            <AnimatedAutoHeight>
+                <div className="publication-tab-content">
+                    {activeTab === 'general' && <GeneralTab publication={publication} />}
+                    {activeTab === 'layouts' && <LayoutsTab publication={publication} />}
+                    {activeTab === 'deadlines' && <DeadlinesTab publication={publication} />}
+                    {activeTab === 'contributors' && <ContributorsTab publication={publication} />}
+                </div>
+            </AnimatedAutoHeight>
         </div>
     );
 }

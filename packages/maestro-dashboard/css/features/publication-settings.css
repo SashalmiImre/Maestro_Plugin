@@ -44,11 +44,37 @@
     font-size: 12px;
 }
 
-/* ─── Publication settings modal: tab content konténer ─────────────────── */
+/* ─── Publication / Organization / Editorial Office settings modal:
+       sticky tabs + tartalom görget ──────────────────────────────────────── */
 
 .publication-settings-modal {
     display: flex;
     flex-direction: column;
+}
+
+/* A modal-body default padding-top: 20px. Settings modaloknál ezt
+   eltüntetjük, hogy a sticky tabs ténylegesen a tetejéig csússzon
+   görgetéskor — a tabs saját padding-top-ja adja vissza a vizuális
+   spacing-et (lásd lent). */
+.modal-body:has(> .publication-settings-modal) {
+    padding-top: 0;
+}
+
+.publication-settings-modal .tabs {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: var(--bg-surface);
+    /* Negatív horizontal margin = modal-body horizontal padding (24px),
+       hogy a sticky tabs background pontosan a modal-body éleihez érjen
+       és ne lógjon ki a modal-card 16px border-radius-án túlra.
+       margin-bottom 24px: levegő a fekete border és a tartalom közt
+       (felülírja az alap .tabs margin-bottom: 20px-jét). */
+    margin: 0 -24px 24px;
+    /* Padding-bottom 0: az aktív tab kék underline-ja közvetlenül
+       érintkezik a .tabs gray border-bottom-jával (a tab.margin-bottom: -1px
+       trükkjével). */
+    padding: 20px 24px 0;
 }
 
 .publication-tab-content {

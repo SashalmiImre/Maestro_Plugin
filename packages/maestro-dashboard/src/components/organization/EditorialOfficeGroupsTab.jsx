@@ -63,9 +63,9 @@ function GroupBadge({ label, isActive, isPending, canEdit, onToggle }) {
                 cursor: canEdit && !isPending ? 'pointer' : 'default',
                 marginRight: 4,
                 marginBottom: 2,
-                border: isActive ? '1px solid #3b82f6' : '1px solid #555',
-                background: isActive ? 'rgba(59, 130, 246, 0.15)' : '#282a30',
-                color: isActive ? '#93bbfc' : '#666',
+                border: isActive ? '1px solid var(--accent-solid)' : '1px solid var(--outline-variant)',
+                background: isActive ? 'rgb(from var(--accent-solid) r g b / 0.15)' : 'var(--bg-elevated)',
+                color: isActive ? 'var(--accent)' : 'var(--text-muted)',
                 opacity: isPending ? 0.5 : 1,
                 transition: 'all 0.15s ease',
                 userSelect: 'none'
@@ -252,11 +252,11 @@ export default function EditorialOfficeGroupsTab({
             )}
 
             {/* ═══ Csoportok lista + CRUD ═══ */}
-            <div style={{ marginBottom: 20, borderBottom: '1px solid #333', paddingBottom: 16 }}>
+            <div style={{ marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                     <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>
                         Csoportok{' '}
-                        <span style={{ color: '#888', fontWeight: 400, fontSize: 12 }}>
+                        <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 12 }}>
                             ({groups.length})
                         </span>
                     </h3>
@@ -271,7 +271,7 @@ export default function EditorialOfficeGroupsTab({
                             disabled={!!actionPending}
                             style={{
                                 marginLeft: 'auto',
-                                background: '#2563eb', color: '#fff', border: 'none',
+                                background: 'var(--accent-solid)', color: '#fff', border: 'none',
                                 padding: '4px 10px', borderRadius: 4,
                                 cursor: actionPending ? 'not-allowed' : 'pointer',
                                 fontSize: 11
@@ -283,7 +283,7 @@ export default function EditorialOfficeGroupsTab({
                 </div>
 
                 {groups.length === 0 && !isCreatingGroup ? (
-                    <p style={{ fontSize: 12, color: '#888', margin: '4px 0' }}>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0' }}>
                         Nincsenek csoportok.
                     </p>
                 ) : (
@@ -311,8 +311,8 @@ export default function EditorialOfficeGroupsTab({
                                                 autoFocus
                                                 style={{
                                                     flex: 1, fontSize: 12, padding: '4px 6px',
-                                                    background: '#222', color: '#ccc',
-                                                    border: '1px solid #555', borderRadius: 4
+                                                    background: 'var(--bg-base)', color: 'var(--text-primary)',
+                                                    border: '1px solid var(--outline-variant)', borderRadius: 4
                                                 }}
                                                 onKeyDown={e => {
                                                     if (e.key === 'Enter') handleSaveRename(group);
@@ -323,7 +323,7 @@ export default function EditorialOfficeGroupsTab({
                                                 onClick={() => handleSaveRename(group)}
                                                 disabled={!!actionPending}
                                                 style={{
-                                                    background: '#2563eb', color: '#fff', border: 'none',
+                                                    background: 'var(--accent-solid)', color: '#fff', border: 'none',
                                                     padding: '4px 10px', borderRadius: 4,
                                                     cursor: 'pointer', fontSize: 11
                                                 }}
@@ -334,8 +334,8 @@ export default function EditorialOfficeGroupsTab({
                                                 onClick={cancelRename}
                                                 disabled={!!actionPending}
                                                 style={{
-                                                    background: 'none', color: '#ccc',
-                                                    border: '1px solid #666', padding: '4px 8px',
+                                                    background: 'none', color: 'var(--text-secondary)',
+                                                    border: '1px solid var(--outline-variant)', padding: '4px 8px',
                                                     borderRadius: 4, cursor: 'pointer', fontSize: 11
                                                 }}
                                             >
@@ -345,9 +345,9 @@ export default function EditorialOfficeGroupsTab({
                                     ) : (
                                         <>
                                             <span>{group.name}</span>
-                                            <span style={{ color: '#888', fontSize: 11 }}>({group.slug})</span>
+                                            <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>({group.slug})</span>
                                             <span style={{
-                                                fontSize: 10, color: '#888', background: '#282a30',
+                                                fontSize: 10, color: 'var(--text-muted)', background: 'var(--bg-elevated)',
                                                 padding: '1px 6px', borderRadius: 3
                                             }}>
                                                 {memberCount} tag
@@ -359,8 +359,8 @@ export default function EditorialOfficeGroupsTab({
                                                         onClick={() => beginRename(group)}
                                                         disabled={!!actionPending}
                                                         style={{
-                                                            background: 'none', color: '#ccc',
-                                                            border: '1px solid #666', padding: '2px 8px',
+                                                            background: 'none', color: 'var(--text-secondary)',
+                                                            border: '1px solid var(--outline-variant)', padding: '2px 8px',
                                                             borderRadius: 4, cursor: 'pointer', fontSize: 10
                                                         }}
                                                     >
@@ -375,8 +375,8 @@ export default function EditorialOfficeGroupsTab({
                                                             : undefined}
                                                         style={{
                                                             background: 'none',
-                                                            color: isDefault ? '#555' : '#ef6060',
-                                                            border: `1px solid ${isDefault ? '#333' : '#7a2d2d'}`,
+                                                            color: isDefault ? 'var(--text-muted)' : 'var(--c-danger, #ef6060)',
+                                                            border: `1px solid ${isDefault ? 'var(--border)' : 'var(--c-danger-border, #7a2d2d)'}`,
                                                             padding: '2px 8px', borderRadius: 4,
                                                             cursor: (actionPending || isDefault) ? 'not-allowed' : 'pointer',
                                                             fontSize: 10
@@ -406,8 +406,8 @@ export default function EditorialOfficeGroupsTab({
                             autoFocus
                             style={{
                                 flex: 1, fontSize: 12, padding: '4px 6px',
-                                background: '#222', color: '#ccc',
-                                border: '1px solid #555', borderRadius: 4
+                                background: 'var(--bg-base)', color: 'var(--text-primary)',
+                                border: '1px solid var(--outline-variant)', borderRadius: 4
                             }}
                             onKeyDown={e => {
                                 if (e.key === 'Enter') handleCreateGroup();
@@ -418,7 +418,7 @@ export default function EditorialOfficeGroupsTab({
                             onClick={handleCreateGroup}
                             disabled={!!actionPending || !newGroupName.trim()}
                             style={{
-                                background: '#2563eb', color: '#fff', border: 'none',
+                                background: 'var(--accent-solid)', color: '#fff', border: 'none',
                                 padding: '4px 12px', borderRadius: 4,
                                 cursor: (actionPending || !newGroupName.trim()) ? 'not-allowed' : 'pointer',
                                 fontSize: 11
@@ -430,8 +430,8 @@ export default function EditorialOfficeGroupsTab({
                             onClick={() => setIsCreatingGroup(false)}
                             disabled={!!actionPending}
                             style={{
-                                background: 'none', color: '#ccc',
-                                border: '1px solid #666', padding: '4px 8px',
+                                background: 'none', color: 'var(--text-secondary)',
+                                border: '1px solid var(--outline-variant)', padding: '4px 8px',
                                 borderRadius: 4, cursor: 'pointer', fontSize: 11
                             }}
                         >
@@ -442,20 +442,20 @@ export default function EditorialOfficeGroupsTab({
             </div>
 
             {/* ═══ Tagok és csoportok mátrix ═══ */}
-            <div style={{ marginBottom: 20, borderBottom: '1px solid #333', paddingBottom: 16 }}>
+            <div style={{ marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
                 <h3 style={{ margin: '0 0 8px 0', fontSize: 14, fontWeight: 600 }}>
                     Tagok és csoportok{' '}
-                    <span style={{ color: '#888', fontWeight: 400, fontSize: 12 }}>
+                    <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 12 }}>
                         ({officeMembers.length} tag)
                     </span>
                 </h3>
 
                 {officeMembers.length === 0 ? (
-                    <p style={{ fontSize: 12, color: '#888', margin: '4px 0' }}>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0' }}>
                         Nincsenek tagok a szerkesztőségben.
                     </p>
                 ) : groups.length === 0 ? (
-                    <p style={{ fontSize: 12, color: '#888', margin: '4px 0' }}>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0' }}>
                         Hozz létre csoportot, hogy tagokat tudj hozzárendelni.
                     </p>
                 ) : (
@@ -474,7 +474,7 @@ export default function EditorialOfficeGroupsTab({
                                     <div style={{ minWidth: 140, flexShrink: 0 }}>
                                         <span>{displayName}</span>
                                         {displayEmail && (
-                                            <span style={{ color: '#888', fontSize: 11, marginLeft: 4 }}>
+                                            <span style={{ color: 'var(--text-muted)', fontSize: 11, marginLeft: 4 }}>
                                                 ({displayEmail})
                                             </span>
                                         )}
@@ -505,7 +505,7 @@ export default function EditorialOfficeGroupsTab({
                 )}
 
                 {!isOrgAdmin && officeMembers.length > 0 && (
-                    <p style={{ fontSize: 11, color: '#888', marginTop: 8, fontStyle: 'italic' }}>
+                    <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8, fontStyle: 'italic' }}>
                         Csoporttagság módosításához szervezeti admin jogosultság szükséges.
                     </p>
                 )}
@@ -516,7 +516,7 @@ export default function EditorialOfficeGroupsTab({
                 <h3 style={{ margin: '0 0 8px 0', fontSize: 14, fontWeight: 600 }}>
                     Jogosultság-sablonok
                 </h3>
-                <p style={{ fontSize: 12, color: '#888', margin: '4px 0', fontStyle: 'italic' }}>
+                <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0', fontStyle: 'italic' }}>
                     A csoportokhoz rendelt jogosultság-sablonok a jövőben itt lesznek
                     szerkeszthetők. Jelenleg a workflow-specifikus jogosultságokat a
                     Workflow Designer kezeli.

@@ -167,7 +167,7 @@ export default function EditorialOfficeWorkflowTab({
                 <p>
                     A(z) <strong>„{workflow.name}"</strong> workflow törlődik.
                 </p>
-                <p style={{ fontSize: 12, color: '#888' }}>
+                <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
                     A törlés csak akkor sikerül, ha egyetlen publikáció sem hivatkozik erre a workflow-ra.
                 </p>
                 <p>Ez a művelet nem visszavonható.</p>
@@ -209,7 +209,7 @@ export default function EditorialOfficeWorkflowTab({
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
                     <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>
                         Workflow-k{' '}
-                        <span style={{ color: '#888', fontWeight: 400, fontSize: 12 }}>
+                        <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 12 }}>
                             ({sortedWorkflows.length})
                         </span>
                     </h3>
@@ -225,7 +225,7 @@ export default function EditorialOfficeWorkflowTab({
                             disabled={!!actionPending}
                             style={{
                                 marginLeft: 'auto',
-                                background: '#2563eb', color: '#fff', border: 'none',
+                                background: 'var(--accent-solid)', color: '#fff', border: 'none',
                                 padding: '4px 10px', borderRadius: 4,
                                 cursor: actionPending ? 'not-allowed' : 'pointer',
                                 fontSize: 11
@@ -237,7 +237,7 @@ export default function EditorialOfficeWorkflowTab({
                 </div>
 
                 {sortedWorkflows.length === 0 && !isCreating ? (
-                    <p style={{ fontSize: 12, color: '#888', margin: '4px 0' }}>
+                    <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0' }}>
                         Nincs workflow konfigurálva.
                     </p>
                 ) : (
@@ -254,7 +254,7 @@ export default function EditorialOfficeWorkflowTab({
                                 <li key={workflow.$id} style={{
                                     display: 'flex', alignItems: 'center', gap: 8,
                                     fontSize: 13, padding: '6px 0',
-                                    borderBottom: '1px solid #2a2a2a'
+                                    borderBottom: '1px solid var(--border)'
                                 }}>
                                     {isEditing && isOrgAdmin ? (
                                         <>
@@ -267,8 +267,8 @@ export default function EditorialOfficeWorkflowTab({
                                                 autoFocus
                                                 style={{
                                                     flex: 1, fontSize: 12, padding: '4px 6px',
-                                                    background: '#222', color: '#ccc',
-                                                    border: '1px solid #555', borderRadius: 4
+                                                    background: 'var(--bg-base)', color: 'var(--text-primary)',
+                                                    border: '1px solid var(--outline-variant)', borderRadius: 4
                                                 }}
                                                 onKeyDown={e => {
                                                     if (e.key === 'Enter') handleSaveRename(workflow);
@@ -279,7 +279,7 @@ export default function EditorialOfficeWorkflowTab({
                                                 onClick={() => handleSaveRename(workflow)}
                                                 disabled={!!actionPending}
                                                 style={{
-                                                    background: '#2563eb', color: '#fff', border: 'none',
+                                                    background: 'var(--accent-solid)', color: '#fff', border: 'none',
                                                     padding: '4px 10px', borderRadius: 4,
                                                     cursor: 'pointer', fontSize: 11
                                                 }}
@@ -290,8 +290,8 @@ export default function EditorialOfficeWorkflowTab({
                                                 onClick={cancelRename}
                                                 disabled={!!actionPending}
                                                 style={{
-                                                    background: 'none', color: '#ccc',
-                                                    border: '1px solid #666', padding: '4px 8px',
+                                                    background: 'none', color: 'var(--text-secondary)',
+                                                    border: '1px solid var(--outline-variant)', padding: '4px 8px',
                                                     borderRadius: 4, cursor: 'pointer', fontSize: 11
                                                 }}
                                             >
@@ -309,8 +309,8 @@ export default function EditorialOfficeWorkflowTab({
                                                 title={VISIBILITY_DESCRIPTIONS[visibility]}
                                                 style={{
                                                     fontSize: 11, padding: '2px 6px',
-                                                    background: '#222', color: '#ccc',
-                                                    border: '1px solid #555', borderRadius: 4,
+                                                    background: 'var(--bg-base)', color: 'var(--text-primary)',
+                                                    border: '1px solid var(--outline-variant)', borderRadius: 4,
                                                     cursor: (!isOrgAdmin || actionPending) ? 'not-allowed' : 'pointer',
                                                     opacity: isVisibilityPending ? 0.5 : 1
                                                 }}
@@ -330,8 +330,8 @@ export default function EditorialOfficeWorkflowTab({
                                                     disabled={!!actionPending}
                                                     title="Workflow tervező megnyitása"
                                                     style={{
-                                                        background: 'none', color: '#adc6ff',
-                                                        border: '1px solid #3b4a6b', padding: '2px 8px',
+                                                        background: 'none', color: 'var(--accent)',
+                                                        border: '1px solid var(--outline-variant)', padding: '2px 8px',
                                                         borderRadius: 4, cursor: 'pointer', fontSize: 10
                                                     }}
                                                 >
@@ -351,8 +351,8 @@ export default function EditorialOfficeWorkflowTab({
                                                             aria-haspopup="menu"
                                                             aria-expanded={openKebabId === workflow.$id}
                                                             style={{
-                                                                background: 'none', color: '#ccc',
-                                                                border: '1px solid #666', padding: '2px 8px',
+                                                                background: 'none', color: 'var(--text-secondary)',
+                                                                border: '1px solid var(--outline-variant)', padding: '2px 8px',
                                                                 borderRadius: 4, cursor: 'pointer',
                                                                 fontSize: 14, lineHeight: 1,
                                                                 minWidth: 26
@@ -384,7 +384,7 @@ export default function EditorialOfficeWorkflowTab({
                                                                         style={{
                                                                             display: 'block', width: '100%',
                                                                             textAlign: 'left',
-                                                                            background: 'none', color: '#ccc',
+                                                                            background: 'none', color: 'var(--text-primary)',
                                                                             border: 'none', padding: '6px 10px',
                                                                             borderRadius: 4, cursor: 'pointer',
                                                                             fontSize: 12
@@ -402,7 +402,7 @@ export default function EditorialOfficeWorkflowTab({
                                                                         style={{
                                                                             display: 'block', width: '100%',
                                                                             textAlign: 'left',
-                                                                            background: 'none', color: '#ccc',
+                                                                            background: 'none', color: 'var(--text-primary)',
                                                                             border: 'none', padding: '6px 10px',
                                                                             borderRadius: 4, cursor: 'pointer',
                                                                             fontSize: 12
@@ -447,7 +447,7 @@ export default function EditorialOfficeWorkflowTab({
                     <div style={{
                         display: 'flex', gap: 8, alignItems: 'center',
                         marginTop: 8, padding: 8,
-                        background: '#1e1f24', border: '1px solid #333', borderRadius: 4
+                        background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 4
                     }}>
                         <input
                             type="text"
@@ -459,8 +459,8 @@ export default function EditorialOfficeWorkflowTab({
                             autoFocus
                             style={{
                                 flex: 1, fontSize: 12, padding: '4px 6px',
-                                background: '#222', color: '#ccc',
-                                border: '1px solid #555', borderRadius: 4
+                                background: 'var(--bg-base)', color: 'var(--text-primary)',
+                                border: '1px solid var(--outline-variant)', borderRadius: 4
                             }}
                             onKeyDown={e => {
                                 if (e.key === 'Enter' && newName.trim()) handleCreate();
@@ -477,8 +477,8 @@ export default function EditorialOfficeWorkflowTab({
                             title={VISIBILITY_DESCRIPTIONS[newVisibility]}
                             style={{
                                 fontSize: 11, padding: '4px 6px',
-                                background: '#222', color: '#ccc',
-                                border: '1px solid #555', borderRadius: 4
+                                background: 'var(--bg-base)', color: 'var(--text-primary)',
+                                border: '1px solid var(--outline-variant)', borderRadius: 4
                             }}
                         >
                             <option value={WORKFLOW_VISIBILITY.EDITORIAL_OFFICE}>
@@ -492,7 +492,7 @@ export default function EditorialOfficeWorkflowTab({
                             onClick={handleCreate}
                             disabled={!newName.trim() || actionPending === 'create'}
                             style={{
-                                background: '#2563eb', color: '#fff', border: 'none',
+                                background: 'var(--accent-solid)', color: '#fff', border: 'none',
                                 padding: '4px 10px', borderRadius: 4,
                                 cursor: (!newName.trim() || actionPending === 'create') ? 'not-allowed' : 'pointer',
                                 fontSize: 11
@@ -507,8 +507,8 @@ export default function EditorialOfficeWorkflowTab({
                             }}
                             disabled={actionPending === 'create'}
                             style={{
-                                background: 'none', color: '#ccc',
-                                border: '1px solid #666', padding: '4px 8px',
+                                background: 'none', color: 'var(--text-secondary)',
+                                border: '1px solid var(--outline-variant)', padding: '4px 8px',
                                 borderRadius: 4, cursor: 'pointer', fontSize: 11
                             }}
                         >

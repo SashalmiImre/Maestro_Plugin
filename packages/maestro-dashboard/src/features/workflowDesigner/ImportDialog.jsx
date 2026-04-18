@@ -102,7 +102,7 @@ export default function ImportDialog({ isOpen, onClose, currentNodes, currentEdg
                                 </li>
                             )}
                             {diff.metadataChanges?.length > 0 && (
-                                <li className="import-dialog__diff-item" style={{ color: '#fb923c' }}>
+                                <li className="import-dialog__diff-item" style={{ color: 'var(--c-warning, #fb923c)' }}>
                                     ⚠ Jogosultság/konfiguráció változás: {diff.metadataChanges.join(', ')}
                                 </li>
                             )}
