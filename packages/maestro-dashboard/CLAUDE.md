@@ -31,7 +31,7 @@
 | **Környezet**   | Adobe UXP                              | Böngésző                                          |
 | **Auth**        | localStorage cookieFallback + proxy    | Natív böngésző cookie-k                           |
 | **Realtime**    | Proxy auth bridge (WS)                 | Közvetlen Appwrite WS                             |
-| **Endpoint**    | Dual-proxy failover                    | `cloud.appwrite.io/v1` (közvetlen)                |
+| **Endpoint**    | Dual-proxy failover                    | `api.maestro.emago.hu/v1` (Appwrite custom domain CNAME) |
 | **Adatkezelés** | Read-write (cikk CRUD, workflow, lock) | Read-write (kiadvány/layout/határidő CRUD, workflow designer) |
 | **Bundler**     | Webpack 5                              | Vite                                              |
 
@@ -304,3 +304,13 @@ A `deploy.sh` automatikusan:
 3. Feltölti a `dist/index.html` + `dist/assets/` mappát
 
 A `shared/` többé nem kell külön — Vite bebundolja a build-be.
+
+### Appwrite Custom Domain (2026-04-19)
+
+A Dashboard **nem** közvetlenül `cloud.appwrite.io`-t hív, hanem az `api.maestro.emago.hu` CNAME-en keresztül — amely az Appwrite Cloud infra-ra mutat.
+
+- **Konfiguráció**: `VITE_APPWRITE_ENDPOINT` env var a `.env.production`-ban (`src/config.js:27` olvassa, fallback: `cloud.appwrite.io/v1`)
+- **DNS**: `api.maestro.emago.hu` CNAME → `*.appwrite.global` (Appwrite Console → Domains)
+- **Miért**: Safari ITP (és a készülődő Chrome 3rd-party cookie phaseout) blokkolja a session cookie-t a WebSocket upgrade kéréseknél, ha az Appwrite endpoint cross-site a Dashboard origin-hez képest. A custom domain ugyanazon `emago.hu` eTLD+1 alatt van, mint `maestro.emago.hu` → first-party cookie → a Realtime push megbízhatóan megy minden böngészőben.
+- **Fontos**: ez a változtatás **csak a Dashboard-ot érinti**. A Plugin (UXP InDesign) továbbra is a Railway dual-proxy failover-t használja, ami egy orthogonális problémát (UXP Origin header hiány) old meg.
+- **Appwrite Platform**: a Project Platform listában a `maestro.emago.hu` origin-nek kell szerepelnie (CORS). A custom domain-t nem Platform-ként, hanem Domain-ként adjuk hozzá a Console-ban.
