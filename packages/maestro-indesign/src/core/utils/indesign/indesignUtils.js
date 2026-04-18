@@ -5,7 +5,7 @@
  * @module utils/indesignUtils
  */
 
-import { logWarn, logError } from "../logger.js";
+import { logWarn, logError, logDebug } from "../logger.js";
 
 // InDesign API Accessor - Lazy Loading
 let _indesign = null;
@@ -38,10 +38,6 @@ export const getIndesignApp = () => {
     return getIndesign().app;
 };
 
-// Export ScriptLanguage for convenience, but lazily via a getter proxy if needed, 
-// or just access it via getIndesign() internally.
-// We'll keep the internal usage consistent.
-
 /**
  * Robusztusan megkeresi az aktív dokumentumot vagy egy érvényes jelöltet.
  * Különböző stratégiákat próbál végig, mert az `app.activeDocument` nem mindig megbízható
@@ -64,23 +60,28 @@ export const findActiveDocument = (appInstance) => {
     try {
         if (!app.activeDocument) return null;
         let isValid = false;
-        try { isValid = app.activeDocument.isValid; } catch (e) {}
+        // Belső isValid ellenőrzés: kontrollált fail-safe (UXP gyakran dob), néma marad.
+        try { isValid = app.activeDocument.isValid; } catch (_e) {}
         if (isValid) return app.activeDocument;
-    } catch (e) {}
+    } catch (e) {
+        logDebug("[indesignUtils] findActiveDocument strategy 1 failed:", e?.message);
+    }
 
     // 2. Layout ablak (gyakran érvényes, ha az esemény célpontja furcsa)
     try {
         if (app.layoutWindows && app.layoutWindows.length > 0) {
             const win = app.layoutWindows[0];
             let docCandidate = null;
-            try { docCandidate = win.activeDocument; } catch (e) {}
+            try { docCandidate = win.activeDocument; } catch (_e) {}
             if (docCandidate) {
                 let isValid = false;
-                try { isValid = docCandidate.isValid; } catch (e) {}
+                try { isValid = docCandidate.isValid; } catch (_e) {}
                 if (isValid) return docCandidate;
             }
         }
-    } catch (e) {}
+    } catch (e) {
+        logDebug("[indesignUtils] findActiveDocument strategy 2 failed:", e?.message);
+    }
 
     // 3. Egyetlen nyitott dokumentum literál
     try {
@@ -88,7 +89,9 @@ export const findActiveDocument = (appInstance) => {
             const doc = app.documents.item(0);
             if (doc && doc.isValid) return doc;
         }
-    } catch (e) {}
+    } catch (e) {
+        logDebug("[indesignUtils] findActiveDocument strategy 3 failed:", e?.message);
+    }
 
     // 4. Aktív ablak fa tartalék (fallback)
     try {
@@ -100,7 +103,9 @@ export const findActiveDocument = (appInstance) => {
                 return app.activeWindow.activeSpread.parent;
             }
         }
-    } catch (e) {}
+    } catch (e) {
+        logDebug("[indesignUtils] findActiveDocument strategy 4 failed:", e?.message);
+    }
 
     return null;
 };
@@ -192,10 +197,34 @@ export const getOpenDocumentPaths = async (appInstance) => {
                     }
                 } catch(e) {}
                 
-                // Egyszerű JSON sorosítás
+                // JSON string escapelés — teljes U+0000..U+001F fedéssel.
+                // Kötelező a JSON spec miatt: minden control karakter escape-elve kell legyen.
+                // A backslash mindig elsőnek megy, utána a quote, végül charcode-alapú sweep
+                // a ritkább control karakterekre.
+                function jsonEscape(s) {
+                    s = s.split('\\\\').join('\\\\\\\\').split('"').join('\\\\"');
+                    var out = '';
+                    for (var ci = 0; ci < s.length; ci++) {
+                        var cc = s.charCodeAt(ci);
+                        if (cc >= 0x20) { out += s.charAt(ci); continue; }
+                        if (cc === 0x08) { out += '\\\\b'; }
+                        else if (cc === 0x09) { out += '\\\\t'; }
+                        else if (cc === 0x0A) { out += '\\\\n'; }
+                        else if (cc === 0x0C) { out += '\\\\f'; }
+                        else if (cc === 0x0D) { out += '\\\\r'; }
+                        else {
+                            // Egyéb kontroll karakter: \\uXXXX
+                            var hx = cc.toString(16);
+                            while (hx.length < 4) hx = '0' + hx;
+                            out += '\\\\u' + hx;
+                        }
+                    }
+                    return out;
+                }
+
                 var json = '{"paths": [';
                 for (var i = 0; i < paths.length; i++) {
-                    json += '"' + paths[i].split('"').join('\\\\"') + '"';
+                    json += '"' + jsonEscape(paths[i]) + '"';
                     if (i < paths.length - 1) json += ",";
                 }
                 json += ']}';
@@ -225,14 +254,14 @@ export const getFileTimestamp = async (path) => {
     if (!app || !ScriptLanguage) return null;
 
     try {
-        // SEGÉD: String -> Hex konverzió az ExtendScript biztonságos átadásához
-        // 4 hex digit / karakter a teljes Unicode támogatáshoz
+        // SEGÉD: String -> Hex konverzió az ExtendScript biztonságos átadásához.
+        // UTF-16 code unit alapú iteráció (charCodeAt), szimmetrikusan az ExtendScript
+        // `fromHex` + `String.fromCharCode` párjával — astral plane karakterek (pl. emoji,
+        // BMP-n kívüli CJK) így is konzisztensen mennek át a surrogate pár mindkét felével.
         const toHex = (str) => {
             let hex = '';
-            for (let i = 0; i < str.length;) {
-                const cp = str.codePointAt(i);
-                hex += cp.toString(16).padStart(4, '0');
-                i += cp > 0xFFFF ? 2 : 1;
+            for (let i = 0; i < str.length; i++) {
+                hex += str.charCodeAt(i).toString(16).padStart(4, '0');
             }
             return hex;
         };

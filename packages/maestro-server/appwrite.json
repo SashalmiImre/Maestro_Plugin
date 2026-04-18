@@ -21,7 +21,12 @@
             "events": [
                 "databases.6880850e000da87a3d55.collections.articles.documents.*.update"
             ],
-            "specification": "s-0.5vcpu-512mb"
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [],
+            "schedule": "",
+            "buildSpecification": "s-0.5vcpu-512mb",
+            "runtimeSpecification": "s-0.5vcpu-512mb",
+            "deploymentRetention": 0
         },
         {
             "$id": "validate-article-creation",
@@ -41,7 +46,12 @@
             "events": [
                 "databases.6880850e000da87a3d55.collections.articles.documents.*.create"
             ],
-            "specification": "s-0.5vcpu-512mb"
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [],
+            "schedule": "",
+            "buildSpecification": "s-0.5vcpu-512mb",
+            "runtimeSpecification": "s-0.5vcpu-512mb",
+            "deploymentRetention": 0
         },
         {
             "$id": "validate-publication-update",
@@ -62,27 +72,12 @@
                 "databases.6880850e000da87a3d55.collections.publications.documents.*.create",
                 "databases.6880850e000da87a3d55.collections.publications.documents.*.update"
             ],
-            "specification": "s-0.5vcpu-512mb"
-        },
-        {
-            "$id": "validate-labels",
-            "name": "Validate Labels",
-            "runtime": "node-18.0",
-            "entrypoint": "src/main.js",
-            "commands": "npm install",
-            "timeout": 15,
-            "enabled": true,
-            "logging": true,
-            "path": "functions/validate-labels",
-            "scopes": [
-                "users.read",
-                "users.write",
-                "databases.read"
-            ],
-            "events": [
-                "users.*.update"
-            ],
-            "specification": "s-0.5vcpu-512mb"
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [],
+            "schedule": "",
+            "buildSpecification": "s-0.5vcpu-512mb",
+            "runtimeSpecification": "s-0.5vcpu-512mb",
+            "deploymentRetention": 0
         },
         {
             "$id": "cascade-delete",
@@ -97,6 +92,8 @@
             "scopes": [
                 "databases.read",
                 "databases.write",
+                "documents.read",
+                "documents.write",
                 "files.read",
                 "files.write"
             ],
@@ -104,7 +101,12 @@
                 "databases.6880850e000da87a3d55.collections.articles.documents.*.delete",
                 "databases.6880850e000da87a3d55.collections.publications.documents.*.delete"
             ],
-            "specification": "s-0.5vcpu-512mb"
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [],
+            "schedule": "",
+            "buildSpecification": "s-0.5vcpu-512mb",
+            "runtimeSpecification": "s-0.5vcpu-512mb",
+            "deploymentRetention": 0
         },
         {
             "$id": "cleanup-orphaned-locks",
@@ -123,7 +125,11 @@
             ],
             "events": [],
             "schedule": "0 3 * * *",
-            "specification": "s-0.5vcpu-512mb"
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [],
+            "buildSpecification": "s-0.5vcpu-512mb",
+            "runtimeSpecification": "s-0.5vcpu-512mb",
+            "deploymentRetention": 0
         },
         {
             "$id": "cleanup-orphaned-thumbnails",
@@ -142,7 +148,11 @@
             ],
             "events": [],
             "schedule": "0 4 * * 0",
-            "specification": "s-0.5vcpu-512mb"
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [],
+            "buildSpecification": "s-0.5vcpu-512mb",
+            "runtimeSpecification": "s-0.5vcpu-512mb",
+            "deploymentRetention": 0
         },
         {
             "$id": "migrate-legacy-paths",
@@ -154,30 +164,98 @@
             "enabled": true,
             "logging": true,
             "path": "functions/migrate-legacy-paths",
-            "execute": ["users"],
+            "execute": [
+                "users"
+            ],
             "scopes": [
                 "databases.read",
                 "databases.write"
             ],
             "events": [],
-            "specification": "s-0.5vcpu-512mb"
+            "specification": "s-0.5vcpu-512mb",
+            "schedule": "",
+            "buildSpecification": "s-0.5vcpu-512mb",
+            "runtimeSpecification": "s-0.5vcpu-512mb",
+            "deploymentRetention": 0
         },
         {
-            "$id": "69599cf9000a865db98a",
-            "name": "Get Team Members",
-            "runtime": "node-22",
-            "entrypoint": "main.js",
+            "$id": "update-article",
+            "name": "Update Article",
+            "runtime": "node-18.0",
+            "entrypoint": "src/main.js",
             "commands": "npm install",
             "timeout": 15,
             "enabled": true,
             "logging": true,
-            "path": "functions/team",
-            "execute": ["users"],
+            "path": "functions/update-article",
+            "execute": [
+                "users"
+            ],
             "scopes": [
+                "databases.read",
+                "databases.write",
                 "users.read"
             ],
             "events": [],
-            "specification": "s-0.5vcpu-512mb"
+            "specification": "s-0.5vcpu-512mb",
+            "schedule": "",
+            "buildSpecification": "s-0.5vcpu-512mb",
+            "runtimeSpecification": "s-0.5vcpu-512mb",
+            "deploymentRetention": 0
+        },
+        {
+            "$id": "set-publication-root-path",
+            "name": "Set Publication Root Path",
+            "runtime": "node-18.0",
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "path": "functions/set-publication-root-path",
+            "execute": [
+                "users"
+            ],
+            "scopes": [
+                "databases.read",
+                "databases.write",
+                "documents.read",
+                "documents.write",
+                "users.read"
+            ],
+            "events": [],
+            "specification": "s-0.5vcpu-512mb",
+            "schedule": "",
+            "buildSpecification": "s-0.5vcpu-512mb",
+            "runtimeSpecification": "s-0.5vcpu-512mb",
+            "deploymentRetention": 0
+        },
+        {
+            "$id": "invite-to-organization",
+            "name": "Invite To Organization",
+            "runtime": "node-18.0",
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "timeout": 15,
+            "enabled": true,
+            "logging": true,
+            "path": "functions/invite-to-organization",
+            "execute": [
+                "users"
+            ],
+            "scopes": [
+                "databases.read",
+                "databases.write",
+                "documents.read",
+                "documents.write",
+                "users.read"
+            ],
+            "events": [],
+            "specification": "s-0.5vcpu-512mb",
+            "schedule": "",
+            "buildSpecification": "s-0.5vcpu-512mb",
+            "runtimeSpecification": "s-0.5vcpu-512mb",
+            "deploymentRetention": 0
         }
     ]
 }

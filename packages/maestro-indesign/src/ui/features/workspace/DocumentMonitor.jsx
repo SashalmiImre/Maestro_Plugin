@@ -19,7 +19,56 @@ import {
 import { WorkflowEngine } from "../../../core/utils/workflow/workflowEngine.js";
 import { LOCK_TYPE, LOCK_WAIT_CONFIG, TOAST_TYPES } from "../../../core/utils/constants.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../core/config/maestroEvents.js";
+import { withTimeout } from "../../../core/utils/promiseUtils.js";
 import { log, logWarn, logError } from "../../../core/utils/logger.js";
+
+/**
+ * Validátor feladatok maximális várakozási ideje. Ha egy feladat nem tér vissza
+ * (pl. thumbnail upload elakad), a verifikáció ne ragadjon be — a timeout után
+ * logolunk és folytatjuk a `finally` blokkba (unlock + state reset).
+ */
+const VALIDATION_TASKS_TIMEOUT_MS = 30000;
+
+/**
+ * Unlock finally retry konfiguráció.
+ *
+ * A DocumentMonitor finally blokkja a SYSTEM lockot feloldja a DB-ben. Recovery
+ * alatti átmeneti hálózati hiba (timeout) esetén az orphaned SYSTEM lock
+ * blokkolja a többi felhasználó `openArticle` hívását (ghost-lock cleanup a
+ * saját user.$id-re nem aktiválódik, mert az owner tagja az office-nak).
+ * A `cleanupOrphanedLocks` csak a plugin következő indulásakor tisztít — addig
+ * a fájl user-blokkolt más gépekről. Retry-val zárjuk a hálózati eredetű
+ * orphan ablakot.
+ */
+const UNLOCK_RETRY_MAX_ATTEMPTS = 3;
+const UNLOCK_RETRY_BASE_DELAY_MS = 1000;
+
+/**
+ * Dokumentum feloldás újrapróbálkozással, csak átmeneti hálózati hibákra.
+ * Üzleti hibák (permission, nem saját lock) azonnal tovább tér vissza.
+ *
+ * @param {Object} lockedArticle - A DB-ben zárolt cikk (lock CF válaszából).
+ * @param {Object} user - A lock tulajdonosa.
+ * @returns {Promise<Object>} Az `unlockDocument` utolsó eredménye.
+ */
+const unlockWithRetry = async (lockedArticle, user) => {
+    let lastResult = null;
+    for (let attempt = 1; attempt <= UNLOCK_RETRY_MAX_ATTEMPTS; attempt++) {
+        lastResult = await WorkflowEngine.unlockDocument(lockedArticle, user);
+        if (lastResult?.success) return lastResult;
+        if (!lastResult?.networkError || attempt === UNLOCK_RETRY_MAX_ATTEMPTS) {
+            return lastResult;
+        }
+        const delayMs = UNLOCK_RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+        logWarn(
+            `[DocumentMonitor] Unlock retry ${attempt}/${UNLOCK_RETRY_MAX_ATTEMPTS} ` +
+            `— ${delayMs}ms múlva:`,
+            lastResult?.error
+        );
+        await new Promise(resolve => setTimeout(resolve, delayMs));
+    }
+    return lastResult;
+};
 
 
 
@@ -67,6 +116,20 @@ export const DocumentMonitor = () => {
     // Mindig frissítjük a ref-eket, ha változik a context adat
     useEffect(() => { latestArticlesRef.current = articles; }, [articles]);
     useEffect(() => { publicationsRef.current = publications; }, [publications]);
+
+    // Timestamp cache takarítás: a már nem létező cikkek bejegyzéseit töröljük,
+    // különben hosszú session alatt (publikáció-váltás, cikktörlés) feleslegesen
+    // nő a memóriahasználat. Az aktív articles listából képzett Set-tel szűrünk.
+    useEffect(() => {
+        if (!articles?.length) return;
+        const validIds = new Set(articles.map(a => a.$id));
+        const cache = lastValidatedTimestampsRef.current;
+        for (const id of Object.keys(cache)) {
+            if (!validIds.has(id)) {
+                delete cache[id];
+            }
+        }
+    }, [articles]);
 
     /**
      * Megkeres egy cikket a globális Context-ben a fájl útvonala alapján.
@@ -177,10 +240,19 @@ export const DocumentMonitor = () => {
                 registerTask: (promise) => tasks.push(promise)
             });
 
-            // Megvárjuk az összes regisztrált feladatot
+            // Megvárjuk az összes regisztrált feladatot — timeout-tal védve, hogy egy
+            // elakadt feladat ne ragassza be a verifikációt (lásd isVerifyingRef).
             if (tasks.length > 0) {
                 log(`[DocumentMonitor] ${tasks.length} validációs feladat fut: ${article.name}`);
-                await Promise.all(tasks);
+                try {
+                    await withTimeout(
+                        Promise.all(tasks),
+                        VALIDATION_TASKS_TIMEOUT_MS,
+                        `DocumentMonitor: validation tasks (${article.name})`
+                    );
+                } catch (tasksErr) {
+                    logWarn(`[DocumentMonitor] Validációs feladatok timeout / hiba (${article.name}) — folytatás:`, tasksErr);
+                }
             }
 
             // Sikeres validálás után friss timestamp mentése
@@ -199,10 +271,18 @@ export const DocumentMonitor = () => {
             // Maestro zárolás feloldása / optimistic update visszavonása
             try {
                 if (lockedArticle) {
-                    // Normál útvonal: DB-ben megerősített lock feloldása
-                    const unlockResult = await WorkflowEngine.unlockDocument(lockedArticle, user);
+                    // Normál útvonal: DB-ben megerősített lock feloldása.
+                    // Retry-val védjük az orphan SYSTEM lock user-blokkoló
+                    // hatása ellen (recovery közbeni átmeneti hálózati hibák).
+                    const unlockResult = await unlockWithRetry(lockedArticle, user);
                     if (unlockResult?.success && unlockResult.document) {
                         applyArticleUpdate(unlockResult.document);
+                    } else if (!unlockResult?.success) {
+                        logError(
+                            "[DocumentMonitor] Unlock retry kimerítve — orphaned SYSTEM lock " +
+                            "marad a DB-ben (cleanupOrphanedLocks a következő plugin-indításkor tisztít):",
+                            unlockResult?.error
+                        );
                     }
                 } else {
                     // DB lock nem sikerült — optimistic update visszavonása
@@ -279,7 +359,12 @@ export const DocumentMonitor = () => {
 
                 if (appInstance) {
                     const openPaths = await getOpenDocumentPaths(appInstance);
-                    if (openPaths) {
+                    if (!openPaths) {
+                        // Ha a ExtendScript hívás null/undefined-ot ad vissza, nem tudjuk
+                        // eldönteni, hogy a fájl nyitva van-e — loggoljuk a hibát, hogy
+                        // ne maradjon rejtve (korábban csendben továbbment).
+                        logWarn(`[DocumentMonitor] getOpenDocumentPaths nem adott vissza listát (${typeof openPaths}), nyitott-ellenőrzés kihagyva: ${unlockTarget.name}`);
+                    } else {
                         const articleCanonical = getArticleCanonicalPath(unlockTarget, publicationsRef.current).toLowerCase();
                         const isOpen = openPaths.some(p => {
                             return toCanonicalPath(p).toLowerCase() === articleCanonical;
@@ -334,9 +419,9 @@ export const DocumentMonitor = () => {
         const app = getIndesignApp();
 
         const handleSave = async (event) => {
-            // Programozott mentés kihagyása
-            if (typeof window !== 'undefined' && window.maestroSkipMonitor) {
-                window.maestroSkipMonitor = false;
+            // Programozott mentés kihagyása — számláló-alapú (több party egyidejűleg is jelezhet)
+            if (typeof window !== 'undefined' && window.maestroSkipCount > 0) {
+                window.maestroSkipCount--;
                 return;
             }
 

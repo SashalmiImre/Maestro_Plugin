@@ -1,5 +1,5 @@
 // React
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 
 // Contexts & Custom Hooks
 import { useUser } from "../../../../core/contexts/UserContext.jsx";
@@ -21,9 +21,12 @@ import { isValidFileName, toNativePath, toAbsoluteArticlePath } from "../../../.
 import { formatPagedFileName } from "../../../../core/utils/namingUtils.js";
 import { WorkflowEngine } from "../../../../core/utils/workflow/workflowEngine.js";
 import { canUserMoveArticle } from "../../../../core/utils/workflow/workflowPermissions.js";
+import { isNetworkError } from "../../../../core/utils/errorUtils.js";
 import { useElementPermissions, useContributorPermissions } from "../../../../data/hooks/useElementPermission.js";
+import { useContributorGroups } from "../../../../data/hooks/useContributorGroups.js";
 import { SCRIPT_LANGUAGE_JAVASCRIPT, TOAST_TYPES } from "../../../../core/utils/constants.js";
-import { WORKFLOW_CONFIG, MARKERS } from "../../../../core/utils/workflow/workflowConstants.js";
+import { MARKERS } from "maestro-shared/constants.js";
+import { getStateLabel } from "maestro-shared/workflowRuntime.js";
 import { log, logError, logWarn } from "../../../../core/utils/logger.js";
 import {
     generateRenumberDocumentScript,
@@ -44,11 +47,15 @@ import { uploadThumbnails, deleteOldThumbnails, cleanupTempFiles, getTempFolderP
 
 export const ArticleProperties = ({ article, publication, onUpdate }) => {
     const { user } = useUser();
-    const { updateArticle, applyArticleUpdate } = useData();
+    const { updateArticle, applyArticleUpdate, workflow } = useData();
     const { renameArticle } = useArticles(article?.publicationId, null, false);
     const { showToast } = useToast();
     const { hasErrors } = useUnifiedValidation(article);
     const [isSyncing, setIsSyncing] = useState(false);
+    // Ref-alapú in-flight guard állapotváltáshoz — a React state (isSyncing) nem szinkron,
+    // gyors duplakattintás a setState flush előtt átcsúszhatna és két párhuzamos
+    // executeTransition-t indítana (dupla preflight + dupla CF hívás).
+    const transitionInFlightRef = useRef(false);
     const isIgnored = ((typeof article?.markers === 'number' ? article.markers : 0) & MARKERS.IGNORE) !== 0;
 
     // Elem jogosultságok
@@ -57,8 +64,15 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
         'validationForm', 'validationActions'
     ]);
 
+    // Csoportok a contributor dropdown jogosultság-számításhoz
+    const { groups: contributorGroupsList } = useContributorGroups();
+    const contributorGroupSlugs = React.useMemo(
+        () => contributorGroupsList.map(g => g.slug),
+        [contributorGroupsList]
+    );
+
     // Per-dropdown contributor jogosultságok (állapotfüggő)
-    const contributorPermissions = useContributorPermissions(article.state);
+    const contributorPermissions = useContributorPermissions(article.state, contributorGroupSlugs);
 
     // ── Mező frissítés ───────────────────────────────────────────────────────
 
@@ -148,7 +162,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
      *   2. Megnyitás ha szükséges
      *   3. Átszámozás (renumber)
      *   4. Új oldalszámok kinyerése (extract page ranges)
-     *   5. Mentés (maestroSkipMonitor flag-gel)
+     *   5. Mentés (maestroSkipCount számlálóval)
      *   6. Bezárás (ha mi nyitottuk)
      *
      * @param {number} newStartPage - Új kezdőoldal
@@ -215,11 +229,18 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
                 logWarn('[ArticleProperties] Page extraction failed:', extractResult.error);
             }
 
-            // 5. Mentés (maestroSkipMonitor: DocumentMonitor ne reagáljon)
-            if (typeof window !== 'undefined') window.maestroSkipMonitor = true;
+            // 5. Mentés (maestroSkipCount: DocumentMonitor ne reagáljon a programozott mentésre).
+            // Ha a save sikertelen, a counter-t visszavonjuk (különben egy későbbi valódi user save
+            // is átugorna — a sikertelen save NEM tüzel afterSave eseményt, ami elhasználná).
+            if (typeof window !== 'undefined') {
+                window.maestroSkipCount = (window.maestroSkipCount || 0) + 1;
+            }
             const saveResult = executeInDesignScript(generateSaveDocumentScript(filePath), "Saving document");
             const parsedSave = parseExecutionStatus(saveResult);
             if (!parsedSave.success) {
+                if (typeof window !== 'undefined') {
+                    window.maestroSkipCount = Math.max(0, (window.maestroSkipCount || 0) - 1);
+                }
                 throw new Error(`Failed to save document: ${parsedSave.error || 'Unknown error'}`);
             }
 
@@ -264,12 +285,9 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
                 }
             }
 
-            // 6. Bezárás (csak ha mi nyitottuk)
-            if (!wasAlreadyOpen) {
-                executeInDesignScript(generateCloseDocumentScript(filePath), "Closing document (restoring state)");
-            }
-
-            // Adatbázis frissítés
+            // Adatbázis frissítés — a bezárás ELŐTT, hogy a fizikai fájl és a DB konzisztens
+            // maradjon akkor is, ha a close lépés sikertelen (pl. InDesign hiba). A save már
+            // lefutott (5. lépés), a fájl lemezen az új állapotban van — a DB-nek ezt kell tükröznie.
             const updateData = {
                 startPage: extractResult.success ? extractResult.startPage : newStartPage,
                 endPage: extractResult.success ? extractResult.endPage : (article.endPage ? article.endPage + offset : null),
@@ -280,6 +298,15 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
             log('[ArticleProperties] Updating database with:', updateData);
 
             const updated = await updateArticle(article.$id, updateData);
+
+            // 6. Bezárás (csak ha mi nyitottuk) — best-effort, a DB már konzisztens
+            if (!wasAlreadyOpen) {
+                try {
+                    executeInDesignScript(generateCloseDocumentScript(filePath), "Closing document (restoring state)");
+                } catch (closeErr) {
+                    logWarn('[ArticleProperties] Dokumentum bezárás sikertelen a sikeres átszámozás után (nem blokkoló):', closeErr);
+                }
+            }
 
             showToast('Oldalszámok frissítve', TOAST_TYPES.SUCCESS);
 
@@ -312,12 +339,18 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
 
     /**
      * Workflow állapotátmenet végrehajtása.
-     * Validál (WorkflowEngine.validateTransition), majd végrehajt (executeTransition).
      *
-     * @param {number} targetState - Cél-állapot száma
+     * Felelősségmegosztás:
+     *   - UI (ez a handler): gyors előellenőrzések (in-flight guard, hasErrors, jogosultsági hint,
+     *     filePath megléte) + toast-formázás a visszatérési értékből.
+     *   - Engine (`executeTransition`): drága validáció (preflight, file-accessible) + CF hívás.
+     *   - CF (update-article): végleges jogosultság-ellenőrzés és DB írás.
+     *
+     * @param {string} targetState - Cél-állapot string ID-ja
      */
     const handleStateTransition = async (targetState) => {
-        setIsSyncing(true);
+        // In-flight guard — ref, mert a setState nem szinkron.
+        if (transitionInFlightRef.current) return;
 
         if (hasErrors) {
             showToast(
@@ -325,66 +358,85 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
                 TOAST_TYPES.ERROR,
                 'A cikkhez javítatlan hibák tartoznak (validáció vagy felhasználói üzenet). Kérjük, javítsd vagy minősítsd vissza őket.'
             );
-            setIsSyncing(false);
             return;
         }
 
-        // Jogosultsági ellenőrzés (a validáció előtt — a drága preflight ne fusson feleslegesen)
-        const permission = canUserMoveArticle(article, article.state, user);
+        // Jogosultsági hint — a CF a végleges gate, de itt megspórolunk egy drága validáció + CF futást.
+        const permission = canUserMoveArticle(workflow, article.state, user?.groupSlugs || []);
         if (!permission.allowed) {
-            showToast(
-                'Nincs jogosultságod az állapotváltáshoz',
-                TOAST_TYPES.ERROR,
-                permission.reason
-            );
-            setIsSyncing(false);
+            showToast('Nincs jogosultságod az állapotváltáshoz', TOAST_TYPES.ERROR, permission.reason);
             return;
         }
 
         if (!article.filePath && !article.FilePath) {
             logError("[ArticleProperties] Missing file path for article:", article);
             showToast('Az állapotváltás nem lehetséges', TOAST_TYPES.ERROR, 'A cikkhez nem tartozik fájl útvonal. Próbáld frissíteni az adatokat.');
-            setIsSyncing(false);
             return;
         }
 
+        transitionInFlightRef.current = true;
+        setIsSyncing(true);
+
+        const showNetworkErrorToast = () => showToast(
+            'Hálózati hiba',
+            TOAST_TYPES.ERROR,
+            'Az állapotváltás a hálózat miatt megszakadt. Ellenőrizd a kapcsolatot, majd próbáld újra.'
+        );
+
         try {
-            const validation = await WorkflowEngine.validateTransition(article, targetState, publication?.rootPath);
-            if (!validation.isValid) {
-                setIsSyncing(false);
-                // Csatolatlan meghajtó → specifikus toast, a validációs eredményeket nem bántjuk
-                if (validation.skipped) {
-                    const driveList = validation.unmountedDrives?.join(', ') || '';
+            const result = await WorkflowEngine.executeTransition(workflow, article, targetState, user, publication?.rootPath);
+
+            if (result.success) {
+                applyArticleUpdate(result.document);
+                if (onUpdate) onUpdate(result.document);
+                showToast(`Állapot: ${getStateLabel(workflow, targetState)}`, TOAST_TYPES.SUCCESS);
+                return;
+            }
+
+            // Kliens-oldali validációs bukás — pontos, kategóriás toast.
+            if (result.validation) {
+                if (result.validation.skipped) {
+                    const driveList = result.validation.unmountedDrives?.join(', ') || '';
                     showToast(
                         'Az állapotváltás nem lehetséges',
                         TOAST_TYPES.ERROR,
                         `A preflight ellenőrzés nem tudott lefutni, mert a következő hálózati meghajtó(k) nem elérhetők: ${driveList}. ` +
                         'Kérjük, ellenőrizd a hálózati kapcsolatot, majd próbáld újra.'
                     );
-                    return;
+                } else {
+                    const errorDetails = result.validation.errors?.length > 0
+                        ? result.validation.errors.join('\n')
+                        : 'Az ellenőrzés során nem azonosítható hiba merült fel. Próbáld meg újra.';
+                    showToast('Az állapotváltás nem lehetséges', TOAST_TYPES.ERROR, errorDetails);
                 }
-
-                const errorDetails = validation.errors?.length > 0
-                    ? validation.errors.join('\n')
-                    : 'Az ellenőrzés során nem azonosítható hiba merült fel. Próbáld meg újra.';
-                showToast('Az állapotváltás nem lehetséges', TOAST_TYPES.ERROR, errorDetails);
                 return;
             }
 
-            const result = await WorkflowEngine.executeTransition(article, targetState, user, publication?.rootPath);
-            if (result.success) {
-                if (result.document) applyArticleUpdate(result.document);
-                if (onUpdate && result.document) onUpdate(result.document);
-                const targetConfig = WORKFLOW_CONFIG[targetState]?.config;
-                showToast(`Állapot: ${targetConfig?.label || 'Frissítve'}`, TOAST_TYPES.SUCCESS);
-            } else {
-                logError("[ArticleProperties] Transition error:", result.error);
-                showToast('Az állapotváltás sikertelen', TOAST_TYPES.ERROR, result.error || 'Ismeretlen hiba történt a végrehajtás során.');
+            // Szerver-oldali jogosultság-megtagadás.
+            if (result.permissionDenied) {
+                showToast('Nincs jogosultságod az állapotváltáshoz', TOAST_TYPES.ERROR, result.error);
+                return;
             }
+
+            // Hálózati hiba (timeout, offline, 5xx) — retry-javasló toast.
+            if (result.networkError) {
+                showNetworkErrorToast();
+                return;
+            }
+
+            logError("[ArticleProperties] Transition error:", result.error);
+            showToast('Az állapotváltás sikertelen', TOAST_TYPES.ERROR, result.error || 'Ismeretlen hiba történt a végrehajtás során.');
         } catch (error) {
+            // Nem-CF hibák (pl. validator kivétel, listener hiba) — az engine minden CF hibát
+            // result-ra konvertál, ide csak váratlan throw-ok érkeznek.
             logError("[ArticleProperties] Transition exception:", error);
-            showToast('Az állapotváltás sikertelen', TOAST_TYPES.ERROR, error.message || 'Váratlan hiba történt a végrehajtás során.');
+            if (isNetworkError(error)) {
+                showNetworkErrorToast();
+            } else {
+                showToast('Az állapotváltás sikertelen', TOAST_TYPES.ERROR, error.message || 'Váratlan hiba történt a végrehajtás során.');
+            }
         } finally {
+            transitionInFlightRef.current = false;
             setIsSyncing(false);
         }
     };
@@ -431,6 +483,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
                 <GeneralSection
                     article={article}
                     user={user}
+                    workflow={workflow}
                     onFieldUpdate={handleFieldUpdate}
                     onPageNumberChange={handlePageNumberChange}
                     onStateTransition={handleStateTransition}

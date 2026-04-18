@@ -44,7 +44,7 @@ export function generateThumbnailExportScript(sourcePath, outputFolderPath) {
                 ${linkCheckLogic}
 
                 // 3. KIMENETI MAPPA
-                var tempFolder = new Folder("${escapedOutputFolder}");
+                var tempFolder = new Folder('${escapedOutputFolder}');
                 if (!tempFolder.exists) tempFolder.create();
 
                 // 4. JPEG EXPORT (oldalanként)
@@ -94,7 +94,7 @@ export function generateThumbnailExportForOpenDocScript(filePath, outputFolderPa
                 ${linkCheckLogic}
 
                 // 3. KIMENETI MAPPA
-                var tempFolder = new Folder("${escapedOutputFolder}");
+                var tempFolder = new Folder('${escapedOutputFolder}');
                 if (!tempFolder.exists) tempFolder.create();
 
                 // 4. JPEG EXPORT (oldalanként)

@@ -6,7 +6,9 @@
  */
 
 import React from 'react';
-import { WORKFLOW_CONFIG, MARKERS, LOCK_TYPE } from '../config.js';
+import { MARKERS, LOCK_TYPE } from '../config.js';
+import { useData } from '../contexts/DataContext.jsx';
+import { getStateConfig } from '@shared/workflowRuntime.js';
 import ValidationIcons from './ValidationIcons.jsx';
 
 const ArticleRow = React.memo(function ArticleRow({
@@ -92,20 +94,29 @@ function LockLabel({ article, currentUser, getMemberName }) {
 }
 
 function StateIndicator({ article }) {
-    const state = article.state ?? 0;
-    const config = WORKFLOW_CONFIG[state];
+    const { workflow } = useData();
+    const state = article.state || "";
+    const config = getStateConfig(workflow, state);
     const markers = typeof article.markers === 'number' ? article.markers : 0;
     const isIgnored = (markers & MARKERS.IGNORE) !== 0;
     const color = isIgnored ? '#9E9E9E' : (config?.color || '#999');
     const label = config?.label || 'Ismeretlen';
     const suffix = isIgnored ? ' (Kimarad)' : '';
+    const fullLabel = label + suffix;
 
     return (
         <span
-            className="state-dot"
-            style={{ backgroundColor: color, color }}
-            title={label + suffix}
-        />
+            className="state-cell"
+            title={fullLabel}
+            aria-label={`Állapot: ${fullLabel}`}
+        >
+            <span
+                className="state-dot"
+                style={{ backgroundColor: color, color }}
+                aria-hidden="true"
+            />
+            <span className="state-label">{fullLabel}</span>
+        </span>
     );
 }
 

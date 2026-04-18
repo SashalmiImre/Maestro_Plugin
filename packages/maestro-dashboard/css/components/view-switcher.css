@@ -1,0 +1,36 @@
+/* ─── Nézet-váltó gombok ──────────────────────────────────────────────────── */
+
+.view-toggle {
+    display: flex;
+    gap: 2px;
+    background: var(--bg-surface);
+    border: none;
+    border-radius: var(--radius-xl);
+    padding: var(--space-1);
+}
+
+.view-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 10px;
+    border: none;
+    border-radius: var(--radius-lg);
+    background: transparent;
+    color: var(--text-secondary);
+    cursor: pointer;
+    line-height: 1;
+    text-decoration: none;
+    transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+
+.view-btn:hover {
+    color: var(--text-primary);
+}
+
+.view-btn.active {
+    background: var(--bg-elevated);
+    color: var(--accent);
+    box-shadow: 0 4px 12px rgba(var(--shadow-tint), 0.3), 0 0 0 1px var(--glass-inset);
+}
+

@@ -1,121 +1,126 @@
 /**
  * @fileoverview Workflow Engine a cikkek állapotátmeneteinek és jelölőinek (markers) kezelésére.
  * Kezeli a validációt, az állapotváltásokat és a jelölők kapcsolását a Maestro pluginban.
- * 
+ *
+ * A workflow konfiguráció a DataContext `workflow` state-jéből (compiled JSON) érkezik.
+ * Minden állapot- és átmenet-művelet a `workflowRuntime` helpereket használja.
+ *
  * @module utils/workflowEngine
  */
 
-import { tables, DATABASE_ID, ARTICLES_COLLECTION_ID } from "../../config/appwriteConfig.js";
-import { withTimeout } from "../promiseUtils.js";
-import { WORKFLOW_CONFIG } from "./workflowConstants.js";
-import { canUserMoveArticle } from "./workflowPermissions.js";
+import { callUpdateArticleCF } from "../updateArticleClient.js";
+import { PermissionDeniedError, isNetworkError } from "../errorUtils.js";
+import { getAvailableTransitions as rtGetAvailableTransitions } from "maestro-shared/workflowRuntime.js";
 import { LOCK_TYPE } from "../constants.js";
 import { validate } from "../validationRunner.js";
 import { VALIDATOR_TYPES } from "../validationConstants.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../config/maestroEvents.js";
 
-import { log, logError } from "../logger.js";
+import { log, logError, logWarn } from "../logger.js";
+
+/** Közös hibakezelés a CF-hívó metódusokhoz. */
+function _handleCFError(error, context) {
+    if (error instanceof PermissionDeniedError) {
+        return { success: false, error: error.message, permissionDenied: true };
+    }
+    if (isNetworkError(error)) {
+        logWarn(context, error);
+        return { success: false, error: error.message, networkError: true };
+    }
+    logError(context, error);
+    return { success: false, error: error.message };
+}
 
 /**
  * WorkflowEngine osztály a cikkek munkafolyamat-állapotainak és átmeneteinek kezelésére.
- * 
+ *
  * Ez a statikus osztály metódusokat biztosít a következőkhöz:
  * - Elérhető állapotátmenetek lekérdezése
  * - Átmenetek validálása végrehajtás előtt
  * - Állapotátmenetek végrehajtása adatbázis frissítéssel
  * - Jelölők (flag-ek) kapcsolása a cikkeken
- * 
+ *
  * @class
  */
 export class WorkflowEngine {
     /**
-     * Visszaadja a cikk számára elérhető következő állapotokat a jelenlegi állapot alapján.
-     * 
-     * @param {string|number} currentState - A cikk jelenlegi munkafolyamat állapota.
-     *                                       A WORKFLOW_STATES konstans egyik értéke kell legyen.
-     * @returns {Array<Object>} Érvényes célállapotok tömbje, ahová a cikk áttérhet.
-     *                          Üres tömböt ad vissza, ha nincs elérhető átmenet.
+     * Visszaadja a cikk számára elérhető következő állapotátmeneteket a jelenlegi állapot alapján.
+     *
+     * @param {Object} workflow - A compiled workflow JSON (DataContext.workflow).
+     * @param {string} currentState - A cikk jelenlegi munkafolyamat állapota (string ID).
+     * @returns {Array<Object>} Érvényes átmenetek tömbje (from, to, label, direction, allowedGroups).
      */
-    static getAvailableTransitions(currentState) {
-        return WORKFLOW_CONFIG[currentState]?.transitions || [];
+    static getAvailableTransitions(workflow, currentState) {
+        if (!workflow) return [];
+        return rtGetAvailableTransitions(workflow, currentState);
     }
 
     /**
      * Validálja, hogy a cikk áttérhet-e a célállapotba.
      * Lefuttatja az alapvető fájlvalidációt és a célállapothoz definiált specifikus ellenőrzéseket.
-     * 
+     *
+     * @param {Object} workflow - A compiled workflow JSON.
      * @param {Object} article - A validálandó cikk objektum.
-     * @param {string} article.$id - A cikk egyedi azonosítója.
-     * @param {string} article.Name - A cikk neve.
-     * @param {number} article.state - Jelenlegi munkafolyamat állapot.
-     * @param {string} [article.FilePath] - A fájl útvonala.
-     * @param {number} [article.startPage] - Kezdő oldalszám.
-     * @param {number} [article.endPage] - Utolsó oldalszám.
-     * @param {number} targetState - A célállapot, amire a váltást validálni kell.
-     * 
-     * @returns {Promise<Object>} Validációs eredmény objektum.
-     * @returns {boolean} return.isValid - Igaz, ha az átmenet érvényes.
-     * @returns {string[]} return.errors - Hibaüzenetek tömbje (megakadályozza az átmenetet).
-     * @returns {string[]} return.warnings - Figyelmeztetések tömbje (nem blokkol).
+     * @param {string} targetState - A célállapot string ID-ja.
+     * @param {string} publicationRootPath - A kiadvány gyökér útvonala.
+     * @returns {Promise<Object>} Validációs eredmény: { isValid, errors[], warnings[] }.
      */
-    static async validateTransition(article, targetState, publicationRootPath) {
-        // Állapot-specifikus ellenőrzések (fájl létezés, oldalszám, fájlnév, preflight)
-        // delegálva a StateComplianceValidator-nak
-        return validate(article, VALIDATOR_TYPES.STATE_COMPLIANCE, { targetState, publicationRootPath });
+    static async validateTransition(workflow, article, targetState, publicationRootPath) {
+        if (!workflow) {
+            return { isValid: false, errors: ["Hiányzó workflow konfiguráció."], warnings: [] };
+        }
+        return validate(article, VALIDATOR_TYPES.STATE_COMPLIANCE, { workflow, targetState, publicationRootPath });
     }
 
     /**
      * Végrehajt egy állapotátmenetet a cikken.
-     * Frissíti a cikk állapotát az adatbázisban és naplózza az eseményt.
-     * 
+     *
+     * A jogosultsági hint-ellenőrzést a hívó UI végzi (gomb disabled + preflight handler);
+     * a végleges engedélyezés a CF szerver-oldalán történik. Itt a drága validáció (preflight,
+     * file-accessible stb.) az egyetlen kliens-oldali kapuőr a CF hívás előtt.
+     *
+     * @param {Object} workflow - A compiled workflow JSON (snapshot — a hívó a belépéskor rögzíti).
      * @param {Object} article - A cikk objektum.
-     * @param {string} article.$id - A cikk egyedi azonosítója.
-     * @param {number} targetState - A célállapot (WORKFLOW_STATES egyik értéke).
-     * @param {Object} user - A felhasználó, aki végrehajtja a váltást.
-     * @param {string} user.$id - Felhasználó ID-ja.
-     * @param {string} [user.name] - Felhasználó neve.
-     * 
-     * @returns {Promise<Object>} Eredmény objektum, ami jelzi a sikert vagy hibát.
-     * @returns {boolean} return.success - Sikeres volt-e a váltás.
-     * @returns {Object} [return.document] - A frissített dokumentum az Appwrite-ból (siker esetén).
-     * @returns {string} [return.error] - Hibaüzenet (kudarc esetén).
+     * @param {string} targetState - A célállapot string ID-ja.
+     * @param {Object} user - A felhasználó, aki végrehajtja a váltást (naplózáshoz).
+     * @param {string} publicationRootPath - A kiadvány gyökér útvonala.
+     * @returns {Promise<Object>} { success, document?, error?, permissionDenied?, validation? }
+     *   A `validation` csak akkor szerepel, ha a kliens-oldali validáció bukott (tartalmazza:
+     *   `errors`, `warnings`, `skipped`, `unmountedDrives` — hogy a UI pontos toast-ot tudjon formálni).
      */
-    static async executeTransition(article, targetState, user, publicationRootPath) {
+    static async executeTransition(workflow, article, targetState, user, publicationRootPath) {
+        if (!workflow || !article) {
+            logWarn("[WorkflowEngine] executeTransition: hiányzó workflow vagy article");
+            return { success: false, error: "Hiányzó workflow konfiguráció vagy cikk." };
+        }
+
         try {
-            // 0. Jogosultsági ellenőrzés (a validáció ELŐTT — a drága preflight ne fusson feleslegesen)
-            const permission = canUserMoveArticle(article, article.state, user);
-            if (!permission.allowed) {
-                return { success: false, error: permission.reason, permissionDenied: true };
-            }
-
-            // 1. Átmenet validálása
-            const validation = await WorkflowEngine.validateTransition(article, targetState, publicationRootPath);
+            // 1. Kliens-oldali átmenet-validáció (drága: preflight, file-accessible)
+            const validation = await WorkflowEngine.validateTransition(workflow, article, targetState, publicationRootPath);
             if (!validation.isValid) {
-                return { success: false, error: validation.errors.join(", ") };
+                return {
+                    success: false,
+                    error: validation.errors?.join(", ") || "Az állapotváltás validációja sikertelen.",
+                    validation
+                };
             }
 
-            log(`[WorkflowEngine] Cikk (${article.$id}) állapotváltása erre: ${targetState}, felhasználó: ${user?.name || user?.$id || 'ismeretlen'}`);
+            log(`[WorkflowEngine] Cikk (${article.$id}) állapotváltása: ${article.state} → ${targetState}, felhasználó: ${user?.name || user?.$id || 'ismeretlen'}`);
 
-            // 1. Cikk frissítése az adatbázisban
-            const result = await withTimeout(
-                tables.updateRow({
-                    databaseId: DATABASE_ID,
-                    tableId: ARTICLES_COLLECTION_ID,
-                    rowId: article.$id,
-                    data: {
-                        state: targetState,
-                        previousState: Number(article.state)
-                    }
-                }),
-                20000,
-                "WorkflowEngine: executeTransition"
-            );
+            // 2. Cikk frissítése az update-article CF-en keresztül (CF a végső jogosultsági gate)
+            const result = await callUpdateArticleCF(article.$id, {
+                state: targetState,
+                previousState: article.state
+            }, "WorkflowEngine: executeTransition");
 
-            // Állapotváltás jelzése az event rendszeren keresztül
+            // Állapotváltás jelzése az event rendszeren keresztül.
+            // Figyelem: a `result` a CF válasz pillanatnyi állapota — a feliratkozók a DataContext
+            // élő state-jéből olvassák ki a cikket (event-payload csak az $id átadására szolgál),
+            // hogy egy azonnal befutó Realtime update ne legyen felülírva elavult snapshottal.
             try {
                 dispatchMaestroEvent(MaestroEvent.stateChanged, {
                     article: result,
-                    previousState: Number(article.state),
+                    previousState: article.state,
                     newState: targetState
                 });
             } catch (listenerError) {
@@ -124,50 +129,38 @@ export class WorkflowEngine {
 
             return { success: true, document: result };
         } catch (error) {
-            logError("Állapotváltás sikertelen:", error);
-            return { success: false, error: error.message };
+            return _handleCFError(error, "Állapotváltás sikertelen:");
         }
     }
 
     /**
      * Jelölő (marker) kapcsolása a cikken bitműveletek használatával.
      * A jelölők bitmaszkként vannak tárolva a cikk `markers` mezőjében.
-     * 
+     *
      * @param {Object} article - A módosítandó cikk objektum.
-     * @param {string} article.$id - A cikk egyedi azonosítója.
-     * @param {number} [article.markers=0] - Jelenlegi marker bitmaszk.
      * @param {number} markerType - A kapcsolni kívánt marker bit (pl. 1 = IGNORE).
      * @param {Object} user - A felhasználó, aki a módosítást végzi.
-     * 
-     * @returns {Promise<Object>} Eredmény objektum.
-     * @returns {boolean} return.success - Sikeres volt-e a módosítás.
-     * @returns {Object} [return.document] - A frissített dokumentum (siker esetén).
-     * @returns {string} [return.error] - Hibaüzenet (kudarc esetén).
+     * @returns {Promise<Object>} { success, document?, error? }
      */
     static async toggleMarker(article, markerType, user) {
+        if (!article) {
+            return { success: false, error: "Hiányzó cikk." };
+        }
+        if (!markerType || markerType <= 0 || (markerType & (markerType - 1)) !== 0) {
+            logWarn(`[WorkflowEngine] toggleMarker: érvénytelen markerType: ${markerType}`);
+            return { success: false, error: `Érvénytelen marker típus: ${markerType}` };
+        }
+
         try {
-            // Alapértelmezés 0-ra, ha null/undefined
             const currentMarkersMask = typeof article.markers === 'number' ? article.markers : 0;
-            
-            // Bit átbillentése XOR művelettel
             const newMarkersMask = currentMarkersMask ^ markerType;
 
-            const result = await withTimeout(
-                tables.updateRow({
-                    databaseId: DATABASE_ID,
-                    tableId: ARTICLES_COLLECTION_ID,
-                    rowId: article.$id,
-                    data: {
-                        markers: newMarkersMask
-                    }
-                }),
-                20000,
-                "WorkflowEngine: toggleMarker"
-            );
+            const result = await callUpdateArticleCF(article.$id, {
+                markers: newMarkersMask
+            }, "WorkflowEngine: toggleMarker");
             return { success: true, document: result };
         } catch (error) {
-            logError("Marker kapcsolása sikertelen:", error);
-            return { success: false, error: error.message };
+            return _handleCFError(error, "Marker kapcsolása sikertelen:");
         }
     }
 
@@ -176,91 +169,70 @@ export class WorkflowEngine {
      *
      * A valódi fájlszintű zárolást az InDesign .idlk mechanizmusa végzi —
      * ez a DB lock informatív jellegű (a UI-ban mutatja, ki szerkeszti éppen).
-     * Sima updateRow hívás, ami megbízhatóan triggerel Appwrite realtime eventeket.
      *
      * @param {Object} article - A zárolandó cikk.
      * @param {string} lockType - A zárolás típusa (LOCK_TYPE.USER vagy LOCK_TYPE.SYSTEM).
      * @param {Object} user - A műveletet végző felhasználó.
-     * @returns {Promise<Object>} { success: boolean, document?: Object, error?: string }
+     * @returns {Promise<Object>} { success, document?, error? }
      */
     static async lockDocument(article, lockType, user) {
-        // Validate lockType
+        if (!article) {
+            return { success: false, error: "Hiányzó cikk." };
+        }
         if (!Object.values(LOCK_TYPE).includes(lockType)) {
             return {
                 success: false,
-                error: `Invalid lockType: ${lockType}. Must be one of: ${Object.values(LOCK_TYPE).join(", ")}`
+                error: `Érvénytelen zárolási típus: ${lockType}. Engedélyezett: ${Object.values(LOCK_TYPE).join(", ")}`
             };
         }
 
-        // Ownership check (a hívó friss adatot ad — LockManager mindig DB-ből lekérdez előtte)
         if (article.lockOwnerId && article.lockOwnerId !== user.$id) {
             return { success: false, error: "A dokumentumot már zárolta más felhasználó" };
         }
 
         try {
-            const result = await withTimeout(
-                tables.updateRow({
-                    databaseId: DATABASE_ID,
-                    tableId: ARTICLES_COLLECTION_ID,
-                    rowId: article.$id,
-                    data: {
-                        lockType: lockType,
-                        lockOwnerId: user.$id
-                    }
-                }),
-                20000,
-                "WorkflowEngine: lockDocument"
-            );
+            const result = await callUpdateArticleCF(article.$id, {
+                lockType: lockType,
+                lockOwnerId: user.$id
+            }, "WorkflowEngine: lockDocument");
 
             return { success: true, document: result };
 
         } catch (error) {
-            logError("Dokumentum zárolása sikertelen:", error);
-            return { success: false, error: error.message };
+            return _handleCFError(error, "Dokumentum zárolása sikertelen:");
         }
     }
 
     /**
      * Dokumentum zárolásának feloldása.
      *
-     * Sima updateRow hívás, ami megbízhatóan triggerel Appwrite realtime eventeket.
-     * Idempotens: ha nincs zárolva, sikeresnek tekinti.
-     *
      * @param {Object} article - A feloldandó cikk.
      * @param {Object} user - A műveletet végző felhasználó.
-     * @returns {Promise<Object>} { success: boolean, document?: Object, error?: string }
+     * @returns {Promise<Object>} { success, document?, error? }
      */
     static async unlockDocument(article, user) {
+        if (!article) {
+            return { success: false, error: "Hiányzó cikk." };
+        }
+
         try {
-            // Ha nincs zárolva, már rendben vagyunk (idempotens)
             if (!article.lockOwnerId) {
                 return { success: true };
             }
 
-            // Authorization check — csak a tulajdonos oldhatja fel
             if (article.lockOwnerId !== user.$id) {
-                return { success: false, error: "not authorized" };
+                return { success: false, error: "Nincs jogosultság a zárolás feloldásához." };
             }
 
-            const result = await withTimeout(
-                tables.updateRow({
-                    databaseId: DATABASE_ID,
-                    tableId: ARTICLES_COLLECTION_ID,
-                    rowId: article.$id,
-                    data: {
-                        lockType: null,
-                        lockOwnerId: null
-                    }
-                }),
-                20000,
-                "WorkflowEngine: unlockDocument"
-            );
+            const result = await callUpdateArticleCF(article.$id, {
+                lockType: null,
+                lockOwnerId: null
+            }, "WorkflowEngine: unlockDocument");
 
             return { success: true, document: result };
 
         } catch (error) {
-            logError("Dokumentum feloldása sikertelen:", error);
-            return { success: false, error: error.message };
+            return _handleCFError(error, "Dokumentum feloldása sikertelen:");
         }
     }
 }

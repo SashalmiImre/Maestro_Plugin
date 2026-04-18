@@ -86,7 +86,7 @@ export function generateIsDocumentOpenScript(filePath) {
     return `
         (function() {
             try {
-                var path = "${safePath}";
+                var path = '${safePath}';
                 var f = File(path);
                 if (!f.exists) f = File(encodeURI(path));
 
@@ -244,7 +244,7 @@ export function generateOpenDocumentScript(filePath, openInBackground = false, s
                     app.linkingPreferences.checkLinksAtOpen = true;
                 }
 
-                var path = "${safePath}";
+                var path = '${safePath}';
                 var f = File(path);
                 if (!f.exists) f = File(encodeURI(path));
 
@@ -416,7 +416,7 @@ export function generateRollbackRenameScript(currentPath, originalName) {
  * Ehelyett: doc.save(newPath) (Save As) frissíti az InDesign belső hivatkozását,
  * majd töröljük a régi fájlt.
  *
- * A hívó felelős a `window.maestroSkipMonitor` flag beállításáért a UXP oldalon,
+ * A hívó felelős a `window.maestroSkipCount` inkrementálásáért a UXP oldalon,
  * hogy a DocumentMonitor ne reagáljon a programozott mentésre.
  *
  * @param {string} oldPath - Az eredeti fájl útvonal (InDesign-ban nyitva).
@@ -491,51 +491,62 @@ export function generateRenameOpenDocumentScript(oldPath, newPath) {
 
 /**
  * Feldolgozza az `extractPageRanges` scriptek eredmény stringjét.
- * Várt formátum: "min:max:[ranges]"
+ * Várt formátum: "min:max:[ranges]" (ahol a harmadik szegmens `[[a,b],[c,d],...]` alakú).
+ *
+ * A pageRanges string strukturális érvényességét is ellenőrzi (JSON.parse): hibás
+ * bemenet esetén `error: "Érvénytelen pageRanges struktúra"` eredményt ad.
  *
  * @param {string} resultStr - Az ExtendScript által visszaadott string.
  * @returns {{success: boolean, startPage: number|null, endPage: number|null, pageRanges: string|null, error: string|null}}
  */
 export function parsePageRangesResult(resultStr) {
+    const failure = (error) => ({
+        success: false,
+        startPage: null,
+        endPage: null,
+        pageRanges: null,
+        error
+    });
+
+    if (typeof resultStr !== "string" || resultStr.length === 0) {
+        return failure("Üres eredmény");
+    }
     if (resultStr.indexOf("ERROR:") === 0) {
-        return {
-            success: false,
-            startPage: null,
-            endPage: null,
-            pageRanges: null,
-            error: resultStr.substring(6)
-        };
+        return failure(resultStr.substring(6));
     }
 
     // Formátum bontása: "min:max:rangesJSON"
     const colonIndex = resultStr.indexOf(":");
     const secondColonIndex = resultStr.indexOf(":", colonIndex + 1);
+    if (colonIndex <= 0 || secondColonIndex <= colonIndex) {
+        return failure("Érvénytelen formátum");
+    }
 
-    if (colonIndex > 0 && secondColonIndex > colonIndex) {
-        const minStr = resultStr.substring(0, colonIndex);
-        const maxStr = resultStr.substring(colonIndex + 1, secondColonIndex);
-        const rangesStr = resultStr.substring(secondColonIndex + 1);
+    const min = parseInt(resultStr.substring(0, colonIndex), 10);
+    const max = parseInt(resultStr.substring(colonIndex + 1, secondColonIndex), 10);
+    if (isNaN(min) || isNaN(max)) {
+        return failure("Érvénytelen oldalszámok");
+    }
 
-        const min = parseInt(minStr, 10);
-        const max = parseInt(maxStr, 10);
-
-        if (!isNaN(min) && !isNaN(max)) {
-            return {
-                success: true,
-                startPage: min,
-                endPage: max,
-                pageRanges: rangesStr,
-                error: null
-            };
+    const rangesStr = resultStr.substring(secondColonIndex + 1);
+    // Strukturális validáció: tömb, elemei 2 elemű számtömbök, növekvő sorrendben.
+    try {
+        const parsed = JSON.parse(rangesStr);
+        if (!Array.isArray(parsed)) throw new Error("nem tömb");
+        for (const pair of parsed) {
+            if (!Array.isArray(pair) || pair.length !== 2) throw new Error("hibás pár");
+            if (typeof pair[0] !== "number" || typeof pair[1] !== "number") throw new Error("nem szám");
         }
+    } catch (_e) {
+        return failure("Érvénytelen pageRanges struktúra");
     }
 
     return {
-        success: false,
-        startPage: null,
-        endPage: null,
-        pageRanges: null,
-        error: "Érvénytelen formátum"
+        success: true,
+        startPage: min,
+        endPage: max,
+        pageRanges: rangesStr,
+        error: null
     };
 }
 
@@ -574,13 +585,13 @@ export function parseExecutionStatus(resultStr) {
 export function generateDeleteOldPdfsScript(publicationPath, pdfFileName, folderNames) {
     const escapedPubPath = escapePathForExtendScript(publicationPath);
     const escapedFileName = escapePathForExtendScript(pdfFileName);
-    const foldersJs = folderNames.map(f => `"${escapePathForExtendScript(f)}"`).join(',');
+    const foldersJs = folderNames.map(f => `'${escapePathForExtendScript(f)}'`).join(',');
 
     return `
         (function() {
             try {
-                var pubPath = "${escapedPubPath}";
-                var fileName = "${escapedFileName}";
+                var pubPath = '${escapedPubPath}';
+                var fileName = '${escapedFileName}';
                 var folders = [${foldersJs}];
                 var deleted = 0;
 

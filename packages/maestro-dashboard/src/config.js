@@ -11,48 +11,33 @@ export {
     APPWRITE_PROJECT_ID,
     DATABASE_ID,
     COLLECTIONS,
-    TEAMS,
     BUCKETS,
-    GET_TEAM_MEMBERS_FUNCTION_ID
+    FUNCTIONS
 } from '@shared/appwriteIds.js';
 
 export {
-    WORKFLOW_STATES,
-    MARKERS,
-    STATE_DURATIONS,
-    TEAM_ARTICLE_FIELD,
-    STATUS_LABELS,
-    STATUS_COLORS
-} from '@shared/workflowConfig.js';
-
-export {
     LOCK_TYPE,
-    VALIDATION_TYPES
+    VALIDATION_TYPES,
+    MARKERS
 } from '@shared/constants.js';
-
-export {
-    resolveGrantedTeams,
-    hasCapability,
-    CAPABILITY_LABELS,
-    VALID_LABELS
-} from '@shared/labelConfig.js';
 
 // ─── Dashboard-specifikus ───────────────────────────────────────────────────
 
-/** Közvetlen Appwrite endpoint (nem proxy-n keresztül). */
-export const APPWRITE_ENDPOINT = 'https://cloud.appwrite.io/v1';
+/**
+ * Közvetlen Appwrite endpoint (nem proxy-n keresztül).
+ * Production-ban érdemes saját custom domain-t használni (pl. `api.maestro.emago.hu`),
+ * hogy a böngésző első-feles cookie-ként kezelje a session-t — különben Safari ITP
+ * (és hamarosan Chrome) blokkolja a WebSocket upgrade-nél küldött session cookie-t,
+ * és a Realtime nem kap push-t.
+ */
+export const APPWRITE_ENDPOINT = import.meta.env.VITE_APPWRITE_ENDPOINT || 'https://cloud.appwrite.io/v1';
 
 /**
- * Workflow konfiguráció — label és szín állapotonként.
- * A komponensek WORKFLOW_CONFIG[state].label / .color-t használják.
+ * A Dashboard saját origin URL-je az Appwrite verifikációs/recovery callback-ekhez.
+ * Az `account.createVerification()` és `account.createRecovery()` ezt használja
+ * abszolút URL-ként. Production-ban env var (`VITE_DASHBOARD_URL`) felülírhatja.
  */
-import { STATUS_LABELS as _SL, STATUS_COLORS as _SC } from '@shared/workflowConfig.js';
-
-export const WORKFLOW_CONFIG = Object.fromEntries(
-    Object.entries(_SL).map(([state, label]) => [
-        state, { label, color: _SC[state] || '#999' }
-    ])
-);
+export const DASHBOARD_URL = import.meta.env.VITE_DASHBOARD_URL || window.location.origin;
 
 /** Dashboard localStorage kulcsok. */
 export const STORAGE_KEYS = {
@@ -68,7 +53,7 @@ export const STORAGE_KEYS = {
 /** Sürgősség újraszámítás gyakorisága (5 perc). */
 export const URGENCY_REFRESH_INTERVAL_MS = 300_000;
 
-/** Csapattag cache élettartama (5 perc). */
+/** Csoporttag cache élettartama (5 perc). */
 export const TEAM_CACHE_DURATION_MS = 300_000;
 
 /** Lapozás méret az Appwrite lekérdezésekhez. */

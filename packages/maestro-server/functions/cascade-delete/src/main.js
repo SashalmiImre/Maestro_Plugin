@@ -5,7 +5,7 @@ const sdk = require("node-appwrite");
  *
  * Article vagy publication törlésekor automatikusan kitörli az összes kapcsolódó adatot.
  *
- * Article törlés → ArticleMessages, UserValidations, Validations + thumbnail fájlok.
+ * Article törlés → UserValidations, SystemValidations + thumbnail fájlok.
  * Publication törlés → Articles (→ rekurzívan triggereli az article ágat), Deadlines, Layouts.
  *
  * A collection típust a trigger event-ből detektálja (req.headers['x-appwrite-event']).
@@ -17,9 +17,8 @@ const sdk = require("node-appwrite");
  * - APPWRITE_API_KEY: API kulcs 'databases.read', 'databases.write' és 'storage.read', 'storage.write' jogosultsággal.
  * - DATABASE_ID: Az adatbázis azonosítója.
  * - ARTICLES_COLLECTION_ID: Az Articles collection azonosítója.
- * - ARTICLE_MESSAGES_COLLECTION_ID: Az ArticleMessages collection azonosítója.
  * - USER_VALIDATIONS_COLLECTION_ID: A UserValidations collection azonosítója.
- * - VALIDATIONS_COLLECTION_ID: A Validations (rendszer) collection azonosítója.
+ * - SYSTEM_VALIDATIONS_COLLECTION_ID: A SystemValidations collection azonosítója.
  * - DEADLINES_COLLECTION_ID: A Deadlines collection azonosítója.
  * - LAYOUTS_COLLECTION_ID: A Layouts collection azonosítója.
  * - THUMBNAILS_BUCKET_ID: A thumbnails Storage bucket azonosítója.
@@ -159,16 +158,15 @@ async function cleanupCollections(collections, databases, fieldName, fieldValue,
 // ═══════════════════════════════════════════════════════════════════════════
 
 /**
- * Article törlésekor: ArticleMessages, UserValidations, Validations + thumbnailek takarítása.
+ * Article törlésekor: UserValidations, SystemValidations + thumbnailek takarítása.
  */
 async function handleArticleDelete(payload, databases, storage, log, error) {
     const articleId = payload.$id;
     log(`Article törölve: ${articleId} — kapcsolódó adatok takarítása...`);
 
     const collections = [
-        { id: process.env.ARTICLE_MESSAGES_COLLECTION_ID, name: 'ArticleMessages' },
         { id: process.env.USER_VALIDATIONS_COLLECTION_ID, name: 'UserValidations' },
-        { id: process.env.VALIDATIONS_COLLECTION_ID, name: 'Validations' }
+        { id: process.env.SYSTEM_VALIDATIONS_COLLECTION_ID, name: 'SystemValidations' }
     ];
 
     // Collection takarítás + thumbnail törlés párhuzamosan
@@ -219,7 +217,7 @@ module.exports = async function ({ req, res, log, error }) {
     const client = new sdk.Client();
 
     client
-        .setEndpoint(process.env.APPWRITE_FUNCTION_ENDPOINT || 'https://cloud.appwrite.io/v1')
+        .setEndpoint(process.env.APPWRITE_ENDPOINT || 'https://cloud.appwrite.io/v1')
         .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
         .setKey(process.env.APPWRITE_API_KEY);
 

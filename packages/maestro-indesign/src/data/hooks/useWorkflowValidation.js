@@ -18,46 +18,14 @@ import { useData } from "../../core/contexts/DataContext.jsx";
 import { useValidation } from "../../core/contexts/ValidationContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 
-import { WORKFLOW_CONFIG } from "../../core/utils/workflow/workflowConstants.js";
+import { getStateValidations } from "maestro-shared/workflowRuntime.js";
 import { VALIDATOR_TYPES, VALIDATION_SOURCES } from "../../core/utils/validationConstants.js";
 import { VALIDATION_TYPES } from "../../core/utils/messageConstants.js";
-import { tables, DATABASE_ID, VALIDATIONS_COLLECTION_ID, ID, Query } from "../../core/config/appwriteConfig.js";
+import { tables, DATABASE_ID, COLLECTIONS, ID, Query } from "../../core/config/appwriteConfig.js";
 import { log, logError } from "../../core/utils/logger.js";
-import { DATA_QUERY_CONFIG, TOAST_TYPES } from "../../core/utils/constants.js";
-
-
-
-/**
- * Lapozva lekéri az összes preflight validációs sort az Appwrite-ból.
- */
-async function fetchAllPreflightRows(baseQueries) {
-    const allRows = [];
-    let offset = 0;
-
-    while (true) {
-        const response = await tables.listRows({
-            databaseId: DATABASE_ID,
-            tableId: VALIDATIONS_COLLECTION_ID,
-            queries: [
-                ...baseQueries,
-                Query.limit(DATA_QUERY_CONFIG.PAGE_SIZE),
-                Query.offset(offset)
-            ]
-        });
-
-        if (!response || !Array.isArray(response.rows)) {
-            logError('[useWorkflowValidation] Hibás válasz a tables.listRows-tól:', response);
-            break;
-        }
-
-        allRows.push(...response.rows);
-
-        if (response.rows.length < DATA_QUERY_CONFIG.PAGE_SIZE) break;
-        offset += DATA_QUERY_CONFIG.PAGE_SIZE;
-    }
-
-    return allRows;
-}
+import { withRetry } from "../../core/utils/promiseUtils.js";
+import { fetchAllValidationRows, queuePersist } from "../../core/utils/validationPersist.js";
+import { TOAST_TYPES } from "../../core/utils/constants.js";
 
 /**
  * Hook a preflight validációs eredmények kezeléséhez.
@@ -69,15 +37,17 @@ async function fetchAllPreflightRows(baseQueries) {
  * @returns {{ runAndPersistPreflight: (article: Object) => Promise<Object> }}
  */
 export const useWorkflowValidation = () => {
-    const { articles, publications } = useData();
+    const { articles, publications, workflow } = useData();
     const { updateArticleValidation, clearArticleValidation } = useValidation();
     const { showToast } = useToast();
 
     const articlesRef = useRef(articles);
     const publicationsRef = useRef(publications);
+    const workflowRef = useRef(workflow);
 
     useEffect(() => { articlesRef.current = articles; }, [articles]);
     useEffect(() => { publicationsRef.current = publications; }, [publications]);
+    useEffect(() => { workflowRef.current = workflow; }, [workflow]);
 
     /**
      * Betölti az összes meglévő validációt az Appwrite-ból
@@ -88,9 +58,10 @@ export const useWorkflowValidation = () => {
             try {
                 // Betöltjük a 'preflight' forrású validációkat (hardkódolva a kompatibilitás miatt,
                 // de később kiterjeszthető más forrásokra is)
-                const allRows = await fetchAllPreflightRows([
-                    Query.equal('source', VALIDATION_SOURCES.PREFLIGHT)
-                ]);
+                const allRows = await fetchAllValidationRows(
+                    [Query.equal('source', VALIDATION_SOURCES.PREFLIGHT)],
+                    'useWorkflowValidation.loadExisting'
+                );
 
                 if (allRows.length === 0) return;
 
@@ -121,54 +92,69 @@ export const useWorkflowValidation = () => {
 
     /**
      * Egyetlen cikk validációs eredményét menti (upsert) az Appwrite-ba.
+     * Per-(articleId, source) queuePersist: sorba fűzi az egymás utáni hívásokat,
+     * hogy a fetch+write párok ne keveredjenek.
      */
-    const persistToDatabase = useCallback(async (articleId, publicationId, source, result) => {
-        try {
-            // 1. Meglévő sor keresése ehhez a cikkhez és forráshoz
-            const existingRows = await fetchAllPreflightRows([
-                Query.equal('articleId', articleId),
-                Query.equal('source', source)
-            ]);
+    const persistToDatabase = useCallback((articleId, publicationId, source, result) => {
+        return queuePersist(`${source}::${articleId}`, async () => {
+            try {
+                // 1. Meglévő sor keresése ehhez a cikkhez és forráshoz
+                const existingRows = await fetchAllValidationRows(
+                    [
+                        Query.equal('articleId', articleId),
+                        Query.equal('source', source)
+                    ],
+                    'useWorkflowValidation.persistFetch'
+                );
 
-            const hasContent = result.errors.length > 0 || result.warnings.length > 0;
-            const data = { errors: result.errors, warnings: result.warnings };
+                const hasContent = result.errors.length > 0 || result.warnings.length > 0;
+                const data = { errors: result.errors, warnings: result.warnings };
 
-            if (hasContent) {
-                if (existingRows.length > 0) {
-                    // Update
-                    await tables.updateRow({
-                        databaseId: DATABASE_ID,
-                        tableId: VALIDATIONS_COLLECTION_ID,
-                        rowId: existingRows[0].$id,
-                        data
-                    });
-                } else {
-                    // Create
-                    await tables.createRow({
-                        databaseId: DATABASE_ID,
-                        tableId: VALIDATIONS_COLLECTION_ID,
-                        rowId: ID.unique(),
-                        data: {
-                            articleId,
-                            publicationId,
-                            source: source,
-                            ...data
-                        }
-                    });
+                if (hasContent) {
+                    if (existingRows.length > 0) {
+                        await withRetry(
+                            () => tables.updateRow({
+                                databaseId: DATABASE_ID,
+                                tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
+                                rowId: existingRows[0].$id,
+                                data
+                            }),
+                            { operationName: `updatePreflight(${articleId})` }
+                        );
+                    } else {
+                        // Create — ID-t előre generáljuk, hogy retry esetén ne jöjjön létre duplikátum
+                        const generatedRowId = ID.unique();
+                        await withRetry(
+                            () => tables.createRow({
+                                databaseId: DATABASE_ID,
+                                tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
+                                rowId: generatedRowId,
+                                data: {
+                                    articleId,
+                                    publicationId,
+                                    source,
+                                    ...data
+                                }
+                            }),
+                            { operationName: `createPreflight(${articleId})` }
+                        );
+                    }
+                } else if (existingRows.length > 0) {
+                    await withRetry(
+                        () => tables.deleteRow({
+                            databaseId: DATABASE_ID,
+                            tableId: COLLECTIONS.SYSTEM_VALIDATIONS,
+                            rowId: existingRows[0].$id
+                        }),
+                        { operationName: `deletePreflight(${articleId})` }
+                    );
                 }
-            } else if (existingRows.length > 0) {
-                // Nincs hiba → régi sor törlése
-                await tables.deleteRow({
-                    databaseId: DATABASE_ID,
-                    tableId: VALIDATIONS_COLLECTION_ID,
-                    rowId: existingRows[0].$id
-                });
-            }
 
-            log(`[useWorkflowValidation] Eredmény mentve (article: ${articleId}, source: ${source}, hibák: ${result.errors.length}).`);
-        } catch (error) {
-            logError('[useWorkflowValidation] DB mentés sikertelen:', error);
-        }
+                log(`[useWorkflowValidation] Eredmény mentve (article: ${articleId}, source: ${source}, hibák: ${result.errors.length}).`);
+            } catch (error) {
+                logError('[useWorkflowValidation] DB mentés sikertelen:', error);
+            }
+        });
     }, []);
 
     /**
@@ -232,13 +218,10 @@ export const useWorkflowValidation = () => {
 
     // Legacy wrapper a kompatibilitásért (Workspace.jsx, preflightCheck.js)
     const runAndPersistPreflight = useCallback((article) => {
-        // Preflight profile feloldása az aktuális állapotból? 
-        // Vagy default? A gombnyomásos indításnál használhatjuk az aktuális állapot konfigurációját,
-        // VAGY egy alapértelmezett profilt.
-        // A WORKFLOW_CONFIG-ból kikeressük, van-e config erre az állapotra.
-        const stateConfig = WORKFLOW_CONFIG[article.state]?.validations;
-        const preflightConfig = stateConfig?.onEntry?.find(v => v.validator === VALIDATOR_TYPES.PREFLIGHT_CHECK);
-        const options = preflightConfig?.options || {}; // Default to empty if not configured (PreflightValidator defaults to Levil)
+        const wf = workflowRef.current;
+        const stateValidations = getStateValidations(wf, article.state);
+        const preflightConfig = stateValidations?.onEntry?.find(v => v.validator === VALIDATOR_TYPES.PREFLIGHT_CHECK);
+        const options = preflightConfig?.options || {};
 
         return runValidation(article, VALIDATOR_TYPES.PREFLIGHT_CHECK, options);
     }, [runValidation]);
@@ -257,10 +240,11 @@ export const useWorkflowValidation = () => {
          * Segédfüggvény: állapothoz tartozó auto-run validációk futtatása
          */
         const runAutoValidations = (article) => {
-            const stateConfig = WORKFLOW_CONFIG[article.state]?.validations;
-            if (!stateConfig || !stateConfig.onEntry) return;
+            const wf = workflowRef.current;
+            const stateValidations = getStateValidations(wf, article.state);
+            if (!stateValidations?.onEntry) return;
 
-            stateConfig.onEntry.forEach(config => {
+            stateValidations.onEntry.forEach(config => {
                 log(`[useWorkflowValidation] Auto-validáció futtatása: ${config.validator} (${article.name})`);
                 callbacksRef.current.runValidation(article, config.validator, config.options);
             });
@@ -273,10 +257,11 @@ export const useWorkflowValidation = () => {
 
         const handleDocumentClosed = (event) => {
             const { article, registerTask } = event.detail;
-            const stateConfig = WORKFLOW_CONFIG[article.state]?.validations;
-            if (!stateConfig || !stateConfig.onEntry) return;
+            const wf = workflowRef.current;
+            const stateValidations = getStateValidations(wf, article.state);
+            if (!stateValidations?.onEntry) return;
 
-            stateConfig.onEntry.forEach(config => {
+            stateValidations.onEntry.forEach(config => {
                 log(`[useWorkflowValidation] Auto-validáció (closed): ${config.validator} (${article.name})`);
                 registerTask(callbacksRef.current.runValidation(article, config.validator, config.options));
             });
@@ -284,18 +269,21 @@ export const useWorkflowValidation = () => {
 
         const handleStateChanged = (event) => {
             const { article, previousState, newState } = event.detail;
-            const prevConfig = WORKFLOW_CONFIG[previousState]?.validations;
-            const newConfig = WORKFLOW_CONFIG[newState]?.validations;
+            if (!article?.$id) return;
 
-            // 1. Kilépés a régi állapotból: takarítás?
-            // Ha a régi állapotban volt 'preflight_check' auto-run, és az újban NINCS, akkor töröljük az eredményt?
-            // A logika: ha egy validáció "auto-run" egy állapotban, akkor az eredménye addig érvényes, amíg abban az állapotban vagyunk?
-            // Vagy amíg el nem avul?
-            // A régi implementáció törölte a preflight eredményt, ha kiléptünk a PREFLIGHT_STATES-ből.
-            
-            // Megnézzük, hogy a régi állapotban volt-e preflight, és az újban van-e.
-            const hadPreflight = prevConfig?.onEntry?.some(v => v.validator === VALIDATOR_TYPES.PREFLIGHT_CHECK);
-            const hasPreflight = newConfig?.onEntry?.some(v => v.validator === VALIDATOR_TYPES.PREFLIGHT_CHECK);
+            // A cikk ref-alapú ellenőrzése: ha időközben kiesett a scope-ból
+            // (pub switch / törlés), az eseményre nem reagálunk.
+            // A payload cikk-objektumát a CF szinkron válaszából kapjuk — ez a legfrissebb
+            // állapot, még a DataContext applyArticleUpdate előtti pillanatban is.
+            const stillExists = articlesRef.current.some(a => a.$id === article.$id);
+            if (!stillExists) return;
+
+            const wf = workflowRef.current;
+            const prevValidations = getStateValidations(wf, previousState);
+            const newValidations = getStateValidations(wf, newState);
+
+            const hadPreflight = prevValidations?.onEntry?.some(v => v.validator === VALIDATOR_TYPES.PREFLIGHT_CHECK);
+            const hasPreflight = newValidations?.onEntry?.some(v => v.validator === VALIDATOR_TYPES.PREFLIGHT_CHECK);
 
             if (hadPreflight && !hasPreflight) {
                  log(`[useWorkflowValidation] Preflight eredmények törlése (kilépés): "${article.name}"`);
@@ -303,8 +291,8 @@ export const useWorkflowValidation = () => {
                  callbacksRef.current.persistToDatabase(article.$id, article.publicationId, VALIDATION_SOURCES.PREFLIGHT, { errors: [], warnings: [] });
             }
 
-            // 2. Belépés az új állapotba: futtatás
-            runAutoValidations(article); // Ez kezeli a hasPreflight esetet is
+            // Belépés az új állapotba: futtatás
+            runAutoValidations(article);
         };
 
         window.addEventListener(MaestroEvent.documentSaved, handleDocumentSaved);

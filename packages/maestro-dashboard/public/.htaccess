@@ -1,0 +1,25 @@
+# Maestro Dashboard — SPA fallback (LiteSpeed / Apache mod_rewrite)
+#
+# A React Router kliens-oldali route-okat kezel (/login, /register, /invite,
+# /onboarding, /reset-password stb.), amelyeknek nincs megfelelő fizikai fájl
+# a disken. Közvetlen URL betöltéskor (e-mail link, megosztott invite link,
+# page reload) a szerver 404-et dobna a natív view-re, ha nem irányítjuk
+# vissza az index.html-re, ahol a React Router átveszi a routing-ot.
+#
+# Szabályok:
+# 1. Ha a kért útvonal létező fájl (!-f) vagy könyvtár (!-d), a szerver
+#    kiszolgálja (assets/, favicon, .htaccess maga, stb.).
+# 2. Minden más kérés átíródik az /index.html-re — a kliens JS betölti
+#    a React app-ot, ami elolvassa a window.location.pathname-t és
+#    megjeleníti a megfelelő route-ot.
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /
+
+    # Létező fájl vagy könyvtár → passthrough
+    RewriteCond %{REQUEST_FILENAME} !-f
+    RewriteCond %{REQUEST_FILENAME} !-d
+
+    # Minden más → index.html (React Router kezeli)
+    RewriteRule ^ index.html [L]
+</IfModule>

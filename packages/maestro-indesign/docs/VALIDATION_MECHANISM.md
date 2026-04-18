@@ -70,9 +70,9 @@ A fenti rendszer- és felhasználói validációk mellett létezik egy harmadik 
 ### Implementáció
 
 *   A `ValidatedTextField` komponens fogadja az `invalid` propot, és továbbadja az `sp-textfield`-nek.
-*   A `DeadlinesSection` a `DeadlineValidator` statikus metódusait (`isValidDate`, `isValidTime`) használja blur-kor.
+*   A Plugin `GeneralSection.jsx` (cikkek) az `isValidFileName`-et használja blur-kor a cikk-átnevezés mezőjénél.
 *   Ha a formátum érvénytelen, a mező piros keretet kap és az adat nem kerül mentésre.
-*   Ha a formátum érvényes, a mentés normálisan folytatódik, és a `DeadlineValidator.validate()` instance metódus a mentett adatokon futtatja a kereszt-validációkat (átfedés, lefedettség, tartomány).
+*   A határidők mező-szintű validációja Fázis 9 óta a Dashboard hatáskörébe került — a Plugin csak olvassa a határidőket, nem szerkeszti.
 
 ### Validációs Rétegek Összehasonlítása
 

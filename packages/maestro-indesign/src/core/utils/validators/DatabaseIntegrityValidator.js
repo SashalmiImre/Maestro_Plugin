@@ -4,7 +4,8 @@
  */
 
 import { withTimeout } from "../promiseUtils.js";
-import { tables, storage, DATABASE_ID, ARTICLES_COLLECTION_ID } from "../../config/appwriteConfig.js";
+import { storage } from "../../config/appwriteConfig.js";
+import { callUpdateArticleCF } from "../updateArticleClient.js";
 import { BUCKETS } from "maestro-shared/appwriteIds.js";
 
 const { app, ScriptLanguage } = require("indesign");
@@ -99,8 +100,8 @@ export class DatabaseIntegrityValidator extends ValidatorBase {
                 const physStart = parsed.startPage;
                 const physEnd = parsed.endPage;
 
-                // Use loose check (==) because API might return strings for numbers
-                mismatch = (dbStart != physStart) || (dbEnd != physEnd);
+                // Explicit Number konverzió — az API string-eket is küldhet
+                mismatch = (Number(dbStart) !== Number(physStart)) || (Number(dbEnd) !== Number(physEnd));
                 
                 // Csak akkor állítjuk be a rangeDetails-t, ha tényleg eltérés van
                 if (mismatch) {
@@ -112,22 +113,15 @@ export class DatabaseIntegrityValidator extends ValidatorBase {
                 const errorMsg = `Page mismatch. ${rangeDetails}`;
                 
                 if (autoCorrect) {
-                     // 3. Adatbázis frissítése, ha kérték
+                     // 3. Adatbázis frissítése, ha kérték — az update-article CF-en keresztül
                      log(`[DatabaseIntegrityValidator] Auto-correcting ${article.name}...`);
-                     const correctedDoc = await withTimeout(
-                        tables.updateRow({
-                            databaseId: DATABASE_ID,
-                            tableId: ARTICLES_COLLECTION_ID,
-                            rowId: article.$id,
-                            data: {
-                                startPage: parsed.startPage,
-                                endPage: parsed.endPage,
-                                pageRanges: parsed.pageRanges
-                                // NE használjunk modifiedByClientId-t, mert az megmarad az adatbázisban
-                                // és a realtime kiszűri a jövőbeli frissítéseket!
-                            }
-                        }),
-                        5000,
+                     const correctedDoc = await callUpdateArticleCF(
+                        article.$id,
+                        {
+                            startPage: parsed.startPage,
+                            endPage: parsed.endPage,
+                            pageRanges: parsed.pageRanges
+                        },
                         "DatabaseIntegrityValidator: autoCorrect"
                     );
 

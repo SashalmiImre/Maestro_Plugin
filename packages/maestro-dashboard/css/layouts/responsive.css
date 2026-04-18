@@ -1,0 +1,41 @@
+/* ─── Responsive ───────────────────────────────────────────────────────────── */
+
+@media (max-width: 768px) {
+    .breadcrumb-header {
+        padding: 0 12px;
+    }
+
+    .breadcrumb-separator {
+        display: none;
+    }
+
+    .bc-dropdown-trigger {
+        padding: 4px 6px;
+        font-size: 12px;
+        max-width: 120px;
+    }
+
+    .breadcrumb-logo {
+        font-size: 12px;
+    }
+
+    .filter-status-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+}
+
+@media (max-width: 480px) {
+    .breadcrumb-header {
+        padding: 0 8px;
+        height: 44px;
+    }
+
+    .bc-dropdown-trigger {
+        max-width: 90px;
+    }
+
+    .filter-status-grid {
+        grid-template-columns: 1fr 1fr;
+    }
+}
+

@@ -1,17 +1,8 @@
 import React, { useCallback, useMemo } from "react";
 
 import { CustomCheckbox } from "../../common/CustomCheckbox.jsx";
-import { WORKFLOW_STATES, WORKFLOW_CONFIG } from "../../../core/utils/workflow/workflowConstants.js";
-
-/** Státusz opciók (egyszer számítva, nem renderenként) */
-const statusOptions = Object.values(WORKFLOW_STATES).map(state => {
-    const config = WORKFLOW_CONFIG[state]?.config;
-    return {
-        value: state,
-        label: config?.label || `Állapot ${state}`,
-        color: config?.color || "var(--spectrum-global-color-gray-500)"
-    };
-});
+import { useData } from "../../../core/contexts/DataContext.jsx";
+import { getAllStates } from "maestro-shared/workflowRuntime.js";
 
 /**
  * Központi szűrősáv a fejléc alatt (minden kiadványra érvényes).
@@ -41,6 +32,17 @@ const FilterBar = React.memo(({
     isFilterActive,
     onReset
 }) => {
+    const { workflow } = useData();
+
+    /** Státusz opciók — dinamikusan a workflow-ból */
+    const statusOptions = useMemo(() => {
+        return getAllStates(workflow).map(state => ({
+            value: state.id,
+            label: state.label || state.id,
+            color: state.color || "var(--spectrum-global-color-gray-500)"
+        }));
+    }, [workflow]);
+
     const toggleStatus = useCallback((value) => {
         const next = statusFilters.includes(value)
             ? statusFilters.filter(v => v !== value)

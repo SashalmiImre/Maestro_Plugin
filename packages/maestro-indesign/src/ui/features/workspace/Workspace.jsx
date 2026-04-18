@@ -1,20 +1,11 @@
 /**
  * @file Workspace.jsx
  * @description A Maestro Plugin fő munkaterülete.
- * 
- * Ez a modul felel a két fő nézet (Lista és Tulajdonságok) közötti váltásért,
- * valamint a kiválasztott elemek (cikkek, kiadványok) állapotának kezeléséért.
- * 
- * ## Szinkronizáció és Cache Busting
- * 
- * A komponens egyik legkritikusabb feladata az adatok frissítése,
- * különösen "Alvás" (Sleep) után. Mivel a hálózati réteg (proxy/CDN) hajlamos
- * gyorsítótárazni a kéréseket, speciális "Cache Busting" technikát alkalmazunk:
- * 
- * `Query.notEqual("$id", "egyedi-időbélyeg")`
- * 
- * Ez garantálja, hogy minden frissítési kérés egyedi URL-t kapjon,
- * így kényszerítve a szervert a legfrissebb adatok küldésére.
+ *
+ * Ez a modul felel a két fő nézet (lista és cikk tulajdonságok) közötti váltásért,
+ * valamint a kiválasztott cikk állapotának kezeléséért. Publikáció-szintű szerkesztés
+ * a Dashboard hatáskörébe tartozik (Fázis 9) — a plugin csak a „Megnyitás Dashboardon"
+ * deeplinket biztosítja publikációkra.
  */
 
 // React
@@ -30,7 +21,7 @@ import { ConfirmDialog } from "../../common/ConfirmDialog.jsx";
 // Contexts & Custom Hooks
 import { useToast } from "../../common/Toast/ToastContext.jsx";
 import { useUser } from "../../../core/contexts/UserContext.jsx";
-import { usePublications } from "../../../data/hooks/usePublications.js";
+import { useScope } from "../../../core/contexts/ScopeContext.jsx";
 import { useData } from "../../../core/contexts/DataContext.jsx";
 import { useWorkflowValidation } from "../../../data/hooks/useWorkflowValidation.js";
 import { useThumbnails } from "../../../data/hooks/useThumbnails.js";
@@ -43,8 +34,7 @@ import { account, DASHBOARD_URL } from "../../../core/config/appwriteConfig.js";
 // Utils
 import { toAbsoluteArticlePath, toNativePath } from "../../../core/utils/pathUtils.js";
 import { generateOpenDocumentScript } from "../../../core/utils/indesign/index.js";
-import { log, logWarn, logError } from "../../../core/utils/logger.js";
-import { MaestroEvent, dispatchMaestroEvent } from "../../../core/config/maestroEvents.js";
+import { logWarn, logError } from "../../../core/utils/logger.js";
 import { SCRIPT_LANGUAGE_JAVASCRIPT, TOAST_TYPES } from "../../../core/utils/constants.js";
 
 /** Hibaüzenet: a cikkhez nem tartozik fájl útvonal */
@@ -63,14 +53,21 @@ const NO_FILE_PATH_ERROR = {
  * @returns {JSX.Element} A fő munkaterület komponens
  */
 export const Workspace = () => {
-    const { user } = useUser();
+    const { user, organizations, editorialOffices } = useUser();
+    const { activeOrganizationId, activeEditorialOfficeId, setActiveOrganization, setActiveOffice } = useScope();
     const { showToast } = useToast();
-    const { updatePublication, publications } = usePublications();
     const { runAndPersistPreflight } = useWorkflowValidation();
     useThumbnails();
     const { canArchivePublication, isArchiving, archiveProgress, archivePublication } = usePublicationArchive();
     const [archiveDialogOpen, setArchiveDialogOpen] = useState(false);
     const handleOpenArchiveDialog = useCallback(() => setArchiveDialogOpen(true), []);
+
+    // Scope dropdown adatok — az aktív orghoz tartozó szerkesztőségek
+    const scopedOffices = useMemo(
+        () => (editorialOffices || []).filter(o => o.organizationId === activeOrganizationId),
+        [editorialOffices, activeOrganizationId]
+    );
+
 
     // Központi szűrő állapot (minden kiadványra egységesen alkalmazva)
     const {
@@ -89,70 +86,44 @@ export const Workspace = () => {
 
     // Központi adatok elérése a DataContext-ből
     // Az articles lista automatikusan frissül a Realtime események alapján
-    const { articles, setActivePublicationId, activePublicationId } = useData();
+    const { publications, articles, setActivePublicationId, activePublicationId } = useData();
 
     // Navigációs állapot: 'list' (lista) vagy 'properties' (tulajdonságok)
     const [currentView, setCurrentView] = useState('list');
 
-    // Kiválasztott elem típusa és ID-ja
-    // Az adatokat a DataContext-ből származtatjuk, nem tárolunk teljes objektumot
+    // Kiválasztott cikk ID-ja — a cikk objektumot a DataContext-ből származtatjuk.
+    // A plugin csak cikkeket jelenít meg Properties nézetben (Fázis 9 — a publikáció
+    // szerkesztés a Dashboard hatáskörébe került).
     const [selectedItemId, setSelectedItemId] = useState(null);
-    const [selectedType, setSelectedType] = useState(null);
-    const [selectedPublication, setSelectedPublication] = useState(null);
-
-    // Aktív publikáció szinkronizálás a DataContext-tel — csak properties nézetben.
-    // Lista nézetben a PublicationList kezeli az activePublicationId-t (toggleExpansion).
-    useEffect(() => {
-        if (currentView !== 'properties') return;
-        if (selectedPublication?.$id) {
-            setActivePublicationId(selectedPublication.$id);
-        } else if (selectedType === 'publication' && selectedItemId) {
-            setActivePublicationId(selectedItemId);
-        }
-    }, [currentView, selectedPublication, selectedItemId, selectedType, setActivePublicationId]);
+    const [selectedParentPublicationId, setSelectedParentPublicationId] = useState(null);
 
     /**
      * Kiválasztott cikk származtatása a DataContext-ből.
      * A useMemo automatikusan újraszámolja, ha az articles tömb vagy az ID változik.
      * Ez biztosítja, hogy a Realtime frissítések azonnal megjelenjenek.
      */
-    const selectedArticle = useMemo(() => {
-        if (!selectedItemId || selectedType !== 'article') return null;
+    const selectedItem = useMemo(() => {
+        if (!selectedItemId) return null;
         return articles.find(a => a.$id === selectedItemId) || null;
-    }, [articles, selectedItemId, selectedType]);
+    }, [articles, selectedItemId]);
+
+    const selectedParentPublication = useMemo(() => {
+        if (!selectedParentPublicationId) return null;
+        return publications.find(p => p.$id === selectedParentPublicationId) || null;
+    }, [publications, selectedParentPublicationId]);
 
     /**
-     * Kiválasztott kiadvány származtatása a DataContext-ből.
+     * Navigálás a tulajdonságok nézetre (jobb oldali cikk panel).
+     *
+     * @param {Object} article - A kiválasztott cikk objektum
+     * @param {Object} publication - A cikk szülő publikációja (aktív publikációnak állítódik)
      */
-    const selectedPublicationData = useMemo(() => {
-        if (!selectedItemId || selectedType !== 'publication') return null;
-        return publications.find(p => p.$id === selectedItemId) || null;
-    }, [publications, selectedItemId, selectedType]);
-
-    /**
-     * A kiválasztott elem (cikk vagy kiadvány) - típustól függően
-     */
-    const selectedItem = selectedType === 'article' ? selectedArticle : selectedPublicationData;
-
-    /**
-     * Navigálás a tulajdonságok nézetre (jobb oldali panel)
-     * 
-     * @param {Object} item - A kiválasztott kiadvány vagy cikk objektum
-     * @param {string} type - A kiválasztott elem típusa ('publication' vagy 'article')
-     * @param {Object} [publication] - A szülő kiadvány (cikkek esetén)
-     */
-    const handleShowProperties = (item, type, publication = null) => {
-        setSelectedItemId(item.$id);
-        setSelectedType(type);
-        setSelectedPublication(publication);
+    const handleShowProperties = (article, publication) => {
+        setSelectedItemId(article.$id);
+        setSelectedParentPublicationId(publication?.$id || null);
         setCurrentView('properties');
-
-        // Ha cikket nyitunk meg, a szülő publikáció lesz az aktív.
-        // Ha kiadványt, akkor az maga.
-        if (type === 'article' && publication) {
+        if (publication?.$id) {
             setActivePublicationId(publication.$id);
-        } else if (type === 'publication') {
-            setActivePublicationId(item.$id);
         }
     };
 
@@ -163,65 +134,44 @@ export const Workspace = () => {
     const handleBackToList = useCallback(() => {
         setCurrentView('list');
         setSelectedItemId(null);
-        setSelectedType(null);
-        setSelectedPublication(null);
+        setSelectedParentPublicationId(null);
     }, []);
 
     /**
      * Dashboard megnyitása böngészőben JWT auto-login-nal.
      * Létrehoz egy 15 perces JWT tokent, majd a böngészőben megnyitja a dashboard URL-t
-     * a token query paraméterrel.
+     * a `?pub=<id>` query paraméterrel és a JWT-vel fragment-ben.
+     *
+     * @param {string} [pubId] - Opcionális publikáció ID; ha hiányzik, az aktív publikációra nyit.
      */
-    const handleOpenDashboard = useCallback(async () => {
+    const handleOpenDashboard = useCallback(async (pubId) => {
+        const targetPubId = pubId || activePublicationId || '';
+        const buildUrl = (jwt) => {
+            let url = DASHBOARD_URL;
+            if (targetPubId) {
+                url += `?pub=${encodeURIComponent(targetPubId)}`;
+            }
+            if (jwt) {
+                // JWT fragment-ben (#) utazik, nem query paraméterben — így nem kerül szerver logba
+                url += `#jwt=${encodeURIComponent(jwt)}`;
+            }
+            return url;
+        };
+
         try {
             const { jwt } = await account.createJWT();
-            // JWT fragment-ben (#) utazik, nem query paraméterben — így nem kerül szerver logba
-            let url = DASHBOARD_URL;
-            if (activePublicationId) {
-                url += `?pub=${encodeURIComponent(activePublicationId)}`;
-            }
-            url += `#jwt=${encodeURIComponent(jwt)}`;
-            require('uxp').shell.openExternal(url);
+            require('uxp').shell.openExternal(buildUrl(jwt));
         } catch (error) {
             logError('[Workspace] Dashboard megnyitás sikertelen:', error);
             // Fallback: JWT nélkül is megnyitjuk a dashboardot
             try {
-                let url = DASHBOARD_URL;
-                if (activePublicationId) {
-                    url += `?pub=${encodeURIComponent(activePublicationId)}`;
-                }
-                require('uxp').shell.openExternal(url);
+                require('uxp').shell.openExternal(buildUrl(null));
             } catch (fallbackError) {
                 logError('[Workspace] Böngésző megnyitása sikertelen:', fallbackError);
                 showToast('A böngésző nem nyitható meg', TOAST_TYPES.ERROR);
             }
         }
     }, [showToast, activePublicationId]);
-
-    /**
-     * Kiadvány mező frissítése (pl. coverage)
-     * A DataContext automatikusan frissíti az adatokat.
-     * @param {string} field - A mező neve
-     * @param {*} value - Az új érték
-     */
-    const handlePublicationUpdate = useCallback(async (field, value) => {
-        if (!selectedItem || selectedType !== 'publication') return;
-
-        try {
-            await updatePublication(selectedItem.$id, { [field]: value });
-            showToast('Módosítás mentve', TOAST_TYPES.SUCCESS);
-
-            // Coverage változás esetén újravalidáljuk az összes cikket
-            if (field === 'coverageStart' || field === 'coverageEnd') {
-                dispatchMaestroEvent(MaestroEvent.publicationCoverageChanged, {
-                    publication: { ...selectedItem, [field]: value }
-                });
-            }
-        } catch (error) {
-            logError('[Workspace] Publication update failed:', error);
-            showToast('A kiadvány mentése sikertelen', TOAST_TYPES.ERROR, error.message || 'Ismeretlen hiba történt a frissítés közben.');
-        }
-    }, [selectedItem, selectedType, updatePublication, showToast]);
 
     /**
      * Cikk fájl megnyitása InDesign-ban
@@ -304,6 +254,12 @@ export const Workspace = () => {
                 isArchiving={isArchiving}
                 archiveProgress={archiveProgress}
                 onArchivePublication={handleOpenArchiveDialog}
+                organizations={organizations}
+                activeOrganizationId={activeOrganizationId}
+                onOrganizationChange={setActiveOrganization}
+                scopedOffices={scopedOffices}
+                activeEditorialOfficeId={activeEditorialOfficeId}
+                onOfficeChange={setActiveOffice}
             />
 
             {/* Központi szűrősáv — a fejléc alatt, minden kiadványra érvényes */}
@@ -339,6 +295,7 @@ export const Workspace = () => {
             }}>
                 <PublicationList
                     onShowProperties={handleShowProperties}
+                    onOpenInDashboard={handleOpenDashboard}
                     filterState={filterState}
                 />
             </div>
@@ -346,9 +303,7 @@ export const Workspace = () => {
             {currentView === 'properties' && selectedItem && (
                 <PropertiesPanel
                     selectedItem={selectedItem}
-                    type={selectedType}
-                    publication={selectedPublication}
-                    onPublicationUpdate={handlePublicationUpdate}
+                    publication={selectedParentPublication}
                     onBack={handleBackToList}
                     onOpen={handleOpenArticle}
                     runAndPersistPreflight={runAndPersistPreflight}

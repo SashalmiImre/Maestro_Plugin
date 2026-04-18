@@ -5,12 +5,12 @@
  * Appwrite REST lekérés + Realtime szinkronizáció.
  */
 
-import React, { createContext, useContext, useState, useCallback, useEffect, useRef } from 'react';
-import { Databases, Functions, Storage, Query } from 'appwrite';
+import React, { createContext, useContext, useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
+import { Databases, Storage, Query, ID } from 'appwrite';
 import { getClient } from './AuthContext.jsx';
+import { useScope } from './ScopeContext.jsx';
 import {
-    DATABASE_ID, COLLECTIONS, TEAMS, BUCKETS,
-    GET_TEAM_MEMBERS_FUNCTION_ID,
+    DATABASE_ID, COLLECTIONS, BUCKETS,
     PAGE_SIZE, TEAM_CACHE_DURATION_MS
 } from '../config.js';
 
@@ -21,18 +21,32 @@ export function useData() {
 }
 
 export function DataProvider({ children }) {
+    const { activeOrganizationId, activeEditorialOfficeId } = useScope();
+
     const [publications, setPublications] = useState([]);
     const [articles, setArticles] = useState([]);
     const [layouts, setLayouts] = useState([]);
     const [deadlines, setDeadlines] = useState([]);
     const [validations, setValidations] = useState([]);
+    const [workflows, setWorkflows] = useState([]);
     const [activePublicationId, setActivePublicationIdState] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
 
-    // Ref-ek a Realtime handler számára (stabil referencia)
+    // Ref-ek a Realtime handler és a write-through metódusok számára (stabil referencia)
     const activePublicationIdRef = useRef(null);
     // Az aktuális kiadvány article $id-jainak Set-je — validáció Realtime szűréshez
     const articleIdsRef = useRef(new Set());
+
+    // Scope refek — a create metódusok olvassák, hogy callback closure-ök nélkül mindig
+    // a legfrissebb aktív organization/office ID-ra injektáljanak scope mezőket.
+    // useLayoutEffect: commit fázisban, még MIELŐTT a gyerek komponensek useEffect-jei
+    // futnának. A DashboardLayout scope-effect-je ugyanis hamarabb fut a fa miatt
+    // (child-first), és ref-ből olvassa a fetchPublications-t → ha useEffect-tel
+    // szinkronizálnánk, stale office-szal fetchelne (A→B→A esetben A-n is üres lenne).
+    const activeOrganizationIdRef = useRef(activeOrganizationId);
+    const activeEditorialOfficeIdRef = useRef(activeEditorialOfficeId);
+    useLayoutEffect(() => { activeOrganizationIdRef.current = activeOrganizationId; }, [activeOrganizationId]);
+    useLayoutEffect(() => { activeEditorialOfficeIdRef.current = activeEditorialOfficeId; }, [activeEditorialOfficeId]);
 
     // Appwrite szolgáltatások
     const servicesRef = useRef(null);
@@ -40,11 +54,10 @@ export function DataProvider({ children }) {
         const client = getClient();
         servicesRef.current = {
             databases: new Databases(client),
-            functions: new Functions(client),
             storage: new Storage(client)
         };
     }
-    const { databases, functions, storage } = servicesRef.current;
+    const { databases, storage } = servicesRef.current;
 
     // Csapattag cache
     const memberCacheRef = useRef({ map: new Map(), time: 0 });
@@ -52,6 +65,12 @@ export function DataProvider({ children }) {
     // ─── Kiadványok lekérése ────────────────────────────────────────────────
 
     const fetchPublications = useCallback(async () => {
+        const editorialOfficeId = activeEditorialOfficeIdRef.current;
+        if (!editorialOfficeId) {
+            setPublications([]);
+            return [];
+        }
+
         const allDocuments = [];
         let offset = 0;
 
@@ -60,6 +79,7 @@ export function DataProvider({ children }) {
                 databaseId: DATABASE_ID,
                 collectionId: COLLECTIONS.PUBLICATIONS,
                 queries: [
+                    Query.equal('editorialOfficeId', editorialOfficeId),
                     Query.limit(PAGE_SIZE),
                     Query.offset(offset),
                     Query.orderAsc('name')
@@ -79,6 +99,18 @@ export function DataProvider({ children }) {
     const switchPublication = useCallback(async (publicationId) => {
         activePublicationIdRef.current = publicationId;
         setActivePublicationIdState(publicationId);
+
+        // null = nincs aktív kiadvány (pl. üres scope) → derived state törlése
+        if (!publicationId) {
+            setArticles([]);
+            setLayouts([]);
+            setDeadlines([]);
+            setValidations([]);
+            articleIdsRef.current = new Set();
+            setIsLoading(false);
+            return;
+        }
+
         setLayouts([]);
         setIsLoading(true);
 
@@ -172,48 +204,300 @@ export function DataProvider({ children }) {
         }
     }, [databases]);
 
-    // ─── Csapattag feloldás ─────────────────────────────────────────────────
+    // ─── Csoporttag feloldás ────────────────────────────────────────────────
 
-    const fetchAllTeamMembers = useCallback(async () => {
+    const fetchAllGroupMembers = useCallback(async () => {
         const cache = memberCacheRef.current;
         const now = Date.now();
         if (cache.map.size > 0 && (now - cache.time) < TEAM_CACHE_DURATION_MS) {
             return cache.map;
         }
 
-        const allTeamIds = Object.values(TEAMS);
-        const results = await Promise.allSettled(
-            allTeamIds.map(teamId =>
-                functions.createExecution({
-                    functionId: GET_TEAM_MEMBERS_FUNCTION_ID,
-                    body: JSON.stringify({ teamId }),
-                    async: false
-                })
-            )
-        );
+        const editorialOfficeId = localStorage.getItem('maestro.activeEditorialOfficeId');
+        if (!editorialOfficeId) return new Map();
 
-        const map = new Map();
-        for (const result of results) {
-            if (result.status !== 'fulfilled') continue;
-            try {
-                const response = JSON.parse(result.value.responseBody);
-                if (response.success && response.members) {
-                    for (const m of response.members) {
-                        if (!map.has(m.userId)) {
-                            map.set(m.userId, m.name);
-                        }
-                    }
+        try {
+            const result = await databases.listDocuments({
+                databaseId: DATABASE_ID,
+                collectionId: COLLECTIONS.GROUP_MEMBERSHIPS,
+                queries: [
+                    Query.equal('editorialOfficeId', editorialOfficeId),
+                    Query.limit(500)
+                ]
+            });
+
+            const map = new Map();
+            for (const m of result.documents) {
+                if (!map.has(m.userId)) {
+                    map.set(m.userId, m.userName || '');
                 }
-            } catch { /* parse hiba — kihagyjuk */ }
-        }
+            }
 
-        memberCacheRef.current = { map, time: now };
-        return map;
-    }, [functions]);
+            memberCacheRef.current = { map, time: now };
+            return map;
+        } catch {
+            return new Map();
+        }
+    }, [databases]);
 
     const getMemberName = useCallback((userId) => {
         return memberCacheRef.current.map.get(userId) || null;
     }, []);
+
+    // ─── Workflow lekérés ────────────────────────────────────────────────────
+    //
+    // A `workflows[]` (plural) az összes workflow doc az aktív szerkesztőségben —
+    // a publication CreateModal / SettingsModal workflow-dropdownja olvassa.
+    // A `workflow` (singular) származtatott state: az aktív kiadvány `workflowId`-ja
+    // szerint kiválasztott workflow compiled JSON-ja. Ha nincs aktív kiadvány vagy
+    // nincs workflowId, az első (név szerint rendezett) workflow a fallback. Ezt a
+    // filterek / jogosultsági hookok / Workflow Designer használják.
+
+    const fetchWorkflow = useCallback(async () => {
+        const editorialOfficeId = activeEditorialOfficeIdRef.current;
+        if (!editorialOfficeId) {
+            setWorkflows([]);
+            return;
+        }
+
+        try {
+            const result = await databases.listDocuments({
+                databaseId: DATABASE_ID,
+                collectionId: COLLECTIONS.WORKFLOWS,
+                queries: [
+                    Query.equal('editorialOfficeId', editorialOfficeId),
+                    Query.orderAsc('name'),
+                    Query.limit(100)
+                ]
+            });
+
+            setWorkflows(result.documents);
+        } catch (err) {
+            console.error('[DataContext] Workflow fetch hiba:', err);
+        }
+    }, [databases]);
+
+    // Workflow(k) betöltése induláskor, és scope-váltáskor újra.
+    useEffect(() => {
+        fetchWorkflow();
+    }, [fetchWorkflow, activeEditorialOfficeId]);
+
+    // Származtatott workflow: az aktív kiadvány `workflowId`-ja szerint.
+    // Ha a publikációnak van workflowId-ja, de a referencia stale (a workflow
+    // már nem létezik a listában) → null (fail-closed, a szerver policy egyezik).
+    // Ha nincs workflowId (legacy rekord vagy nincs aktív kiadvány) → az első
+    // (név szerint rendezett) workflow a fallback.
+    const workflow = useMemo(() => {
+        if (workflows.length === 0) return null;
+
+        const activePub = activePublicationId
+            ? publications.find((p) => p.$id === activePublicationId)
+            : null;
+        const targetId = activePub?.workflowId;
+
+        let targetDoc;
+        if (targetId) {
+            targetDoc = workflows.find((w) => w.$id === targetId) || null;
+        } else {
+            targetDoc = workflows[0];
+        }
+
+        if (!targetDoc) return null;
+
+        try {
+            return typeof targetDoc.compiled === 'string'
+                ? JSON.parse(targetDoc.compiled)
+                : targetDoc.compiled;
+        } catch (err) {
+            console.error('[DataContext] Workflow compiled parse hiba:', err);
+            return null;
+        }
+    }, [workflows, publications, activePublicationId]);
+
+    // ─── Write-through metódusok ────────────────────────────────────────────
+    //
+    // A Dashboard szerkesztőfelületek (CreatePublicationModal, PublicationSettingsModal)
+    // ezeken keresztül írnak az Appwrite DB-be. A scope mezők (`organizationId`,
+    // `editorialOfficeId`) automatikusan injektálódnak a `withScope()` helper-rel.
+    // A Realtime $updatedAt guard az optimista update-et védi a régi payload ellen.
+
+    const withScope = useCallback((data) => {
+        const officeId = activeEditorialOfficeIdRef.current;
+        const orgId = activeOrganizationIdRef.current;
+        if (!officeId || !orgId) {
+            throw new Error('Nincs aktív szerkesztőség — a művelet nem hajtható végre.');
+        }
+        return { ...data, organizationId: orgId, editorialOfficeId: officeId };
+    }, []);
+
+    // Publications
+
+    const createPublication = useCallback(async (data) => {
+        const doc = await databases.createDocument({
+            databaseId: DATABASE_ID,
+            collectionId: COLLECTIONS.PUBLICATIONS,
+            documentId: ID.unique(),
+            data: withScope(data)
+        });
+        setPublications((prev) => {
+            if (prev.some((p) => p.$id === doc.$id)) return prev;
+            return [...prev, doc].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        });
+        // Frissen létrehozott kiadvány legyen az aktív — így a modal zárása
+        // után azonnal a szerkesztő felületre kerül a user, és a modalból
+        // utólag létrehozott default layout is az aktív pub-hoz kerül be.
+        await switchPublication(doc.$id);
+        return doc;
+    }, [databases, withScope, switchPublication]);
+
+    const updatePublication = useCallback(async (id, data) => {
+        const doc = await databases.updateDocument({
+            databaseId: DATABASE_ID,
+            collectionId: COLLECTIONS.PUBLICATIONS,
+            documentId: id,
+            data
+        });
+        setPublications((prev) => prev.map((p) => (p.$id === id ? doc : p)));
+        return doc;
+    }, [databases]);
+
+    const deletePublication = useCallback(async (id) => {
+        await databases.deleteDocument({
+            databaseId: DATABASE_ID,
+            collectionId: COLLECTIONS.PUBLICATIONS,
+            documentId: id
+        });
+        setPublications((prev) => prev.filter((p) => p.$id !== id));
+        // Ha a törölt publikáció az aktív, a derived state-et és az aktív
+        // ID-t is törölni kell — a Realtime handler ugyanezt végzi delete
+        // event-re, de Realtime disconnect alatt nem érkezne meg az event,
+        // így a UI árva doc-on ragadna. A direkt CRUD úton is szinkron
+        // tisztázzuk ugyanazt a state-et.
+        if (id === activePublicationIdRef.current) {
+            activePublicationIdRef.current = null;
+            setActivePublicationIdState(null);
+            setArticles([]);
+            setLayouts([]);
+            setDeadlines([]);
+            setValidations([]);
+            articleIdsRef.current = new Set();
+        }
+    }, [databases]);
+
+    // Layouts
+
+    const createLayout = useCallback(async (data) => {
+        const doc = await databases.createDocument({
+            databaseId: DATABASE_ID,
+            collectionId: COLLECTIONS.LAYOUTS,
+            documentId: ID.unique(),
+            data: withScope(data)
+        });
+        // Csak akkor rakjuk be a helyi state-be, ha az aktív kiadványhoz tartozik
+        if (doc.publicationId === activePublicationIdRef.current) {
+            setLayouts((prev) => {
+                if (prev.some((l) => l.$id === doc.$id)) return prev;
+                return [...prev, doc].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
+            });
+        }
+        return doc;
+    }, [databases, withScope]);
+
+    const updateLayout = useCallback(async (id, data) => {
+        const doc = await databases.updateDocument({
+            databaseId: DATABASE_ID,
+            collectionId: COLLECTIONS.LAYOUTS,
+            documentId: id,
+            data
+        });
+        setLayouts((prev) => prev.map((l) => (l.$id === id ? doc : l)));
+        return doc;
+    }, [databases]);
+
+    /**
+     * Layout törlés cikk-áthelyezéssel.
+     * @param {string} id - A törlendő layout $id-je.
+     * @param {string|null} reassignToId - A cél layout $id-je, vagy null (layoutId mező
+     *     nullázása az érintett cikkeken).
+     */
+    const deleteLayout = useCallback(async (id, reassignToId = null) => {
+        // Érintett cikkek átrendelése
+        const affectedArticles = articles.filter((a) => a.layoutId === id);
+        if (affectedArticles.length > 0) {
+            await Promise.all(
+                affectedArticles.map((a) =>
+                    databases.updateDocument({
+                        databaseId: DATABASE_ID,
+                        collectionId: COLLECTIONS.ARTICLES,
+                        documentId: a.$id,
+                        data: { layoutId: reassignToId }
+                    })
+                )
+            );
+            // Lokális article state frissítése a Realtime előtt (optimista)
+            setArticles((prev) =>
+                prev.map((a) => (a.layoutId === id ? { ...a, layoutId: reassignToId } : a))
+            );
+        }
+
+        await databases.deleteDocument({
+            databaseId: DATABASE_ID,
+            collectionId: COLLECTIONS.LAYOUTS,
+            documentId: id
+        });
+        setLayouts((prev) => prev.filter((l) => l.$id !== id));
+    }, [databases, articles]);
+
+    // Deadlines
+
+    const createDeadline = useCallback(async (data) => {
+        const doc = await databases.createDocument({
+            databaseId: DATABASE_ID,
+            collectionId: COLLECTIONS.DEADLINES,
+            documentId: ID.unique(),
+            data: withScope(data)
+        });
+        if (doc.publicationId === activePublicationIdRef.current) {
+            setDeadlines((prev) => {
+                if (prev.some((d) => d.$id === doc.$id)) return prev;
+                return [...prev, doc];
+            });
+        }
+        return doc;
+    }, [databases, withScope]);
+
+    const updateDeadline = useCallback(async (id, data) => {
+        const doc = await databases.updateDocument({
+            databaseId: DATABASE_ID,
+            collectionId: COLLECTIONS.DEADLINES,
+            documentId: id,
+            data
+        });
+        setDeadlines((prev) => prev.map((d) => (d.$id === id ? doc : d)));
+        return doc;
+    }, [databases]);
+
+    const deleteDeadline = useCallback(async (id) => {
+        await databases.deleteDocument({
+            databaseId: DATABASE_ID,
+            collectionId: COLLECTIONS.DEADLINES,
+            documentId: id
+        });
+        setDeadlines((prev) => prev.filter((d) => d.$id !== id));
+    }, [databases]);
+
+    // Articles (csak update — create és delete a plugin felelőssége)
+
+    const updateArticle = useCallback(async (id, data) => {
+        const doc = await databases.updateDocument({
+            databaseId: DATABASE_ID,
+            collectionId: COLLECTIONS.ARTICLES,
+            documentId: id,
+            data
+        });
+        setArticles((prev) => prev.map((a) => (a.$id === id ? doc : a)));
+        return doc;
+    }, [databases]);
 
     // ─── Realtime feliratkozás ──────────────────────────────────────────────
 
@@ -228,7 +512,8 @@ export function DataProvider({ children }) {
             channelName(COLLECTIONS.LAYOUTS),
             channelName(COLLECTIONS.DEADLINES),
             channelName(COLLECTIONS.USER_VALIDATIONS),
-            channelName(COLLECTIONS.SYSTEM_VALIDATIONS)
+            channelName(COLLECTIONS.SYSTEM_VALIDATIONS),
+            channelName(COLLECTIONS.WORKFLOWS)
         ], (response) => {
             const eventType = getEventType(response.events);
             if (!eventType) return;
@@ -244,7 +529,26 @@ export function DataProvider({ children }) {
                         applyArticleEvent(eventType, payload, activePublicationIdRef, setArticles);
                         break;
                     case 'publications':
-                        applyPublicationEvent(eventType, payload, setPublications);
+                        applyPublicationEvent(
+                            eventType,
+                            payload,
+                            activeEditorialOfficeIdRef.current,
+                            setPublications
+                        );
+                        // Ha a törölt publikáció éppen az aktív, a derived
+                        // state-et és az aktív ID-t is törölni kell, hogy a
+                        // UI ne maradjon árva doc-on ragadva. A Plugin
+                        // DataContext ugyanezt a mintát követi
+                        // (maestro-indesign CLAUDE.md § DataContext).
+                        if (eventType === 'delete' && payload.$id === activePublicationIdRef.current) {
+                            activePublicationIdRef.current = null;
+                            setActivePublicationIdState(null);
+                            setArticles([]);
+                            setLayouts([]);
+                            setDeadlines([]);
+                            setValidations([]);
+                            articleIdsRef.current = new Set();
+                        }
                         break;
                     case 'layouts':
                         applyLayoutEvent(eventType, payload, activePublicationIdRef, setLayouts);
@@ -258,6 +562,29 @@ export function DataProvider({ children }) {
                     case 'system_validations':
                         applySystemValidationEvent(eventType, payload, articleIdsRef, setValidations);
                         break;
+                    case 'workflows': {
+                        // A `workflows[]` lista frissül; a származtatott `workflow`
+                        // useMemo automatikusan recompute-ol az aktív kiadvány
+                        // workflowId-ja alapján.
+                        const activeOfficeId = activeEditorialOfficeIdRef.current;
+                        if (eventType === 'delete') {
+                            setWorkflows((prev) => prev.filter((w) => w.$id !== payload.$id));
+                        } else if (payload.editorialOfficeId === activeOfficeId) {
+                            setWorkflows((prev) => {
+                                const idx = prev.findIndex((w) => w.$id === payload.$id);
+                                let next;
+                                if (idx >= 0) {
+                                    next = [...prev];
+                                    next[idx] = payload;
+                                } else {
+                                    next = [...prev, payload];
+                                }
+                                next.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+                                return next;
+                            });
+                        }
+                        break;
+                    }
                 }
             } catch (error) {
                 console.error('Realtime event handler error', {
@@ -272,9 +599,15 @@ export function DataProvider({ children }) {
 
     const value = {
         publications, articles, layouts, deadlines, validations,
+        workflow, workflows,
         activePublicationId, isLoading, storage,
-        fetchPublications, switchPublication,
-        fetchAllTeamMembers, getMemberName
+        fetchPublications, switchPublication, fetchWorkflow,
+        fetchAllGroupMembers, getMemberName,
+        // Write-through API
+        createPublication, updatePublication, deletePublication,
+        createLayout, updateLayout, deleteLayout,
+        createDeadline, updateDeadline, deleteDeadline,
+        updateArticle
     };
 
     return (
@@ -301,10 +634,9 @@ function getCollection(channels) {
         if (ch.includes(COLLECTIONS.PUBLICATIONS)) return 'publications';
         if (ch.includes(COLLECTIONS.LAYOUTS)) return 'layouts';
         if (ch.includes(COLLECTIONS.DEADLINES)) return 'deadlines';
-        // USER_VALIDATIONS ('uservalidations') ellenőrzése a SYSTEM_VALIDATIONS ('validations')
-        // előtt, mert 'validations' substring of 'uservalidations'
         if (ch.includes(COLLECTIONS.USER_VALIDATIONS)) return 'validations';
         if (ch.includes(COLLECTIONS.SYSTEM_VALIDATIONS)) return 'system_validations';
+        if (ch.includes(COLLECTIONS.WORKFLOWS)) return 'workflows';
     }
     return null;
 }
@@ -333,20 +665,35 @@ function applyArticleEvent(eventType, payload, pubIdRef, setArticles) {
     }
 }
 
-function applyPublicationEvent(eventType, payload, setPublications) {
+function applyPublicationEvent(eventType, payload, activeOfficeId, setPublications) {
     if (eventType === 'delete') {
         setPublications(prev => prev.filter(p => p.$id !== payload.$id));
-    } else {
-        setPublications(prev => {
-            const idx = prev.findIndex(p => p.$id === payload.$id);
-            if (idx >= 0) {
-                const next = [...prev];
-                next[idx] = payload;
-                return next;
-            }
-            return [...prev, payload];
-        });
+        return;
     }
+
+    // Scope-szűrés: idegen office payload-ját nem vesszük fel, és ha egy
+    // már listázott rekord scope-ja idegenre változott, eltávolítjuk.
+    const inScope = payload.editorialOfficeId === activeOfficeId;
+
+    setPublications(prev => {
+        const idx = prev.findIndex(p => p.$id === payload.$id);
+        if (!inScope) {
+            return idx >= 0 ? prev.filter(p => p.$id !== payload.$id) : prev;
+        }
+        if (idx >= 0) {
+            // Elavulás-védelem: ha a helyi példány frissebb, ne írjuk felül
+            // (pl. a write-through response után érkező régebbi realtime event).
+            const local = prev[idx];
+            if (local.$updatedAt && payload.$updatedAt &&
+                new Date(local.$updatedAt) > new Date(payload.$updatedAt)) {
+                return prev;
+            }
+            const next = [...prev];
+            next[idx] = payload;
+            return next;
+        }
+        return [...prev, payload];
+    });
 }
 
 function applyLayoutEvent(eventType, payload, pubIdRef, setLayouts) {
@@ -381,6 +728,13 @@ function applyDeadlineEvent(eventType, payload, pubIdRef, setDeadlines) {
         setDeadlines(prev => {
             const idx = prev.findIndex(d => d.$id === payload.$id);
             if (idx >= 0) {
+                // Elavulás-védelem: a DeadlinesTab blur-onként külön hívja az updateDeadline-t,
+                // így egy késleltetett régebbi realtime event könnyen felülírná a frissebb mezőt.
+                const local = prev[idx];
+                if (local.$updatedAt && payload.$updatedAt &&
+                    new Date(local.$updatedAt) > new Date(payload.$updatedAt)) {
+                    return prev;
+                }
                 const next = [...prev];
                 next[idx] = payload;
                 return next;
@@ -391,7 +745,7 @@ function applyDeadlineEvent(eventType, payload, pubIdRef, setDeadlines) {
 }
 
 function applyValidationEvent(eventType, payload, articleIdsRef, setValidations) {
-    // uservalidations: csak az aktív kiadvány cikkeihez tartozó eseményeket kezeljük.
+    // userValidations: csak az aktív kiadvány cikkeihez tartozó eseményeket kezeljük.
     // Delete esetén $id alapján szűrünk (a cikk már törölve lehet az articleIdsRef-ből).
     if (eventType === 'delete') {
         setValidations(prev => prev.filter(v => v.$id !== payload.$id));

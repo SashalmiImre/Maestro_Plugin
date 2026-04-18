@@ -11,7 +11,9 @@ import { useData } from "../../../../core/contexts/DataContext.jsx";
 
 // Utils
 import { WorkflowEngine } from "../../../../core/utils/workflow/workflowEngine.js";
-import { WORKFLOW_STATES, WORKFLOW_CONFIG, MARKERS, TRANSITION_TYPES, STATE_PERMISSIONS, TEAM_ARTICLE_FIELD } from "../../../../core/utils/workflow/workflowConstants.js";
+import { MARKERS } from "maestro-shared/constants.js";
+import { getStateConfig, getAvailableTransitions } from "maestro-shared/workflowRuntime.js";
+import { getContributor } from "maestro-shared/contributorHelpers.js";
 import { hasTransitionPermission } from "../../../../core/utils/workflow/workflowPermissions.js";
 import { STORAGE_KEYS } from "../../../../core/utils/constants.js";
 import { isValidFileName } from "../../../../core/utils/pathUtils.js";
@@ -49,7 +51,7 @@ import { isValidFileName } from "../../../../core/utils/pathUtils.js";
  * @param {boolean} props.isSyncing - Whether an update is in progress (disables controls)
  * @returns {JSX.Element} The GeneralSection component
  */
-export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChange, onStateTransition, isSyncing, permissions }) => {
+export const GeneralSection = ({ article, user, workflow, onFieldUpdate, onPageNumberChange, onStateTransition, isSyncing, permissions }) => {
     const { layouts } = useData();
 
     /**
@@ -64,35 +66,47 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
      * @returns {Array} availableTransitions - Sorted array of available transition objects
      */
     const { activeMarkersMask, currentState, currentConfig, availableTransitions } = (() => {
-        // Validate and default the workflow state
-        let rawState = article.state;
-        if (rawState === undefined) rawState = article.State;
-
-        const state = typeof rawState === 'number' ? rawState : WORKFLOW_STATES.DESIGNING;
-        const config = WORKFLOW_CONFIG[state]?.config || WORKFLOW_CONFIG[WORKFLOW_STATES.DESIGNING]?.config || {};
+        const state = article.state || "designing";
+        const config = getStateConfig(workflow, state);
 
         // Validate and default the markers value
         const markers = typeof article.markers === 'number' ? article.markers : 0;
 
-        // Get available transitions and sort by target state
-        const rawTransitions = WorkflowEngine.getAvailableTransitions(state);
-        const transitions = [...rawTransitions].sort((a, b) => a.target - b.target);
+        // Get available transitions from workflow
+        const transitions = getAvailableTransitions(workflow, state);
 
-        return { activeMarkersMask: markers, currentState: state, currentConfig: config, availableTransitions: transitions };
+        return {
+            activeMarkersMask: markers,
+            currentState: state,
+            currentConfig: config ? { label: config.label, color: config.color } : { label: state, color: "#999999" },
+            availableTransitions: transitions
+        };
     })();
 
     // Jogosultsági ellenőrzés: a felhasználó mozgathatja-e a cikket?
-    const canTransition = user ? hasTransitionPermission(article, currentState, user) : false;
+    const userGroups = user?.groupSlugs || [];
+    const canTransition = workflow ? hasTransitionPermission(workflow, currentState, userGroups) : false;
 
     // Ellenőrzi, hogy a jelenlegi állapot felelős csapataiból van-e hozzárendelt munkatárs
     const hasRequiredContributor = (() => {
-        const teams = STATE_PERMISSIONS[currentState];
+        const teams = workflow?.statePermissions?.[currentState];
         if (!teams || teams.length === 0) return true;
-        return teams.some(slug => {
-            const field = TEAM_ARTICLE_FIELD[slug];
-            return field && article[field];
-        });
+        return teams.some(slug => getContributor(article.contributors, slug));
     })();
+
+    // Aktív lock (USER = megnyitott fájl, SYSTEM = verifikáció alatt) → nincs állapotváltás.
+    // A lock azt jelzi, hogy a dokumentum foglalt; a CF is elutasítaná, de UI-szinten is blokkoljuk.
+    const isLocked = Boolean(article.lockType);
+
+    // Közös disabled + title a két átmenet-gombhoz (backward/forward).
+    const transitionDisabled = isIgnored || isSyncing || isLocked || !canTransition || !hasRequiredContributor ? true : undefined;
+    const transitionTitle = isLocked
+        ? "Zárd be az InDesign dokumentumot az állapotváltáshoz"
+        : !canTransition
+            ? "Nincs jogosultságod az állapotváltáshoz"
+            : !hasRequiredContributor
+                ? "Előbb rendelj hozzá felelős munkatársat"
+                : undefined;
 
     // Local state for Name field to allow "Enter to save" behavior
     const [localName, setLocalName] = useState(article.name || "");
@@ -347,9 +361,7 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
                             {/* Backward button (25%) */}
                             <div style={{ flex: 1 }}>
                                 {(() => {
-                                    const backwardTransition = availableTransitions.find(t =>
-                                        t.type === TRANSITION_TYPES.BACKWARD || (!t.type && t.target < currentState)
-                                    );
+                                    const backwardTransition = availableTransitions.find(t => t.direction === "backward");
 
                                     return backwardTransition ? (
                                         <sp-button
@@ -357,9 +369,9 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
                                             variant="secondary"
                                             size="m"
                                             style={{ borderRadius: "12px 0 0 12px", width: "100%" }}
-                                            onClick={() => onStateTransition(backwardTransition.target)}
-                                            disabled={isIgnored || isSyncing || !canTransition || !hasRequiredContributor ? true : undefined}
-                                            title={!canTransition ? "Nincs jogosultságod az állapotváltáshoz" : !hasRequiredContributor ? "Előbb rendelj hozzá felelős munkatársat" : undefined}
+                                            onClick={() => onStateTransition(backwardTransition.to)}
+                                            disabled={transitionDisabled}
+                                            title={transitionTitle}
                                         >
                                             ← {backwardTransition.label}
                                         </sp-button>
@@ -387,9 +399,7 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
                             {/* Forward button (25%) */}
                             <div style={{ flex: 1 }}>
                                 {(() => {
-                                    const forwardTransition = availableTransitions.find(t =>
-                                        t.type === TRANSITION_TYPES.FORWARD || (!t.type && t.target > currentState)
-                                    );
+                                    const forwardTransition = availableTransitions.find(t => t.direction === "forward");
 
                                     return forwardTransition ? (
                                         <sp-button
@@ -397,9 +407,9 @@ export const GeneralSection = ({ article, user, onFieldUpdate, onPageNumberChang
                                             variant="secondary"
                                             size="m"
                                             style={{ borderRadius: "0 12px 12px 0", width: "100%" }}
-                                            onClick={() => onStateTransition(forwardTransition.target)}
-                                            disabled={isIgnored || isSyncing || !canTransition || !hasRequiredContributor ? true : undefined}
-                                            title={!canTransition ? "Nincs jogosultságod az állapotváltáshoz" : !hasRequiredContributor ? "Előbb rendelj hozzá felelős munkatársat" : undefined}
+                                            onClick={() => onStateTransition(forwardTransition.to)}
+                                            disabled={transitionDisabled}
+                                            title={transitionTitle}
                                         >
                                             {forwardTransition.label} →
                                         </sp-button>

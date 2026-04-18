@@ -23,6 +23,7 @@ cd "$SCRIPT_DIR" && npm run build
 DIST_DIR="$SCRIPT_DIR/dist"
 errors=0
 [[ -f "$DIST_DIR/index.html" ]] || { echo "HIBA: $DIST_DIR/index.html nem található"; errors=1; }
+[[ -f "$DIST_DIR/.htaccess" ]]  || { echo "HIBA: $DIST_DIR/.htaccess nem található (SPA fallback rewrite)"; errors=1; }
 [[ -d "$DIST_DIR/assets" ]]     || { echo "HIBA: $DIST_DIR/assets könyvtár nem található"; errors=1; }
 [[ $errors -eq 0 ]] || exit 1
 
@@ -32,6 +33,7 @@ echo "[2/3] Fájlok feltöltése..."
 ssh "$REMOTE_USER@$REMOTE_HOST" "rm -rf $REMOTE_DIR/js $REMOTE_DIR/css $REMOTE_DIR/shared $REMOTE_DIR/assets"
 # Build output feltöltése
 scp "$DIST_DIR/index.html" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
+scp "$DIST_DIR/.htaccess"  "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
 scp -r "$DIST_DIR/assets/" "$REMOTE_USER@$REMOTE_HOST:$REMOTE_DIR/"
 
 # 4. Kész

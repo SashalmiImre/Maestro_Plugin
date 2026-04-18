@@ -1,5 +1,5 @@
 // React
-import React, { useState, useCallback, useMemo } from "react";
+import React, { useState, useCallback, useMemo, useRef, useEffect } from "react";
 
 // Components
 import { ArticleTable } from "../../articles/ArticleTable.jsx";
@@ -8,18 +8,26 @@ import { ConfirmDialog } from "../../../common/ConfirmDialog.jsx";
 // Custom Hooks
 import { useArticles } from "../../../../data/hooks/useArticles.js";
 import { useUser } from "../../../../core/contexts/UserContext.jsx";
-import { useToast } from "../../../common/Toast/ToastContext.jsx";
+import { useData } from "../../../../core/contexts/DataContext.jsx";
 
 // Utils
-import { MARKERS, TEAM_ARTICLE_FIELD, labelMatchesSlug } from "../../../../core/utils/workflow/workflowConstants.js";
-import { log, logError } from "../../../../core/utils/logger.js";
+import { MARKERS } from "maestro-shared/constants.js";
+import { logDebug, logError } from "../../../../core/utils/logger.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../../../core/config/maestroEvents.js";
-import { checkElementPermission, PUBLICATION_ELEMENT_PERMISSIONS } from "../../../../core/utils/workflow/elementPermissions.js";
 import { buildPlaceholderRows } from "../../../../core/utils/pageGapUtils.js";
+import { isContributor } from "maestro-shared/contributorHelpers.js";
+import { toCanonicalPath, isUnderMountPrefix, currentMountPrefix } from "../../../../core/utils/pathUtils.js";
+import { callSetPublicationRootPathCF } from "../../../../core/utils/updatePublicationClient.js";
+import { PermissionDeniedError, isNetworkError } from "../../../../core/utils/errorUtils.js";
 
-export const Publication = React.memo(({ publication, onDelete, onRename, onShowProperties, isExpanded, onToggle, isDriveAccessible, filterState }) => {
+export const Publication = React.memo(({ publication, onShowProperties, onOpenInDashboard, isExpanded, onToggle, isConfigured, isDriveAccessible, filterState }) => {
+    // Két blokkoló ok egyesítve a fejléc színezéshez és a cikk-művelet tiltáshoz.
+    // Szemantikailag különbözőek — a banner-ek külön ágon jelennek meg:
+    //   - !isConfigured  → narancs „Konfiguráció szükséges" (rootPath még nincs beállítva, #33)
+    //   - !isDriveAccessible → piros „mappa nem érhető el" (rootPath be van állítva, de nem elérhető)
+    const isBlocked = !isConfigured || !isDriveAccessible;
     const { user } = useUser();
-    const { showToast } = useToast();
+    const { workflow } = useData();
     const {
         articles,
         addArticle,
@@ -27,52 +35,45 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
     } = useArticles(publication.$id, publication.rootPath);
 
     const [isHovered, setIsHovered] = useState(false);
+    const [isFocused, setIsFocused] = useState(false);
 
     // Dialog state
     const [dialogOpen, setDialogOpen] = useState(false);
     const [dialogConfig, setDialogConfig] = useState({ title: "", message: "", isAlert: false });
 
+    // rootPath beállítás flow — külön confirm dialog a véglegesítéshez.
+    // `pendingRootPath` null, ha nincs nyitott confirm; { nativePath, canonical }, ha van.
+    const [pendingRootPath, setPendingRootPath] = useState(null);
+    const [isSavingRootPath, setIsSavingRootPath] = useState(false);
+    const isSavingRootPathRef = useRef(false);
+    const [isRootPathButtonFocused, setIsRootPathButtonFocused] = useState(false);
+
     // Szűrő állapot a központi filterState prop-ból
     const { statusFilters, showIgnored, showOnlyMine, showPlaceholders } = filterState;
 
-    /** A felhasználó csapattagságaihoz tartozó contributor mezőnevek */
-    const userContributorFields = useMemo(() => {
-        const fields = new Set();
-
-        // Csapattagságból
-        (user?.teamIds || []).forEach(slug => {
-            const field = TEAM_ARTICLE_FIELD[slug];
-            if (field) fields.add(field);
-        });
-
-        // Label override-ból (a csapatok slug normalizációjával)
-        if (user?.labels?.length) {
-            for (const [slug, field] of Object.entries(TEAM_ARTICLE_FIELD)) {
-                if (labelMatchesSlug(user.labels, slug)) fields.add(field);
-            }
-        }
-
-        return Array.from(fields);
-    }, [user?.teamIds, user?.labels]);
+    const userGroupSlugs = user?.groupSlugs || [];
 
     const filteredArticles = React.useMemo(() => {
         const filtered = articles.filter(article => {
-            const statusMatch = statusFilters.includes(article.state || 0);
+            const statusMatch = statusFilters.includes(article.state || "");
             const articleMarkers = typeof article.markers === 'number' ? article.markers : 0;
             const markerMatch = showIgnored || (articleMarkers & MARKERS.IGNORE) === 0;
-            const ownerMatch = !showOnlyMine || userContributorFields.some(field => article[field] === user?.$id);
+            const ownerMatch = !showOnlyMine || isContributor(article.contributors, user?.$id, userGroupSlugs);
 
             return statusMatch && markerMatch && ownerMatch;
         });
 
-        log(`[Publication] Articles stats: Total fetched: ${articles.length}, Shown: ${filtered.length}. Filtered out: ${articles.length - filtered.length}`);
+        logDebug(`[Publication] Articles stats: Total fetched: ${articles.length}, Shown: ${filtered.length}. Filtered out: ${articles.length - filtered.length}`);
         return filtered;
-    }, [articles, statusFilters, showIgnored, showOnlyMine, userContributorFields, user?.$id]);
+    }, [articles, statusFilters, showIgnored, showOnlyMine, userGroupSlugs, user?.$id]);
 
-    /** Helykitöltő sorok: a kiadvány terjedelmén belüli lefedetlen oldalcsoportok */
+    /** Helykitöltő sorok: a kiadvány terjedelmén belüli lefedetlen oldalcsoportok.
+     *  Unconfigured pub-nál üres — a „Konfiguráció szükséges" banner mellé egy teljes
+     *  flatplan-placeholder tábla ellentmondana. */
     const placeholderRows = useMemo(() => {
-        return buildPlaceholderRows(articles, publication);
-    }, [articles, publication]);
+        if (!isConfigured) return [];
+        return buildPlaceholderRows(articles, publication, workflow);
+    }, [articles, publication, workflow, isConfigured]);
 
     /** Táblázat adatai: szűrt cikkek + opcionálisan helykitöltők */
     const tableData = useMemo(() => {
@@ -80,18 +81,40 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
         return [...filteredArticles, ...placeholderRows];
     }, [filteredArticles, placeholderRows, showPlaceholders, showOnlyMine]);
 
-    const canOpenPublicationProperties = useMemo(() => {
-        return checkElementPermission(PUBLICATION_ELEMENT_PERMISSIONS.publicationProperties, user).allowed;
-    }, [user]);
+    // Dupla Dashboard open guard: fejléc dupla kattintás + hover ikon gyors egymás utáni
+    // triggerelése két JWT lekérést és két tab-nyitást eredményezne. 1s-os ref-alapú zár
+    // (ref, nem state — nincs render impact) egyetlen hívásra szűkíti.
+    const isOpeningDashboardRef = useRef(false);
+    const openDashboardTimerRef = useRef(null);
+
+    useEffect(() => {
+        return () => {
+            if (openDashboardTimerRef.current) {
+                clearTimeout(openDashboardTimerRef.current);
+                openDashboardTimerRef.current = null;
+            }
+        };
+    }, []);
+
+    const triggerOpenInDashboard = useCallback(() => {
+        if (isOpeningDashboardRef.current) return;
+        isOpeningDashboardRef.current = true;
+        onOpenInDashboard?.(publication.$id);
+        openDashboardTimerRef.current = setTimeout(() => {
+            isOpeningDashboardRef.current = false;
+            openDashboardTimerRef.current = null;
+        }, 1000);
+    }, [onOpenInDashboard, publication.$id]);
 
     const handlePublicationDoubleClick = useCallback((e) => {
         e.stopPropagation();
-        if (!canOpenPublicationProperties) {
-            showToast('Nincs jogosultság', 'error', 'A kiadvány beállításait csak vezető szerkesztők és művészeti vezetők nyithatják meg.');
-            return;
-        }
-        onShowProperties?.(publication, 'publication');
-    }, [onShowProperties, publication, canOpenPublicationProperties, showToast]);
+        triggerOpenInDashboard();
+    }, [triggerOpenInDashboard]);
+
+    const handleOpenInDashboardClick = useCallback((e) => {
+        e.stopPropagation();
+        triggerOpenInDashboard();
+    }, [triggerOpenInDashboard]);
 
     const handleChevronClick = useCallback((e) => {
         e.stopPropagation();
@@ -99,6 +122,21 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
     }, [onToggle]);
 
     const handleOpenArticle = useCallback(async (article) => {
+        // Védelmi guard: blokkolt állapotban (nincs rootPath VAGY mappa nem elérhető) az
+        // openArticle `toAbsoluteArticlePath(filePath, null)` hívása hibás útvonalat adna,
+        // az `app.open()` elbukna. A + gomb disabled, de legacy cikkek dupla kattintása
+        // ide fut — ezért explicit dialog a valódi okkal.
+        if (isBlocked) {
+            setDialogConfig({
+                title: !isConfigured ? "Konfiguráció szükséges" : "A mappa nem érhető el",
+                message: !isConfigured
+                    ? "A kiadvány gyökérmappája még nincs beállítva — a cikk nem nyitható meg."
+                    : "A kiadvány mappája nem érhető el. Ellenőrizd a meghajtó csatlakoztatását.",
+                isAlert: true
+            });
+            setDialogOpen(true);
+            return;
+        }
         try {
             await openArticle(article, user);
         } catch (error) {
@@ -111,10 +149,14 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
             });
             setDialogOpen(true);
         }
-    }, [openArticle, user]);
+    }, [openArticle, user, isBlocked, isConfigured]);
 
     const handleAddArticleClick = useCallback(async (e) => {
-        e.stopPropagation();
+        e?.stopPropagation?.();
+        // Védelmi guard: ha a kiadvány blokkolt (nincs rootPath VAGY mappa nem elérhető),
+        // a fájl-írás (saveACopy) elbukna — a UI-n a gomb disabled, de a billentyűzet-handler
+        // is ide fut, ezért itt is szűrünk.
+        if (isBlocked) return;
         try {
             const fs = require("uxp").storage.localFileSystem;
             const files = await fs.getFileForOpening({
@@ -126,7 +168,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
 
             let skippedFiles = [];
             let errorFiles = [];
-            let addedCount = 0;
+            let addedArticles = [];
 
             for (const file of files) {
                 try {
@@ -134,7 +176,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                     if (result && result.status === "skipped") {
                         skippedFiles.push(result.fileName);
                     } else if (result && result.status === "success") {
-                        addedCount++;
+                        if (result.article) addedArticles.push(result.article);
                     }
                 } catch (addError) {
                     logError("Error adding file:", file.name, addError);
@@ -142,8 +184,11 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                 }
             }
 
-            if (addedCount > 0) {
-                dispatchMaestroEvent(MaestroEvent.articlesAdded, { publicationId: publication.$id });
+            if (addedArticles.length > 0) {
+                dispatchMaestroEvent(MaestroEvent.articlesAdded, {
+                    publicationId: publication.$id,
+                    articles: addedArticles
+                });
             }
 
             if (skippedFiles.length > 0 || errorFiles.length > 0) {
@@ -166,21 +211,131 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
             }
 
             if (!isExpanded) onToggle?.();
-        } catch (e) {
-            logError("Error selecting files:", e);
+        } catch (err) {
+            logError("Error selecting files:", err);
             setDialogConfig({
                 title: "Hiba",
-                message: "Nem sikerült megnyitni a fájlválasztót: " + e.message,
+                message: "Nem sikerült megnyitni a fájlválasztót: " + err.message,
                 isAlert: true
             });
             setDialogOpen(true);
         }
-    }, [addArticle, isExpanded, onToggle]);
+    }, [addArticle, isExpanded, onToggle, isBlocked, publication.$id]);
 
-    const deletePublication = useCallback((e) => {
-        e.stopPropagation();
-        onDelete?.(publication.$id, publication.name);
-    }, [onDelete, publication]);
+    // rootPath beállítás trigger (narancs bannerből): folder picker → mount-prefix check → confirm dialog.
+    // A tényleges CF hívás a `confirmSetRootPath`-ban fut.
+    const handleSetRootPathClick = useCallback(async () => {
+        if (isSavingRootPathRef.current) return;
+        try {
+            const fs = require("uxp").storage.localFileSystem;
+            const folder = await fs.getFolder();
+            if (!folder) return; // user cancel
+
+            const nativePath = folder.nativePath;
+            if (!nativePath) {
+                setDialogConfig({
+                    title: "Érvénytelen mappa",
+                    message: "A kiválasztott mappa útvonala nem olvasható.",
+                    isAlert: true
+                });
+                setDialogOpen(true);
+                return;
+            }
+
+            if (!isUnderMountPrefix(nativePath)) {
+                const prefix = currentMountPrefix();
+                setDialogConfig({
+                    title: "Nem megosztott meghajtó",
+                    message: `A gyökérmappának megosztott meghajtón kell lennie (${prefix}/... alatt). Kérd az IT-t a megosztás beállítására, vagy válassz másik mappát.`,
+                    isAlert: true
+                });
+                setDialogOpen(true);
+                return;
+            }
+
+            const canonical = toCanonicalPath(nativePath);
+            setPendingRootPath({ nativePath, canonical });
+        } catch (err) {
+            logError("[Publication] rootPath folder pick error:", err);
+            setDialogConfig({
+                title: "Hiba",
+                message: "Nem sikerült megnyitni a mappa-választót: " + err.message,
+                isAlert: true
+            });
+            setDialogOpen(true);
+        }
+    }, []);
+
+    const cancelSetRootPath = useCallback(() => {
+        if (isSavingRootPathRef.current) return; // ne engedjük bezárni CF közben
+        setPendingRootPath(null);
+    }, []);
+
+    const confirmSetRootPath = useCallback(async () => {
+        if (isSavingRootPathRef.current) return;
+        if (!pendingRootPath) return;
+
+        isSavingRootPathRef.current = true;
+        setIsSavingRootPath(true);
+        let succeeded = false;
+        try {
+            await callSetPublicationRootPathCF(publication.$id, pendingRootPath.canonical);
+            succeeded = true;
+            // Siker — Realtime hozza a publication.rootPath frissítést, a banner (és benne a gomb) automatikusan eltűnik.
+            // Ha a Realtime késik vagy megszakadt, a dupla-klikk védelem úgyis a szerver CF-be ütközik
+            // (`root_path_already_set` → barátságos dialog), nem hagyjuk a usert permanensen disabled gombbal.
+            setPendingRootPath(null);
+        } catch (err) {
+            logError("[Publication] set-publication-root-path CF error:", err);
+            setPendingRootPath(null);
+
+            let title = "Hiba";
+            let message = "";
+            if (err instanceof PermissionDeniedError) {
+                title = "Nincs jogosultság";
+                message = "Nincs jogosultságod a gyökérmappa beállításához. Szólj a szerkesztőség adminjának vagy a szervezet tulajdonosának.";
+            } else if (err.cfReason === 'root_path_already_set') {
+                title = "Már beállítva";
+                message = "Ezt a gyökérmappát már beállították (valószínűleg egy másik felhasználó). Az oldal automatikusan frissül.";
+            } else if (err.cfReason === 'invalid_root_path') {
+                title = "Érvénytelen útvonal";
+                message = "A kiválasztott útvonal nem elfogadható. Válassz másik mappát.";
+            } else if (err.cfReason === 'publication_not_found') {
+                title = "Kiadvány nem található";
+                message = "A kiadvány időközben törölve lett.";
+            } else if (isNetworkError(err)) {
+                title = "Hálózati hiba";
+                message = "A beállítás nem mentődött el — próbáld újra.";
+            } else {
+                message = "Váratlan hiba: " + (err.message || "ismeretlen");
+            }
+            setDialogConfig({ title, message, isAlert: true });
+            setDialogOpen(true);
+        } finally {
+            // Sikernél NEM engedjük el a zárat — a Realtime hamarosan levetíti `isConfigured=true`-ra,
+            // és a teljes banner eltűnik. Ha ezt a pillanatot megtöltjük gombbal, a user rákattint,
+            // és predictable `root_path_already_set` race-t kap. Csak hibánál engedjük vissza a
+            // kísérletet.
+            if (!succeeded) {
+                isSavingRootPathRef.current = false;
+                setIsSavingRootPath(false);
+            }
+        }
+    }, [pendingRootPath, publication.$id]);
+
+    // Fejléc szín: kék (OK), narancs (konfiguráció szükséges), piros (mappa nem elérhető).
+    // Egy helyen dől el — alább három JSX pontnál ugyanezt az értéket használjuk.
+    const headerColor = !isBlocked
+        ? "var(--spectrum-global-color-blue-400)"
+        : (!isConfigured
+            ? "var(--spectrum-global-color-orange-500)"
+            : "var(--spectrum-global-color-red-400)");
+
+    const addArticleTooltip = !isConfigured
+        ? "A kiadvány gyökérmappája még nincs beállítva — cikkfelvétel jelenleg nem lehetséges"
+        : (!isDriveAccessible
+            ? "A kiadvány mappája nem elérhető — a cikkfelvétel most nem lehetséges"
+            : "Cikk hozzáadása");
 
     return (
         <div
@@ -194,7 +349,8 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                 marginBottom: "12px"
             }}
         >
-            {/* Publikáció fejléc sor */}
+            {/* Publikáció fejléc sor — a toolbar hover VAGY focus-within állapotra jelenik meg,
+                hogy billentyűzettel navigáló felhasználók is elérjék a műveleteket. */}
             <div
                 style={{
                     display: "flex",
@@ -206,13 +362,18 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                 }}
                 onMouseEnter={() => setIsHovered(true)}
                 onMouseLeave={() => setIsHovered(false)}
+                onFocus={() => setIsFocused(true)}
+                onBlur={(e) => {
+                    // Csak akkor rejtjük el, ha a fókusz a fejléc sor doboza ELHAGYJA (nem belső mozgás)
+                    if (!e.currentTarget.contains(e.relatedTarget)) setIsFocused(false);
+                }}
             >
                 <div style={{ display: "flex", alignItems: "center" }}>
                     <div onClick={handleChevronClick} style={{
                         cursor: "pointer", display: "flex", alignItems: "center", marginRight: "8px",
-                        color: isDriveAccessible ? "var(--spectrum-global-color-blue-400)" : "var(--spectrum-global-color-red-400)"
+                        color: headerColor
                     }}>
-                        <sp-body style={{ margin: 0, color: isDriveAccessible ? "var(--spectrum-global-color-blue-400)" : "var(--spectrum-global-color-red-400)" }}>
+                        <sp-body style={{ margin: 0, color: headerColor }}>
                             {isExpanded ?
                                 <sp-icon-chevron-down size="s" style={{ width: "14px", height: "14px", display: "inline-block", verticalAlign: "middle" }}></sp-icon-chevron-down> :
                                 <sp-icon-chevron-right size="s" style={{ width: "14px", height: "14px", display: "inline-block", verticalAlign: "middle" }}></sp-icon-chevron-right>
@@ -221,46 +382,113 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                     </div>
                     <sp-heading size="xxs"
                         onDoubleClick={handlePublicationDoubleClick}
-                        style={{
-                            cursor: canOpenPublicationProperties ? "pointer" : "default",
-                            margin: 0,
-                            color: isDriveAccessible ? "var(--spectrum-global-color-blue-400)" : "var(--spectrum-global-color-red-400)"
-                        }}>
+                        title="Dupla kattintás: megnyitás a Dashboardon"
+                        style={{ cursor: "pointer", margin: 0, color: headerColor }}>
                         {publication.name?.toUpperCase()}
                     </sp-heading>
                 </div>
 
-                {isHovered && (
-                    <sp-body style={{ margin: 0 }}>
-                        <div style={{ display: "flex", alignItems: "center" }}>
-                            <div
-                                onClick={handleAddArticleClick}
-                                title="Cikk hozzáadása"
-                                style={{ cursor: "pointer", display: "flex", alignItems: "center" }}
-                            >
-                                <sp-icon-add
-                                    size="s"
-                                    style={{ width: "14px", height: "14px", display: "inline-block" }}
-                                ></sp-icon-add>
-                            </div>
-
-                            <div
-                                onClick={deletePublication}
-                                title="Kiadvány törlése"
-                                style={{ cursor: "pointer", display: "flex", alignItems: "center", marginLeft: "8px" }}
-                            >
-                                <sp-icon-delete
-                                    size="s"
-                                    style={{ width: "14px", height: "14px", display: "inline-block" }}
-                                ></sp-icon-delete>
-                            </div>
+                {(isHovered || isFocused) && (
+                    <div style={{ display: "flex", alignItems: "center" }}>
+                        <div
+                            role="button"
+                            tabIndex={isBlocked ? -1 : 0}
+                            aria-disabled={isBlocked}
+                            onClick={isBlocked ? undefined : handleAddArticleClick}
+                            onKeyDown={(e) => {
+                                if (isBlocked) return;
+                                if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    handleAddArticleClick();
+                                }
+                            }}
+                            aria-label="Cikk hozzáadása"
+                            title={addArticleTooltip}
+                            style={{
+                                cursor: isBlocked ? "not-allowed" : "pointer",
+                                display: "flex",
+                                alignItems: "center",
+                                padding: "2px",
+                                opacity: isBlocked ? 0.4 : 1,
+                                color: "var(--spectrum-global-color-blue-400)"
+                            }}
+                        >
+                            <sp-icon-add size="s" style={{ width: "14px", height: "14px", display: "inline-block", verticalAlign: "middle" }}></sp-icon-add>
                         </div>
-                    </sp-body>
+
+                        <div
+                            role="button"
+                            tabIndex={0}
+                            onClick={handleOpenInDashboardClick}
+                            onKeyDown={(e) => {
+                                if (e.key === "Enter" || e.key === " ") {
+                                    e.preventDefault();
+                                    handleOpenInDashboardClick();
+                                }
+                            }}
+                            aria-label="Megnyitás a Dashboardon"
+                            title="Megnyitás a Dashboardon"
+                            style={{
+                                cursor: "pointer",
+                                display: "flex",
+                                alignItems: "center",
+                                padding: "2px",
+                                marginLeft: "4px",
+                                color: "var(--spectrum-global-color-blue-400)"
+                            }}
+                        >
+                            <sp-icon-link-out size="s" style={{ width: "14px", height: "14px", display: "inline-block", verticalAlign: "middle" }}></sp-icon-link-out>
+                        </div>
+                    </div>
                 )}
             </div>
 
             {
-                isExpanded && !isDriveAccessible && (
+                isExpanded && !isConfigured && (
+                    <div style={{
+                        backgroundColor: "var(--spectrum-global-color-orange-500)",
+                        color: "white",
+                        padding: "8px 12px 24px 12px",
+                        borderRadius: "4px",
+                        marginTop: "8px",
+                        marginBottom: "8px",
+                        display: "flex",
+                        alignItems: "flex-start"
+                    }}>
+                        <div style={{ flexShrink: 0, marginRight: "8px", marginTop: "1px", display: "flex", alignItems: "center" }}>
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none">
+                                <circle cx="12" cy="12" r="10" fill="white" fillOpacity="0.3" />
+                                <path d="M12 8v5" stroke="white" strokeWidth="2" strokeLinecap="round" />
+                                <circle cx="12" cy="16" r="1.2" fill="white" />
+                            </svg>
+                        </div>
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontSize: "12px", fontWeight: "bold", marginBottom: "2px" }}>
+                                Konfiguráció szükséges
+                            </div>
+                            <div style={{ fontSize: "11px", opacity: 0.85, marginBottom: "8px" }}>
+                                A kiadvány gyökérmappája még nincs beállítva. A beállításig cikkfelvétel és -megnyitás nem lehetséges.
+                            </div>
+                            <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                                <sp-button
+                                    variant="primary"
+                                    size="s"
+                                    onClick={handleSetRootPathClick}
+                                    disabled={isSavingRootPath || undefined}
+                                    onFocus={() => setIsRootPathButtonFocused(true)}
+                                    onBlur={() => setIsRootPathButtonFocused(false)}
+                                    style={{ "--spectrum-button-m-text-color": "white" }}
+                                >
+                                    {isSavingRootPath ? "Mentés…" : "Gyökérmappa beállítása"}
+                                </sp-button>
+                            </div>
+                        </div>
+                    </div>
+                )
+            }
+
+            {
+                isExpanded && isConfigured && !isDriveAccessible && (
                     <div style={{
                         backgroundColor: "var(--spectrum-global-color-red-400)",
                         color: "white",
@@ -296,7 +524,7 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                         articles={tableData}
                         publication={publication}
                         onOpen={handleOpenArticle}
-                        onShowProperties={(article, type) => onShowProperties?.(article, type, publication)}
+                        onShowProperties={(article) => onShowProperties?.(article, publication)}
                     />
                 )
             }
@@ -308,6 +536,20 @@ export const Publication = React.memo(({ publication, onDelete, onRename, onShow
                 isAlert={dialogConfig.isAlert}
                 onConfirm={() => setDialogOpen(false)}
                 onCancel={() => setDialogOpen(false)}
+            />
+
+            <ConfirmDialog
+                isOpen={!!pendingRootPath}
+                title="Gyökérmappa beállítása"
+                message={pendingRootPath ? (
+                    `A(z) „${publication.name}" kiadvány gyökérmappája:\n\n` +
+                    `Kiválasztott: ${pendingRootPath.nativePath}\n` +
+                    `Kanonikus:    ${pendingRootPath.canonical}\n\n` +
+                    `FIGYELEM: a beállítás után a gyökérmappa nem módosítható. Csak akkor erősítsd meg, ha biztos vagy benne.`
+                ) : ""}
+                confirmLabel={isSavingRootPath ? "Mentés…" : "Beállítás"}
+                onConfirm={confirmSetRootPath}
+                onCancel={cancelSetRootPath}
             />
         </div >
     );

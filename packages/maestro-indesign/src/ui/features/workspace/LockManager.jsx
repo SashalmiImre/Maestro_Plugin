@@ -5,7 +5,8 @@ import React, { useEffect, useRef } from "react";
 import { useUser } from "../../../core/contexts/UserContext.jsx";
 import { useData } from "../../../core/contexts/DataContext.jsx";
 import { useToast } from "../../common/Toast/ToastContext.jsx";
-import { tables, Query, DATABASE_ID, ARTICLES_COLLECTION_ID } from "../../../core/config/appwriteConfig.js";
+import { tables, Query, DATABASE_ID, COLLECTIONS } from "../../../core/config/appwriteConfig.js";
+import { callUpdateArticleCF } from "../../../core/utils/updateArticleClient.js";
 
 // Segédfüggvények
 import { toCanonicalPath, toRelativeArticlePath, getArticleCanonicalPath } from "../../../core/utils/pathUtils.js";
@@ -54,6 +55,12 @@ export const LockManager = () => {
     const timeoutsRef = useRef([]);
     const syncLocksTimeoutRef = useRef(null);
     const isVerifyingRef = useRef(false);
+
+    // Per-article lockolás in-flight flag — megakadályozza, hogy a `handleAfterOpen`
+    // (InDesign event) és a `syncLocks` (debounce / recovery / manual check) egy időben
+    // ugyanarra a cikkre duplán hívja a `WorkflowEngine.lockDocument`-et.
+    // Kulcs: article.$id VAGY (ha még nincs, a megnyitáskor) a filePath kanonikus formája.
+    const lockingInProgressRef = useRef(new Set());
 
     /**
      * Natív InDesign útvonalból DB-lekérdezéshez használható útvonal-variánsokat generál.
@@ -136,7 +143,7 @@ export const LockManager = () => {
                 () => withTimeout(
                     tables.listRows({
                         databaseId: DATABASE_ID,
-                        tableId: ARTICLES_COLLECTION_ID,
+                        tableId: COLLECTIONS.ARTICLES,
                         queries: orphanedQueries,
                         limit: 100
                     }),
@@ -148,25 +155,18 @@ export const LockManager = () => {
 
             if (!isMountedRef.current) return;
 
-            // Minden talált lockot törlünk
+            // Minden talált lockot törlünk — az update-article CF a lock-only
+            // payload-ra kivételt alkalmaz, így a cleanup csoporttagság nélkül
+            // is működik, ha a user a SAJÁT lock-ját adja vissza.
             for (const article of response.rows) {
                 if (!isMountedRef.current) break;
                 try {
                     const updatedDoc = await withRetry(
-                        () => withTimeout(
-                            tables.updateRow({
-                                databaseId: DATABASE_ID,
-                                tableId: ARTICLES_COLLECTION_ID,
-                                rowId: article.$id,
-                                data: {
-                                    lockType: null,
-                                    lockOwnerId: null
-                                }
-                            }),
-                            10000,
-                            "LockManager: cleanupOrphanedLocks updateRow"
-                        ),
-                        { operationName: "LockManager: cleanupOrphanedLocks updateRow" }
+                        () => callUpdateArticleCF(article.$id, {
+                            lockType: null,
+                            lockOwnerId: null
+                        }, "LockManager: cleanupOrphanedLocks"),
+                        { operationName: "LockManager: cleanupOrphanedLocks updateArticleCF" }
                     );
                     log(`[LockManager] Orphaned lock törölve: ${article.name}`);
                     // Optimista UI frissítés — az orphaned lock törlése azonnal megjelenjen
@@ -218,7 +218,7 @@ export const LockManager = () => {
                 () => withTimeout(
                     tables.listRows({
                         databaseId: DATABASE_ID,
-                        tableId: ARTICLES_COLLECTION_ID,
+                        tableId: COLLECTIONS.ARTICLES,
                         queries: cleanupQuery,
                         limit: 100
                     }),
@@ -234,7 +234,7 @@ export const LockManager = () => {
                     () => withTimeout(
                         tables.listRows({
                             databaseId: DATABASE_ID,
-                            tableId: ARTICLES_COLLECTION_ID,
+                            tableId: COLLECTIONS.ARTICLES,
                             queries: openFilesQuery,
                             limit: 100
                         }),
@@ -274,7 +274,7 @@ export const LockManager = () => {
                 () => withTimeout(
                     tables.listRows({
                         databaseId: DATABASE_ID,
-                        tableId: ARTICLES_COLLECTION_ID,
+                        tableId: COLLECTIONS.ARTICLES,
                         queries: [Query.equal("filePath", searchVariants)],
                         limit: 10
                     }),
@@ -293,15 +293,26 @@ export const LockManager = () => {
                     return;
                 }
 
-                // Ha nincs zárolva, vagy mi zároltuk (megerősítés), akkor írjuk be
-                const lockResult = await WorkflowEngine.lockDocument(article, LOCK_TYPE.USER, user);
-                if (lockResult.success) {
-                    log('[LockManager] Fájl zárolva:', article.name, '-', user.name);
-                    // Optimista UI frissítés — azonnal tükrözi a zárolást a helyi state-ben
-                    if (lockResult.document) applyArticleUpdate(lockResult.document);
-                } else {
-                    logWarn('[LockManager] Zárolás sikertelen:', lockResult.error);
-                    showToast('A dokumentum zárolása sikertelen', TOAST_TYPES.ERROR, lockResult.error || 'Nem sikerült zárolni a fájlt. Próbáld meg újra.');
+                // Per-article in-flight guard — ha a syncLocks épp lockolja ugyanezt,
+                // nem indítunk párhuzamos második CF hívást.
+                if (lockingInProgressRef.current.has(article.$id)) {
+                    log(`[LockManager] Lockolás már folyamatban (${article.name}), skip.`);
+                    return;
+                }
+                lockingInProgressRef.current.add(article.$id);
+                try {
+                    // Ha nincs zárolva, vagy mi zároltuk (megerősítés), akkor írjuk be
+                    const lockResult = await WorkflowEngine.lockDocument(article, LOCK_TYPE.USER, user);
+                    if (lockResult.success) {
+                        log('[LockManager] Fájl zárolva:', article.name, '-', user.name);
+                        // Optimista UI frissítés — azonnal tükrözi a zárolást a helyi state-ben
+                        if (lockResult.document) applyArticleUpdate(lockResult.document);
+                    } else {
+                        logWarn('[LockManager] Zárolás sikertelen:', lockResult.error);
+                        showToast('A dokumentum zárolása sikertelen', TOAST_TYPES.ERROR, lockResult.error || 'Nem sikerült zárolni a fájlt. Próbáld meg újra.');
+                    }
+                } finally {
+                    lockingInProgressRef.current.delete(article.$id);
                 }
             }
         } catch (error) {
@@ -327,7 +338,7 @@ export const LockManager = () => {
                 () => withTimeout(
                     tables.listRows({
                         databaseId: DATABASE_ID,
-                        tableId: ARTICLES_COLLECTION_ID,
+                        tableId: COLLECTIONS.ARTICLES,
                         queries: [Query.equal("filePath", searchVariants)],
                         limit: 10
                     }),
@@ -407,13 +418,24 @@ export const LockManager = () => {
 
                     if (isLocallyOpen && (!article.lockOwnerId || article.lockOwnerId === user.$id)) {
                         // NYITVA van + Nincs Lock (vagy saját) => LOCKOLÁS
-                        const result = await WorkflowEngine.lockDocument(article, LOCK_TYPE.USER, user);
-                        if (result.success) {
-                            log('[LockManager] Fájl zárolva:', article.name, '-', user.name);
-                            // Optimista UI frissítés — azonnali visszajelzés a szinkronizált zárolásról
-                            if (result.document) applyArticleUpdate(result.document);
-                        } else {
-                            logWarn(`[LockManager] Zárolás sikertelen (${article.name}, ${article.$id}):`, result.error);
+                        // Per-article in-flight guard — ne duplázzunk, ha a `handleAfterOpen`
+                        // már elindított egy lockolást ugyanerre a cikkre.
+                        if (lockingInProgressRef.current.has(article.$id)) {
+                            log(`[LockManager] Lockolás már folyamatban (${article.name}), syncLocks skip.`);
+                            continue;
+                        }
+                        lockingInProgressRef.current.add(article.$id);
+                        try {
+                            const result = await WorkflowEngine.lockDocument(article, LOCK_TYPE.USER, user);
+                            if (result.success) {
+                                log('[LockManager] Fájl zárolva:', article.name, '-', user.name);
+                                // Optimista UI frissítés — azonnali visszajelzés a szinkronizált zárolásról
+                                if (result.document) applyArticleUpdate(result.document);
+                            } else {
+                                logWarn(`[LockManager] Zárolás sikertelen (${article.name}, ${article.$id}):`, result.error);
+                            }
+                        } finally {
+                            lockingInProgressRef.current.delete(article.$id);
                         }
                     } else if (!isLocallyOpen && article.lockOwnerId === user.$id) {
                         // NINCS nyitva + Saját Lock => UNLOCKOLÁS (Takarítás)

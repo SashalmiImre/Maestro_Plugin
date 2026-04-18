@@ -3,6 +3,7 @@
  */
 
 import { ValidatorBase } from "./ValidatorBase.js";
+import { logWarn } from "../logger.js";
 
 export class PublicationStructureValidator extends ValidatorBase {
     constructor() {
@@ -23,115 +24,72 @@ export class PublicationStructureValidator extends ValidatorBase {
 
     /**
      * Validálja a cikkek oldaltartományait egy kiadványon belül.
+     * A validatePerArticle()-ra delegál, az eredményekből aggregálja a hibákat.
      * @param {Object} publicationData - { publication: { coverageStart, coverageEnd }, articles: [], layouts?: [] }
      */
     async validate(publicationData) {
-        const errors = [];
-        const warnings = [];
-
         const { publication, articles } = publicationData;
 
         if (!publication || !articles) {
             return this.failure("Invalid context for PublicationStructureValidator");
         }
 
-        const pubStart = publication.coverageStart || 0;
-        const pubEnd = publication.coverageEnd || 9999;
+        const resultsMap = this.validatePerArticle(publicationData);
+        if (resultsMap.size === 0) return this.success();
 
-        // 1. Határok ellenőrzése (Bounds Check) - Minden cikket külön vizsgálunk
-        this.checkBounds(articles, pubStart, pubEnd, errors);
+        const errors = [];
+        const warnings = [];
 
-        // 2. Átfedések ellenőrzése (Overlap Check) - Layout szerint csoportosítva
-        this.checkOverlaps(articles, errors, publicationData.layouts);
+        // Cikk-kontextus hozzáadása az aggregált üzenetekhez
+        const articleNames = new Map(articles.map(a => [a.$id, a.name]));
+        for (const [articleId, { errors: e, warnings: w }] of resultsMap.entries()) {
+            const name = articleNames.get(articleId) || articleId;
+            errors.push(...e.map(err => `"${name}": ${err}`));
+            warnings.push(...w.map(warn => `"${name}": ${warn}`));
+        }
 
         return errors.length > 0 ? this.failure(errors, warnings) : this.success(warnings);
     }
 
     /**
-     * Ellenőrzi, hogy a cikkek a kiadvány határain belül vannak-e.
+     * Visszaadja a cikk tényleges min/max oldalszámait.
+     * Preferálja a startPage/endPage-t, de fallback-ként a pageRanges JSON-ból is kinyeri.
      */
-    checkBounds(articles, pubStart, pubEnd, errors) {
-        for (const article of articles) {
-            const start = article.startPage;
-            const end = article.endPage;
+    getEffectivePageRange(article) {
+        let min = article.startPage;
+        let max = article.endPage;
 
-            if (start !== null && start < pubStart) {
-                errors.push(`"${article.name}" a kiadvány kezdete (${pubStart}) előtt kezdődik.`);
-            }
-            if (end !== null && end > pubEnd) {
-                errors.push(`"${article.name}" a kiadvány vége (${pubEnd}) után végződik.`);
-            }
-        }
-    }
+        // Ha valamelyik null/undefined, próbáljuk pageRanges-ből kiegészíteni
+        if (min == null || max == null) {
+            try {
+                const ranges = typeof article.pageRanges === 'string'
+                    ? JSON.parse(article.pageRanges)
+                    : article.pageRanges;
 
-    /**
-     * Ellenőrzi az átfedéseket a cikkek között, figyelembe véve a layout-ot és az oldalszekciókat.
-     * @param {Array} articles - A cikkek tömbje
-     * @param {Array} errors - Hibaüzenetek tömbje (módosítható)
-     * @param {Array} [layouts] - A layoutok tömbje a név feloldáshoz
-     */
-    checkOverlaps(articles, errors, layouts) {
-        // Csoportosítás layout szerint
-        const articlesByLayout = {};
-        
-        for (const article of articles) {
-            // Ha nincs layout megadva, 'default'-ként kezeljük
-            const layout = article.layout || 'default';
-            if (!articlesByLayout[layout]) {
-                articlesByLayout[layout] = [];
-            }
-            articlesByLayout[layout].push(article);
-        }
-
-        // Minden layout csoporton belül vizsgáljuk az átfedéseket
-        Object.entries(articlesByLayout).forEach(([layout, layoutArticles]) => {
-            // Ha csak 1 cikk van a layouton, nincs kivel ütközni
-            if (layoutArticles.length < 2) return;
-
-            // Foglalt oldalak térképe ehhez a layouthoz: pageNumber -> articleName
-            const occupiedPages = new Map();
-
-            for (const article of layoutArticles) {
-                const pages = this.getOccupiedPages(article);
-                
-                for (const page of pages) {
-                    if (occupiedPages.has(page)) {
-                        const conflictingArticleName = occupiedPages.get(page);
-                        // Hiba üzenet generálása
-                        const layoutDisplayName = this.resolveLayoutName(layout, layouts);
-                        const layoutMsg = layout !== 'default' ? ` (Layout: ${layoutDisplayName})` : '';
-                        errors.push(`Átfedés észlelve a(z) "${article.name}" és a(z) "${conflictingArticleName}" között a(z) ${page}. oldalon${layoutMsg}.`);
-                        
-                        // Ne spammeljük tele a hibákat ugyanazzal a párral, ha sok oldalon ütköznek
-                        // De a jelenlegi logikával minden ütköző oldalt jelez. 
-                        // Ez lehet sok, de pontos. Ha nem akarunk sokat, break-elhetünk a pages cikluson.
-                        // Egyelőre hagyjuk, hogy jelezze az elsőt minden cikk-párnál?
-                        // A fenti logika minden oldalra dob hibát.
-                        // Optimalizálás: Csak egyszer jelentsük két cikk között.
-                        // De a map csak EGY nevet tárol. Mi van ha 3 cikk ütközik?
-                        // Ez a map logika egyszerűsített. 
-                        // Robusztusabb lenne range metszeteket nézni, de a "szekciók" miatt ez bonyolultabb.
-                        // Maradjunk a Page Map-nél, de kezeljük a duplikált hibákat a végén, vagy szűrjük.
-                        // Vagy break-eljünk az adott cikkhez, ha már találtunk ütközést EZZEL a cikkel?
-                        // Nem, mert más cikkel is ütközhet.
-                        
-                        // Finomítás: Csak akkor adjuk hozzá, ha még nincs benne specifikus üzenet?
-                        // Inkább hagyjuk, max. pár sor hiba lesz.
-                        
-                    } else {
-                        occupiedPages.set(page, article.name);
+                if (Array.isArray(ranges)) {
+                    for (const range of ranges) {
+                        if (Array.isArray(range) && range.length === 2) {
+                            if (min == null || range[0] < min) min = range[0];
+                            if (max == null || range[1] > max) max = range[1];
+                        }
                     }
                 }
+            } catch (e) {
+                logWarn(`[PublicationStructureValidator] pageRanges JSON parse hiba (${article.name}):`, e.message);
             }
-        });
+        }
+
+        return { min, max };
     }
 
     /**
      * Visszaadja a cikk által elfoglalt összes oldalszámot tömbként.
      * Figyelembe veszi a pageRanges mezőt (JSON tömb formátum: "[[1,3],[5,5],[8,10]]"),
      * különben a start-end tartományt használja fallback-ként.
+     * Felső korlát: MAX_PAGE_NUMBER (9999) — korrupt adatból származó extrém tartomány ellen véd.
      */
     getOccupiedPages(article) {
+        const MAX_PAGE_NUMBER = 9999;
         const pages = new Set();
 
         // 1. pageRanges alapján (JSON tömb: "[[start,end],[start,end],...]")
@@ -144,19 +102,22 @@ export class PublicationStructureValidator extends ValidatorBase {
                 if (Array.isArray(ranges)) {
                     for (const range of ranges) {
                         if (Array.isArray(range) && range.length === 2) {
-                            const [start, end] = range;
+                            const start = Math.max(1, range[0]);
+                            const end = Math.min(MAX_PAGE_NUMBER, range[1]);
                             for (let i = start; i <= end; i++) pages.add(i);
                         }
                     }
                 }
             } catch (e) {
-                // JSON parse hiba — fallback-re esünk
+                logWarn(`[PublicationStructureValidator] pageRanges JSON parse hiba (${article.name}):`, e.message);
             }
         }
 
         // 2. Fallback: startPage - endPage (ha pageRanges nem adott vagy parse sikertelen)
         if (pages.size === 0 && article.startPage != null && article.endPage != null) {
-            for (let i = article.startPage; i <= article.endPage; i++) {
+            const start = Math.max(1, article.startPage);
+            const end = Math.min(MAX_PAGE_NUMBER, article.endPage);
+            for (let i = start; i <= end; i++) {
                 pages.add(i);
             }
         }
@@ -184,20 +145,19 @@ export class PublicationStructureValidator extends ValidatorBase {
             return resultsMap.get(articleId);
         };
 
-        const pubStart = publication.coverageStart || 0;
-        const pubEnd = publication.coverageEnd || 9999;
+        const pubStart = publication.coverageStart ?? 1;
+        const pubEnd = publication.coverageEnd ?? 9999;
 
         // 1. Határok ellenőrzése — hiba az adott cikkre
         for (const article of articles) {
-            const start = article.startPage;
-            const end = article.endPage;
+            const { min, max } = this.getEffectivePageRange(article);
 
-            if (start !== null && start < pubStart) {
+            if (min != null && min < pubStart) {
                 ensureEntry(article.$id).errors.push(
                     `A kiadvány kezdete (${pubStart}) előtt kezdődik.`
                 );
             }
-            if (end !== null && end > pubEnd) {
+            if (max != null && max > pubEnd) {
                 ensureEntry(article.$id).errors.push(
                     `A kiadvány vége (${pubEnd}) után végződik.`
                 );

@@ -151,86 +151,198 @@ graph TD
 
 ### Esemény → Feliratkozó mátrix
 
-| Esemény                      | useWorkflowValidation  | useDatabaseIntegrityValidation | useOverlapValidation |   DataContext   |
-| ---------------------------- | :---------------------: | :----------------------------: | :------------------: | :-------------: |
-| `documentSaved`              |   ha PREFLIGHT state    |              igen              |          —           |        —        |
-| `documentClosed`             |   ha PREFLIGHT state    |      igen (registerTask)       |          —           |        —        |
-| `stateChanged`               | belépés/kilépés kezelés |               —                |          —           |        —        |
-| `pageRangesChanged`          |            —            |               —                |         igen         |        —        |
-| `layoutChanged`              |            —            |               —                |         igen         |        —        |
-| `publicationCoverageChanged` |            —            |               —                |         igen         |        —        |
-| `dataRefreshRequested`       |            —            |               —                |          —           | fetchData(true) + UserContext: account.get() |
+| Esemény                      | useWorkflowValidation   | useDatabaseIntegrityValidation | useOverlapValidation |   DataContext   |   UserContext   |
+| ---------------------------- | :---------------------: | :----------------------------: | :------------------: | :-------------: | :-------------: |
+| `documentSaved`              |   ha PREFLIGHT state    |              igen              |          —           |        —        |        —        |
+| `documentClosed`             |   ha PREFLIGHT state    |      igen (registerTask)       |          —           |        —        |        —        |
+| `stateChanged`               | belépés/kilépés kezelés |               —                |          —           |        —        |        —        |
+| `pageRangesChanged`          |            —            |               —                |         igen         |        —        |        —        |
+| `layoutChanged`              |            —            |               —                |         igen         |        —        |        —        |
+| `publicationCoverageChanged` |            —            |               —                |         igen         |        —        |        —        |
+| `articlesAdded`              |            —            |               —                | igen (merge + recalc)|        —        |        —        |
+| `groupMembershipChanged`     |            —            |               —                |          —           |        —        | refreshGroupSlugs() |
+| `scopeChanged`               |            —            |               —                |          —           | derived state reset | refreshGroupSlugs() |
+| `workflowChanged`            |            —            |               —                |          —           | setWorkflow (hot-reload) |        —        |
+| `dataRefreshRequested`       |            —            |               —                |          —           | fetchData(true) | account.get() + refreshGroupSlugs() |
+
+---
+
+## 2a. Multi-tenant scope + groupSlugs szinkronizáció
+
+A Plugin multi-tenant (szervezet + szerkesztőség) hatókörrel dolgozik. A `ScopeContext` és a `UserContext` három csatornán keresztül tart szinkront:
+
+```mermaid
+graph TD
+    subgraph "Adatforrások"
+        GroupMembershipsRT["Appwrite Realtime:<br/>groupMemberships collection"]
+        AccountRT["Appwrite Realtime:<br/>account channel"]
+        ScopeChange["Scope-váltás<br/>(WorkspaceHeader dropdown)"]
+        Recovery["Recovery<br/>(sleep/wake/reconnect)"]
+    end
+
+    subgraph "Esemény dispatch"
+        GMC["dispatch: groupMembershipChanged"]
+        SC["dispatch: scopeChanged"]
+        DRR["dispatch: dataRefreshRequested"]
+
+        GroupMembershipsRT --> GMC
+        ScopeChange --> SC
+        Recovery --> DRR
+    end
+
+    subgraph "UserContext"
+        RefreshSlugs["refreshGroupSlugs()<br/>= groupMemberships + groups query"]
+        AccountGet["account.get()<br/>(labels, prefs, email)"]
+        SetUser["setUser({...user, groupSlugs})"]
+
+        GMC --> RefreshSlugs
+        SC --> RefreshSlugs
+        DRR --> AccountGet
+        DRR --> RefreshSlugs
+        AccountRT -->|"account event"| SetUser
+        RefreshSlugs --> SetUser
+    end
+
+    subgraph "ScopeContext"
+        ResolveScope["resolveScope() tiszta függvény<br/>(stale ID védelem + auto-pick)"]
+        SetOrg["setActiveOrganization(id)"]
+        SetOffice["setActiveOffice(id)"]
+
+        SC --> ResolveScope
+        ResolveScope --> SetOrg
+        ResolveScope --> SetOffice
+    end
+
+    subgraph "Fogyasztók"
+        UIPermissions["UI Permission Hooks<br/>(useElementPermission, useContributorPermissions)"]
+        DataCtxScope["DataContext scope-szűrt fetch +<br/>derived state reset office-váltáskor"]
+        GroupMembersCache["useGroupMembers cache invalidálás"]
+
+        SetUser --> UIPermissions
+        SetOffice --> DataCtxScope
+        GMC --> GroupMembersCache
+        SC --> GroupMembersCache
+    end
+
+    classDef source fill:#fff9c4,stroke:#f9a825,stroke-width:2px;
+    classDef event fill:#e3f2fd,stroke:#1565c0,stroke-width:2px;
+    classDef ctx fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px;
+    classDef consumer fill:#fce4ec,stroke:#c62828,stroke-width:2px;
+
+    class GroupMembershipsRT,AccountRT,ScopeChange,Recovery source;
+    class GMC,SC,DRR event;
+    class RefreshSlugs,AccountGet,SetUser,ResolveScope,SetOrg,SetOffice ctx;
+    class UIPermissions,DataCtxScope,GroupMembersCache consumer;
+```
+
+### Kulcs garanciák
+
+- **`sameGroupSlugs()` helper**: Set-alapú összehasonlítás — azonos tartalom esetén nem okoz re-rendert.
+- **Stale ID védelem**: `ScopeContext` auto-pick effect csak `!membershipsError` esetén fut (átmeneti hiba nem törli a helyes scope-ot).
+- **Scope-szűrt fetch**: `DataContext.fetchData` minden collection-hez hozzáfűzi a `Query.equal("editorialOfficeId", ...)` feltételt + `publications` esetén `isActivated === true` szűrést.
+- **Office-váltáskor**: külön effect nullázza az `activePublicationId`-t és a derived state-et (`articles`, `layouts`, `deadlines`, `validations`).
+- **ValidationContext reset**: `scopeChanged` eseményre a `sourceResults` Map teljesen törlődik (idegen office articleId-s eredmények kitisztítása).
 
 ---
 
 ## 3. Komponens hierarchia
 
 ```text
-Main.jsx
-  └─ DataProvider (publications[], articles[])
-       └─ ValidationProvider (validationResults Map)
-            └─ Workspace
-                 ├─ PublicationList
-                 │    ├─ useOverlapValidation()          ← event subscriber
-                 │    ├─ useDatabaseIntegrityValidation() ← event subscriber
-                 │    ├─ DocumentMonitor                  ← event dispatcher (afterSave, unlock; kétfázisú detektálás)
-                 │    ├─ LockManager                      ← lock kezelés (DB → realtime → UI)
-                 │    └─ Publication (×N)
-                 │         └─ useArticles(pubId)          ← DataContext szűrés
-                 │              └─ ArticleTable
-                 │                   └─ useValidation()   ← ValidationContext olvasás
-                 │                        └─ CustomTable
-                 │
-                 └─ PropertiesPanel (ha kiválasztva)
-                      └─ selectedArticle: useMemo a DataContext articles-ból
+index.jsx
+  └─ UserProvider                     ← Auth, session, groupSlugs szinkron (Realtime + recovery)
+       └─ ConnectionProvider          ← Online/offline/connecting UI állapot
+            └─ Main.jsx               ← Sleep detektálás, RecoveryManager trigger, Realtime watchdog
+                 └─ ToastProvider     ← Toast értesítési rendszer
+                      └─ (user?) ScopeProvider  ← activeOrganizationId, activeEditorialOfficeId (multi-tenant)
+                           └─ DataProvider       ← publications[], articles[], validations[], workflows[]
+                                └─ ValidationProvider ← validationResults Map (rendszer-validációk)
+                                     └─ ScopedWorkspace  ← ScopeMissingPlaceholder / Workspace switch
+                                          └─ Workspace
+                                               ├─ PublicationList
+                                               │    ├─ useOverlapValidation()          ← event subscriber
+                                               │    ├─ useDatabaseIntegrityValidation() ← event subscriber
+                                               │    ├─ DocumentMonitor                  ← event dispatcher (afterSave, unlock)
+                                               │    ├─ LockManager                      ← lock kezelés (DB → realtime → UI)
+                                               │    └─ Publication (×N)
+                                               │         └─ useArticles(pubId)          ← DataContext szűrés
+                                               │              └─ ArticleTable
+                                               │                   └─ useValidation()   ← ValidationContext olvasás
+                                               │                        └─ CustomTable
+                                               │
+                                               └─ PropertiesPanel (ha kiválasztva)
+                                                    └─ selectedArticle: useMemo a DataContext articles-ból
 ```
+
+A `ScopeProvider` csak a bejelentkezett ágon jelenik meg. A `ScopedWorkspace` dönti el, hogy a valódi `<Workspace />` vagy a `<ScopeMissingPlaceholder />` (loading / no-membership / error) renderelődik — a `UserContext` memberships betöltöttségétől és a `ScopeContext` auto-pick eredményétől függően.
 
 ### Melyik komponens honnan kapja az adatot?
 
-| Komponens         | Adatforrás               | Mechanizmus                                  |
-| ----------------- | ------------------------ | -------------------------------------------- |
-| `Publication`     | articles (szűrt)         | `useArticles()` → `useData()` → DataContext  |
-| `ArticleTable`    | articles (szűrt + szűrt) | props a Publication-től                      |
-| `ArticleTable`    | validationResults        | `useValidation()` → ValidationContext        |
-| `Workspace`       | selectedArticle          | `useMemo` → DataContext articles[].find()    |
-| `DocumentMonitor` | articles (összes)        | `useData()` → DataContext (ref-en keresztül) |
+| Komponens           | Adatforrás                 | Mechanizmus                                     |
+| ------------------- | -------------------------- | ----------------------------------------------- |
+| `WorkspaceHeader`   | organizations, offices     | `useUser()` → memberships + `useScope()`        |
+| `ScopedWorkspace`   | activeEditorialOfficeId    | `useScope()` → ScopeContext                     |
+| `Publication`       | articles (szűrt)           | `useArticles()` → `useData()` → DataContext     |
+| `ArticleTable`      | articles (szűrt + szűrt)   | props a Publication-től                         |
+| `ArticleTable`      | validationResults          | `useValidation()` → ValidationContext           |
+| `Workspace`         | selectedArticle            | `useMemo` → DataContext articles[].find()       |
+| `DocumentMonitor`   | articles (összes)          | `useData()` → DataContext (ref-en keresztül)    |
+| `ArticleProperties` | user.groupSlugs, workflow  | `useUser()` + `useData()` → jogosultság hookok  |
 
 ---
 
 ## 4. Write-Through Adatfolyam
 
 A DataContext központi write-through API-t biztosít: a komponensek a DataContext metódusain
-keresztül írnak (createArticle, updateArticle, stb.), ami DB írás UTÁN azonnal frissíti
-a helyi state-et a szerver válaszával (optimistic update). A Realtime esemény is megérkezik,
-de a `$updatedAt` staleness guard kiszűri az elavult eventeket.
+keresztül írnak (createArticle, updateArticle, createValidation, updateValidation, stb.),
+ami szerver válasz UTÁN azonnal frissíti a helyi state-et (optimistic update). A Realtime
+esemény is megérkezik, de a `$updatedAt` staleness guard kiszűri az elavult eventeket.
+
+**Cikkek** (`updateArticle`): az írás a `callUpdateArticleCF` helperen keresztül az
+`update-article` Cloud Function-re megy (office scope + workflow + csoport jogosultság
+szerver-oldali ellenőrzéssel). A CF szinkron válasza az `applyArticleUpdate(result)` helperen
+át alkalmazódik, amely tartalmazza a staleness guardot.
+
+**Validációk** (`updateValidation`): közvetlen DB írás (`tables.updateRow`) — a user-saját
+üzenetek collection-jén nincs CF kényszer. A szerver válasz az `applyValidationUpdate(result)`
+helperen át alkalmazódik, szintén staleness guarddal.
 
 ```text
 Felhasználó akció (Hook / Komponens)
   │
-  └─→ DataContext write-through metódus (pl. updateArticle)
+  └─→ DataContext write-through metódus (pl. updateArticle / updateValidation)
        │
-       ├─→ 1. Appwrite DB write (tables.updateRow)
-       │        → szerver válasz (friss dokumentum)
+       ├─→ 1. Szerver írás
+       │      • updateArticle   → callUpdateArticleCF → CF (szerver-oldali guard + DB write)
+       │      • updateValidation → tables.updateRow (közvetlen)
+       │      → szerver válasz (friss dokumentum)
        │
-       ├─→ 2. Optimistic: setArticles() a szerver válaszával → UI AZONNAL frissül
+       ├─→ 2. Apply-helper: applyArticleUpdate / applyValidationUpdate
+       │        → $updatedAt guard + setArticles/setValidations → UI frissül
        │
        └─→ 3. Realtime WebSocket event (később megérkezik)
               └─→ DataContext realtime handler
                     └─→ $updatedAt guard: ha helyi adat frissebb → KIHAGYÁS
 ```
 
-### applyArticleUpdate — Külső írók számára
+### applyArticleUpdate / applyValidationUpdate — Közös apply-helperek
 
-A `WorkflowEngine` (executeTransition, lockDocument, unlockDocument, toggleMarker)
-közvetlenül ír az adatbázisba. Ezek hívói az `applyArticleUpdate(serverDocument)` metódussal
-frissítik a helyi state-et DB hívás nélkül — a szerver válaszát közvetlenül alkalmazzák.
+Az `applyArticleUpdate(serverDocument)` és `applyValidationUpdate(serverDocument)` a
+központi apply-pontok. Minden optimistic update ezeken keresztül fut — akár a DataContext
+saját write-through metódusából (`updateArticle`, `updateValidation`), akár külső
+hívóból (`WorkflowEngine.executeTransition/lockDocument/unlockDocument/toggleMarker`,
+`LockManager.cleanupOrphanedLocks`, `DocumentMonitor.verifyDocumentInBackground`).
+
+Mindkét helper:
+- `$updatedAt` staleness guardot alkalmaz (frissebb helyi adatot nem ír felül),
+- csak akkor ír, ha a dokumentum már létezik a helyi tömbben (no-op idegen ID-ra),
+- normalizálja a validációs payload-ot (`id` + `$id` egységesítés).
 
 ```text
-WorkflowEngine hívó (pl. DocumentMonitor, ArticleProperties)
+Külső hívó (pl. WorkflowEngine, LockManager, DocumentMonitor)
   │
-  ├─→ 1. WorkflowEngine.lockDocument() → DB write → szerver válasz
+  ├─→ 1. Szerver művelet (CF vagy direkt DB) → szerver válasz
   │
-  └─→ 2. applyArticleUpdate(serverDocument) → setArticles() → UI frissül
+  └─→ 2. applyArticleUpdate / applyValidationUpdate → staleness guard → UI frissül
 ```
 
 ### $updatedAt Staleness Guard
@@ -247,8 +359,13 @@ if (article.$updatedAt && payload.$updatedAt && article.$updatedAt > payload.$up
 
 ### Lock/unlock — egységes realtime flow
 
-A `WorkflowEngine.lockDocument()` és `unlockDocument()` sima `updateRow` hívásokat használnak
-(tranzakció nélkül), amelyek megbízhatóan triggerelnek Appwrite realtime eventeket.
+A `WorkflowEngine.lockDocument()` és `unlockDocument()` a `callUpdateArticleCF` helperen
+keresztül az `update-article` Cloud Function-t hívják. A CF-nek fast-path kivétele van
+a lock mezőkre (`lockType`/`lockOwnerId`): saját lock beállítás/feloldás esetén a workflow +
+csoport jogosultsági check ki van hagyva, így a LockManager és DocumentMonitor orphan
+cleanup / SYSTEM lock útvonalai fail-closed kompatibilisek maradnak. Office membership
+check MINDIG fut — cross-office lock-lopás nem lehetséges.
+
 A valódi fájlszintű zárolást az InDesign `.idlk` mechanizmusa végzi — a DB lock informatív
 jellegű (a UI-ban mutatja, ki szerkeszti éppen a fájlt).
 
@@ -257,10 +374,12 @@ LockManager lock/unlock
   │
   └─→ WorkflowEngine.lockDocument() / unlockDocument()
        │
-       └─→ tables.updateRow()  (sima DB update, nincs tranzakció)
+       └─→ callUpdateArticleCF() → update-article CF (fast-path: lock-only payload)
             │
-            └─→ Appwrite Realtime event
-                 └─→ DataContext setArticles() → React renderel
+            ├─→ applyArticleUpdate(result) → staleness guard → UI frissül (optimistic)
+            │
+            └─→ Appwrite Realtime event (később)
+                 └─→ DataContext realtime handler → staleness guard → KIHAGYÁS
 ```
 
 Ez ugyanaz az adatfolyam, amit az `executeTransition` (állapotváltás) és a `toggleMarker` is követ.

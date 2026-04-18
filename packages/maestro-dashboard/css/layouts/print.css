@@ -1,0 +1,65 @@
+/* ─── Nyomtatás (PDF export) ─────────────────────────────────────────────── */
+
+@media print {
+    .breadcrumb-header,
+    .filter-bar,
+    .table-container,
+    .layout-toolbar,
+    .toast-container {
+        display: none !important;
+    }
+
+    html, body {
+        height: auto;
+        overflow: visible;
+        background: white;
+    }
+
+    .dashboard,
+    .dashboard-body,
+    .main-content,
+    .layout-container,
+    .layout-scroll-area {
+        overflow: visible !important;
+        height: auto !important;
+        max-height: none !important;
+        position: static !important;
+        display: block !important;
+    }
+
+    .dashboard-body {
+        flex: none !important;
+    }
+
+    .layout-zoom-wrapper {
+        width: auto !important;
+        height: auto !important;
+    }
+
+    .layout-view {
+        transform: none !important;
+        width: auto !important;
+        gap: 8px 10px;
+        padding: 10px;
+    }
+
+    .page-state-bar,
+    .page-conflict-badge,
+    .page-validation-badge {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+    }
+
+    .page-info {
+        color: #333;
+    }
+
+    .spread {
+        break-inside: avoid;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* Modal rendszer                                                            */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+

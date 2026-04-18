@@ -8,6 +8,12 @@
     "./appwriteIds": "./appwriteIds.js",
     "./constants": "./constants.js",
     "./urgency": "./urgency.js",
-    "./workflowConfig": "./workflowConfig.js"
+    "./workflowRuntime": "./workflowRuntime.js",
+    "./contributorHelpers": "./contributorHelpers.js",
+    "./commandRegistry": "./commandRegistry.js",
+    "./pageGapUtils": "./pageGapUtils.js",
+    "./groups": "./groups.js",
+    "./deadlineValidator": "./deadlineValidator.js",
+    "./publicationActivation": "./publicationActivation.js"
   }
 }

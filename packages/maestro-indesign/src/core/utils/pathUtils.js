@@ -30,23 +30,32 @@ const normalizePath = (path) => {
 
 /**
  * Escapeli a fájl útvonalat az ExtendScript-ben való biztonságos használathoz.
- * Kifejezetten single-quoted string literálokhoz ('...') készíti elő.
- * Kezeli a backslash-eket (Windows) és az aposztrófokat.
- * 
+ * Single-quoted string literálokhoz ('...') készíti elő.
+ * Kezeli a backslash-eket (Windows) és az aposztrófokat — a backslash ESCAPE-je
+ * mindig elsőnek fut, hogy a további escape-ek ne duplázzák újra.
+ *
  * @param {string} filePath - A natív fájl útvonal.
- * @returns {string} Az escapelt útvonal, ami biztonságosan beilleszthető ExtendScript kódba.
- * 
+ * @returns {string} Az escapelt útvonal, ami biztonságosan beilleszthető ExtendScript `'...'` literálba.
+ *
  * @example
  * // Windows:
  * escapePathForExtendScript("C:\\Users\\file.indd") // Eredmény: "C:\\\\Users\\\\file.indd"
- * 
+ *
  * // Mac (aposztróf kezelése):
  * escapePathForExtendScript("/Users/imre/file's.indd") // Eredmény: "/Users/imre/file\\'s.indd"
  */
 export const escapePathForExtendScript = (filePath) => {
     if (!filePath) return "";
-    // Először a backslash-eket duplázzuk, majd az aposztrófokat escapeljük
-    return filePath.split('\\').join('\\\\').split("'").join("\\'");
+    // Backslash elsőnek — utána a többi escape nem üt vissza.
+    // Line terminator-ok (\r, \n, \u2028, \u2029) is escape-elve, mert elvileg legális
+    // fájlnév-karakterek, és nyers állapotban törnék a generált ExtendScript literált.
+    return filePath
+        .split('\\').join('\\\\')
+        .split('\r').join('\\r')
+        .split('\n').join('\\n')
+        .split('\u2028').join('\\u2028')
+        .split('\u2029').join('\\u2029')
+        .split("'").join("\\'");
 };
 
 
@@ -190,6 +199,38 @@ export const toNativePath = (canonicalPath) => {
 };
 
 /**
+ * Ellenőrzi, hogy egy natív útvonal az aktuális platform mount prefix-e ALATT
+ * van-e, azaz egy megosztás-alkönyvtárra mutat (pl. `/Volumes/Story`).
+ * A mount-prefix maga (`/Volumes`) NEM fogadható el — annak kanonikus alakja
+ * `/` lenne, ami nem valid `publication.rootPath`.
+ *
+ * A rootPath folder picker használja (#34). Csak megosztott meghajtón
+ * (Mac /Volumes, Win C:/Volumes) lévő, legalább egy szintet lejjebb eső
+ * mappát fogadunk el kanonizálásra, hogy cross-platform hordozható
+ * maradjon a DB-ben tárolt `publication.rootPath`.
+ *
+ * @param {string} nativePath - A vizsgálandó natív útvonal.
+ * @returns {boolean} True, ha a path a platform mount prefix-e alatt van (legalább egy alkönyvtár).
+ */
+export const isUnderMountPrefix = (nativePath) => {
+    if (!nativePath) return false;
+    // Trailing slash-ek levágása, hogy `/Volumes/` vagy `/Volumes//` ne csússzon át.
+    const processed = normalize(nativePath).replace(/\/+$/, "");
+    const prefix = getMountPrefix();
+    if (!processed.startsWith(prefix + "/")) return false;
+    // Legalább egy non-empty segment a prefix után (kizárva a prefix önmagát).
+    return processed.length > prefix.length + 1;
+};
+
+/**
+ * Az aktuális platform mount prefix-ét adja vissza (pl. "/Volumes" vagy "C:/Volumes").
+ * UI üzenetekhez és a folder picker felhasználói tájékoztatásához.
+ *
+ * @returns {string} A platform mount prefix.
+ */
+export const currentMountPrefix = () => getMountPrefix();
+
+/**
  * Abszolút article útvonal → relatív a kiadvány kanonikus rootPath-jához.
  *
  * Abszolút: /Story/.maestro/article.indd, root: /Story → .maestro/article.indd
@@ -235,7 +276,16 @@ export const toAbsoluteArticlePath = (relativePath, canonicalRoot) => {
 
     // Relatív → kanonikus abszolút → natív
     const root = normalize(canonicalRoot).replace(/\/$/, "");
-    const canonical = `${root}/${normalize(relativePath)}`;
+    const normalized = normalize(relativePath);
+
+    // Defense-in-depth: „.." path szegmens nem léphet ki a root-ból
+    // (normalize már dekódolt URI-t, így %2e%2e is elkapva)
+    if (/(^|\/)\.\.($|\/)/.test(normalized)) {
+        logWarn("[PathUtils] Path traversal blokkolva:", relativePath);
+        return "";
+    }
+
+    const canonical = `${root}/${normalized}`;
     return toNativePath(canonical);
 };
 
@@ -262,18 +312,6 @@ export const getArticleCanonicalPath = (article, publications) => {
 };
 
 /**
- * Backward compatibility wrapper — kanonikus vagy natív útvonalat natívra konvertál.
- *
- * @param {string} path - Bármilyen formátumú útvonal (kanonikus, natív, régi formátumú).
- * @returns {string} A platform-specifikus natív útvonal.
- * @deprecated Használd a toNativePath()-t új kódban.
- */
-export const resolvePlatformPath = (path) => {
-    if (!path) return "";
-    return toNativePath(path);
-};
-
-/**
  * Natív fájl elérési utat konvertál helyes file:// URL formátumra.
  * Kezeli a Windows (backslash) és Mac (forward slash) útvonalakat is,
  * valamint a már meglévő file: URL-eket.
@@ -283,42 +321,32 @@ export const resolvePlatformPath = (path) => {
  */
 export const convertNativePathToUrl = (path) => {
     if (!path) return "";
-    
+
     let url = path;
-    const encodePath = (p) => p.split('/').map(encodeURIComponent).join('/');
+
+    // Az UXP getEntryWithUrl saját maga végzi az URL-kódolást,
+    // ezért NEM kódolunk encodeURIComponent-tel — az dupla kódolást okozna
+    // (szóköz → %20 → %2520).
 
     if (url.startsWith("file:")) {
-        // Már URL, biztosítjuk a kódolást
+        // Már URL — ha kódolt volt, decode-oljuk nyers útvonalra
         const match = url.match(/^(file:\/*)(.*)/);
         if (match) {
             try {
-                // Először decode, hogy elkerüljük a dupla kódolást
-                const decoded = decodeURI(match[2]);
-                url = match[1] + encodePath(decoded);
+                url = "file:///" + decodeURIComponent(match[2]);
             } catch (e) {
-                // Fallback: nyers szegmens kódolása
-                url = match[1] + encodePath(match[2]);
+                url = "file:///" + match[2];
             }
         }
+    } else if (url.startsWith("/")) {
+        // Mac/Unix: /Users/... -> file:///Users/...
+        url = "file://" + url;
     } else {
-        // Natív útvonal konvertálása
-        if (url.startsWith("/")) {
-            // Mac/Unix: /Users/... -> file:///Users/...
-            url = "file://" + encodePath(url);
-        } else {
-            // Windows: Z:/... -> file:///Z:/...
-            let normalizedPath = url.replace(/\\/g, "/");
-            // Ha drive letter (pl. C:/...), akkor a kettőspontot nem kódoljuk
-            const winDriveMatch = normalizedPath.match(/^([a-zA-Z]:)\/(.*)/);
-            if (winDriveMatch) {
-                // winDriveMatch[1] = "C:", winDriveMatch[2] = "Users/..."
-                url = "file:///" + winDriveMatch[1] + "/" + encodePath(winDriveMatch[2]);
-            } else {
-                url = "file:///" + encodePath(normalizedPath);
-            }
-        }
+        // Windows: Z:\... -> file:///Z:/...
+        let normalizedPath = url.replace(/\\/g, "/");
+        url = "file:///" + normalizedPath;
     }
-    
+
     return url;
 };
 

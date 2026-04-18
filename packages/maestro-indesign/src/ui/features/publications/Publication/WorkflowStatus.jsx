@@ -1,16 +1,17 @@
 import React from "react";
-import { WORKFLOW_STATES, WORKFLOW_CONFIG, MARKERS } from "../../../../core/utils/workflow/workflowConstants.js";
+import { useData } from "../../../../core/contexts/DataContext.jsx";
+import { getStateConfig } from "maestro-shared/workflowRuntime.js";
+import { MARKERS } from "maestro-shared/constants.js";
 
 export const WorkflowStatus = ({ article }) => {
+    const { workflow } = useData();
+
     if (!article) return null;
 
-    // State is now an integer in DB
-    // Handle both lowercase 'state' (new) and PascalCase 'State' (legacy/imported)
-    let rawState = article.state;
-    if (rawState === undefined) rawState = article.State;
-
-    const currentState = typeof rawState === 'number' ? rawState : WORKFLOW_STATES.DESIGNING;
-    const currentConfig = WORKFLOW_CONFIG[currentState]?.config || WORKFLOW_CONFIG[WORKFLOW_STATES.DESIGNING]?.config;
+    const stateId = article.state || "designing";
+    const config = getStateConfig(workflow, stateId);
+    const label = config?.label || stateId;
+    const color = config?.color || "#999999";
 
     // Markers are stored as a Bitmask Integer
     const markersMask = typeof article.markers === 'number' ? article.markers : 0;
@@ -19,10 +20,10 @@ export const WorkflowStatus = ({ article }) => {
     // Ha "Kimarad" aktív, szürke pöttyöt mutatunk az eredeti státusz szín helyett
     const dotColor = isIgnored
         ? "var(--spectrum-global-color-gray-500)"
-        : currentConfig.color;
+        : color;
     const dotTitle = isIgnored
-        ? `${currentConfig.label} (Kimarad)`
-        : currentConfig.label;
+        ? `${label} (Kimarad)`
+        : label;
 
     return (
         <div style={{ display: "flex", flexGrow: 0, alignItems: "center" }}>

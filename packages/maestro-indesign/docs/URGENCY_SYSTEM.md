@@ -133,7 +133,7 @@ Péntek:    9:00–14:00 = 300 perc
 
 ### Hétvégék kihagyása
 
-A `publication.excludeWeekends` boolean mező szabályozza (alapértelmezett: `true`). A beállítás a kiadvány tulajdonságainál, a **Határidők** szekción belül található (`DeadlinesSection.jsx`, „Hétvégék kihagyása" checkbox).
+A `publication.excludeWeekends` boolean mező szabályozza (alapértelmezett: `true`). Fázis 9 óta a beállítás a Dashboard kiadvány-szerkesztőjében érhető el — a Plugin kizárólag olvassa a mezőt.
 
 Az Appwrite adatbázisban a `Publications` collection `excludeWeekends` attribútumként van tárolva.
 
@@ -266,7 +266,7 @@ A percenkénti sürgősség-újraszámítás és a Realtime események sor-szint
 | `src/data/hooks/useUrgency.js` | React hook (percenkénti újraszámítás, holiday betöltés) |
 | `src/ui/features/articles/ArticleTable.jsx` | Sürgősség bekötése a táblázatba (`getRowStyle`) |
 | `src/ui/common/Table/CustomTable.jsx` | `getRowStyle` prop + hover kezelés |
-| `src/ui/features/publications/PublicationProperties/DeadlinesSection.jsx` | „Hétvégék kihagyása" checkbox |
+| Dashboard → `PublicationSettingsModal` „Hétvégék kihagyása" checkbox | A mező szerkesztése Fázis 9 óta kizárólag a Dashboardon történik |
 
 ---
 

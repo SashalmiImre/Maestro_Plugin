@@ -26,9 +26,11 @@ Az alábbi leképezés alapján döntsd el, mely docs fájlokat kell ellenőrizn
 | `src/core/config/appwriteConfig.js`, `realtimeClient.js`, `recoveryManager.js` | `docs/REALTIME_ARCHITECTURE.md`, `docs/PROXY_SERVER.md`, `docs/diagrams/network-architecture.md` |
 | `src/core/contexts/DataContext.jsx` | `docs/diagrams/data-flow-architecture.md`, `CLAUDE.md` (DataContext API szekció) |
 | `src/core/contexts/UserContext.jsx` | `CLAUDE.md` (UserContext API szekció) |
+| `src/core/contexts/ScopeContext.jsx` | `CLAUDE.md` (ScopeContext API szekció), `docs/diagrams/data-flow-architecture.md` (multi-tenant scope ábra) |
 | `src/core/contexts/ValidationContext.jsx` | `docs/VALIDATION_MECHANISM.md`, `CLAUDE.md` (ValidationContext API) |
 | `src/core/config/maestroEvents.js` | `docs/EVENT_ARCHITECTURE.md` |
-| `src/core/utils/workflow/*` | `docs/WORKFLOW_CONFIGURATION.md`, `docs/WORKFLOW_PERMISSIONS.md` |
+| `src/core/utils/workflow/*` | `CLAUDE.md` (Jogosultsági Rendszer szekció), `../maestro-server/CLAUDE.md` (update-article CF) |
+| `src/core/utils/updateArticleClient.js` | `CLAUDE.md` (DataContext API — Write-Through Cikkek), `../maestro-server/CLAUDE.md` (update-article) |
 | `src/core/utils/urgencyUtils.js` | `docs/URGENCY_SYSTEM.md` |
 | `src/core/utils/validators/*` | `docs/VALIDATION_MECHANISM.md` |
 | `src/core/utils/indesign/*` | `docs/diagrams/open-file-flow.md` |

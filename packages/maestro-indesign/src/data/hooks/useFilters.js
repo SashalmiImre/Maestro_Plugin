@@ -8,37 +8,57 @@
  */
 
 // React
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 
 // Konfiguráció & Konstansok
 import { STORAGE_KEYS } from "../../core/utils/constants.js";
-import { WORKFLOW_STATES } from "../../core/utils/workflow/workflowConstants.js";
 
 // Utils
 import { logError } from "../../core/utils/logger.js";
+import { useData } from "../../core/contexts/DataContext.jsx";
+import { getAllStates } from "maestro-shared/workflowRuntime.js";
 
-const allStatuses = Object.values(WORKFLOW_STATES);
+/**
+ * localStorage-ból olvassa a mentett status filter-t.
+ * Régi integer ID-k esetén eldobja a mentett értéket.
+ * @returns {string[]|null} Mentett szűrők vagy null ha nincs/érvénytelen.
+ */
+function loadStatusFilter() {
+    try {
+        const saved = localStorage.getItem(STORAGE_KEYS.FILTER_STATUS);
+        if (saved) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed)) {
+                if (parsed.length > 0 && typeof parsed[0] !== 'string') {
+                    localStorage.removeItem(STORAGE_KEYS.FILTER_STATUS);
+                    return null;
+                }
+                return parsed;
+            }
+        }
+    } catch (error) {
+        logError(`[useFilters] Error parsing statusFilters from localStorage (key: ${STORAGE_KEYS.FILTER_STATUS}):`, error);
+    }
+    return null;
+}
 
 /**
  * Központi szűrő állapot hook.
+ * Az állapotszűrők string ID-kat tartalmaznak.
+ * Ha nincs localStorage-ban mentett érték, az összes állapot aktív (allStatuses).
  *
  * @returns {Object} Szűrő állapot és kezelő függvények.
  */
 export const useFilters = () => {
+    const { workflow } = useData();
+    const allStatuses = useMemo(() => getAllStates(workflow).map(s => s.id), [workflow]);
     const [filterOpen, setFilterOpen] = useState(false);
 
-    const [statusFilters, setStatusFilters] = useState(() => {
-        try {
-            const saved = localStorage.getItem(STORAGE_KEYS.FILTER_STATUS);
-            if (saved) {
-                const parsed = JSON.parse(saved);
-                if (Array.isArray(parsed)) return parsed;
-            }
-        } catch (error) {
-            logError(`[useFilters] Error parsing statusFilters from localStorage (key: ${STORAGE_KEYS.FILTER_STATUS}):`, error);
-        }
-        return allStatuses;
-    });
+    // null = nincs mentett szűrő → allStatuses lesz az effektív
+    const [statusFilters, setStatusFilters] = useState(loadStatusFilter);
+
+    // Effektív szűrő: ha nincs mentett, az összes állapot aktív
+    const effectiveStatusFilters = statusFilters ?? allStatuses;
 
     const [showIgnored, setShowIgnored] = useState(
         () => localStorage.getItem(STORAGE_KEYS.FILTER_SHOW_IGNORED) !== 'false'
@@ -52,7 +72,7 @@ export const useFilters = () => {
         () => localStorage.getItem(STORAGE_KEYS.FILTER_SHOW_PLACEHOLDERS) !== 'false'
     );
 
-    const isFilterActive = statusFilters.length !== allStatuses.length || !showIgnored || showOnlyMine || !showPlaceholders;
+    const isFilterActive = effectiveStatusFilters.length !== allStatuses.length || !showIgnored || showOnlyMine || !showPlaceholders;
 
     const toggleFilterOpen = useCallback(() => {
         setFilterOpen(prev => !prev);
@@ -79,7 +99,7 @@ export const useFilters = () => {
     }, []);
 
     const resetFilters = useCallback(() => {
-        setStatusFilters(allStatuses);
+        setStatusFilters(null);
         setShowIgnored(true);
         setShowOnlyMine(false);
         setShowPlaceholders(true);
@@ -92,7 +112,7 @@ export const useFilters = () => {
     return {
         filterOpen,
         toggleFilterOpen,
-        statusFilters,
+        statusFilters: effectiveStatusFilters,
         showIgnored,
         showOnlyMine,
         showPlaceholders,

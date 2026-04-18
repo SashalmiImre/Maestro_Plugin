@@ -48,20 +48,8 @@ export const ConfirmDialog = ({ isOpen, title, message, onConfirm = () => { }, o
 
     const isConfirmDisabled = verificationExpected && verificationInput !== verificationExpected;
 
-    // We render the dialog always, but control visibility via showModal() logic in useEffect.
-    // However, React often unmounts if we return null.
-    // If we want the seamless showModal transition, we should render it but rely on native visibility.
-    // BUT checking existing pattern: "if (!isOpen) return null;"
-    // If we return null, the ref is lost and we can't call showModal.
-    // So we must render it always, or at least when we want it to *be* open.
-    // If we conditionally render {isOpen && <dialog...>} then on mount calling showModal might need a small delay or useLayoutEffect,
-    // although useEffect should work.
-    // Better pattern for native dialog: Render always, control open state.
-
-    // However, to keep it simple and consistent with previous behavior (unmounting when closed?),
-    // let's try rendering always but hiding via the native 'open' attribute mechanism (managed by showModal).
-    // If the parent controls `isOpen`, we just reflect that.
-
+    // A <dialog>-ot mindig rendereljük — a native showModal()/close() kezeli a láthatóságot.
+    // Conditional rendering (null) mellett elveszne a ref, és nem tudnánk showModal-t hívni.
     return (
             <dialog
                 ref={dialogRef}

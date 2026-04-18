@@ -15,7 +15,7 @@ import React, { useEffect, useRef, useState } from "react";
 
 import { useUser } from "./contexts/UserContext.jsx";
 import { useConnection } from "./contexts/ConnectionContext.jsx";
-import { CONNECTION_STATES, CONNECTION_CONFIG, RECOVERY_TRIGGERS, TOAST_TYPES } from "./utils/constants.js";
+import { CONNECTION_CONFIG, RECOVERY_TRIGGERS, TOAST_TYPES } from "./utils/constants.js";
 import { MaestroEvent } from "./config/maestroEvents.js";
 import { realtime } from "./config/realtimeClient.js";
 import { recoveryManager } from "./config/recoveryManager.js";
@@ -31,6 +31,8 @@ import { ToastProvider, useToast } from "../ui/common/Toast/ToastContext.jsx";
 import { ToastContainer } from "../ui/common/Toast/ToastContainer.jsx";
 import { DataProvider } from "./contexts/DataContext.jsx";
 import { ValidationProvider } from "./contexts/ValidationContext.jsx";
+import { ScopeProvider, useScope } from "./contexts/ScopeContext.jsx";
+import { ScopeMissingPlaceholder } from "../ui/features/workspace/ScopeMissingPlaceholder.jsx";
 
 /**
  * Endpoint váltás toast értesítő.
@@ -57,6 +59,49 @@ const EndpointSwitchNotifier = () => {
 };
 
 /**
+ * A scope-tól függő workspace switch. A membership/scope állapot alapján dönt
+ * a Workspace és a különböző `ScopeMissingPlaceholder` variánsok között.
+ * Az auto-pick logika a `ScopeContext`-ben történik; itt csak olvassuk.
+ */
+const ScopedWorkspace = () => {
+    const { activeOrganizationId, activeEditorialOfficeId, isScopeValidated } = useScope();
+    const {
+        organizations,
+        editorialOffices,
+        loading: userLoading,
+        membershipsError,
+        reloadMemberships
+    } = useUser();
+
+    if (userLoading || !isScopeValidated) {
+        return <ScopeMissingPlaceholder variant="loading" />;
+    }
+    // Ha van működőképes scope-unk, a Workspace marad — egy tranziens
+    // memberships refresh hiba (membershipsError) nem téphet le mindent.
+    // Az error placeholder csak akkor jön, ha tényleg nincs mit megjeleníteni.
+    if (activeEditorialOfficeId) {
+        return <Workspace />;
+    }
+    if (membershipsError) {
+        return <ScopeMissingPlaceholder variant="error" onRetry={reloadMemberships} />;
+    }
+
+    // Nincs aktív office — variant szétválasztás: nincs szervezet, nincs office
+    // az aktív orgban (különben infinite spinner), vagy átmeneti auto-pick race.
+    const hasOrgs = organizations?.length > 0;
+    if (!hasOrgs) {
+        return <ScopeMissingPlaceholder variant="no-membership" onRetry={reloadMemberships} />;
+    }
+    const hasOfficeInActiveOrg = editorialOffices?.some(
+        (o) => o.organizationId === activeOrganizationId
+    );
+    if (!hasOfficeInActiveOrg) {
+        return <ScopeMissingPlaceholder variant="no-office-in-org" onRetry={reloadMemberships} />;
+    }
+    return <ScopeMissingPlaceholder variant="loading" />;
+};
+
+/**
  * Main application component.
  * Serves as the root for the authenticated/unauthenticated UI and manages global
  * connection lifecycles.
@@ -69,8 +114,7 @@ export const Main = () => {
         showConnectionOverlay,
         setOnlineStatus,
         setConnected,
-        setConnectionStatus,
-        setRealtimeStatus
+        setConnectionStatus
     } = useConnection();
 
     // -------------------------------------------------------------------------
@@ -113,32 +157,60 @@ export const Main = () => {
     // Realtime Service Connection
     // -------------------------------------------------------------------------
 
-    /**
-     * @effect Feliratkozás a Realtime kapcsolat állapotváltozásaira.
-     * Ha a WebSocket szétkapcsolódik (pl. 1005 halott TCP), a RecoveryManager
-     * kezeli a helyreállítást (auto-reconnect logika).
-     */
+    // A subscribe-time szinkron callback (mount-ra eshet false-sal) nem jelez
+    // helyreállítást — minden KÉSŐBBI false (tényleges szakadás vagy perzisztens
+    // initial connect-kudarc) viszont recoveryt indít.
+    const initialFireHandledRef = useRef(false);
+
     useEffect(() => {
         const unsubscribe = realtime.onConnectionChange((isConnected) => {
+            if (!initialFireHandledRef.current) {
+                initialFireHandledRef.current = true;
+                if (!isConnected) return;
+            }
+
             log('[Main] Realtime:', isConnected ? 'connected' : 'disconnected');
-            // setRealtimeStatus(isConnected ? CONNECTION_STATES.CONNECTED : CONNECTION_STATES.DISCONNECTED);
 
             if (isConnected) {
-                // Realtime helyreállt → alkalmazás is "connected"
                 setConnected();
             } else {
-                // Realtime szétkapcsolódott → recovery indítása
+                setConnectionStatus(prev => {
+                    if (prev.isOffline || prev.isConnecting) return prev;
+                    return {
+                        ...prev,
+                        isConnecting: true,
+                        message: 'Újracsatlakozás...',
+                        details: null,
+                        showSpinner: true
+                    };
+                });
                 recoveryManager.requestRecovery(RECOVERY_TRIGGERS.REALTIME);
             }
         });
 
-        // Cleanup function - kritikus a duplikált listenerek elkerülése miatt!
         return () => {
             if (typeof unsubscribe === 'function') {
                 unsubscribe();
             }
         };
-    }, [setConnected]);
+    }, [setConnected, setConnectionStatus]);
+
+    // Realtime watchdog: a _notifyConnectionChange(false→false) dedupe miatt
+    // egy initial handshake-kudarc (vagy post-CONNECTING close) nem vált ki
+    // listener-trigger-t. Periodikusan ellenőrzünk; ha se kapcsolat, se in-flight
+    // handshake/reconnect nincs, recovery-t kérünk (idempotens a debounce miatt).
+    // Ha nincs aktív feliratkozás (pl. Login képernyő, user még nem auth-olt),
+    // a recovery úgyis 0 csatornát építene — skip, hogy ne induljon felesleges
+    // health-check churn.
+    useEffect(() => {
+        const intervalId = setInterval(() => {
+            if (!realtime.hasActiveSubscriptions()) return;
+            if (realtime.getConnectionStatus() || realtime.isHandshaking()) return;
+            log('[Main] Realtime watchdog — recovery indítása');
+            recoveryManager.requestRecovery(RECOVERY_TRIGGERS.REALTIME);
+        }, CONNECTION_CONFIG.STARTUP_REALTIME_CHECK_MS);
+        return () => clearInterval(intervalId);
+    }, []);
 
     /**
      * @effect Subscribes to Appwrite Realtime errors (e.g., connection failures).
@@ -337,11 +409,13 @@ export const Main = () => {
                 }}>
                     {!userLoading && (
                         user ? (
-                            <DataProvider>
-                                <ValidationProvider>
-                                    <Workspace />
-                                </ValidationProvider>
-                            </DataProvider>
+                            <ScopeProvider>
+                                <DataProvider>
+                                    <ValidationProvider>
+                                        <ScopedWorkspace />
+                                    </ValidationProvider>
+                                </DataProvider>
+                            </ScopeProvider>
                         ) : (
                             authView === 'login'
                                 ? <Login onSwitchToRegister={() => setAuthView('register')} />

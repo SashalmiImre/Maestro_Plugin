@@ -15,25 +15,18 @@ export const DATABASE_ID = '6880850e000da87a3d55';
 export const COLLECTIONS = {
     PUBLICATIONS: 'publications',
     ARTICLES: 'articles',
-    USER_VALIDATIONS: 'uservalidations',
-    SYSTEM_VALIDATIONS: 'validations',
+    USER_VALIDATIONS: 'userValidations',
+    SYSTEM_VALIDATIONS: 'systemValidations',
     LAYOUTS: 'layouts',
     DEADLINES: 'deadlines',
-    CONFIG: 'config'
-};
-
-/**
- * Csapat slug-ok.
- * @enum {string}
- */
-export const TEAMS = {
-    EDITORS: 'editors',
-    DESIGNERS: 'designers',
-    WRITERS: 'writers',
-    IMAGE_EDITORS: 'image_editors',
-    ART_DIRECTORS: 'art_directors',
-    MANAGING_EDITORS: 'managing_editors',
-    PROOFWRITERS: 'proofwriters'
+    ORGANIZATIONS: 'organizations',
+    ORGANIZATION_MEMBERSHIPS: 'organizationMemberships',
+    EDITORIAL_OFFICES: 'editorialOffices',
+    EDITORIAL_OFFICE_MEMBERSHIPS: 'editorialOfficeMemberships',
+    ORGANIZATION_INVITES: 'organizationInvites',
+    GROUPS: 'groups',
+    GROUP_MEMBERSHIPS: 'groupMemberships',
+    WORKFLOWS: 'workflows'
 };
 
 /**
@@ -44,5 +37,15 @@ export const BUCKETS = {
     THUMBNAILS: 'thumbnails'
 };
 
-/** Cloud Function ID — csapattagok lekérése. */
-export const GET_TEAM_MEMBERS_FUNCTION_ID = '69599cf9000a865db98a';
+/**
+ * Cloud Function azonosítók.
+ *
+ * Egy helyen sorolva fel, hogy a hívó csomagok (plugin + dashboard) ne
+ * hardkódolják a string literal-eket külön-külön. A `GET_TEAM_MEMBERS`
+ * egyelőre Appwrite belső ID-t használ, az új CF-ek (B.5+) már a
+ * `functionId` slug-gal hívhatóak (pl. `invite-to-organization`).
+ * @enum {string}
+ */
+export const FUNCTIONS = {
+    INVITE_TO_ORGANIZATION: 'invite-to-organization'
+};

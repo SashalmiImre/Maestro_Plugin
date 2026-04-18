@@ -1,0 +1,172 @@
+/* ─── Design Tokens ────────────────────────────────────────────────────────── */
+
+/**
+ * Téma váltás:
+ *   - `:root` = dark theme (default)
+ *   - `[data-theme="light"]` = light theme overrides
+ *
+ * A `<html data-theme="...">` attribútumot a `main.jsx` állítja be korai bootstrap-pel
+ * (no-flash), a `useTheme` hook kezeli a futtatási váltást + localStorage perzisztenciát.
+ *
+ * Új téma-függő érték esetén:
+ *   1. Ide a `:root`-ba kerül a dark érték.
+ *   2. A `[data-theme="light"]` blokkba a light verzió.
+ *   3. A használati helyen `var(--token)` — semmi hardcoded szín.
+ *
+ * Token-derivált alpha (pl. felszín 50% áttetszően) preferált formája:
+ *   `rgb(from var(--bg-surface) r g b / 0.5)` — automatikusan követi a téma váltást.
+ */
+
+:root {
+    /* Rétegzett háttér — Stitch "Digital Curator" tónusok */
+    --bg-base:     #111319;     /* background/surface */
+    --bg-surface:  #191b22;     /* surface-container-low */
+    --bg-elevated: #282a30;     /* surface-container-high */
+    --bg-overlay:  #1e1f26;     /* surface-container */
+    --bg-hover:    #33343b;     /* surface-container-highest */
+
+    /* Keretek — "No-Line" szabály: ghost border-ek */
+    --border:       rgba(66, 71, 84, 0.15);    /* outline-variant/15 */
+    --border-muted: rgba(66, 71, 84, 0.05);    /* outline-variant/5 */
+
+    /* Szöveg hierarchia */
+    --text-primary:   #e2e2eb;   /* on-surface */
+    --text-secondary: #c2c6d6;   /* on-surface-variant */
+    --text-muted:     #9aa0b0;   /* outline — AA 4.7:1 a --bg-elevated felett */
+    --text-disabled:  #424754;   /* outline-variant */
+
+    /* Accent — Stitch primary paletta */
+    --accent:        #adc6ff;    /* primary */
+    --accent-hover:  #4d8eff;    /* primary-container */
+    --accent-subtle: rgba(173, 198, 255, 0.15);
+    --accent-solid:  #2563eb;    /* interaktív háttér: sidebar blade, gombok (WCAG AA 5.1:1 fehér szövegre) */
+
+    /* Státusz — text/icon kontextus (legibility text-on-bg-overlay-en) */
+    --c-error:   #ffb4ab;        /* error */
+    --c-warning: #e3b341;
+    --c-success: #4ade80;        /* green-400 */
+
+    /* Státusz — solid bg gombokhoz (fehér szöveggel) */
+    --c-error-solid:   #e53935;
+    --c-warning-solid: #e68619;
+
+    /* Lila — Tervezet állapot */
+    --tertiary:           #ddb7ff;
+    --tertiary-container: #b76dff;
+
+    /* Felszín tokenek (közvetlen hivatkozáshoz) */
+    --surface-container:         #1e1f26;
+    --surface-container-highest: #33343b;
+    --outline-variant:           #424754;
+
+    /* Lock badge variánsok — Stitch tónusok */
+    --badge-me-bg:      rgba(173, 198, 255, 0.10);
+    --badge-me-text:    #adc6ff;
+    --badge-me-border:  rgba(173, 198, 255, 0.20);
+
+    --badge-sys-bg:     rgba(183, 109, 255, 0.10);
+    --badge-sys-text:   #ddb7ff;
+    --badge-sys-border: rgba(221, 183, 255, 0.20);
+
+    --badge-other-bg:     #33343b;
+    --badge-other-text:   #c2c6d6;
+    --badge-other-border: rgba(66, 71, 84, 0.20);
+
+    /* ── Semantic shadow / overlay tokenek ──
+     * `--shadow-tint` az RGB csatornák (vesszővel), így `rgba(var(--shadow-tint), A)`
+     * minden geometriához használható és téma-aware. */
+    --shadow-tint:      0, 0, 0;
+    --modal-backdrop:   rgba(var(--shadow-tint), 0.55);
+    --tooltip-backdrop: rgba(var(--shadow-tint), 0.55);
+
+    /* Glassmorphism élek — világos overlay sötét felszínen */
+    --glass-edge:  rgba(255, 255, 255, 0.20);
+    --glass-inset: rgba(255, 255, 255, 0.04);
+
+    /* Spacing tokenek — 4px lineáris + 2× skála (4–64px) */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+    --space-7: 48px;
+    --space-8: 64px;
+
+    /* Radius tokenek */
+    --radius-sm: 4px;   /* badges, kis input-ok */
+    --radius-md: 6px;   /* gombok, kártyák */
+    --radius-lg: 8px;   /* modalok, popover-ek */
+    --radius-xl: 12px;  /* kiemelt felszínek */
+}
+
+/* ─── Light theme overrides ─────────────────────────────────────────────────── */
+
+[data-theme="light"] {
+    /* Rétegzett háttér — GitHub light-ihletésű, ugyanolyan 5 szintes hierarchia */
+    --bg-base:     #ffffff;
+    --bg-surface:  #f6f8fa;
+    --bg-elevated: #ffffff;
+    --bg-overlay:  #ffffff;
+    --bg-hover:    #eaeef2;
+
+    /* Keretek — sötét ghost border light háttéren */
+    --border:       rgba(31, 35, 40, 0.15);
+    --border-muted: rgba(31, 35, 40, 0.06);
+
+    /* Szöveg hierarchia — invertált */
+    --text-primary:   #1f2328;
+    --text-secondary: #424a53;
+    --text-muted:     #656d76;   /* AA 4.6:1 a --bg-elevated felett */
+    --text-disabled:  #afb8c1;
+
+    /* Accent — telített kék (light háttéren is olvasható) */
+    --accent:        #0969da;
+    --accent-hover:  #0550ae;
+    --accent-subtle: rgba(9, 105, 218, 0.10);
+    --accent-solid:  #0969da;
+
+    /* Státusz — light variánsok */
+    --c-error:   #cf222e;
+    --c-warning: #9a6700;
+    --c-success: #1a7f37;
+
+    /* Solid status bg gombok (fehér szöveg) — light variáns */
+    --c-error-solid:   #cf222e;
+    --c-warning-solid: #bf8700;
+
+    /* Lila — Tervezet */
+    --tertiary:           #8250df;
+    --tertiary-container: #6639ba;
+
+    /* Felszín tokenek */
+    --surface-container:         #ffffff;
+    --surface-container-highest: #eaeef2;
+    --outline-variant:           #d0d7de;
+
+    /* Lock badge variánsok */
+    --badge-me-bg:      rgba(9, 105, 218, 0.10);
+    --badge-me-text:    #0969da;
+    --badge-me-border:  rgba(9, 105, 218, 0.25);
+
+    --badge-sys-bg:     rgba(130, 80, 223, 0.10);
+    --badge-sys-text:   #8250df;
+    --badge-sys-border: rgba(130, 80, 223, 0.25);
+
+    --badge-other-bg:     #eaeef2;
+    --badge-other-text:   #424a53;
+    --badge-other-border: rgba(31, 35, 40, 0.15);
+
+    /* Shadow tint — light témán halványabb mélység (slate tone) */
+    --shadow-tint:      31, 35, 40;
+    --modal-backdrop:   rgba(var(--shadow-tint), 0.40);
+    --tooltip-backdrop: rgba(var(--shadow-tint), 0.55);
+
+    /* Glassmorphism élek — sötét overlay light felszínen (invertált) */
+    --glass-edge:  rgba(31, 35, 40, 0.10);
+    --glass-inset: rgba(31, 35, 40, 0.04);
+}
+
+/* Színes felület-kiemelést igénylő böngésző UI-k (scrollbar, kijelölés) */
+:root { color-scheme: dark; }
+[data-theme="light"] { color-scheme: light; }

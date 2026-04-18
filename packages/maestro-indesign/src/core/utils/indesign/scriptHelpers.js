@@ -10,6 +10,39 @@
 import { escapePathForExtendScript } from "../pathUtils.js";
 
 /**
+ * Biztonságos string-beillesztő ExtendScript literálokhoz.
+ * A backslash-t mindig elsőnek escape-eli, majd a kiválasztott quote karaktert.
+ *
+ * Használat:
+ *  - `'${safeEmbed(value)}'` — single-quoted literál (alapértelmezett).
+ *  - `"${safeEmbed(value, 'double')}"` — double-quoted literál.
+ *
+ * Ne tegyél köré quote-ot a függvényen belül — a hívó fél felel a literál quote-jaiért.
+ * Null/undefined inputra üres stringet ad vissza.
+ *
+ * @param {*} value - Az embedelendő érték (stringgé kasztolódik).
+ * @param {'single'|'double'} [quote='single'] - A cél literál quote karaktere.
+ * @returns {string} Az escape-elt string (quote-ok nélkül).
+ */
+export function safeEmbed(value, quote = 'single') {
+    if (value === null || value === undefined) return "";
+    // Backslash elsőnek — különben a későbbi escape-ek visszaütnek.
+    // Line terminator-ok escape-je (\r, \n, \u2028, \u2029) kötelező:
+    // a template literal a JS oldali értéket nyersen pakolja a generált ExtendScript
+    // string literálba, és egy beágyazott sortörés törné a literált.
+    let escaped = String(value).split('\\').join('\\\\');
+    escaped = escaped
+        .split('\r').join('\\r')
+        .split('\n').join('\\n')
+        .split('\u2028').join('\\u2028')
+        .split('\u2029').join('\\u2029');
+    if (quote === 'double') {
+        return escaped.split('"').join('\\"');
+    }
+    return escaped.split("'").join("\\'");
+}
+
+/**
  * Generálja a dokumentum megnyitásának logikáját (háttérben vagy előtérben).
  * Kezeli: `app.open`, `UserInteractionLevels`, `checkLinksAtOpen`.
  *
@@ -22,7 +55,7 @@ export function getBackgroundOpenLogic(filePath, docVarName, openedVarName) {
     const safePath = escapePathForExtendScript(filePath);
     return `
                 // -- START: Background Open Logic --
-                var path = "${safePath}";
+                var path = '${safePath}';
                 var f = File(path);
                 if (!f.exists) f = File(encodeURI(path));
                 if (!f.exists) return "ERROR:A forrásfájl nem található: " + path;
@@ -260,7 +293,7 @@ export function getDocumentTargetLogic(varName, filePath) {
     }
     const safePath = escapePathForExtendScript(filePath);
     return `
-                var path = "${safePath}";
+                var path = '${safePath}';
                 var f = File(path);
                 if (!f.exists) f = File(encodeURI(path));
                 var ${varName} = null;

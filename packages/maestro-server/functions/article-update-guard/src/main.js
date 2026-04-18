@@ -1,155 +1,219 @@
 const sdk = require("node-appwrite");
 
 /**
- * Appwrite Function: Article Update Guard
+ * Appwrite Function: Article Update Guard (Defense-in-depth safety net)
  *
- * Szerver-oldali validáció cikk frissítésekor.
- * Összevont ellenőrzés: workflow állapotátmenet + contributor mezők.
+ * Fázis 9 follow-up óta a cikk update-ek elsődleges érvényesítője az
+ * `update-article` CF (pre-event, szinkron). Ez a post-event guard mostantól
+ * csak DEFENSE-IN-DEPTH szerepet tölt be:
  *
- * Ellenőrzések:
- * 1. Állapot érvényessége (0-7 tartomány)
- * 2. Állapotátmenet érvényessége (previousState → state a VALID_TRANSITIONS alapján)
- * 3. Jogosultság (a felhasználó csapattagsága/label-jei engedélyezik-e az átmenetet)
- * 4. Contributor mezők validitása (létező felhasználó, helyes csapat)
- *
- * A konstansokat a `config` collection `workflow_config` dokumentumából olvassa.
- * Ha a config nem elérhető, hardkódolt fallback értékeket használ (fail-closed).
- * A plugin felelős a config naprakészen tartásáért.
- *
- * Végtelen ciklus védelem: a korrekciós update `modifiedByClientId = 'server-guard'`
- * sentinel-t ír → a következő triggereléskor az early return elkapja.
+ *  • Ha az `update-article` CF írta a rekordot (modifiedByClientId === server-guard
+ *    sentinel), teljesen átugorja az eseményt — a CF már validált.
+ *  • A parent publication cross-tenant scope sync TOVÁBBRA IS korrekciót alkalmaz —
+ *    ez minden írási forrást lefed (Dashboard közvetlen írás, Console edit,
+ *    jövőbeli integrációk).
+ *  • Minden egyéb invariáns (state érvényesség, átmenet, office scope,
+ *    jogosultság, contributor lookup) LOG-ONLY — warning-ot ír, de nem
+ *    módosítja a rekordot. Ezek a check-ek megfigyelési célt szolgálnak, hogy
+ *    észleljük, ha a CF-en kívüli írás sértette az invariánsokat.
  *
  * Trigger: databases.*.collections.articles.documents.*.update
  * Runtime: Node.js 18.0+
  *
  * Szükséges környezeti változók:
- * - APPWRITE_API_KEY: API kulcs (databases.*, users.*, teams.* jogosultságok)
- * - DATABASE_ID: Adatbázis azonosító
- * - ARTICLES_COLLECTION_ID: Cikkek gyűjtemény azonosító
- * - CONFIG_COLLECTION_ID: Config gyűjtemény azonosító
+ * - APPWRITE_API_KEY
+ * - DATABASE_ID
+ * - ARTICLES_COLLECTION_ID
+ * - PUBLICATIONS_COLLECTION_ID
+ * - WORKFLOWS_COLLECTION_ID
+ * - EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID
+ * - GROUPS_COLLECTION_ID
+ * - GROUP_MEMBERSHIPS_COLLECTION_ID
  */
 
 const SERVER_GUARD_ID = 'server-guard';
-const CONFIG_DOCUMENT_ID = 'workflow_config';
 
-// Contributor mezők, amelyek user ID-t tartalmaznak
-const CONTRIBUTOR_FIELDS = [
-    'writerId', 'editorId', 'designerId',
-    'imageEditorId', 'artDirectorId',
-    'managingEditorId', 'proofwriterId'
-];
+// ─── Workflow cache (process-szintű, 60s TTL, Map-alapú) ────────────────────
+//
+// Fázis 6: a workflow-t a publikáció `workflowId`-ja alapján töltjük be,
+// fallback az office első workflow-jára ha null. A Map két kulcstípust kezel:
+//   - `wf:${workflowId}`        — konkrét workflow ID
+//   - `office:${officeId}`      — fallback az office első workflow-jára
+//
+// Soft FIFO eviction CACHE_MAX_ENTRIES felett; Appwrite function process-ek
+// ephemeralisek, a memória-pressure alacsony, ezért LRU overkill lenne.
 
-// ─── Fallback konfiguráció ───────────────────────────────────────────────
-// Ha a DB config nem elérhető, ezek az értékek biztosítják a validáció működését.
-// Tartsd szinkronban: maestro-shared/workflowConfig.js + labelConfig.js
-const FALLBACK_CONFIG = {
-    statePermissions: {
-        '0': ['designers', 'art_directors'],
-        '1': ['art_directors'],
-        '2': ['designers', 'art_directors'],
-        '3': ['editors', 'managing_editors'],
-        '4': ['proofwriters'],
-        '5': ['editors', 'managing_editors'],
-        '6': ['designers', 'art_directors']
-    },
-    validTransitions: {
-        '0': [1], '1': [2, 0], '2': [3, 1], '3': [4, 0],
-        '4': [5, 3], '5': [6, 1], '6': [7, 5], '7': []
-    },
-    teamArticleField: {
-        'designers': 'designerId', 'art_directors': 'artDirectorId',
-        'editors': 'editorId', 'managing_editors': 'managingEditorId',
-        'proofwriters': 'proofwriterId', 'writers': 'writerId',
-        'image_editors': 'imageEditorId'
-    },
-    capabilityLabels: {
-        'canUseDesignerFeatures': ['designers'], 'canApproveDesigns': ['art_directors'],
-        'canEditContent': ['editors'], 'canManageEditorial': ['managing_editors'],
-        'canProofread': ['proofwriters'], 'canWriteArticles': ['writers'],
-        'canEditImages': ['image_editors'], 'canUseEditorFeatures': ['editors']
-    },
-    validLabels: new Set([
-        'canUseDesignerFeatures', 'canApproveDesigns', 'canEditContent',
-        'canManageEditorial', 'canProofread', 'canWriteArticles',
-        'canEditImages', 'canUseEditorFeatures', 'canAddArticlePlan'
-    ]),
-    validStates: new Set([0, 1, 2, 3, 4, 5, 6, 7])
-};
+const workflowCache = new Map();
+const CACHE_TTL_MS = 60_000;
+const CACHE_MAX_ENTRIES = 32;
 
-// ─── Config betöltés ──────────────────────────────────────────────────────
+function cacheGet(key) {
+    const entry = workflowCache.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.fetchedAt >= CACHE_TTL_MS) {
+        workflowCache.delete(key);
+        return null;
+    }
+    return entry.compiled;
+}
+
+function cacheSet(key, compiled) {
+    if (workflowCache.size >= CACHE_MAX_ENTRIES) {
+        // FIFO: Map insertion order garantált, a legrégebbi kerül ki
+        const firstKey = workflowCache.keys().next().value;
+        if (firstKey) workflowCache.delete(firstKey);
+    }
+    workflowCache.set(key, { compiled, fetchedAt: Date.now() });
+}
 
 /**
- * Betölti a workflow konfigurációt a DB config collection-ből.
- * Ha nem elérhető, a FALLBACK_CONFIG-ot adja vissza (fail-closed).
+ * Betölti a compiled workflow JSON-t egy publikáció számára.
+ *
+ * Preferencia (Feladat #37/#38): `publication.compiledWorkflowSnapshot`
+ * (aktiváláskor rögzített pillanatkép). Ha jelen van, kizárólag ezt
+ * használjuk — a Dashboard-oldali workflow módosítások így NEM érintik a
+ * már aktivált publikáció safety-net validációját. A post-event guard
+ * így egy ritmusban marad az `update-article` CF-fel és a Plugin
+ * klienssel.
+ *
+ * Elsődleges (Fázis 7): `publication.workflowId` alapján a `workflows`
+ * collection-ből, cross-tenant védelemmel (a workflow `editorialOfficeId`-jának
+ * egyeznie kell a publikáció office-ával). Ha a workflowId explicit beállított,
+ * de nem oldható fel (404, scope mismatch, egyéb hiba), a függvény `null`-t ad
+ * vissza — a hívó ilyenkor fail-closed módon revert-el, soha nem esünk vissza
+ * egy másik workflow-ra (cross-workflow leak védelem).
+ *
+ * Legacy fallback: kizárólag akkor, ha a `publication.workflowId` mező
+ * explicit null/undefined (Fázis 7 előtti rekordok), akkor az office első
+ * workflow-jára esünk vissza. Új publikációkat a Dashboard mindig `workflowId`-val
+ * hoz létre, így ez az ág éles adatokon nem tüzel.
  *
  * @param {sdk.Databases} databases
  * @param {string} databaseId
- * @param {string} configCollectionId
+ * @param {string} workflowsCollectionId
+ * @param {{ editorialOfficeId?: string, workflowId?: string, compiledWorkflowSnapshot?: string }} parentPublication
  * @param {Function} log
- * @returns {Object|null} A parsed config objektum vagy null
+ * @returns {Promise<Object|null>}
  */
-async function loadWorkflowConfig(databases, databaseId, configCollectionId, log) {
-    try {
-        const doc = await databases.getDocument(databaseId, configCollectionId, CONFIG_DOCUMENT_ID);
+async function getWorkflowForPublication(databases, databaseId, workflowsCollectionId, parentPublication, log) {
+    if (!parentPublication) return null;
+    const officeId = parentPublication.editorialOfficeId;
+    const workflowId = parentPublication.workflowId;
+    const snapshot = parentPublication.compiledWorkflowSnapshot;
 
-        return {
-            statePermissions: JSON.parse(doc.statePermissions || '{}'),
-            validTransitions: JSON.parse(doc.validTransitions || '{}'),
-            teamArticleField: JSON.parse(doc.teamArticleField || '{}'),
-            capabilityLabels: JSON.parse(doc.capabilityLabels || '{}'),
-            validLabels: new Set(JSON.parse(doc.validLabels || '[]')),
-            validStates: new Set(JSON.parse(doc.validStates || '[]'))
-        };
-    } catch (e) {
-        log(`[Config] DB config nem elérhető, fallback használata: ${e.message}`);
-        return FALLBACK_CONFIG;
-    }
-}
-
-// ─── Label → csapat feloldás ──────────────────────────────────────────────
-
-/**
- * A felhasználó label-jei alapján feloldja a virtuális csapat slug-okat.
- * (Szerver-oldali portja a maestro-shared/labelConfig.js resolveGrantedTeams-nek.)
- *
- * @param {string[]} userLabels - A felhasználó label-jei
- * @param {Object} capabilityLabels - A config-ból olvasott label→teams mapping
- * @returns {Set<string>}
- */
-function resolveGrantedTeams(userLabels, capabilityLabels) {
-    const granted = new Set();
-    for (const label of userLabels) {
-        const teams = capabilityLabels[label];
-        if (Array.isArray(teams)) {
-            for (const team of teams) {
-                granted.add(team);
-            }
+    // 0. Snapshot preferencia (#37/#38) — aktivált publikációk rögzített workflow verziója
+    if (typeof snapshot === 'string' && snapshot.length > 0) {
+        const snapCacheKey = `snap:${parentPublication.$id}:${snapshot.length}`;
+        const cachedSnap = cacheGet(snapCacheKey);
+        if (cachedSnap) return cachedSnap;
+        try {
+            const compiled = JSON.parse(snapshot);
+            cacheSet(snapCacheKey, compiled);
+            return compiled;
+        } catch (e) {
+            log(`[Workflow] Snapshot parse hiba (pub=${parentPublication.$id}): ${e.message} — fallback workflowId-ra`);
+            // Ne állítsunk be fallback változót; a következő blokk ugyanazt a
+            // workflowId lookup-ot futtatja le, mintha snapshot sem létezne.
         }
     }
-    return granted;
+
+    // 1. Primary: publication.workflowId — fail-closed, nincs cross-workflow fallback
+    if (workflowId) {
+        const cacheKey = `wf:${workflowId}`;
+        const cached = cacheGet(cacheKey);
+        if (cached) return cached;
+        try {
+            const doc = await databases.getDocument(databaseId, workflowsCollectionId, workflowId);
+            if (officeId && doc.editorialOfficeId !== officeId) {
+                log(`[Workflow] Cross-tenant leak blokkolva: wf ${workflowId} office=${doc.editorialOfficeId} ≠ pub office=${officeId} — fail-closed`);
+                return null;
+            }
+            const compiled = typeof doc.compiled === 'string' ? JSON.parse(doc.compiled) : doc.compiled;
+            cacheSet(cacheKey, compiled);
+            return compiled;
+        } catch (e) {
+            if (e.code === 404) {
+                log(`[Workflow] publication.workflowId=${workflowId} not found — fail-closed`);
+            } else {
+                log(`[Workflow] workflow lookup hiba (${workflowId}): ${e.message} — fail-closed`);
+            }
+            return null;
+        }
+    }
+
+    // 2. Legacy fallback: csak akkor, ha a publication.workflowId explicit null
+    if (!officeId) return null;
+    const fallbackKey = `office:${officeId}`;
+    const cached = cacheGet(fallbackKey);
+    if (cached) return cached;
+    try {
+        const result = await databases.listDocuments(databaseId, workflowsCollectionId, [
+            sdk.Query.equal('editorialOfficeId', officeId),
+            sdk.Query.limit(1)
+        ]);
+        if (result.documents.length === 0) {
+            log(`[Workflow] Nincs workflow az office-hoz: ${officeId}`);
+            return null;
+        }
+        const doc = result.documents[0];
+        const compiled = typeof doc.compiled === 'string' ? JSON.parse(doc.compiled) : doc.compiled;
+        cacheSet(fallbackKey, compiled);
+        return compiled;
+    } catch (e) {
+        log(`[Workflow] Office fallback hiba: ${e.message}`);
+        return null;
+    }
+}
+
+// ─── Segédfüggvények ─────────────────────────────────────────────────────
+
+/**
+ * Lekéri a felhasználó csoporttagságait.
+ */
+async function getUserGroupSlugs(databases, databaseId, groupsCollectionId, groupMembershipsCollectionId, userId, editorialOfficeId) {
+    try {
+        const membershipsResult = await databases.listDocuments(databaseId, groupMembershipsCollectionId, [
+            sdk.Query.equal('userId', userId),
+            sdk.Query.equal('editorialOfficeId', editorialOfficeId),
+            sdk.Query.limit(100)
+        ]);
+        if (membershipsResult.documents.length === 0) return [];
+
+        const groupIds = [...new Set(membershipsResult.documents.map(m => m.groupId))];
+        const groupsResult = await databases.listDocuments(databaseId, groupsCollectionId, [
+            sdk.Query.equal('$id', groupIds),
+            sdk.Query.limit(100)
+        ]);
+
+        const groupIdToSlug = new Map(groupsResult.documents.map(g => [g.$id, g.slug]));
+        const slugs = new Set();
+        for (const m of membershipsResult.documents) {
+            const slug = groupIdToSlug.get(m.groupId);
+            if (slug) slugs.add(slug);
+        }
+        return [...slugs];
+    } catch (e) {
+        return null;
+    }
 }
 
 /**
- * Lekéri a felhasználó tényleges csapat slug-jait (membership alapján).
- *
- * @param {sdk.Users} users
- * @param {string} userId
- * @returns {Promise<string[]>} A csapat ID-k tömbje
+ * Lekéri a felhasználó office membership rekordját.
  */
-async function getUserTeamIds(users, userId) {
-    try {
-        const memberships = await users.listMemberships(userId);
-        return (memberships.memberships || []).map(m => m.teamId);
-    } catch (e) {
-        return [];
-    }
+async function findOfficeMembership(databases, databaseId, collectionId, userId, officeId) {
+    const result = await databases.listDocuments(databaseId, collectionId, [
+        sdk.Query.equal('userId', userId),
+        sdk.Query.equal('editorialOfficeId', officeId),
+        sdk.Query.limit(1)
+    ]);
+    if ((result.total || 0) === 0) return null;
+    return result.documents[0] || null;
 }
 
 // ─── Belépési pont ────────────────────────────────────────────────────────
 
 module.exports = async function ({ req, res, log, error }) {
     try {
-        // Event payload feldolgozása
         let payload = {};
         if (req.body) {
             try {
@@ -164,14 +228,14 @@ module.exports = async function ({ req, res, log, error }) {
             return res.json({ success: true, action: 'skipped', reason: 'No document ID' });
         }
 
-        // ── 1. Sentinel guard — saját korrekciós update kihagyása ──
+        // ── 1. Sentinel guard ──
         if (payload.modifiedByClientId === SERVER_GUARD_ID) {
             return res.json({ success: true, action: 'skipped', reason: 'Server guard update' });
         }
 
         // ── SDK inicializálás ──
         const client = new sdk.Client()
-            .setEndpoint(process.env.APPWRITE_FUNCTION_ENDPOINT || 'https://cloud.appwrite.io/v1')
+            .setEndpoint(process.env.APPWRITE_ENDPOINT || 'https://cloud.appwrite.io/v1')
             .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID)
             .setKey(process.env.APPWRITE_API_KEY);
 
@@ -180,12 +244,25 @@ module.exports = async function ({ req, res, log, error }) {
 
         const databaseId = process.env.DATABASE_ID;
         const articlesCollectionId = process.env.ARTICLES_COLLECTION_ID;
-        const configCollectionId = process.env.CONFIG_COLLECTION_ID;
+        const publicationsCollectionId = process.env.PUBLICATIONS_COLLECTION_ID;
+        const workflowsCollectionId = process.env.WORKFLOWS_COLLECTION_ID;
+        const officeMembershipsCollectionId = process.env.EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID;
+        const groupsCollectionId = process.env.GROUPS_COLLECTION_ID;
+        const groupMembershipsCollectionId = process.env.GROUP_MEMBERSHIPS_COLLECTION_ID;
 
-        // ── 2. Config betöltés (fail-closed: DB → fallback → mindig validál) ──
-        const config = await loadWorkflowConfig(databases, databaseId, configCollectionId, log);
+        // ── Fail-fast env var guard ──
+        const missingEnvVars = [];
+        if (!officeMembershipsCollectionId) missingEnvVars.push('EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID');
+        if (!publicationsCollectionId) missingEnvVars.push('PUBLICATIONS_COLLECTION_ID');
+        if (!workflowsCollectionId) missingEnvVars.push('WORKFLOWS_COLLECTION_ID');
+        if (!groupsCollectionId) missingEnvVars.push('GROUPS_COLLECTION_ID');
+        if (!groupMembershipsCollectionId) missingEnvVars.push('GROUP_MEMBERSHIPS_COLLECTION_ID');
+        if (missingEnvVars.length > 0) {
+            error(`[Config] Hiányzó környezeti változó(k): ${missingEnvVars.join(', ')}`);
+            return res.json({ success: false, reason: 'misconfigured', missing: missingEnvVars }, 500);
+        }
 
-        // ── 3. Friss dokumentum lekérése (stale snapshot védelem) ──
+        // ── 2. Friss dokumentum lekérése ──
         let freshDoc;
         try {
             freshDoc = await databases.getDocument(databaseId, articlesCollectionId, payload.$id);
@@ -197,105 +274,162 @@ module.exports = async function ({ req, res, log, error }) {
             throw e;
         }
 
-        // Ismételt sentinel check a friss dokumentumon
         if (freshDoc.modifiedByClientId === SERVER_GUARD_ID) {
             return res.json({ success: true, action: 'skipped', reason: 'Server guard update (fresh)' });
         }
 
         const corrections = {};
 
-        // ── 4. Állapot érvényesség ──
-        const currentState = Number(freshDoc.state);
-        if (!config.validStates.has(currentState)) {
-            corrections.state = 0; // DESIGNING — biztonságos alapállapot
-            log(`Érvénytelen állapot (${freshDoc.state}) → visszaállítás 0-ra`);
-        }
-
-        // ── 5. Állapotátmenet validáció ──
-        const previousState = freshDoc.previousState;
-        const stateChanged = previousState !== null && previousState !== undefined
-            && Number(previousState) !== currentState;
-
-        if (stateChanged && !corrections.state) {
-            const prevStateNum = Number(previousState);
-            const validTargets = config.validTransitions[String(prevStateNum)] || [];
-
-            if (!validTargets.includes(currentState)) {
-                corrections.state = prevStateNum;
-                log(`Érvénytelen átmenet: ${prevStateNum} → ${currentState} (nem engedélyezett) → visszaállítás`);
-            }
-        }
-
-        // ── 6. Jogosultsági ellenőrzés (állapotváltáskor) ──
-        const userId = req.headers['x-appwrite-user-id'];
-
-        if (stateChanged && !corrections.state && userId) {
-            const prevStateNum = Number(previousState);
-            const requiredTeams = config.statePermissions[String(prevStateNum)];
-
-            if (requiredTeams && requiredTeams.length > 0) {
-                // Felhasználó csapattagságai
-                const userTeamIds = await getUserTeamIds(usersApi, userId);
-
-                // Felhasználó label-jei → virtuális csapatok
-                let grantedTeams = new Set();
-                try {
-                    const userDoc = await usersApi.get(userId);
-                    grantedTeams = resolveGrantedTeams(userDoc.labels || [], config.capabilityLabels);
-                } catch (e) {
-                    log(`Felhasználó lekérése sikertelen (${userId}): ${e.message}`);
-                }
-
-                // Ellenőrzés: a felhasználó benne van-e valamelyik szükséges csapatban
-                const hasPermission = requiredTeams.some(slug =>
-                    userTeamIds.includes(slug) || grantedTeams.has(slug)
-                );
-
-                if (!hasPermission) {
-                    corrections.state = prevStateNum;
-                    log(`Jogosultsági hiba: felhasználó ${userId} nem mozgathatja a cikket állapotból ${prevStateNum} (szükséges: [${requiredTeams.join(', ')}])`);
-                }
-            }
-        }
-
-        // ── 7. Contributor mezők validáció (log only) ──
-        for (const field of CONTRIBUTOR_FIELDS) {
-            const value = freshDoc[field];
-            if (!value) continue;
-
+        // ── 3. Parent publication scope sync (Fázis 1 / B.8) ──
+        let parentPublication = null;
+        if (freshDoc.publicationId) {
             try {
-                await usersApi.get(value);
+                parentPublication = await databases.getDocument(
+                    databaseId, publicationsCollectionId, freshDoc.publicationId
+                );
             } catch (e) {
                 if (e.code === 404) {
-                    log(`[Contributor] ${field}=${value} — felhasználó nem létezik (nem javítva, csak logolva)`);
+                    log(`[Scope] Parent publication ${freshDoc.publicationId} nem található — sync kihagyva (${freshDoc.$id})`);
+                } else {
+                    throw e;
                 }
             }
         }
 
-        // ── 8. previousState karbantartás ──
-        // A szerver mindig naprakészen tartja a previousState-et, így a közvetlen
-        // API hívások (previousState nélkül) a következő módosításkor elkaphatók.
-        if (freshDoc.previousState === null || freshDoc.previousState === undefined) {
-            const effectiveState = corrections.state !== undefined ? corrections.state : currentState;
-            corrections.previousState = effectiveState;
-            log(`previousState inicializálva: ${effectiveState} (korábban nem volt beállítva)`);
-        } else if (corrections.state !== undefined) {
-            // State korrekció (revert) → previousState is frissül
-            corrections.previousState = corrections.state;
+        if (parentPublication && parentPublication.editorialOfficeId) {
+            if (parentPublication.editorialOfficeId !== freshDoc.editorialOfficeId) {
+                corrections.editorialOfficeId = parentPublication.editorialOfficeId;
+                log(`[Scope] Cikk editorialOfficeId drift → sync a parent-hez`);
+                freshDoc.editorialOfficeId = parentPublication.editorialOfficeId;
+            }
+            if (parentPublication.organizationId
+                && parentPublication.organizationId !== freshDoc.organizationId) {
+                corrections.organizationId = parentPublication.organizationId;
+                log(`[Scope] Cikk organizationId drift → sync a parent-hez`);
+                freshDoc.organizationId = parentPublication.organizationId;
+            }
         }
 
-        // ── 9. Korrekciók alkalmazása ──
+        // ── 4. Workflow betöltés (fail-closed) ──
+        // Fázis 6: a workflow a publication.workflowId alapján töltődik be
+        // (fallback: office első workflow-ja). Ha a parent publication törölt
+        // vagy nem elérhető, a freshDoc.editorialOfficeId-val megyünk tovább.
+        let compiled = null;
+        if (parentPublication) {
+            compiled = await getWorkflowForPublication(
+                databases, databaseId, workflowsCollectionId, parentPublication, log
+            );
+        } else if (freshDoc.editorialOfficeId) {
+            compiled = await getWorkflowForPublication(
+                databases, databaseId, workflowsCollectionId,
+                { editorialOfficeId: freshDoc.editorialOfficeId, workflowId: null },
+                log
+            );
+        }
+
+        const currentState = freshDoc.state || "";
+        const previousState = freshDoc.previousState;
+        const stateChanged = previousState !== null && previousState !== undefined
+            && previousState !== currentState;
+
+        // ── 5. Állapot érvényesség (LOG ONLY — safety net) ──
+        if (compiled) {
+            const states = Array.isArray(compiled.states) ? compiled.states : [];
+            const validStateIds = states.map(s => s.id);
+            if (currentState && !validStateIds.includes(currentState)) {
+                log(`[SafetyNet] Érvénytelen állapot ${freshDoc.$id}: "${currentState}" nincs a compiled.states-ben — CF-en kívüli írás?`);
+            }
+        } else if (stateChanged) {
+            log(`[SafetyNet] Nincs elérhető workflow ${freshDoc.$id}: state "${previousState}" → "${currentState}" — CF-en kívüli írás?`);
+        }
+
+        // ── 6. Állapotátmenet validáció (LOG ONLY — safety net) ──
+        if (stateChanged && compiled) {
+            const transitions = compiled.transitions || [];
+            const isValid = transitions.some(t => t.from === previousState && t.to === currentState);
+            if (!isValid) {
+                log(`[SafetyNet] Érvénytelen átmenet ${freshDoc.$id}: "${previousState}" → "${currentState}" nincs a compiled.transitions-ben — CF-en kívüli írás?`);
+            }
+        }
+
+        // ── 7. Office scope ellenőrzés (LOG ONLY — safety net) ──
+        const userId = req.headers['x-appwrite-user-id'];
+
+        if (userId && freshDoc.editorialOfficeId) {
+            try {
+                const membership = await findOfficeMembership(
+                    databases, databaseId, officeMembershipsCollectionId,
+                    userId, freshDoc.editorialOfficeId
+                );
+                if (!membership) {
+                    log(`[SafetyNet] Cross-tenant update ${freshDoc.$id}: user ${userId} nem tagja az office-nak ${freshDoc.editorialOfficeId}`);
+                }
+            } catch (e) {
+                error(`[SafetyNet] Membership lookup hiba ${freshDoc.$id}: ${e.message}`);
+            }
+        } else if (userId && !freshDoc.editorialOfficeId) {
+            log(`[SafetyNet] Legacy cikk ${freshDoc.$id} — nincs editorialOfficeId, office check kihagyva`);
+        }
+
+        // ── 8. Jogosultsági ellenőrzés (LOG ONLY — safety net) ──
+        if (stateChanged && userId && compiled) {
+            const statePermissions = compiled.statePermissions || {};
+            const leaderGroups = compiled.leaderGroups || [];
+            const requiredGroups = statePermissions[previousState] || [];
+
+            if (requiredGroups.length > 0) {
+                const userGroupSlugs = freshDoc.editorialOfficeId
+                    ? await getUserGroupSlugs(databases, databaseId, groupsCollectionId, groupMembershipsCollectionId, userId, freshDoc.editorialOfficeId)
+                    : [];
+
+                if (userGroupSlugs === null) {
+                    error(`[SafetyNet] Jogosultság check lookup hiba ${freshDoc.$id}: userId=${userId}`);
+                } else {
+                    const isLeader = leaderGroups.some(g => userGroupSlugs.includes(g));
+                    const hasPermission = isLeader || requiredGroups.some(slug => userGroupSlugs.includes(slug));
+                    if (!hasPermission) {
+                        log(`[SafetyNet] Jogosultsági sértés ${freshDoc.$id}: user ${userId} mozgatta "${previousState}" → "${currentState}" (szükséges: [${requiredGroups.join(', ')}])`);
+                    }
+                }
+            }
+        }
+
+        // ── 9. Contributors JSON validáció (log only) ──
+        if (freshDoc.contributors) {
+            try {
+                const parsed = JSON.parse(freshDoc.contributors);
+                for (const [slug, contribUserId] of Object.entries(parsed)) {
+                    if (!contribUserId) continue;
+                    try {
+                        await usersApi.get(contribUserId);
+                    } catch (e) {
+                        if (e.code === 404) {
+                            log(`[Contributor] contributors.${slug}=${contribUserId} — felhasználó nem létezik`);
+                        }
+                    }
+                }
+            } catch (e) {
+                log(`[Contributor] contributors parse hiba: ${e.message}`);
+            }
+        }
+
+        // ── 10. previousState karbantartás (legacy data hygiene) ──
+        // Régi, previousState=null rekordoknál inicializáljuk, hogy a
+        // stateChanged detektor kompatibilis legyen. Csak akkor, ha tényleg null.
+        if (freshDoc.previousState === null || freshDoc.previousState === undefined) {
+            corrections.previousState = currentState;
+            log(`previousState inicializálva: ${currentState}`);
+        }
+
+        // ── 11. Korrekciók alkalmazása (csak scope sync + previousState init) ──
         if (Object.keys(corrections).length > 0) {
             corrections.modifiedByClientId = SERVER_GUARD_ID;
 
             await databases.updateDocument(
-                databaseId,
-                articlesCollectionId,
-                payload.$id,
-                corrections
+                databaseId, articlesCollectionId, payload.$id, corrections
             );
 
-            log(`Korrekciók alkalmazva: ${JSON.stringify(corrections)}`);
+            log(`[SafetyNet] Korrekciók alkalmazva (scope/previousState): ${JSON.stringify(corrections)}`);
 
             return res.json({
                 success: true,

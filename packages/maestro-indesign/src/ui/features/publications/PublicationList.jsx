@@ -1,14 +1,12 @@
 // React
-import React, { useState, useCallback, useEffect } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 
 // Components
 import { Publication } from "./Publication/Publication.jsx";
 import { PublicationListToolbar } from "./PublicationListToolbar.jsx";
 import { LockManager } from "../workspace/LockManager.jsx";
-import { ConfirmDialog } from "../../common/ConfirmDialog.jsx";
 
 // Custom Hooks
-import { usePublications } from "../../../data/hooks/usePublications.js";
 import { useOverlapValidation } from "../../../data/hooks/useOverlapValidation.js";
 import { useDatabaseIntegrityValidation } from "../../../data/hooks/useDatabaseIntegrityValidation.js";
 import { useData } from "../../../core/contexts/DataContext.jsx";
@@ -16,21 +14,14 @@ import { useDriveAccessibility } from "../../../data/hooks/useDriveAccessibility
 
 // Utils
 import { STORAGE_KEYS } from "../../../core/utils/constants.js";
-import { logDebug, logWarn, logError } from "../../../core/utils/logger.js";
+import { logDebug, logWarn } from "../../../core/utils/logger.js";
 import { DocumentMonitor } from "../workspace/DocumentMonitor.jsx";
 
 
-export const PublicationList = ({ onShowProperties, filterState }) => {
-    // Access publication services
-    const {
-        publications,
-        loading,
-        error,
-        fetchPublications,
-        createPublication,
-        deletePublication,
-        renamePublication
-    } = usePublications();
+export const PublicationList = ({ onShowProperties, onOpenInDashboard, filterState }) => {
+    // A publikációk és a betöltés állapota közvetlenül a DataContext-ből — a plugin nem ír
+    // publikációkba (Fázis 9), ezért nincs külön hook-wrapper.
+    const { publications, isLoading: loading, setActivePublicationId } = useData();
 
     // Központi mappa-elérhetőség figyelés (minden kiadványra, 2s polling)
     const accessibilityMap = useDriveAccessibility(publications);
@@ -39,8 +30,6 @@ export const PublicationList = ({ onShowProperties, filterState }) => {
 
     // Adatbázis-integritás validáció (MaestroEvent.documentSaved/documentClosed eseményekre hallgat)
     useDatabaseIntegrityValidation();
-
-    const [deleteDialog, setDeleteDialog] = useState({ isOpen: false, id: null, title: "", message: "" });
 
     // Initialize expandedId from localStorage
     const [expandedId, setExpandedId] = useState(() => {
@@ -101,9 +90,6 @@ export const PublicationList = ({ onShowProperties, filterState }) => {
         }
     }, [expandedId]);
 
-    // Access DataContext to control active publication
-    const { setActivePublicationId } = useData();
-
     const toggleExpansion = useCallback((id) => {
         setExpandedId(prev => {
             const newId = prev === id ? null : id;
@@ -121,40 +107,25 @@ export const PublicationList = ({ onShowProperties, filterState }) => {
         });
     }, [setActivePublicationId]);
 
-    // Sync initial expanded state from localStorage with DataContext
+    // Sync initial expanded state from localStorage with DataContext — csak AKKOR,
+    // ha a publications már betöltődött ÉS az expandedId valóban létező publikációra
+    // mutat. Korábban a mount effect vakon dispatch-elt `setActivePublicationId`-t,
+    // akár törölt/deaktivált publikáció ID-jára is — a fetch utána üres listát kapott.
+    // A `didRestoreRef` biztosítja, hogy a restore pontosan egyszer fusson le.
+    const didRestoreRef = useRef(false);
     useEffect(() => {
-        if (expandedId) {
+        if (didRestoreRef.current) return;
+        if (publications.length === 0) return;
+        if (expandedId && publications.some(p => p.$id === expandedId)) {
             setActivePublicationId(expandedId);
-            logDebug('[PublicationList] Restored Active form LocalStorage:', expandedId);
+            logDebug('[PublicationList] Restored Active from LocalStorage:', expandedId);
         }
-    }, []); // Run once on mount
-
-    const confirmDeletePublication = useCallback((id, name) => {
-        setDeleteDialog({
-            isOpen: true,
-            id,
-            title: "Kiadvány törlése",
-            message: `Biztosan törölni szeretnéd a(z) "${name}" nevű kiadványt?\n\nFigyelem: A törléssel a kiadványhoz tartozó összes adat véglegesen törlődik. Ez a művelet nem vonható vissza.`,
-            verificationExpected: name
-        });
-    }, []);
-
-    const handleConfirmDelete = async () => {
-        const { id } = deleteDialog;
-        setDeleteDialog({ ...deleteDialog, isOpen: false });
-        try {
-            await deletePublication(id);
-        } catch (e) {
-            logError("Error deleting:", e);
-        }
-    };
+        didRestoreRef.current = true;
+    }, [publications, expandedId, setActivePublicationId]);
 
     return (
         <>
-            <PublicationListToolbar
-                createPublication={createPublication}
-                fetchPublications={fetchPublications}
-            />
+            <PublicationListToolbar />
 
             <div style={{
                 display: "flex",
@@ -168,40 +139,46 @@ export const PublicationList = ({ onShowProperties, filterState }) => {
                     <sp-body style={{ padding: "20px", textAlign: "center" }}>Betöltés...</sp-body>
                 )}
 
-                {publications.map((pub, index) => (
-                    <Publication
-                        style={{ paddingBottom: "32px" }}
-                        key={pub.$id}
-                        publication={pub}
-                        onDelete={confirmDeletePublication}
-                        onRename={renamePublication}
-                        onShowProperties={onShowProperties}
-                        isExpanded={expandedId === pub.$id}
-                        onToggle={() => toggleExpansion(pub.$id)}
-                        isDriveAccessible={accessibilityMap.get(pub.$id) ?? true}
-                        filterState={filterState}
-                    />
-                ))}
+                {/* Üres állapot: nincs aktivált kiadvány ebben a szerkesztőségben.
+                    A Plugin Fázis 9 óta nem hoz létre kiadványt — a Dashboardra irányítjuk a felhasználót. */}
+                {!loading && publications.length === 0 && (
+                    <div style={{ padding: "24px 20px", textAlign: "center" }}>
+                        <sp-body style={{ display: "block", marginBottom: "8px", fontWeight: "bold" }}>
+                            Nincs aktivált kiadvány
+                        </sp-body>
+                        <sp-body size="s" style={{ display: "block", opacity: 0.75 }}>
+                            Ebben a szerkesztőségben még nincs aktivált kiadvány. A kiadványok létrehozása és aktiválása a Dashboardon történik — nyisd meg a Dashboardot a fenti „DASHBOARD" linkkel.
+                        </sp-body>
+                    </div>
+                )}
+
+                {publications.map((pub) => {
+                    // Konfigurációs állapot: a rootPath beállítva-e (#33). A folder picker
+                    // maga a #34 feladat — itt csak a vizuális állapot + művelet-tiltás.
+                    const isConfigured = Boolean(pub.rootPath);
+                    // Unconfigured pub-ok a useDriveAccessibility map-ből kimaradnak (külön dimenzió),
+                    // ilyenkor a `?? true` default biztosítja, hogy a „mappa nem elérhető" ág ne
+                    // aktiválódjon — a blokkolást és a banner-t az isConfigured=false ága viszi.
+                    const isDriveAccessible = isConfigured
+                        ? (accessibilityMap.get(pub.$id) ?? true)
+                        : true;
+
+                    return (
+                        <Publication
+                            style={{ paddingBottom: "32px" }}
+                            key={pub.$id}
+                            publication={pub}
+                            onShowProperties={onShowProperties}
+                            onOpenInDashboard={onOpenInDashboard}
+                            isExpanded={expandedId === pub.$id}
+                            onToggle={() => toggleExpansion(pub.$id)}
+                            isConfigured={isConfigured}
+                            isDriveAccessible={isDriveAccessible}
+                            filterState={filterState}
+                        />
+                    );
+                })}
             </div>
-
-            <ConfirmDialog
-                isOpen={deleteDialog.isOpen}
-                title={deleteDialog.title}
-                message={deleteDialog.message}
-                onConfirm={handleConfirmDelete}
-                onCancel={() => setDeleteDialog({ ...deleteDialog, isOpen: false })}
-                isAlert={false}
-                verificationExpected={deleteDialog.verificationExpected}
-            />
-
-            <ConfirmDialog
-                isOpen={!!error}
-                title="Hálózati Hiba"
-                message={`Nem sikerült kapcsolódni a szerverhez. (${error}) A rendszer automatikusan újrapróbálkozik...`}
-                isAlert={true}
-                onConfirm={() => fetchPublications(false)}
-                confirmLabel="Újrapróbálkozás"
-            />
 
             <LockManager />
             <DocumentMonitor />

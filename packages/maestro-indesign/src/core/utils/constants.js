@@ -14,6 +14,13 @@ export { LOCK_TYPE };
 // Ez a konstans jelöli a JavaScript nyelvet az InDesign `doScript` metódusában.
 export const SCRIPT_LANGUAGE_JAVASCRIPT = 1246973031;
 
+// LocalStorage Kulcsok — Multi-tenant scope
+// Külön top-level export, mert a ScopeContext és a UserContext is bootstrap-kor
+// (még a React fa összeszerelése előtt) olvassa. Közös helyen tartás megszünteti
+// a ScopeContext ↔ UserContext korábbi körkörös importját.
+export const STORAGE_ORG_KEY = "maestro.activeOrganizationId";
+export const STORAGE_OFFICE_KEY = "maestro.activeEditorialOfficeId";
+
 // LocalStorage Kulcsok
 // Az alkalmazás állapotának mentéséhez használt kulcsok.
 export const STORAGE_KEYS = {
@@ -23,10 +30,6 @@ export const STORAGE_KEYS = {
     SECTION_ARTICLE_MESSAGES_COLLAPSED: "maestro.section.article.messages.collapsed",           // Cikk üzenetek szekció
     SECTION_ARTICLE_CONTRIBUTORS_COLLAPSED: "maestro.section.article.contributors.collapsed",   // Cikk közreműködők szekció
     SECTION_ARTICLE_VALIDATION_COLLAPSED: "maestro.section.article.validation.collapsed",       // Cikk validáció szekció
-    SECTION_PUBLICATION_GENERAL_COLLAPSED: "maestro.section.publication.general.collapsed",           // Kiadvány általános szekció
-    SECTION_PUBLICATION_LAYOUTS_COLLAPSED: "maestro.section.publication.layouts.collapsed",           // Kiadvány elrendezések szekció
-    SECTION_PUBLICATION_CONTRIBUTORS_COLLAPSED: "maestro.section.publication.contributors.collapsed", // Kiadvány munkatársak szekció
-    SECTION_PUBLICATION_DEADLINES_COLLAPSED: "maestro.section.publication.deadlines.collapsed",         // Kiadvány határidők szekció
     FILTER_STATUS: "maestro.filter.status",                   // Kiválasztott workflow állapotok (JSON tömb)
     FILTER_SHOW_IGNORED: "maestro.filter.showIgnored",        // Kimarad cikkek mutatása (boolean string)
     FILTER_SHOW_ONLY_MINE: "maestro.filter.showOnlyMine",     // Csak saját cikkek (boolean string)
@@ -72,7 +75,12 @@ export const CONNECTION_CONFIG = {
     REALTIME_STALENESS_MS: 45000,
 
     // Realtime kapcsolat ellenőrzése
-    RECONNECT_CHECK_MS: 30000      // 30mp fallback - az alvás detektálás kezeli az azonnali helyreállítást
+    RECONNECT_CHECK_MS: 30000,     // 30mp fallback - az alvás detektálás kezeli az azonnali helyreállítást
+
+    // Startup fallback: ennyi ms után ellenőrizzük, hogy a Realtime initial
+    // handshake-je létrejött-e. Ha nem, recovery-t indítunk — különben a
+    // _notifyConnectionChange(false→false) dedupe miatt ragadhatunk benne.
+    STARTUP_REALTIME_CHECK_MS: 5000
 };
 
 // =============================================================================

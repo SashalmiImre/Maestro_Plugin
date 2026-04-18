@@ -1,0 +1,913 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Maestro — Workflow Designer stílusok
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Oldal layout ──────────────────────────────────────────────────────── */
+
+.workflow-designer-page {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    background: var(--bg-base, #111319);
+    color: var(--text-primary, #e8e8e8);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+
+/* ─── Toolbar ───────────────────────────────────────────────────────────── */
+
+.workflow-designer-toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 16px;
+    background: var(--bg-elevated, #282a30);
+    border-bottom: 1px solid rgb(from var(--text-primary) r g b / 0.06);
+    flex-shrink: 0;
+}
+
+.workflow-designer-toolbar__left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.workflow-designer-toolbar__back {
+    color: var(--text-secondary, #999);
+    text-decoration: none;
+    font-size: 18px;
+    padding: 4px 8px;
+    border-radius: 6px;
+    transition: background 0.15s, color 0.15s;
+}
+
+.workflow-designer-toolbar__back:hover {
+    background: rgb(from var(--text-primary) r g b / 0.06);
+    color: var(--text-primary, #e8e8e8);
+}
+
+.workflow-designer-toolbar__title {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0;
+}
+
+/* Rename input — a h2 title helyén, a workflow neve szerkeszthetően */
+.workflow-designer-toolbar__name {
+    font-size: 16px;
+    font-weight: 600;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-primary, #e8e8e8);
+    padding: 4px 8px;
+    border-radius: 6px;
+    min-width: 200px;
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.workflow-designer-toolbar__name:hover {
+    border-color: rgb(from var(--text-primary) r g b / 0.1);
+}
+
+.workflow-designer-toolbar__name:focus {
+    outline: none;
+    border-color: rgb(from var(--accent-solid) r g b / 0.5);
+    background: rgb(from var(--text-primary) r g b / 0.04);
+}
+
+/* Workflow selector dropdown — a rename input mellett, csak ha >1 workflow van */
+.workflow-designer-toolbar__selector {
+    font-size: 12px;
+    padding: 6px 10px;
+    border-radius: 6px;
+    background: rgb(from var(--text-primary) r g b / 0.04);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.1);
+    color: var(--text-secondary, #999);
+    cursor: pointer;
+    transition: border-color 0.15s, color 0.15s;
+}
+
+.workflow-designer-toolbar__selector:hover {
+    border-color: rgb(from var(--text-primary) r g b / 0.2);
+    color: var(--text-primary, #e8e8e8);
+}
+
+.workflow-designer-toolbar__selector:focus {
+    outline: none;
+    border-color: rgb(from var(--accent-solid) r g b / 0.5);
+}
+
+.workflow-designer-toolbar__version {
+    font-size: 12px;
+    color: var(--text-secondary, #999);
+    background: rgb(from var(--text-primary) r g b / 0.06);
+    padding: 2px 8px;
+    border-radius: 10px;
+}
+
+.workflow-designer-toolbar__right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.workflow-designer-toolbar__dirty {
+    font-size: 12px;
+    color: var(--c-warning);
+}
+
+.workflow-designer-toolbar__error {
+    font-size: 12px;
+    color: var(--c-error);
+    max-width: 300px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.workflow-designer-toolbar__save {
+    padding: 6px 16px;
+    font-size: 13px;
+    font-weight: 600;
+    border: none;
+    border-radius: 6px;
+    background: var(--accent-solid);
+    color: #fff;
+    cursor: pointer;
+    transition: background 0.15s, opacity 0.15s;
+}
+
+.workflow-designer-toolbar__save:hover:not(:disabled) {
+    background: var(--accent-hover);
+}
+
+.workflow-designer-toolbar__save:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.workflow-designer-toolbar__btn-secondary {
+    padding: 6px 12px;
+    font-size: 12px;
+    font-weight: 500;
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.1);
+    border-radius: 6px;
+    background: rgb(from var(--text-primary) r g b / 0.04);
+    color: var(--text-secondary, #999);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.workflow-designer-toolbar__btn-secondary:hover {
+    background: rgb(from var(--text-primary) r g b / 0.08);
+    color: var(--text-primary, #e8e8e8);
+}
+
+/* ─── Realtime figyelmeztetés ───────────────────────────────────────────── */
+
+.workflow-designer-remote-warning {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 8px 16px;
+    background: rgb(from var(--c-warning) r g b / 0.15);
+    border-bottom: 1px solid rgb(from var(--c-warning) r g b / 0.3);
+    color: var(--c-warning);
+    font-size: 13px;
+    flex-shrink: 0;
+}
+
+.workflow-designer-remote-warning__btn {
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    border: 1px solid rgb(from var(--c-warning) r g b / 0.4);
+    border-radius: 6px;
+    background: rgb(from var(--c-warning) r g b / 0.1);
+    color: var(--c-warning);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.workflow-designer-remote-warning__btn:hover {
+    background: rgb(from var(--c-warning) r g b / 0.25);
+}
+
+/* ─── Snapshot információs banner (#39) ─────────────────────────────────── */
+
+.workflow-designer-snapshot-info {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    padding: 8px 16px;
+    background: rgb(from var(--accent) r g b / 0.12);
+    border-bottom: 1px solid rgb(from var(--accent) r g b / 0.3);
+    color: var(--accent);
+    font-size: 13px;
+    line-height: 1.4;
+    flex-shrink: 0;
+}
+
+/* ─── Fő tartalom ───────────────────────────────────────────────────────── */
+
+.workflow-designer-body {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+}
+
+.workflow-canvas {
+    flex: 1;
+    position: relative;
+}
+
+/* ── Xyflow felülírások ─────────────────────────────────────────────────── */
+
+.workflow-canvas .react-flow__background {
+    background: var(--bg-base, #111319) !important;
+}
+
+.workflow-canvas .react-flow__controls {
+    background: var(--bg-elevated, #282a30);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.06);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(var(--shadow-tint), 0.4);
+}
+
+.workflow-canvas .react-flow__controls-button {
+    background: transparent;
+    color: var(--text-secondary, #999);
+    border-bottom: 1px solid rgb(from var(--text-primary) r g b / 0.06);
+    fill: var(--text-secondary, #999);
+}
+
+.workflow-canvas .react-flow__controls-button:hover {
+    background: rgb(from var(--text-primary) r g b / 0.06);
+    color: var(--text-primary, #e8e8e8);
+    fill: var(--text-primary, #e8e8e8);
+}
+
+.workflow-canvas .react-flow__minimap {
+    background: var(--bg-elevated, #282a30);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.06);
+    border-radius: 8px;
+}
+
+/* ─── StateNode ─────────────────────────────────────────────────────────── */
+
+.state-node {
+    width: 190px;
+    background: var(--bg-elevated, #282a30);
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1.5px solid rgb(from var(--text-primary) r g b / 0.08);
+    transition: border-color 0.15s, box-shadow 0.15s;
+    cursor: pointer;
+}
+
+.state-node:hover {
+    border-color: rgb(from var(--text-primary) r g b / 0.15);
+}
+
+.state-node--selected {
+    border-color: var(--accent-solid);
+    box-shadow: 0 0 0 2px rgb(from var(--accent-solid) r g b / 0.3), 0 4px 16px rgba(var(--shadow-tint), 0.4);
+}
+
+.state-node__accent {
+    height: 4px;
+    background: var(--node-color, #888);
+}
+
+.state-node__body {
+    padding: 10px 12px 8px;
+}
+
+.state-node__label {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary, #e8e8e8);
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.state-node__id {
+    font-size: 10px;
+    font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+    color: var(--text-secondary, #999);
+    margin-bottom: 4px;
+}
+
+.state-node__duration {
+    font-size: 10px;
+    color: var(--text-secondary, #999);
+    margin-bottom: 6px;
+}
+
+/* Badge-ek */
+.state-node__badges {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 3px;
+    margin-bottom: 6px;
+}
+
+.state-node__badge {
+    font-size: 9px;
+    font-weight: 600;
+    padding: 1px 5px;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+}
+
+.state-node__badge--validator {
+    background: rgb(from var(--c-success) r g b / 0.15);
+    color: var(--c-success);
+}
+
+.state-node__badge--command {
+    background: rgb(from var(--accent-solid) r g b / 0.15);
+    color: var(--accent);
+}
+
+/* Státusz ikonok */
+.state-node__status {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 2px;
+}
+
+.state-node__status-icon {
+    font-size: 10px;
+}
+
+.state-node__status-icon--initial {
+    color: var(--c-success);
+}
+
+.state-node__status-icon--terminal {
+    color: var(--tertiary);
+}
+
+/* Handle-ek */
+.state-node__handle {
+    width: 8px;
+    height: 8px;
+    background: var(--text-secondary, #999);
+    border: 2px solid var(--bg-elevated, #282a30);
+    border-radius: 50%;
+}
+
+.state-node__handle:hover {
+    background: var(--accent-solid);
+}
+
+/* ─── TransitionEdge label ──────────────────────────────────────────────── */
+
+.transition-edge__label {
+    font-size: 10px;
+    color: var(--text-secondary, #999);
+    background: var(--bg-base, #111319);
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.06);
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.transition-edge__label--selected {
+    color: var(--accent-solid);
+    border-color: rgb(from var(--accent-solid) r g b / 0.3);
+}
+
+/* ─── PropertiesSidebar ─────────────────────────────────────────────────── */
+
+.properties-sidebar {
+    width: 280px;
+    flex-shrink: 0;
+    background: var(--bg-elevated, #282a30);
+    border-left: 1px solid rgb(from var(--text-primary) r g b / 0.06);
+    overflow-y: auto;
+    padding: 16px;
+}
+
+.properties-sidebar::-webkit-scrollbar {
+    width: 6px;
+}
+
+.properties-sidebar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.properties-sidebar::-webkit-scrollbar-thumb {
+    background: rgb(from var(--text-primary) r g b / 0.1);
+    border-radius: 3px;
+}
+
+.properties-sidebar::-webkit-scrollbar-thumb:hover {
+    background: rgb(from var(--text-primary) r g b / 0.2);
+}
+
+.properties-editor__title {
+    font-size: 14px;
+    font-weight: 600;
+    margin: 0 0 16px;
+    color: var(--text-primary, #e8e8e8);
+}
+
+.properties-editor__footer {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px solid rgb(from var(--text-primary) r g b / 0.06);
+}
+
+/* ─── Designer mezők ────────────────────────────────────────────────────── */
+
+.designer-field {
+    margin-bottom: 12px;
+}
+
+.designer-field__label {
+    display: block;
+    font-size: 11px;
+    color: var(--text-secondary, #999);
+    margin-bottom: 4px;
+    font-weight: 500;
+}
+
+.designer-field__input {
+    width: 100%;
+    padding: 6px 10px;
+    font-size: 13px;
+    background: rgb(from var(--text-primary) r g b / 0.04);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.08);
+    border-radius: 6px;
+    color: var(--text-primary, #e8e8e8);
+    outline: none;
+    transition: border-color 0.15s;
+    box-sizing: border-box;
+}
+
+.designer-field__input:focus {
+    border-color: rgb(from var(--accent-solid) r g b / 0.5);
+}
+
+.designer-field__input:read-only {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.designer-field__input--mono {
+    font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+    font-size: 12px;
+}
+
+.designer-field__select {
+    width: 100%;
+    padding: 6px 10px;
+    font-size: 13px;
+    background: rgb(from var(--text-primary) r g b / 0.04);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.08);
+    border-radius: 6px;
+    color: var(--text-primary, #e8e8e8);
+    outline: none;
+    cursor: pointer;
+}
+
+.designer-field__select:focus {
+    border-color: rgb(from var(--accent-solid) r g b / 0.5);
+}
+
+.designer-field__value {
+    font-size: 13px;
+    color: var(--text-primary, #e8e8e8);
+}
+
+/* Két oszlopos elrendezés */
+.designer-field__row {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 12px;
+}
+
+.designer-field__row > .designer-field {
+    flex: 1;
+    margin-bottom: 0;
+}
+
+/* Checkbox */
+.designer-field__checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary, #999);
+    cursor: pointer;
+}
+
+.designer-field__checkbox-label input[type="checkbox"] {
+    accent-color: var(--accent-solid);
+}
+
+/* Szín picker sor */
+.designer-field__color-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.designer-field__color-swatch {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    background: none;
+}
+
+.designer-field__color-swatch::-webkit-color-swatch {
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.15);
+    border-radius: 6px;
+}
+
+.designer-field__color-swatch::-webkit-color-swatch-wrapper {
+    padding: 0;
+}
+
+/* Route megjelenítés (transition) */
+.designer-field__route {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+}
+
+.designer-field__route-state {
+    font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
+    background: rgb(from var(--text-primary) r g b / 0.06);
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: var(--text-primary, #e8e8e8);
+}
+
+.designer-field__route-arrow {
+    color: var(--text-secondary, #999);
+}
+
+/* Chip-ek */
+.designer-field__chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.designer-chip {
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 12px;
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.1);
+    background: transparent;
+    color: var(--text-secondary, #999);
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.designer-chip:hover {
+    border-color: rgb(from var(--text-primary) r g b / 0.2);
+    color: var(--text-primary, #e8e8e8);
+}
+
+.designer-chip--active {
+    background: rgb(from var(--accent-solid) r g b / 0.15);
+    border-color: rgb(from var(--accent-solid) r g b / 0.4);
+    color: var(--accent);
+}
+
+.designer-chip--small {
+    font-size: 10px;
+    padding: 2px 6px;
+}
+
+.designer-field__empty {
+    font-size: 11px;
+    color: var(--text-secondary, #999);
+    font-style: italic;
+}
+
+/* Command lista elem */
+.designer-field__command-item {
+    margin-bottom: 10px;
+    padding: 8px;
+    background: rgb(from var(--text-primary) r g b / 0.03);
+    border-radius: 6px;
+}
+
+.designer-field__command-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+.designer-field__command-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-primary, #e8e8e8);
+}
+
+.designer-field__remove-btn {
+    background: none;
+    border: none;
+    color: var(--text-secondary, #999);
+    cursor: pointer;
+    font-size: 12px;
+    padding: 2px 4px;
+}
+
+.designer-field__remove-btn:hover {
+    color: var(--c-error);
+}
+
+/* Hozzáadás sor */
+.designer-field__add-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.designer-field__add-row .designer-field__select {
+    flex: 1;
+    font-size: 12px;
+    padding: 4px 8px;
+}
+
+.designer-field__add-btn {
+    padding: 4px 10px;
+    background: rgb(from var(--accent-solid) r g b / 0.15);
+    border: 1px solid rgb(from var(--accent-solid) r g b / 0.3);
+    border-radius: 6px;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.designer-field__add-btn:hover:not(:disabled) {
+    background: rgb(from var(--accent-solid) r g b / 0.25);
+}
+
+.designer-field__add-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* Törlés gomb — .danger-action (css/components/danger.css) */
+
+/* ─── Collapsible szekció ───────────────────────────────────────────────── */
+
+.designer-collapsible {
+    margin-bottom: 8px;
+}
+
+.designer-collapsible__header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    padding: 8px 10px;
+    background: rgb(from var(--text-primary) r g b / 0.04);
+    border: none;
+    border-radius: 6px;
+    color: var(--text-primary, #e8e8e8);
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    transition: background 0.15s;
+}
+
+.designer-collapsible__header:hover {
+    background: rgb(from var(--text-primary) r g b / 0.08);
+}
+
+.designer-collapsible__header--disabled {
+    opacity: 0.5;
+    cursor: default;
+}
+
+.designer-collapsible__header--disabled:hover {
+    background: rgb(from var(--text-primary) r g b / 0.04);
+}
+
+.designer-collapsible__chevron {
+    color: var(--text-secondary, #999);
+    font-size: 10px;
+}
+
+.designer-collapsible__body {
+    padding: 10px 4px 4px;
+}
+
+/* ─── NodePalette ──────────────────────────────────────────────────────── */
+
+.node-palette {
+    width: 160px;
+    flex-shrink: 0;
+    background: var(--bg-elevated, #282a30);
+    border-right: 1px solid rgb(from var(--text-primary) r g b / 0.06);
+    display: flex;
+    flex-direction: column;
+    padding: 12px;
+    gap: 8px;
+    overflow-y: auto;
+}
+
+.node-palette__header {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text-secondary, #999);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    padding: 4px 0;
+}
+
+.node-palette__items {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.node-palette__item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px;
+    background: rgb(from var(--text-primary) r g b / 0.04);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.08);
+    border-radius: 8px;
+    cursor: grab;
+    transition: background 0.15s, border-color 0.15s;
+    user-select: none;
+}
+
+.node-palette__item:hover {
+    background: rgb(from var(--text-primary) r g b / 0.08);
+    border-color: rgb(from var(--text-primary) r g b / 0.15);
+}
+
+.node-palette__item:active {
+    cursor: grabbing;
+}
+
+.node-palette__item-accent {
+    width: 14px;
+    height: 14px;
+    border-radius: 4px;
+    flex-shrink: 0;
+}
+
+.node-palette__item-label {
+    font-size: 12px;
+    color: var(--text-primary, #e8e8e8);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.node-palette__hint {
+    font-size: 10px;
+    color: var(--text-secondary, #999);
+    font-style: italic;
+    text-align: center;
+    padding: 8px 0;
+    margin-top: auto;
+}
+
+/* ─── ImportDialog ─────────────────────────────────────────────────────── */
+
+.import-dialog__overlay {
+    position: fixed;
+    inset: 0;
+    background: var(--modal-backdrop);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+}
+
+.import-dialog {
+    width: 420px;
+    max-width: 90vw;
+    background: var(--bg-elevated, #282a30);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.1);
+    border-radius: 12px;
+    padding: 24px;
+    box-shadow: 0 8px 32px rgba(var(--shadow-tint), 0.5);
+}
+
+.import-dialog__title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary, #e8e8e8);
+    margin: 0 0 16px;
+}
+
+.import-dialog__file-row {
+    margin-bottom: 12px;
+}
+
+.import-dialog__file-input {
+    font-size: 12px;
+    color: var(--text-secondary, #999);
+}
+
+.import-dialog__error {
+    font-size: 12px;
+    color: var(--c-error);
+    margin: 8px 0;
+}
+
+.import-dialog__diff {
+    margin: 12px 0;
+    padding: 10px;
+    background: rgb(from var(--text-primary) r g b / 0.04);
+    border-radius: 8px;
+}
+
+.import-dialog__diff-title {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-primary, #e8e8e8);
+    margin: 0 0 6px;
+}
+
+.import-dialog__diff-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+}
+
+.import-dialog__diff-item {
+    font-size: 12px;
+    color: var(--text-secondary, #999);
+    padding: 2px 0;
+}
+
+.import-dialog__diff-item--add {
+    color: var(--c-success);
+}
+
+.import-dialog__diff-item--remove {
+    color: var(--c-error);
+}
+
+.import-dialog__actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+}
+
+.import-dialog__btn {
+    padding: 6px 14px;
+    font-size: 13px;
+    font-weight: 500;
+    border-radius: 6px;
+    border: none;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.import-dialog__btn--cancel {
+    background: rgb(from var(--text-primary) r g b / 0.06);
+    color: var(--text-secondary, #999);
+}
+
+.import-dialog__btn--cancel:hover {
+    background: rgb(from var(--text-primary) r g b / 0.1);
+}
+
+.import-dialog__btn--confirm {
+    background: var(--accent-solid);
+    color: #fff;
+}
+
+.import-dialog__btn--confirm:hover:not(:disabled) {
+    background: var(--accent-hover);
+}
+
+.import-dialog__btn--confirm:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+/* ─── Scaffold (betöltés/hiba állapot) ──────────────────────────────────── */
+
+.workflow-designer-scaffold {
+    padding: 32px;
+}

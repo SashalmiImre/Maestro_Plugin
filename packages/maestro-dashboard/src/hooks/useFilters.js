@@ -2,19 +2,33 @@
  * Maestro Dashboard — Szűrő hook
  *
  * Státusz, kimarad, saját cikkek szűrő — localStorage perzisztált.
+ * A workflow-ból dinamikusan olvassa az állapotlistát.
  */
 
 import { useState, useCallback, useMemo } from 'react';
-import { WORKFLOW_CONFIG, MARKERS, TEAM_ARTICLE_FIELD, STORAGE_KEYS, resolveGrantedTeams } from '../config.js';
+import { MARKERS, STORAGE_KEYS } from '../config.js';
+import { useData } from '../contexts/DataContext.jsx';
+import { getAllStates } from '@shared/workflowRuntime.js';
+import { isContributor } from '@shared/contributorHelpers.js';
 
 // ─── localStorage segédfüggvények ───────────────────────────────────────────
 
 function loadStatusFilter() {
     try {
         const stored = localStorage.getItem(STORAGE_KEYS.FILTER_STATUS);
-        if (stored) return new Set(JSON.parse(stored));
+        if (stored) {
+            const parsed = JSON.parse(stored);
+            if (Array.isArray(parsed)) {
+                // Régi integer state ID-k érvénytelenek — eldobjuk a mentett szűrőt
+                if (parsed.length > 0 && typeof parsed[0] !== 'string') {
+                    localStorage.removeItem(STORAGE_KEYS.FILTER_STATUS);
+                    return null;
+                }
+                return new Set(parsed);
+            }
+        }
     } catch { /* fallback */ }
-    return new Set(Object.keys(WORKFLOW_CONFIG).map(Number));
+    return null; // null jelzi, hogy nincs mentett filter → allStatuses lesz az alapértelmezett
 }
 
 function loadBoolean(key, defaultValue) {
@@ -26,6 +40,9 @@ function loadBoolean(key, defaultValue) {
 // ─── Hook ───────────────────────────────────────────────────────────────────
 
 export function useFilters() {
+    const { workflow } = useData();
+    const allStatuses = useMemo(() => new Set(getAllStates(workflow).map(s => s.id)), [workflow]);
+
     const [statusFilter, setStatusFilter] = useState(loadStatusFilter);
     const [showIgnored, setShowIgnored] = useState(() =>
         loadBoolean(STORAGE_KEYS.FILTER_SHOW_IGNORED, true)
@@ -37,15 +54,19 @@ export function useFilters() {
         loadBoolean(STORAGE_KEYS.FILTER_SHOW_PLACEHOLDERS, true)
     );
 
+    // Effektív filter: ha nincs mentett, az összes állapot aktív
+    const effectiveStatusFilter = statusFilter || allStatuses;
+
     const toggleStatus = useCallback((state) => {
         setStatusFilter(prev => {
-            const next = new Set(prev);
+            const base = prev || allStatuses;
+            const next = new Set(base);
             if (next.has(state)) next.delete(state);
             else next.add(state);
             localStorage.setItem(STORAGE_KEYS.FILTER_STATUS, JSON.stringify([...next]));
             return next;
         });
-    }, []);
+    }, [allStatuses]);
 
     const setShowIgnoredPersist = useCallback((value) => {
         setShowIgnored(value);
@@ -63,31 +84,30 @@ export function useFilters() {
     }, []);
 
     const resetFilters = useCallback(() => {
-        const allStates = new Set(Object.keys(WORKFLOW_CONFIG).map(Number));
-        setStatusFilter(allStates);
+        setStatusFilter(null);
         setShowIgnored(true);
         setShowOnlyMine(false);
         setShowPlaceholders(true);
-        localStorage.setItem(STORAGE_KEYS.FILTER_STATUS, JSON.stringify([...allStates]));
+        localStorage.removeItem(STORAGE_KEYS.FILTER_STATUS);
         localStorage.setItem(STORAGE_KEYS.FILTER_SHOW_IGNORED, 'true');
         localStorage.setItem(STORAGE_KEYS.FILTER_SHOW_ONLY_MINE, 'false');
         localStorage.setItem(STORAGE_KEYS.FILTER_SHOW_PLACEHOLDERS, 'true');
     }, []);
 
     const isFilterActive = useMemo(() => {
-        if (statusFilter.size !== Object.keys(WORKFLOW_CONFIG).length) return true;
+        if (effectiveStatusFilter.size !== allStatuses.size) return true;
         if (!showIgnored) return true;
         if (showOnlyMine) return true;
         if (!showPlaceholders) return true;
         return false;
-    }, [statusFilter, showIgnored, showOnlyMine, showPlaceholders]);
+    }, [effectiveStatusFilter, allStatuses, showIgnored, showOnlyMine, showPlaceholders]);
 
     /** Szűrés alkalmazása a cikkekre. */
     const applyFilters = useCallback((articles, user) => {
         return articles.filter(article => {
             // Státusz szűrő
-            const state = article.state ?? 0;
-            if (!statusFilter.has(state)) return false;
+            const state = article.state || "";
+            if (!effectiveStatusFilter.has(state)) return false;
 
             // Kimarad szűrő
             const markers = typeof article.markers === 'number' ? article.markers : 0;
@@ -96,41 +116,19 @@ export function useFilters() {
 
             // Csak saját cikkek
             if (showOnlyMine && user) {
-                const userFields = getUserContributorFields(user);
-                const isOwner = userFields.some(field => article[field] === user.$id);
-                if (!isOwner) return false;
+                const slugs = user?.groupSlugs || [];
+                if (!isContributor(article.contributors, user.$id, slugs)) return false;
             }
 
             return true;
         });
-    }, [statusFilter, showIgnored, showOnlyMine]);
+    }, [effectiveStatusFilter, showIgnored, showOnlyMine]);
 
     return {
-        statusFilter, showIgnored, showOnlyMine, showPlaceholders,
+        statusFilter: effectiveStatusFilter, showIgnored, showOnlyMine, showPlaceholders,
         toggleStatus, setShowIgnored: setShowIgnoredPersist,
         setShowOnlyMine: setShowOnlyMinePersist,
         setShowPlaceholders: setShowPlaceholdersPersist,
         resetFilters, isFilterActive, applyFilters
     };
-}
-
-// ─── Segédfüggvény ──────────────────────────────────────────────────────────
-
-function getUserContributorFields(user) {
-    if (!user?.teamIds) return [];
-    const fields = [];
-    for (const teamId of user.teamIds) {
-        const field = TEAM_ARTICLE_FIELD[teamId];
-        if (field) fields.push(field);
-    }
-    // Capability label-ek feloldása csapat slug-okra
-    if (user.labels) {
-        const grantedTeams = resolveGrantedTeams(user.labels);
-        for (const [slug, field] of Object.entries(TEAM_ARTICLE_FIELD)) {
-            if (grantedTeams.has(slug) && !fields.includes(field)) {
-                fields.push(field);
-            }
-        }
-    }
-    return fields;
 }

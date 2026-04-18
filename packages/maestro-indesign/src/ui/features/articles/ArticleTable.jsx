@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useRef, useCallback, useEffect } from "react";
 import { WorkflowStatus } from "../publications/Publication/WorkflowStatus.jsx";
-import { useAllTeamMembers } from "../../../data/hooks/useAllTeamMembers.js";
+import { useAllGroupMembers } from "../../../data/hooks/useGroupMembers.js";
 import { useUrgency } from "../../../data/hooks/useUrgency.js";
 import { LOCK_TYPE, UI_TIMING, DATA_QUERY_CONFIG } from "../../../core/utils/constants.js";
 import { VALIDATION_SOURCES } from "../../../core/utils/validationConstants.js";
@@ -31,7 +31,7 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
         };
     }, []);
 
-    const { members: allMembers } = useAllTeamMembers();
+    const { members: allMembers } = useAllGroupMembers();
 
     const getUserName = useCallback((userId) => {
         if (!userId) return null;
@@ -108,6 +108,8 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
     // Escape-hatch a CustomTable renderVersion prop-hoz: minden columns-referencia-váltáskor
     // (pl. getAllActiveItems frissül új validációs adattal) növeljük a számlálót,
     // hogy az areRowPropsEqual kényszervégre hajtsa az összes sor újrarenderelését.
+    // A számláló render közben frissül (prevColumnsRef-fel idempotens, strict mode-safe),
+    // hogy a CustomTable ugyanabban a render ciklusban kapja az új értéket.
     const renderVersionRef = useRef(0);
     const prevColumnsRef = useRef(null);
 
@@ -226,8 +228,8 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
                     valB = getLockLabel(b) || "";
                     break;
                 case "state":
-                    valA = a.state || 0;
-                    valB = b.state || 0;
+                    valA = a.state || "";
+                    valB = b.state || "";
                     break;
                 case "validator":
                     valA = getValidationSeverity(a);
@@ -269,7 +271,7 @@ export const ArticleTable = ({ articles, publication, onOpen, onShowProperties }
             clearTimeout(clickTimerRef.current);
         }
         clickTimerRef.current = setTimeout(() => {
-            onShowProperties?.(article, 'article');
+            onShowProperties?.(article);
             clickTimerRef.current = null;
         }, UI_TIMING.CLICK_DEBOUNCE_MS);
     };

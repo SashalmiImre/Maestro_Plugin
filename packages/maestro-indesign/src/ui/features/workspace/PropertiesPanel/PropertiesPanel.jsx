@@ -1,7 +1,8 @@
 import React, { useState, useMemo } from "react";
 import { ArticleProperties } from "../../articles/ArticleProperties/ArticleProperties.jsx";
-import { PublicationProperties } from "../../publications/PublicationProperties/PublicationProperties.jsx";
-import { WORKFLOW_CONFIG, MARKERS, COMMANDS } from "../../../../core/utils/workflow/workflowConstants.js";
+import { MARKERS } from "maestro-shared/constants.js";
+import { getStateCommands, canRunCommand, canUserAccessInState } from "maestro-shared/workflowRuntime.js";
+import { getCommandLabel } from "maestro-shared/commandRegistry.js";
 import { CustomCheckbox } from "../../../common/CustomCheckbox.jsx";
 import { WorkflowEngine } from "../../../../core/utils/workflow/workflowEngine.js";
 import { useUser } from "../../../../core/contexts/UserContext.jsx";
@@ -10,36 +11,38 @@ import { useToast } from "../../../common/Toast/ToastContext.jsx";
 import { TOAST_TYPES } from "../../../../core/utils/constants.js";
 import { executeCommand } from "../../../../core/commands/index.js";
 import { useElementPermissions } from "../../../../data/hooks/useElementPermission.js";
-import { canUserAccessInState, checkElementPermission } from "../../../../core/utils/workflow/elementPermissions.js";
 import { log, logError } from "../../../../core/utils/logger.js";
 
-export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onPublicationUpdate, onBack, onOpen, runAndPersistPreflight }) => {
+export const PropertiesPanel = ({ selectedItem, publication, onUpdate, onBack, onOpen, runAndPersistPreflight }) => {
     // Hooks
     const { user } = useUser();
-    const { layouts, applyArticleUpdate } = useData();
+    const { layouts, applyArticleUpdate, workflow } = useData();
     const { showToast } = useToast();
     const [isSyncing, setIsSyncing] = useState(false);
-    const [hasDeadlineErrors, setHasDeadlineErrors] = useState(false);
 
     // Elem jogosultságok
     const perm = useElementPermissions(['ignoreToggle']);
+    const userGroups = user?.groupSlugs || [];
     const stateAccess = useMemo(
-        () => type === 'article' ? canUserAccessInState(user, selectedItem?.state) : { allowed: true },
-        [type, user?.teamIds, user?.labels, selectedItem?.state]
+        () => canUserAccessInState(workflow, userGroups, selectedItem?.state),
+        [workflow, userGroups, selectedItem?.state]
     );
 
     // Defensive guard
     const item = selectedItem || {};
     const itemName = item.name || "Részletek";
-    const canOpen = type === 'article' && item.filePath;
-    const isIgnored = type === 'article' && (item.markers & MARKERS.IGNORE) !== 0;
+    const canOpen = Boolean(item.filePath);
+    const isIgnored = (item.markers & MARKERS.IGNORE) !== 0;
 
-    // Az aktuális állapothoz tartozó parancsok feloldva a COMMANDS regiszterből
+    // Az aktuális állapothoz tartozó parancsok — a workflow compiled commands-ból
     const commands = useMemo(() => {
-        if (type !== 'article' || item.state === undefined) return [];
-        const stateCommandIds = WORKFLOW_CONFIG[item.state]?.commands ?? [];
-        return stateCommandIds.filter(id => COMMANDS[id]).map(id => ({ id, ...COMMANDS[id] }));
-    }, [type, item.state]);
+        if (!item.state || !workflow) return [];
+        return getStateCommands(workflow, item.state).map(cmd => ({
+            id: cmd.id,
+            label: getCommandLabel(cmd.id),
+            allowedGroups: cmd.allowedGroups
+        }));
+    }, [item.state, workflow]);
 
     const handleOpen = async () => {
         if (canOpen && onOpen) {
@@ -116,8 +119,6 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
                     <sp-button
                         variant="primary"
                         onClick={onBack}
-                        disabled={hasDeadlineErrors || undefined}
-                        title={hasDeadlineErrors ? "Javítsd a határidő hibákat a kilépés előtt" : undefined}
                     >
                         ← Vissza
                     </sp-button>
@@ -151,74 +152,60 @@ export const PropertiesPanel = ({ selectedItem, type, publication, onUpdate, onP
                 </div>
             </div>
 
-            {/* Commands Toolbar (Always visible for articles) */}
-            {type === 'article' && (
+            {/* Commands Toolbar */}
+            <div style={{
+                padding: "8px 12px",
+                borderBottom: "0.5px solid var(--spectrum-global-color-gray-200)",
+                display: "flex",
+                alignItems: "center",
+                gap: "8px",
+            }}>
+                {/* Command buttons wrapper */}
                 <div style={{
-                    padding: "8px 12px",
-                    borderBottom: "0.5px solid var(--spectrum-global-color-gray-200)",
+                    flex: 1,
                     display: "flex",
-                    alignItems: "center",
                     gap: "8px",
+                    alignItems: "center",
+                    flexWrap: "wrap"
                 }}>
-                    {/* Command buttons wrapper */}
-                    <div style={{
-                        flex: 1,
-                        display: "flex",
-                        gap: "8px",
-                        alignItems: "center",
-                        flexWrap: "wrap"
-                    }}>
-                        {commands.map(cmd => {
-                            const cmdPerm = checkElementPermission(cmd.teams, user);
-                            return (
-                                <sp-button
-                                    quiet
-                                    style={{ flexShrink: 0 }}
-                                    key={cmd.id}
-                                    variant="secondary"
-                                    onClick={() => handleCommand(cmd.id)}
-                                    disabled={isIgnored || isSyncing || !cmdPerm.allowed || undefined}
-                                    title={!cmdPerm.allowed ? cmdPerm.reason : undefined}
-                                    size="s"
-                                >
-                                    {cmd.label}
-                                </sp-button>
-                            );
-                        })}
-                    </div>
-
-                    {/* Kimarad checkbox on the right */}
-                    <CustomCheckbox
-                        checked={isIgnored}
-                        onChange={handleToggleIgnore}
-                        disabled={isSyncing || !perm.ignoreToggle.allowed}
-                        title={!perm.ignoreToggle.allowed ? perm.ignoreToggle.reason : undefined}
-                        style={{ marginLeft: "8px", flexShrink: 0 }}
-                    >
-                        Kimarad
-                    </CustomCheckbox>
+                    {commands.map(cmd => {
+                        const cmdPerm = canRunCommand(workflow, item.state, cmd.id, userGroups);
+                        return (
+                            <sp-button
+                                quiet
+                                style={{ flexShrink: 0 }}
+                                key={cmd.id}
+                                variant="secondary"
+                                onClick={() => handleCommand(cmd.id)}
+                                disabled={isIgnored || isSyncing || !cmdPerm.allowed || undefined}
+                                title={!cmdPerm.allowed ? cmdPerm.reason : undefined}
+                                size="s"
+                            >
+                                {cmd.label}
+                            </sp-button>
+                        );
+                    })}
                 </div>
-            )}
+
+                {/* Kimarad checkbox on the right */}
+                <CustomCheckbox
+                    checked={isIgnored}
+                    onChange={handleToggleIgnore}
+                    disabled={isSyncing || !perm.ignoreToggle.allowed}
+                    title={!perm.ignoreToggle.allowed ? perm.ignoreToggle.reason : undefined}
+                    style={{ marginLeft: "8px", flexShrink: 0 }}
+                >
+                    Kimarad
+                </CustomCheckbox>
+            </div>
 
             {/* Properties content */}
             <div style={{ flex: 1, overflow: "auto" }}>
-                {type === 'article' ? (
-                    <ArticleProperties
-                        article={item}
-                        publication={publication}
-                        onUpdate={onUpdate}
-                    />
-                ) : type === 'publication' ? (
-                    <PublicationProperties
-                        publication={item}
-                        onFieldUpdate={onPublicationUpdate}
-                        onValidationChange={setHasDeadlineErrors}
-                    />
-                ) : (
-                    <div style={{ padding: "16px", textAlign: "center" }}>
-                        <sp-body>Ismeretlen elemtípus: {type}</sp-body>
-                    </div>
-                )}
+                <ArticleProperties
+                    article={item}
+                    publication={publication}
+                    onUpdate={onUpdate}
+                />
             </div>
         </div>
     );

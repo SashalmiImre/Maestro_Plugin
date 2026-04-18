@@ -4,7 +4,7 @@
  * @module utils/promiseUtils
  */
 
-import { isServerError, isNetworkError } from "./errorUtils.js";
+import { isNetworkError } from "./errorUtils.js";
 import { logWarn } from "./logger.js";
 import { RETRY_CONFIG } from "./constants.js";
 
@@ -93,8 +93,8 @@ export const withRetry = async (fn, options = {}) => {
         } catch (error) {
             lastError = error;
 
-            // Csak átmeneti hibáknál próbálkozunk újra
-            const isRetryable = isServerError(error) || isNetworkError(error);
+            // Csak átmeneti hibáknál próbálkozunk újra (isNetworkError tartalmazza a szerver hibákat is: 502, 503, 504)
+            const isRetryable = isNetworkError(error);
 
             if (!isRetryable || attempt === maxAttempts) {
                 throw error;

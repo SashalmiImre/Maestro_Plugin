@@ -1,0 +1,204 @@
+{
+  "version": 1,
+  "states": [
+    {
+      "id": "designing",
+      "label": "Tervezés",
+      "color": "#FFEA00",
+      "duration": { "perPage": 60, "fixed": 0 },
+      "isInitial": true,
+      "isTerminal": false
+    },
+    {
+      "id": "design_approval",
+      "label": "Terv ellenőrzés",
+      "color": "#A4E700",
+      "duration": { "perPage": 30, "fixed": 15 },
+      "isInitial": false,
+      "isTerminal": false
+    },
+    {
+      "id": "waiting_for_start",
+      "label": "Elindításra vár",
+      "color": "#FF9F1C",
+      "duration": { "perPage": 10, "fixed": 15 },
+      "isInitial": false,
+      "isTerminal": false
+    },
+    {
+      "id": "editorial_approval",
+      "label": "Szerkesztői ellenőrzés",
+      "color": "#FF3300",
+      "duration": { "perPage": 30, "fixed": 15 },
+      "isInitial": false,
+      "isTerminal": false
+    },
+    {
+      "id": "content_revision",
+      "label": "Korrektúrázás",
+      "color": "#00E5FF",
+      "duration": { "perPage": 30, "fixed": 10 },
+      "isInitial": false,
+      "isTerminal": false
+    },
+    {
+      "id": "final_approval",
+      "label": "Végső ellenőrzés",
+      "color": "#4096EE",
+      "duration": { "perPage": 10, "fixed": 15 },
+      "isInitial": false,
+      "isTerminal": false
+    },
+    {
+      "id": "printable",
+      "label": "Nyomdakész",
+      "color": "#FF40B0",
+      "duration": { "perPage": 10, "fixed": 5 },
+      "isInitial": false,
+      "isTerminal": false
+    },
+    {
+      "id": "archivable",
+      "label": "Archiválható",
+      "color": "#B366FF",
+      "duration": { "perPage": 0, "fixed": 0 },
+      "isInitial": false,
+      "isTerminal": true
+    }
+  ],
+  "transitions": [
+    { "from": "designing",          "to": "design_approval",    "label": "Tördelve",          "direction": "forward",  "allowedGroups": ["designers", "art_directors"] },
+    { "from": "design_approval",    "to": "waiting_for_start",  "label": "Jóváhagyás",        "direction": "forward",  "allowedGroups": ["art_directors"] },
+    { "from": "design_approval",    "to": "designing",          "label": "Tervezéshez",       "direction": "backward", "allowedGroups": ["art_directors"] },
+    { "from": "waiting_for_start",  "to": "editorial_approval", "label": "Indítás",           "direction": "forward",  "allowedGroups": ["designers", "art_directors"] },
+    { "from": "waiting_for_start",  "to": "design_approval",    "label": "Jóváhagyáshoz",     "direction": "backward", "allowedGroups": ["designers", "art_directors"] },
+    { "from": "editorial_approval", "to": "content_revision",   "label": "Jóváhagyás",        "direction": "forward",  "allowedGroups": ["editors", "managing_editors"] },
+    { "from": "editorial_approval", "to": "designing",          "label": "Tervezéshez",       "direction": "backward", "allowedGroups": ["editors", "managing_editors"] },
+    { "from": "content_revision",   "to": "final_approval",     "label": "Korrektúrázva",     "direction": "forward",  "allowedGroups": ["proofwriters"] },
+    { "from": "content_revision",   "to": "editorial_approval", "label": "Szerkesztőhöz",     "direction": "backward", "allowedGroups": ["proofwriters"] },
+    { "from": "final_approval",     "to": "printable",          "label": "Jóváhagyás",        "direction": "forward",  "allowedGroups": ["editors", "managing_editors"] },
+    { "from": "final_approval",     "to": "design_approval",    "label": "Terv ellenőrzés",   "direction": "backward", "allowedGroups": ["editors", "managing_editors"] },
+    { "from": "printable",          "to": "archivable",         "label": "Levilágítás",       "direction": "forward",  "allowedGroups": ["designers", "art_directors"] },
+    { "from": "printable",          "to": "final_approval",     "label": "Végső ellenőrzés",  "direction": "backward", "allowedGroups": ["designers", "art_directors"] }
+  ],
+  "validations": {
+    "designing": {
+      "onEntry": [],
+      "requiredToEnter": ["file_accessible"],
+      "requiredToExit": []
+    },
+    "design_approval": {
+      "onEntry": [],
+      "requiredToEnter": ["file_accessible", "page_number_check", "filename_verification"],
+      "requiredToExit": []
+    },
+    "waiting_for_start": {
+      "onEntry": [],
+      "requiredToEnter": ["file_accessible", "page_number_check", "filename_verification"],
+      "requiredToExit": []
+    },
+    "editorial_approval": {
+      "onEntry": [],
+      "requiredToEnter": ["file_accessible", "page_number_check", "filename_verification"],
+      "requiredToExit": []
+    },
+    "content_revision": {
+      "onEntry": [],
+      "requiredToEnter": ["file_accessible", "page_number_check", "filename_verification"],
+      "requiredToExit": []
+    },
+    "final_approval": {
+      "onEntry": [
+        { "validator": "preflight_check", "options": { "profile": "Levil", "profileFile": "Levil.idpp" } }
+      ],
+      "requiredToEnter": ["file_accessible"],
+      "requiredToExit": []
+    },
+    "printable": {
+      "onEntry": [
+        { "validator": "preflight_check", "options": { "profile": "Levil", "profileFile": "Levil.idpp" } }
+      ],
+      "requiredToEnter": [
+        "file_accessible",
+        { "validator": "preflight_check", "options": { "profile": "Levil", "profileFile": "Levil.idpp" } }
+      ],
+      "requiredToExit": [
+        { "validator": "preflight_check", "options": { "profile": "Levil", "profileFile": "Levil.idpp" } }
+      ]
+    },
+    "archivable": {
+      "onEntry": [],
+      "requiredToEnter": ["file_accessible"],
+      "requiredToExit": []
+    }
+  },
+  "commands": {
+    "designing": [],
+    "design_approval": [
+      { "id": "export_pdf", "allowedGroups": ["designers", "art_directors"] }
+    ],
+    "waiting_for_start": [
+      { "id": "export_pdf", "allowedGroups": ["designers", "art_directors"] },
+      { "id": "collect_images", "allowedGroups": ["designers", "art_directors"] }
+    ],
+    "editorial_approval": [
+      { "id": "export_pdf", "allowedGroups": ["designers", "art_directors"] },
+      { "id": "collect_images", "allowedGroups": ["designers", "art_directors"] }
+    ],
+    "content_revision": [
+      { "id": "export_pdf", "allowedGroups": ["designers", "art_directors"] },
+      { "id": "collect_images", "allowedGroups": ["designers", "art_directors"] }
+    ],
+    "final_approval": [
+      { "id": "export_final_pdf", "allowedGroups": ["designers", "art_directors"] },
+      { "id": "preflight_check", "allowedGroups": ["designers", "art_directors"] }
+    ],
+    "printable": [
+      { "id": "preflight_check", "allowedGroups": ["designers", "art_directors"] }
+    ],
+    "archivable": [
+      { "id": "archive", "allowedGroups": ["designers", "art_directors"] },
+      { "id": "print_output", "allowedGroups": ["designers", "art_directors"] }
+    ]
+  },
+  "elementPermissions": {
+    "article": {
+      "articleName":       { "type": "groups", "groups": ["editors", "designers", "managing_editors", "art_directors"] },
+      "articlePages":      { "type": "groups", "groups": ["designers", "art_directors"] },
+      "articleLayout":     { "type": "groups", "groups": ["designers", "art_directors"] },
+      "validationForm":    { "type": "anyMember" },
+      "validationActions": { "type": "anyMember" },
+      "ignoreToggle":      { "type": "groups", "groups": ["editors", "designers", "managing_editors", "art_directors"] }
+    },
+    "publication": {
+      "publicationProperties":   { "type": "groups", "groups": ["managing_editors", "art_directors"] },
+      "publicationGeneral":      { "type": "groups", "groups": ["editors", "managing_editors", "art_directors"] },
+      "publicationLayouts":      { "type": "groups", "groups": ["designers", "art_directors"] },
+      "publicationDeadlines":    { "type": "groups", "groups": ["editors", "managing_editors", "art_directors"] },
+      "publicationContributors": { "type": "groups", "groups": ["editors", "managing_editors", "art_directors"] }
+    }
+  },
+  "contributorGroups": [
+    { "slug": "designers",        "label": "Tervező" },
+    { "slug": "editors",          "label": "Szerkesztő" },
+    { "slug": "writers",          "label": "Író" },
+    { "slug": "image_editors",    "label": "Képszerkesztő" },
+    { "slug": "art_directors",    "label": "Művészeti vezető" },
+    { "slug": "managing_editors", "label": "Vezetőszerkesztő" },
+    { "slug": "proofwriters",     "label": "Korrektor" }
+  ],
+  "leaderGroups": ["managing_editors", "art_directors"],
+  "statePermissions": {
+    "designing":          ["designers", "art_directors"],
+    "design_approval":    ["art_directors"],
+    "waiting_for_start":  ["designers", "art_directors"],
+    "editorial_approval": ["editors", "managing_editors"],
+    "content_revision":   ["proofwriters"],
+    "final_approval":     ["editors", "managing_editors"],
+    "printable":          ["designers", "art_directors"],
+    "archivable":         []
+  },
+  "capabilities": {
+    "canAddArticlePlan": ["designers", "managing_editors"]
+  }
+}

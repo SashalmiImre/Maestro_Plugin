@@ -63,8 +63,8 @@ export const useUserValidations = (articleId) => {
 
             const document = await dataCreateValidation({
                 articleId,
-                type: data.type || 'info',
-                source: data.source || 'user',
+                type: data.type || VALIDATION_TYPES.INFO,
+                source: data.source || VALIDATION_SOURCES.USER,
                 description: data.description || '',
                 recipientType: data.recipientType || null,
                 recipientUserId: data.recipientUserId || null,
@@ -142,7 +142,7 @@ export const useUserValidations = (articleId) => {
             type: VALIDATION_TYPES.WARNING,
             source: VALIDATION_SOURCES.SYSTEM_OVERRIDE,
             contextId: errorItem.contextId,
-            originalType: 'error'
+            originalType: VALIDATION_TYPES.ERROR
         });
     }, [addValidation]);
 

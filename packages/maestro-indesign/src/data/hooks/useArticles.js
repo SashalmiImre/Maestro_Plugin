@@ -5,11 +5,12 @@ import { useCallback, useMemo, useRef } from "react";
 import { useConnection } from "../../core/contexts/ConnectionContext.jsx";
 import { useData } from "../../core/contexts/DataContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
-import { useAllTeamMembers } from "./useAllTeamMembers.js";
+import { useAllGroupMembers } from "./useGroupMembers.js";
 
 // Segédprogramok (Utils)
 import { isNetworkError, isAuthError, getAPIErrorMessage } from "../../core/utils/errorUtils.js";
-import { tables, DATABASE_ID, ARTICLES_COLLECTION_ID, Query } from "../../core/config/appwriteConfig.js";
+import { tables, DATABASE_ID, COLLECTIONS, Query } from "../../core/config/appwriteConfig.js";
+import { callUpdateArticleCF } from "../../core/utils/updateArticleClient.js";
 import {
     generateIsDocumentOpenScript,
     generateOpenDocumentScript,
@@ -29,6 +30,7 @@ import { log, logError, logWarn } from "../../core/utils/logger.js";
 import { withTimeout } from "../../core/utils/promiseUtils.js";
 import { SCRIPT_LANGUAGE_JAVASCRIPT, TOAST_TYPES } from "../../core/utils/constants.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../../core/config/maestroEvents.js";
+import { getInitialState } from "maestro-shared/workflowRuntime.js";
 
 /**
  * React Hook a cikkek (Articles) kezelésére.
@@ -49,7 +51,7 @@ export const useArticles = (publicationId, publicationRoot) => {
     const { setOffline, incrementAttempts } = useConnection();
     
     // Globális adatok és write-through API a DataContext-ből
-    const { articles: allArticles, layouts, publications, createArticle, updateArticle, applyArticleUpdate } = useData();
+    const { articles: allArticles, layouts, publications, workflow, createArticle, updateArticle, applyArticleUpdate } = useData();
 
     // A kiadvány objektum az alapértelmezett munkatársak kiolvasásához
     const publication = useMemo(() => publications.find(p => p.$id === publicationId), [publications, publicationId]);
@@ -61,9 +63,11 @@ export const useArticles = (publicationId, publicationRoot) => {
     publicationsRef.current = publications;
 
     // Csapattagok listája — ghost lock detektáláshoz (törölt felhasználók lockjai)
-    const { members: allMembers } = useAllTeamMembers();
+    const { members: allMembers, loading: allMembersLoading } = useAllGroupMembers();
     const allMembersRef = useRef(allMembers);
     allMembersRef.current = allMembers;
+    const allMembersLoadingRef = useRef(allMembersLoading);
+    allMembersLoadingRef.current = allMembersLoading;
     
     // Értesítések kezelése (Toast üzenetek)
     const { showToast } = useToast();
@@ -245,15 +249,14 @@ export const useArticles = (publicationId, publicationRoot) => {
                 }
             } catch (e) {
                 logWarn("[useArticles] Thumbnail feltöltés sikertelen:", e);
-            } finally {
-                if (thumbnailTempFolder) {
-                    try {
-                        await cleanupTempFiles(thumbnailTempFolder);
-                    } catch (cleanupErr) {
-                        logWarn("[useArticles] Temp fájlok törlése sikertelen:", cleanupErr);
-                    }
-                }
             }
+        }
+
+        // Temp mappa takarítás akkor is, ha az export elbukott (fire-and-forget, ne blokkoljon).
+        if (thumbnailTempFolder) {
+            cleanupTempFiles(thumbnailTempFolder).catch(cleanupErr => {
+                logWarn("[useArticles] Temp fájlok törlése sikertelen:", cleanupErr);
+            });
         }
 
         // --- 6. Adatbázis ellenőrzés ---
@@ -269,25 +272,24 @@ export const useArticles = (publicationId, publicationRoot) => {
             // Alapértelmezett munkatársak a kiadvány beállításaiból
             const pub = publicationRef.current;
 
-            await createArticle({
+            const initialState = getInitialState(workflow);
+            if (!initialState) {
+                logWarn('[useArticles] Workflow nem elérhető — "designing" fallback használata');
+            }
+
+            const createdArticle = await createArticle({
                 name: file.name.replace(/\.[^/.]+$/, ""), // Kiterjesztés levágása a névből
                 layout: layouts[0]?.$id ?? null,
                 filePath: relativeFilePath,
                 publicationId: publicationId,
-                state: 0,
+                state: initialState || "designing",
                 startPage: startPage,
                 endPage: endPage,
                 pageRanges: pageRanges,
                 thumbnails: thumbnailsJson,
-                writerId: pub?.defaultWriterId ?? null,
-                editorId: pub?.defaultEditorId ?? null,
-                imageEditorId: pub?.defaultImageEditorId ?? null,
-                designerId: pub?.defaultDesignerId ?? null,
-                proofwriterId: pub?.defaultProofwriterId ?? null,
-                artDirectorId: pub?.defaultArtDirectorId ?? null,
-                managingEditorId: pub?.defaultManagingEditorId ?? null
+                contributors: pub?.defaultContributors ?? null
             });
-            return { status: "success", fileName: file.name };
+            return { status: "success", fileName: file.name, article: createdArticle };
         } catch (error) {
             logError('[useArticles] Cikk hozzáadása sikertelen:', error);
             
@@ -302,7 +304,7 @@ export const useArticles = (publicationId, publicationRoot) => {
             throw error;
         }
 
-    }, [publicationRoot, articles, layouts, createArticle, incrementAttempts, setOffline, showToast, publicationId]);
+    }, [publicationRoot, articles, layouts, workflow, createArticle, incrementAttempts, setOffline, showToast, publicationId]);
 
     /**
      * Cikk megnyitása InDesign-ban.
@@ -320,7 +322,7 @@ export const useArticles = (publicationId, publicationRoot) => {
                     const response = await withTimeout(
                         tables.listRows({
                             databaseId: DATABASE_ID,
-                            tableId: ARTICLES_COLLECTION_ID,
+                            tableId: COLLECTIONS.ARTICLES,
                             queries: [Query.equal("$id", article.$id)],
                             limit: 1
                         }),
@@ -331,19 +333,21 @@ export const useArticles = (publicationId, publicationRoot) => {
                         applyArticleUpdate(freshArticle);
                         if (freshArticle.lockOwnerId && freshArticle.lockOwnerId !== user.$id) {
                             // Ghost lock detektálás: ha a lock owner nem található a csapattagok között,
-                            // valószínűleg törölt felhasználóról van szó — automatikus takarítás
+                            // valószínűleg törölt felhasználóról van szó — automatikus takarítás.
+                            // Várjuk meg a csoporttagok betöltését (max 2s), különben az üres
+                            // `members` lista téves ghost-lock döntést okozna.
+                            const waitStart = Date.now();
+                            while (allMembersLoadingRef.current && Date.now() - waitStart < 2000) {
+                                await new Promise(resolve => setTimeout(resolve, 50));
+                            }
                             const members = allMembersRef.current;
-                            const isKnownMember = members.length > 0 && members.some(m => m.userId === freshArticle.lockOwnerId);
-                            if (!isKnownMember && members.length > 0) {
+                            const isKnownMember = members.some(m => m.userId === freshArticle.lockOwnerId);
+                            if (!isKnownMember) {
                                 log(`[useArticles] Ghost lock detektálva (${freshArticle.lockOwnerId}) — automatikus törlés`);
-                                const cleaned = await withTimeout(
-                                    tables.updateRow({
-                                        databaseId: DATABASE_ID,
-                                        tableId: ARTICLES_COLLECTION_ID,
-                                        rowId: freshArticle.$id,
-                                        data: { lockType: null, lockOwnerId: null }
-                                    }),
-                                    10000, "useArticles: cleanGhostLock"
+                                const cleaned = await callUpdateArticleCF(
+                                    freshArticle.$id,
+                                    { lockType: null, lockOwnerId: null },
+                                    "useArticles: cleanGhostLock"
                                 );
                                 if (cleaned) applyArticleUpdate(cleaned);
                             } else {
@@ -394,7 +398,7 @@ export const useArticles = (publicationId, publicationRoot) => {
             logError("Cikk megnyitása sikertelen:", e);
             throw e; // Továbbdobjuk a hibát, hogy a UI megjeleníthesse
         }
-    }, []);
+    }, [applyArticleUpdate]);
 
     /**
      * Cikk átnevezése.
@@ -457,9 +461,12 @@ export const useArticles = (publicationId, publicationRoot) => {
             }
 
             // DocumentMonitor loop megelőzése a programozott mentésnél.
-            // A flag-et a DocumentMonitor.handleSave állítja vissza false-ra az elején,
-            // mielőtt visszatér (early return), így pontosan egy mentési eseményt ugrik át.
-            if (wasDocumentOpen) window.maestroSkipMonitor = true;
+            // A számlálót a DocumentMonitor.handleSave dekrementálja, így több párhuzamos
+            // programozott mentést is pontosan egyszer-egyszer kihagy (nincs flag-ütközés).
+            // Hiba esetén visszavonjuk — sikertelen save nem tüzel afterSave eseményt.
+            if (wasDocumentOpen) {
+                window.maestroSkipCount = (window.maestroSkipCount || 0) + 1;
+            }
             const result = app.doScript(script, SCRIPT_LANGUAGE_JAVASCRIPT, []);
 
             if (typeof result === 'string' && result.startsWith('ERROR:')) {
@@ -467,6 +474,9 @@ export const useArticles = (publicationId, publicationRoot) => {
             }
 
         } catch (fileError) {
+            if (wasDocumentOpen) {
+                window.maestroSkipCount = Math.max(0, (window.maestroSkipCount || 0) - 1);
+            }
             logError("[useArticles] Fájl átnevezési hiba:", fileError);
             showToast('A fájl átnevezése sikertelen', TOAST_TYPES.ERROR, fileError.message || 'Ismeretlen hiba történt a fájl átnevezése közben.');
             throw fileError;

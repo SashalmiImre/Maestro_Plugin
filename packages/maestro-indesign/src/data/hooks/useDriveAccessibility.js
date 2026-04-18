@@ -19,7 +19,7 @@ import { MaestroEvent } from "../../core/config/maestroEvents.js";
 
 // Utils
 import { checkPathsAccessibleBatch, toNativePath } from "../../core/utils/pathUtils.js";
-import { logDebug } from "../../core/utils/logger.js";
+import { logDebug, logWarn } from "../../core/utils/logger.js";
 
 /**
  * Összehasonlít két Map-et (pubId → boolean) — true, ha eltérnek.
@@ -38,7 +38,7 @@ const mapsAreDifferent = (prev, next) => {
 /**
  * Központi mappa-elérhetőség hook.
  *
- * @param {Array} publications - A kiadványok tömbje (usePublications()-ből).
+ * @param {Array} publications - A kiadványok tömbje (a DataContext-ből).
  * @returns {Map<string, boolean>} accessibilityMap — pubId → elérhetőség.
  */
 export const useDriveAccessibility = (publications) => {
@@ -59,11 +59,30 @@ export const useDriveAccessibility = (publications) => {
             const pubs = publicationsRef.current;
             if (!pubs || pubs.length === 0) return;
 
-            const nativePaths = pubs.map(pub => toNativePath(pub.rootPath));
-            const results = await checkPathsAccessibleBatch(nativePaths);
+            // A rootPath === null publikációk „konfiguráció szükséges" állapotban vannak —
+            // nem elérhetőségi hiba, hanem külön dimenzió (a Publication komponens isConfigured
+            // prop-ja kezeli). Ezekre nem kell ExtendScript hívás, és nem kerülnek a map-be.
+            const configuredPubs = pubs.filter(pub => pub.rootPath);
+            if (configuredPubs.length === 0) {
+                // Identitás-őrzés: ha már üres a map, ne cseréljük új Map()-re — a referencia-stabilitás
+                // miatt a fogyasztó memo-k (PublicationList) nem renderelnek feleslegesen újra.
+                setAccessibilityMap(prev => (prev.size === 0 ? prev : new Map()));
+                return;
+            }
+
+            const nativePaths = configuredPubs.map(pub => toNativePath(pub.rootPath));
+            let results;
+            try {
+                results = await checkPathsAccessibleBatch(nativePaths);
+            } catch (err) {
+                // ExtendScript hiba vagy InDesign elérhetetlen — a poller tovább fut, az előző
+                // state megmarad. Így egy átmeneti doScript-hiccup nem dobja minden mappát pirosra.
+                logWarn('[useDriveAccessibility] checkPathsAccessibleBatch sikertelen:', err?.message || err);
+                return;
+            }
 
             const nextMap = new Map();
-            pubs.forEach((pub, i) => {
+            configuredPubs.forEach((pub, i) => {
                 nextMap.set(pub.$id, results[i] ?? false);
             });
 

@@ -6,7 +6,7 @@ import { useToast } from "../../../common/Toast/ToastContext.jsx";
 
 // Hooks
 import { useUnifiedValidation } from "../../../../data/hooks/useUnifiedValidation.js";
-import { useTeamMembers } from "../../../../data/hooks/useTeamMembers.js";
+import { useGroupMembers } from "../../../../data/hooks/useGroupMembers.js";
 
 // Components
 import { CollapsibleSection } from "../../../common/CollapsibleSection.jsx";
@@ -26,7 +26,6 @@ import {
     formatMessageDate,
     formatExactDate
 } from "../../../../core/utils/messageConstants.js";
-import { TEAMS } from "../../../../core/config/appwriteConfig.js";
 
 // ── Icons & Styles ───────────────────────────────────────────────────────────
 
@@ -213,11 +212,11 @@ export const ValidationSection = ({ article, disabled, permissions }) => {
     const { unifiedList, isLoading, addValidation, resolveValidation, downgradeSystemError } = useUnifiedValidation(article);
     const { showToast } = useToast();
 
-    // Team members for recicipient helpers
-    const { members: editors } = useTeamMembers(TEAMS.EDITORS);
-    const { members: designers } = useTeamMembers(TEAMS.DESIGNERS);
-    const { members: imageEditors } = useTeamMembers(TEAMS.IMAGE_EDITORS);
-    const { members: writers } = useTeamMembers(TEAMS.WRITERS);
+    // Csoporttagok a címzett kiválasztáshoz
+    const { members: editors } = useGroupMembers('editors');
+    const { members: designers } = useGroupMembers('designers');
+    const { members: imageEditors } = useGroupMembers('image_editors');
+    const { members: writers } = useGroupMembers('writers');
     const teamMembers = useMemo(() => ({ editors, designers, imageEditors, writers }), [editors, designers, imageEditors, writers]);
 
     // UI States
@@ -323,18 +322,19 @@ export const ValidationSection = ({ article, disabled, permissions }) => {
             .filter(([key]) => key !== RECIPIENT_TYPES.USER)
             .map(([key, label]) => ({ id: key, name: label }));
 
-        // Deduplicate users
-        const allUsers = [
-            ...editors.map(m => ({ ...m, role: 'Szerkesztő' })),
-            ...designers.map(m => ({ ...m, role: 'Tervező' })),
-            ...imageEditors.map(m => ({ ...m, role: 'Képszerkesztő' }))
-        ];
-        const uniqueUsers = allUsers.filter((u, i, a) => a.findIndex(x => x.userId === u.userId) === i);
-
-        const memberItems = uniqueUsers.map(m => ({
-            id: m.userId,
-            name: `${m.userName} (${m.role})`
-        }));
+        // Deduplicate users — Set-alapú, O(n) (korábban findIndex-szel O(n²) volt)
+        const seen = new Set();
+        const memberItems = [];
+        const appendUniqueMembers = (members, role) => {
+            for (const m of members) {
+                if (seen.has(m.userId)) continue;
+                seen.add(m.userId);
+                memberItems.push({ id: m.userId, name: `${m.userName} (${role})` });
+            }
+        };
+        appendUniqueMembers(editors, 'Szerkesztő');
+        appendUniqueMembers(designers, 'Tervező');
+        appendUniqueMembers(imageEditors, 'Képszerkesztő');
 
         return { groups: groupItems, members: memberItems };
     }, [editors, designers, imageEditors]);

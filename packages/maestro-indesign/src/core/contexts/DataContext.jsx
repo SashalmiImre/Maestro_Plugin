@@ -10,26 +10,38 @@
  *   de csak az AKTÍV kiadványhoz tartozó cikkeket és validációkat tölti be.
  * - Write-through minta: a komponensek ide írnak vissza, a DataContext szinkronizálja az adatbázissal,
  *   majd optimistikusan frissíti a helyi state-et a szerver válaszával.
- * - $updatedAt staleness guard: a Realtime handler kihagyja az elavult eseményeket.
- * - applyArticleUpdate: külső írók (pl. WorkflowEngine hívók) a szerver válaszával
- *   közvetlenül frissíthetik a helyi state-et DB hívás nélkül.
+ * - $updatedAt staleness guard: a Realtime handler ÉS az írási útvonalak (update*)
+ *   kihagyják az elavult eseményeket / válaszokat, hogy egy párhuzamos írás a
+ *   saját CF válaszunkkal ne íródjon felül.
+ * - applyArticleUpdate / applyValidationUpdate: belső helperek (cikk / validáció)
+ *   a szerver válasz staleness-guarddal védett alkalmazására. Az applyArticleUpdate
+ *   exportált is — külső írók (pl. WorkflowEngine, LockManager, DocumentMonitor)
+ *   DB hívás nélkül frissíthetik vele a helyi state-et.
  */
 
 import React, { createContext, useContext, useState, useEffect, useMemo, useCallback, useRef } from "react";
-import { tables, ID, DATABASE_ID, PUBLICATIONS_COLLECTION_ID, ARTICLES_COLLECTION_ID, USER_VALIDATIONS_COLLECTION_ID, LAYOUTS_COLLECTION_ID, DEADLINES_COLLECTION_ID, Query } from "../config/appwriteConfig.js";
+import { tables, ID, DATABASE_ID, COLLECTIONS, Query } from "../config/appwriteConfig.js";
+import { callUpdateArticleCF } from "../utils/updateArticleClient.js";
 import { realtime } from "../config/realtimeClient.js";
 import { useConnection } from "./ConnectionContext.jsx";
+import { useScope } from "./ScopeContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 import { log, logWarn, logError } from "../utils/logger.js";
 import { withTimeout, withRetry } from "../utils/promiseUtils.js";
 import { isNetworkError, isAuthError } from "../utils/errorUtils.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../config/maestroEvents.js";
 import { FETCH_TIMEOUT_CONFIG, TOAST_TYPES } from "../utils/constants.js";
-import { isLegacyRootPath, isAbsoluteFilePath, toCanonicalPath, toRelativeArticlePath } from "../utils/pathUtils.js";
-import { syncWorkflowConfig } from "../utils/syncWorkflowConfig.js";
 
 /** Név szerinti komparátor rendezéshez. */
 const compareByName = (a, b) => (a?.name ?? '').localeCompare(b?.name ?? '');
+
+// Elavult fetch eredmény — a catch csendben eldobja (nincs toast, nincs offline overlay).
+class StaleFetchError extends Error {
+    constructor(generation, current) {
+        super(`Stale fetch eredmény (gen ${generation}, aktuális: ${current})`);
+        this.name = 'StaleFetchError';
+    }
+}
 
 /** Sorrend szerinti komparátor rendezéshez. */
 const compareByOrder = (a, b) => (a?.order ?? 0) - (b?.order ?? 0);
@@ -54,9 +66,11 @@ export const useData = () => {
  */
 export const DataProvider = ({ children }) => {
     // Kapcsolat kezelése (ConnectionContext)
-    const { startConnecting, setConnected, setOffline, setConnectionStatus, incrementAttempts } = useConnection();
+    const { startConnecting, setOffline, setConnectionStatus, incrementAttempts } = useConnection();
     // Értesítések (ToastContext)
     const { showToast } = useToast();
+    // Aktív scope (ScopeContext) — Fázis 1 / B.7
+    const { activeOrganizationId, activeEditorialOfficeId, isScopeValidated } = useScope();
 
     // --- State (Állapot) ---
     // 1. Globális adatok
@@ -70,6 +84,12 @@ export const DataProvider = ({ children }) => {
     const [validations, setValidations] = useState([]); // User Validations
     const [layouts, setLayouts] = useState([]);
     const [deadlines, setDeadlines] = useState([]);
+
+    // Az office-hoz tartozó összes workflow doc (nyers, NEM parse-olt compiled).
+    // A derived `workflow` memo a publication.workflowId alapján oldja fel,
+    // a parse a memo-ban történik — így a Realtime handler olcsó.
+    const [workflows, setWorkflows] = useState([]);
+    const workflowFetchedForScopeRef = useRef(null);
 
     // 4. Loading indikátorok
     const [isLoading, setIsLoading] = useState(true); // Globális loading (initial)
@@ -87,144 +107,27 @@ export const DataProvider = ({ children }) => {
         latestArticlesRef.current = articles;
     }, [articles]);
 
+    const latestPublicationsRef = useRef(publications);
+    useEffect(() => {
+        latestPublicationsRef.current = publications;
+    }, [publications]);
+
     const activePublicationIdRef = useRef(activePublicationId);
     useEffect(() => {
         activePublicationIdRef.current = activePublicationId;
     }, [activePublicationId]);
 
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Lazy migráció (régi formátumú útvonalak konvertálása)
-    // ═══════════════════════════════════════════════════════════════════════════
+    // Scope ref-ek: stabil closure-t adnak a fetchData, Realtime handler és
+    // write-through createX metódusoknak (elkerüli a deps-sprawlt).
+    const activeOrganizationIdRef = useRef(activeOrganizationId);
+    useEffect(() => {
+        activeOrganizationIdRef.current = activeOrganizationId;
+    }, [activeOrganizationId]);
 
-    /** Flag: a migráció már lefutott és nem talált legacy path-okat. */
-    const hasMigratedRef = useRef(false);
-
-    /**
-     * Háttérben konvertálja a régi formátumú útvonalakat kanonikus/relatív formátumra.
-     * Nem blokkolja a UI-t — best-effort DB frissítés.
-     * Az első sikeres (üres) futás után nem iterál újra.
-     */
-    const migratePathsIfNeeded = useCallback(async (pubs, arts) => {
-        if (hasMigratedRef.current) return;
-
-        try {
-            // 0. Normalizálj publikációkat — kanonikus rootPath-okat készítsd elő
-            // Ezt később használd a cikk loop-ban, hogy elkerüld a redundáns toCanonicalPath hívásokat
-            const normalizedPubs = pubs.map(pub => {
-                if (pub.rootPath && isLegacyRootPath(pub.rootPath)) {
-                    return { ...pub, rootPath: toCanonicalPath(pub.rootPath) };
-                }
-                return pub;
-            });
-
-            // 1. Publikációk: gyűjtsd össze az összes update ígéretet párhuzamosan
-            const pubPromises = [];
-            const pubUpdates = new Map();
-
-            for (let i = 0; i < pubs.length; i++) {
-                const pub = pubs[i];
-                if (pub.rootPath && isLegacyRootPath(pub.rootPath)) {
-                    const canonical = normalizedPubs[i].rootPath;
-                    log(`[DataContext] Migráció: pub rootPath "${pub.rootPath}" → "${canonical}"`);
-
-                    pubPromises.push(
-                        tables.updateRow({
-                            databaseId: DATABASE_ID,
-                            tableId: PUBLICATIONS_COLLECTION_ID,
-                            rowId: pub.$id,
-                            data: { rootPath: canonical }
-                        })
-                            .then(() => {
-                                pubUpdates.set(pub.$id, canonical);
-                            })
-                            .catch(e => {
-                                logError(`[DataContext] Migráció sikertelen (pub ${pub.$id}):`, e);
-                            })
-                    );
-                }
-            }
-
-            // Várakozz az összes pub update-re párhuzamosan
-            if (pubPromises.length > 0) {
-                await Promise.all(pubPromises);
-            }
-
-            // Alkalmzd a pub frissítéseket egyetlen state update-ben
-            if (pubUpdates.size > 0) {
-                setPublications(prev => prev.map(p => pubUpdates.has(p.$id) ? { ...p, rootPath: pubUpdates.get(p.$id) } : p));
-            }
-
-            // 2. Cikkek: gyűjtsd össze az összes update ígéretet párhuzamosan
-            // Használd normalizedPubs-t, hogy elkerüld a redundáns toCanonicalPath hívásokat
-            const articlePromises = [];
-            const articleUpdates = new Map();
-
-            for (const article of arts) {
-                if (article.filePath && isAbsoluteFilePath(article.filePath)) {
-                    // Abszolút (legacy) filePath → relatív konverzió
-                    const pub = normalizedPubs.find(p => p.$id === article.publicationId);
-                    const pubRoot = pub?.rootPath;
-                    if (!pubRoot) continue;
-
-                    const relative = toRelativeArticlePath(article.filePath, pubRoot);
-                    if (relative === article.filePath) continue;
-
-                    log(`[DataContext] Migráció: article filePath "${article.filePath}" → "${relative}"`);
-
-                    articlePromises.push(
-                        tables.updateRow({
-                            databaseId: DATABASE_ID,
-                            tableId: ARTICLES_COLLECTION_ID,
-                            rowId: article.$id,
-                            data: { filePath: relative }
-                        })
-                            .then(() => {
-                                articleUpdates.set(article.$id, relative);
-                            })
-                            .catch(e => {
-                                logError(`[DataContext] Migráció sikertelen (article ${article.$id}):`, e);
-                            })
-                    );
-                } else if (article.filePath && !isAbsoluteFilePath(article.filePath) && article.filePath.includes('\\')) {
-                    // Relatív filePath backslash normalizáció → forward slash
-                    const normalized = article.filePath.replace(/\\/g, '/');
-
-                    log(`[DataContext] Migráció: article filePath backslash "${article.filePath}" → "${normalized}"`);
-
-                    articlePromises.push(
-                        tables.updateRow({
-                            databaseId: DATABASE_ID,
-                            tableId: ARTICLES_COLLECTION_ID,
-                            rowId: article.$id,
-                            data: { filePath: normalized }
-                        })
-                            .then(() => {
-                                articleUpdates.set(article.$id, normalized);
-                            })
-                            .catch(e => {
-                                logError(`[DataContext] Migráció sikertelen (article ${article.$id}):`, e);
-                            })
-                    );
-                }
-            }
-
-            // Várakozz az összes article update-re párhuzamosan
-            if (articlePromises.length > 0) {
-                await Promise.all(articlePromises);
-            }
-
-            // Alkalmzd az article frissítéseket egyetlen state update-ben
-            if (articleUpdates.size > 0) {
-                setArticles(prev => prev.map(a => articleUpdates.has(a.$id) ? { ...a, filePath: articleUpdates.get(a.$id) } : a));
-            }
-
-            // Migráció készen: ne iteráljunk újra a következő fetch-nél
-            hasMigratedRef.current = true;
-        } catch (e) {
-            logError('[DataContext] Migráció hiba:', e);
-            hasMigratedRef.current = true; // Még hiba esetén is jelöld meg, hogy ne próbálkozz újra
-        }
-    }, []);
+    const activeEditorialOfficeIdRef = useRef(activeEditorialOfficeId);
+    useEffect(() => {
+        activeEditorialOfficeIdRef.current = activeEditorialOfficeId;
+    }, [activeEditorialOfficeId]);
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Adatlekérés (Fetch)
@@ -244,9 +147,48 @@ export const DataProvider = ({ children }) => {
         // egymás eredményeit felülírja.
         const generation = ++fetchGenerationRef.current;
 
+        const throwIfStale = () => {
+            if (generation !== fetchGenerationRef.current) {
+                throw new StaleFetchError(generation, fetchGenerationRef.current);
+            }
+        };
+
+        // Háttér (recovery utáni) fetch-nél elnyomjuk a nem-kritikus toast-okat —
+        // a user már dolgozik, ne zavarjuk átmeneti hibákkal; a hiba logban marad.
+        const warnUser = (title, type, details) => {
+            if (!isBackground) showToast(title, type, details);
+        };
+
         // Ref-ből olvassuk — így a fetchData nem függ az activePublicationId-tól,
         // és nem generálódik újra pub-váltáskor (elkerüli a dupla fetch-et).
         const currentPubId = activePublicationIdRef.current;
+        const currentOfficeId = activeEditorialOfficeIdRef.current;
+        const currentOrgId = activeOrganizationIdRef.current;
+
+        // Scope-guard: ha még nincs aktív szerkesztőség, üres state + initialized,
+        // hogy a Realtime feliratkozás indulhasson. A scope megjelenésekor az
+        // office effect újra meghívja ezt a függvényt.
+        if (!currentOfficeId) {
+            log('[DataContext] Nincs aktív editorialOfficeId — üres state + initialized');
+            setPublications([]);
+            setArticles([]);
+            setLayouts([]);
+            setDeadlines([]);
+            setValidations([]);
+            setWorkflows([]);
+            setIsInitialized(true);
+            if (!isBackground) {
+                setIsLoading(false);
+                setIsSwitchingPublication(false);
+            }
+            // Overlay tisztítás: ha korábbi fetch/recovery már kapcsolódó állapotba
+            // állította a UI-t, a no-office ág megkerülné a finally cleanup-ot.
+            setConnectionStatus(prev => {
+                if (prev.isOffline || !prev.isConnecting) return prev;
+                return { ...prev, isConnecting: false, message: null, details: null };
+            });
+            return;
+        }
 
         if (!isBackground) setIsLoading(true);
 
@@ -255,19 +197,27 @@ export const DataProvider = ({ children }) => {
             startConnecting("Adatok betöltése...");
         }, 200) : null;
 
+        // Auth hibát külön jelezzük a finally-nek — auth hiba esetén NEM inicializálunk
+        // (nincs értelme Realtime feliratkozásnak session nélkül; a user vissza fog kerülni Login-ra).
+        let didAuthError = false;
+        // Sikerült-e elérni a szervert? Ha igen, egy korábbi setOffline overlay
+        // feloldható — a REST recovery bizonyítja, hogy a hálózat él.
+        let didFetchSucceed = false;
+
         try {
             log('[DataContext] Adatok lekérése...', { activePublicationId: currentPubId, generation });
-            const cacheBustId = `cache-bust-${Date.now()}`;
 
             // 1. Publikációk lekérése (Mindig) — kritikus
+            // isActivated szűrés: a plugin csak aktivált kiadványokat lát
             const publicationsPromise = withRetry(
                 () => withTimeout(
                     tables.listRows({
                         databaseId: DATABASE_ID,
-                        tableId: PUBLICATIONS_COLLECTION_ID,
+                        tableId: COLLECTIONS.PUBLICATIONS,
                         queries: [
-                            Query.limit(100),
-                            Query.notEqual("$id", cacheBustId)
+                            Query.equal("editorialOfficeId", currentOfficeId),
+                            Query.equal("isActivated", true),
+                            Query.limit(100)
                         ]
                     }),
                     FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS, "fetchPublications"
@@ -282,15 +232,17 @@ export const DataProvider = ({ children }) => {
             let deadlinesPromise = Promise.resolve({ documents: [] });
 
             if (currentPubId) {
+                // editorialOfficeId szűrés a publicationId mellé: a pub transzitíven
+                // scope-ol, de a kétszeres szűrés explicit enforcement (match a CF guard logikával).
                 articlesPromise = withRetry(
                     () => withTimeout(
                         tables.listRows({
                             databaseId: DATABASE_ID,
-                            tableId: ARTICLES_COLLECTION_ID,
+                            tableId: COLLECTIONS.ARTICLES,
                             queries: [
                                 Query.equal("publicationId", currentPubId),
-                                Query.limit(1000),
-                                Query.notEqual("$id", cacheBustId)
+                                Query.equal("editorialOfficeId", currentOfficeId),
+                                Query.limit(1000)
                             ]
                         }),
                         FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS, "fetchArticles"
@@ -303,9 +255,10 @@ export const DataProvider = ({ children }) => {
                     () => withTimeout(
                         tables.listRows({
                             databaseId: DATABASE_ID,
-                            tableId: LAYOUTS_COLLECTION_ID,
+                            tableId: COLLECTIONS.LAYOUTS,
                             queries: [
                                 Query.equal("publicationId", currentPubId),
+                                Query.equal("editorialOfficeId", currentOfficeId),
                                 Query.limit(100)
                             ]
                         }),
@@ -319,9 +272,10 @@ export const DataProvider = ({ children }) => {
                     () => withTimeout(
                         tables.listRows({
                             databaseId: DATABASE_ID,
-                            tableId: DEADLINES_COLLECTION_ID,
+                            tableId: COLLECTIONS.DEADLINES,
                             queries: [
                                 Query.equal("publicationId", currentPubId),
+                                Query.equal("editorialOfficeId", currentOfficeId),
                                 Query.limit(100)
                             ]
                         }),
@@ -331,9 +285,55 @@ export const DataProvider = ({ children }) => {
                 );
             }
 
+            // 2d. Workflow-k lekérése (nem-kritikus) — csak ha scope változott vagy
+            // még nincs meg. Része a kritikus Promise.all-nak, hogy a
+            // `isInitialized=true` csak betöltött workflow után billenjen — különben
+            // a Realtime handler átmenetileg `workflow=null`-t látna.
+            //
+            // 2-way visibility (#30):
+            //   - `editorial_office`: csak az aktív office workflow-i
+            //   - `organization`: az aktív org bármely office-ának workflow-i
+            // A scope fetch cache kulcsa `${orgId}|${officeId}` — org-váltás is invalidál.
+            const workflowScopeKey = `${currentOrgId}|${currentOfficeId}`;
+            const needsWorkflowFetch = workflowFetchedForScopeRef.current !== workflowScopeKey;
+            const workflowsPromise = needsWorkflowFetch
+                ? withRetry(
+                    () => withTimeout(
+                        tables.listRows({
+                            databaseId: DATABASE_ID,
+                            tableId: COLLECTIONS.WORKFLOWS,
+                            queries: [
+                                Query.or([
+                                    Query.and([
+                                        Query.equal("visibility", "organization"),
+                                        Query.equal("organizationId", currentOrgId)
+                                    ]),
+                                    Query.and([
+                                        Query.equal("visibility", "editorial_office"),
+                                        Query.equal("editorialOfficeId", currentOfficeId)
+                                    ]),
+                                    // Legacy null → editorial_office fallback (illeszkedik a
+                                    // Realtime handler `payload.visibility || 'editorial_office'`
+                                    // szemantikájához). Rollout-ablak: schema bootstrap előtt
+                                    // létezett sorokat is láthatóvá teszi.
+                                    Query.and([
+                                        Query.isNull("visibility"),
+                                        Query.equal("editorialOfficeId", currentOfficeId)
+                                    ])
+                                ]),
+                                Query.orderAsc("name"),
+                                Query.limit(100)
+                            ]
+                        }),
+                        FETCH_TIMEOUT_CONFIG.NON_CRITICAL_DATA_MS, "fetchWorkflows"
+                    ),
+                    { operationName: "fetchWorkflows" }
+                )
+                : Promise.resolve(null); // Skip — már betöltve, Realtime frissít
+
             // Kritikus adatok (publications, articles) — ha elbuknak, a catch kezeli
-            // Nem-kritikus adatok (layouts, deadlines) — Promise.allSettled: ha elbuknak,
-            // toast figyelmeztetés, a UI működik tovább üres listával
+            // Nem-kritikus adatok (layouts, deadlines, workflows) — allSettled: ha elbuknak,
+            // toast figyelmeztetés, a UI működik tovább üres listával / read-only módban
             const [
                 publicationsResponse,
                 articlesResponse,
@@ -341,47 +341,61 @@ export const DataProvider = ({ children }) => {
             ] = await Promise.all([
                 publicationsPromise,
                 articlesPromise,
-                Promise.allSettled([layoutsPromise, deadlinesPromise])
+                Promise.allSettled([layoutsPromise, deadlinesPromise, workflowsPromise])
             ]).then(([pubs, arts, settled]) => [pubs, arts, ...settled]);
 
-            const [layoutsResult, deadlinesResult] = settledResults;
+            const [layoutsResult, deadlinesResult, workflowsResult] = settledResults;
 
-            // Elavult generáció ellenőrzése: ha közben újabb fetchData indult,
-            // az eredményt eldobjuk, mert a frissebb hívás fogja a state-et beállítani.
-            if (generation !== fetchGenerationRef.current) {
-                log(`[DataContext] Elavult fetch eredmény eldobva (gen ${generation}, aktuális: ${fetchGenerationRef.current})`);
-                return;
-            }
+            // Elavult generáció: a catch blokk StaleFetchError-ként némán eldobja.
+            throwIfStale();
 
             // Feldolgozás
             const publicationList = publicationsResponse.documents || publicationsResponse.rows || [];
             const sortedPublications = publicationList.sort(compareByName);
             setPublications(sortedPublications);
 
+            // Stale activePublicationId védelem: ha a scope-szűrt lista nem
+            // tartalmazza (pl. másik office-é volt), nullázzuk.
+            if (currentPubId && !sortedPublications.some(publication => publication.$id === currentPubId)) {
+                log(`[DataContext] Aktív kiadvány már nem elérhető az aktuális scope-ban (${currentPubId}), nullázás`);
+                setActivePublicationId(null);
+            }
+
             const articleList = articlesResponse.documents || articlesResponse.rows || [];
             const sortedArticles = articleList.sort(compareByName);
             setArticles(sortedArticles);
 
-            // Lazy migráció: régi formátumú path-ok konvertálása kanonikus/relatív formátumra
-            // A migráció háttérben fut, nem blokkolja a UI megjelenést.
-            migratePathsIfNeeded(sortedPublications, sortedArticles);
-
-            // Layoutok feldolgozása (nem-kritikus — allSettled)
             if (layoutsResult.status === 'fulfilled') {
                 const layoutList = layoutsResult.value.documents || layoutsResult.value.rows || [];
                 setLayouts(layoutList.sort(compareByOrder));
             } else {
                 logError('[DataContext] Layoutok lekérése sikertelen:', layoutsResult.reason);
-                showToast('Layoutok betöltése sikertelen', TOAST_TYPES.ERROR, 'A layoutok nem töltődtek be. Próbáld újra később.');
+                warnUser('Layoutok betöltése sikertelen', TOAST_TYPES.ERROR, 'A layoutok nem töltődtek be. Próbáld újra később.');
             }
 
-            // Határidők feldolgozása (nem-kritikus — allSettled)
             if (deadlinesResult.status === 'fulfilled') {
                 const deadlineList = deadlinesResult.value.documents || deadlinesResult.value.rows || [];
                 setDeadlines(deadlineList.sort(compareByStartPage));
             } else {
                 logError('[DataContext] Határidők lekérése sikertelen:', deadlinesResult.reason);
-                showToast('Határidők betöltése sikertelen', TOAST_TYPES.ERROR, 'A határidők nem töltődtek be. Próbáld újra később.');
+                warnUser('Határidők betöltése sikertelen', TOAST_TYPES.ERROR, 'A határidők nem töltődtek be. Próbáld újra később.');
+            }
+
+            // Workflows: ha skip-elve volt (már betöltve, value=null), nem érintjük.
+            if (needsWorkflowFetch) {
+                if (workflowsResult.status === 'fulfilled' && workflowsResult.value) {
+                    const rows = workflowsResult.value.documents || workflowsResult.value.rows || [];
+                    setWorkflows(rows);
+                    workflowFetchedForScopeRef.current = workflowScopeKey;
+                    if (rows.length === 0) {
+                        logWarn('[DataContext] Nincs látható workflow doc ebben a scope-ban:', workflowScopeKey);
+                    } else {
+                        log(`[DataContext] Workflow-k betöltve (${rows.length} doc, scope=${workflowScopeKey})`);
+                    }
+                } else {
+                    logError('[DataContext] Workflow lekérése sikertelen:', workflowsResult.reason);
+                    warnUser('Workflow betöltése sikertelen', TOAST_TYPES.WARNING, 'A munkafolyamat nem töltődött be — a cikk-szerkesztés átmenetileg korlátozott.');
+                }
             }
 
             // 3. Validációk lekérése (Ha vannak cikkek)
@@ -401,9 +415,10 @@ export const DataProvider = ({ children }) => {
                         () => withTimeout(
                             tables.listRows({
                                 databaseId: DATABASE_ID,
-                                tableId: USER_VALIDATIONS_COLLECTION_ID,
+                                tableId: COLLECTIONS.USER_VALIDATIONS,
                                 queries: [
                                     Query.equal('articleId', chunkIds),
+                                    Query.equal("editorialOfficeId", currentOfficeId),
                                     Query.limit(chunkIds.length * 5)
                                 ]
                             }),
@@ -414,51 +429,56 @@ export const DataProvider = ({ children }) => {
                 );
 
                 const chunkResults = await Promise.all(chunkPromises);
+                // Korai stale-check a normalizáció előtt, hogy ne végezzünk
+                // felesleges munkát, ha közben pub-switch/recovery új fetch-et indított.
+                throwIfStale();
                 loadedValidations = chunkResults.flatMap(response => response.documents || response.rows || []);
                 log(`[DataContext] ${loadedValidations.length} validáció betöltve.`);
             }
 
-            // Validációk ID normalizálás
             const normalizedValidations = loadedValidations.map(validation => ({
                 ...validation,
                 id: validation.$id,
                 $id: validation.$id
             }));
 
-            // Végső elavulás-ellenőrzés a validációk után (a validáció lekérés is időt vehet igénybe)
-            if (generation !== fetchGenerationRef.current) {
-                log(`[DataContext] Elavult fetch eredmény eldobva validációk után (gen ${generation}, aktuális: ${fetchGenerationRef.current})`);
-                return;
-            }
+            throwIfStale();
 
             setValidations(normalizedValidations);
 
-            setConnected();
-            setIsInitialized(true);
+            didFetchSucceed = true;
 
         } catch (error) {
-            // Elavult generáció: a hiba is elavult, nem kell kezelni
-            if (generation !== fetchGenerationRef.current) {
-                log(`[DataContext] Elavult fetch hiba figyelmen kívül hagyva (gen ${generation})`);
+            // Elavult generáció: csendben eldobjuk — nincs user-látható mellékhatás.
+            if (error instanceof StaleFetchError) {
+                log(`[DataContext] ${error.message}`);
                 return;
             }
 
             logError('[DataContext] Hiba:', error);
             if (isAuthError(error)) {
+                didAuthError = true;
                 dispatchMaestroEvent(MaestroEvent.sessionExpired);
             } else if (isNetworkError(error)) {
-                // Timeout ≠ offline: a szerver elérhető lehet, csak a lekérés lassú
+                // Timeout ≠ offline: a szerver elérhető lehet, csak a lekérés lassú.
+                // Háttérben (recovery után) ne zajongjunk toast-tal — a user már
+                // dolgozik; a recovery lánc maga rendezi a következő trigger-nél.
                 const isTimeout = error.message?.includes('időtúllépés');
                 if (isTimeout) {
-                    showToast('Lassú kapcsolat', TOAST_TYPES.WARNING, 'Az adatlekérés időtúllépés miatt megszakadt.');
+                    if (!isBackground) {
+                        showToast('Lassú kapcsolat', TOAST_TYPES.WARNING, 'Az adatlekérés időtúllépés miatt megszakadt.');
+                    }
                 } else {
-                    // Valódi hálózati hiba — offline overlay
+                    // Valódi hálózati hiba — offline overlay (háttérben is, mert a
+                    // kapcsolat tényleges megszakadása mindig látható state).
                     const attempts = incrementAttempts();
                     setOffline(error, attempts);
                 }
-            } else {
+            } else if (!isBackground) {
                 showToast('Adatok betöltése sikertelen', TOAST_TYPES.ERROR, error.message);
             }
+            // Háttér (recovery utáni) fetch ismeretlen hibájánál a fentebbi logError elég —
+            // a user-t nem zavarjuk, a következő recovery trigger majd rendezi.
         } finally {
             if (connectingDelayTimerId) clearTimeout(connectingDelayTimerId);
 
@@ -470,36 +490,105 @@ export const DataProvider = ({ children }) => {
                     setIsSwitchingPublication(false);
                 }
 
-                // Overlay tisztítás: ha a startConnecting tüzelt (200ms eltelt) de
-                // nem mentünk offline-ba, töröljük az isConnecting-et, hogy az overlay
-                // ne ragadjon be (timeout, auth hiba, egyéb hiba esetén).
+                // Initialized flag: auth hibán kívül MINDEN terminal ágon true-ra
+                // billen, hogy a Realtime feliratkozás elinduljon — hálózati hiba
+                // után is (különben csak a RecoveryManager `dataRefreshRequested`
+                // eseményére tudna indulni). Auth hibánál viszont értelmetlen a
+                // feliratkozás (nincs session → a user Login-ra kerül).
+                if (!didAuthError) {
+                    setIsInitialized(true);
+                }
+
+                // Overlay tisztítás:
+                // - Siker: ha korábban offline-ba mentünk (más útvonalon, pl. előző
+                //   fetch), a sikeres REST bizonyítja, hogy a hálózat él → clear.
+                // - Egyéb: a startConnecting által felhúzott isConnecting törlése.
                 setConnectionStatus(prev => {
-                    if (prev.isOffline) return prev; // Offline overlay marad (valódi hálózati hiba)
+                    if (didFetchSucceed && prev.isOffline) {
+                        return { ...prev, isOffline: false, isConnecting: false, message: null, details: null };
+                    }
+                    if (prev.isOffline) return prev; // Valódi hálózati hiba — offline marad
                     if (!prev.isConnecting) return prev; // Nincs mit tisztítani
                     return { ...prev, isConnecting: false, message: null, details: null };
                 });
             }
         }
-    }, [startConnecting, setConnected, setOffline, incrementAttempts, showToast]);
+    }, [startConnecting, setOffline, setConnectionStatus, incrementAttempts, showToast]);
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Inicializálás és Active Publication Váltás
     // ═══════════════════════════════════════════════════════════════════════════
 
-    // Initial fetch — egyszer fut, amikor a komponens mountol
-    useEffect(() => {
-        fetchData();
-    }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-    // Workflow config szinkronizálás — egyszer fut, inicializálás után.
-    // A Cloud Function-ök a config collection-ből olvassák a konstansokat.
-    const configSyncedRef = useRef(false);
-    useEffect(() => {
-        if (isInitialized && !configSyncedRef.current) {
-            configSyncedRef.current = true;
-            syncWorkflowConfig();
+    // Parse cache docId szerint — stabil compiled referencia, ha két publikáció
+    // ugyanarra a workflow doc-ra mutat (publikáció-váltáskor nincs fals
+    // workflowChanged event). Legacy fallback: ha a publikációnak még nincs
+    // `compiledWorkflowSnapshot`-ja, ebből a cache-ből oldódik fel a workflow.
+    const workflowCache = useMemo(() => {
+        const cache = new Map();
+        for (const doc of workflows) {
+            try {
+                const compiled = typeof doc.compiled === 'string'
+                    ? JSON.parse(doc.compiled)
+                    : doc.compiled;
+                cache.set(doc.$id, compiled);
+            } catch (err) {
+                logError(`[DataContext] Workflow compiled parse hiba (${doc.$id}):`, err);
+            }
         }
-    }, [isInitialized]);
+        return cache;
+    }, [workflows]);
+
+    // Az aktív publikáció doc — stabil identitás, amíg a konkrét pub objektum
+    // nem cserélődik. Kiszűri a publikáció-lista mutációját (lock flip, rename
+    // más publikáción), így a snapshot / workflowId memo-k csak tényleges
+    // aktív-pub váltásra vagy az aktív pub cseréjére invalidálódnak.
+    const activePublication = useMemo(() => {
+        if (!activePublicationId) return null;
+        return publications.find(p => p.$id === activePublicationId) || null;
+    }, [publications, activePublicationId]);
+
+    // Aktiváláskor rögzített workflow pillanatkép (#38). A CF írja a
+    // `validate-publication-update` §5a-ban, onnantól immutable a publikáció
+    // élettartama alatt — a memo szűk deps-ei (snapshot string identitás)
+    // miatt az élő publikáción soha nem parse-olódik újra.
+    const activeSnapshotCompiled = useMemo(() => {
+        const snapshot = activePublication?.compiledWorkflowSnapshot;
+        if (!snapshot) return null;
+        try {
+            return typeof snapshot === 'string' ? JSON.parse(snapshot) : snapshot;
+        } catch (err) {
+            logError(`[DataContext] compiledWorkflowSnapshot parse hiba (${activePublication.$id}):`, err);
+            return null; // fail-closed → fallback a workflowId útvonalra
+        }
+    }, [activePublication?.$id, activePublication?.compiledWorkflowSnapshot]);
+
+    // Legacy (snapshot nélküli) publikáció workflowId útvonala. Ha van érvényes
+    // snapshot, ezt nem használjuk — ne zavarjon workflow-doc Realtime mutáció
+    // az aktivált publikáción.
+    const activeWorkflowId = useMemo(() => {
+        if (activeSnapshotCompiled) return null;
+        return activePublication?.workflowId || null;
+    }, [activePublication, activeSnapshotCompiled]);
+
+    // Derived workflow — snapshot-preferáló feloldás. Sorrend:
+    // 1. compiledWorkflowSnapshot (aktiválás pillanatképe — az élő publikáció
+    //    stabil, workflow-módosításoktól független kontextusa)
+    // 2. workflowCache[workflowId] (legacy publikáció, még nincs snapshot)
+    // 3. null (fail-closed — cikk blokkolás)
+    const workflow = useMemo(() => {
+        if (activeSnapshotCompiled) return activeSnapshotCompiled;
+        if (!activeWorkflowId) return null;
+        return workflowCache.get(activeWorkflowId) || null;
+    }, [activeSnapshotCompiled, activeWorkflowId, workflowCache]);
+
+    // workflowChanged dispatch a derived workflow identitás változására —
+    // lefedi a Realtime eseményeket ÉS a publikáció-váltást is.
+    const prevWorkflowRef = useRef(null);
+    useEffect(() => {
+        if (prevWorkflowRef.current === workflow) return;
+        prevWorkflowRef.current = workflow;
+        dispatchMaestroEvent(MaestroEvent.workflowChanged);
+    }, [workflow]);
 
     // Active Publication váltás kezelése
     const updateActivePublicationId = useCallback((id) => {
@@ -516,85 +605,61 @@ export const DataProvider = ({ children }) => {
         setIsSwitchingPublication(true);
     }, [activePublicationId]);
 
-    // Trigger fetch on publication change — a fetchData ref-ből olvassa a pubId-t.
-    // Az isInitialized is kell a deps-ben, mert:
-    //   1. PublicationList hamarabb állítja be az activePublicationId-t (localStorage restore),
-    //      mint ahogy az initial fetch befejeződne (isInitialized = false → skip).
-    //   2. Amikor az initial fetch kész és isInitialized = true, az activePublicationId
-    //      már nem változik → az effect nem futna újra nélküle.
+    // Egyesített fetch trigger: initial fetch a scope validáció után, office
+    // váltás detektálás (nullázza a régi pubId-t) és pub váltás fetch egy
+    // effectben. Külön effectekkel a pubId nullázás + re-trigger dupla fetch-et
+    // indított el office váltáskor.
+    const hasInitializedRef = useRef(false);
+    const prevOfficeIdRef = useRef(activeEditorialOfficeId);
     useEffect(() => {
-        if (isInitialized && activePublicationId !== null) {
-            fetchData(false);
+        if (!isScopeValidated) return;
+
+        if (!hasInitializedRef.current) {
+            hasInitializedRef.current = true;
+            prevOfficeIdRef.current = activeEditorialOfficeId;
+            fetchData();
+            return;
         }
-    }, [activePublicationId, isInitialized]); // eslint-disable-line react-hooks/exhaustive-deps
+
+        if (prevOfficeIdRef.current !== activeEditorialOfficeId) {
+            log(`[DataContext] Office váltás (${prevOfficeIdRef.current} → ${activeEditorialOfficeId})`);
+            prevOfficeIdRef.current = activeEditorialOfficeId;
+            if (activePublicationId !== null) {
+                // A setter re-triggereli ezt az effectet pubId=null-lal,
+                // ahol aztán a fetch tiszta állapotból indul.
+                setActivePublicationId(null);
+                setArticles([]);
+                setLayouts([]);
+                setDeadlines([]);
+                setValidations([]);
+                return;
+            }
+        }
+
+        fetchData(false);
+    }, [isScopeValidated, activePublicationId, activeEditorialOfficeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Write-Through API — Publikációk
+    // Write-Through API — közös scope injection helper
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * Új kiadvány létrehozása az adatbázisban.
-     * A szerver válaszával azonnal frissíti a helyi state-et.
-     *
-     * @param {Object} data - A kiadvány adatai (name, rootPath, stb.)
-     * @returns {Promise<Object>} A létrehozott dokumentum.
+     * Hozzáfűzi a `createX` payloadhoz a scope mezőket (organizationId +
+     * editorialOfficeId), és dob, ha hiányzik. A happy path-ban nem tüzelhet
+     * (a UI a ScopeMissingPlaceholder mögött zárolva), de védi a recovery alatti
+     * race-t és a CF guard előtti köztes időszakot.
      */
-    const createPublication = useCallback(async (data) => {
-        const result = await withTimeout(
-            tables.createRow({
-                databaseId: DATABASE_ID,
-                tableId: PUBLICATIONS_COLLECTION_ID,
-                rowId: ID.unique(),
-                data
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: createPublication"
-        );
-        setPublications(prev => {
-            if (prev.some(pub => pub.$id === result.$id)) return prev;
-            return [...prev, result].sort(compareByName);
-        });
-        return result;
-    }, []);
-
-    /**
-     * Kiadvány frissítése az adatbázisban.
-     *
-     * @param {string} publicationId - A frissítendő kiadvány azonosítója.
-     * @param {Object} data - A frissítendő mezők.
-     * @returns {Promise<Object>} A frissített dokumentum.
-     */
-    const updatePublication = useCallback(async (publicationId, data) => {
-        const result = await withTimeout(
-            tables.updateRow({
-                databaseId: DATABASE_ID,
-                tableId: PUBLICATIONS_COLLECTION_ID,
-                rowId: publicationId,
-                data
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: updatePublication"
-        );
-        setPublications(prev => prev.map(publication => publication.$id === publicationId ? result : publication).sort(compareByName));
-        return result;
-    }, []);
-
-    /**
-     * Kiadvány törlése az adatbázisból.
-     *
-     * @param {string} publicationId - A törlendő kiadvány azonosítója.
-     */
-    const deletePublication = useCallback(async (publicationId) => {
-        await withTimeout(
-            tables.deleteRow({
-                databaseId: DATABASE_ID,
-                tableId: PUBLICATIONS_COLLECTION_ID,
-                rowId: publicationId
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: deletePublication"
-        );
-        setPublications(prev => prev.filter(publication => publication.$id !== publicationId));
+    const withScope = useCallback((data) => {
+        const orgId = activeOrganizationIdRef.current;
+        const officeId = activeEditorialOfficeIdRef.current;
+        if (!orgId || !officeId) {
+            throw new Error('Nincs aktív szerkesztőség — a művelet nem hajtható végre.');
+        }
+        return {
+            ...data,
+            organizationId: orgId,
+            editorialOfficeId: officeId
+        };
     }, []);
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -611,9 +676,9 @@ export const DataProvider = ({ children }) => {
         const result = await withTimeout(
             tables.createRow({
                 databaseId: DATABASE_ID,
-                tableId: ARTICLES_COLLECTION_ID,
+                tableId: COLLECTIONS.ARTICLES,
                 rowId: ID.unique(),
-                data
+                data: withScope(data)
             }),
             FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: createArticle"
@@ -623,47 +688,7 @@ export const DataProvider = ({ children }) => {
             return [...prev, result].sort(compareByName);
         });
         return result;
-    }, []);
-
-    /**
-     * Cikk frissítése az adatbázisban.
-     *
-     * @param {string} articleId - A frissítendő cikk azonosítója.
-     * @param {Object} data - A frissítendő mezők.
-     * @returns {Promise<Object>} A frissített dokumentum.
-     */
-    const updateArticle = useCallback(async (articleId, data) => {
-        const result = await withTimeout(
-            tables.updateRow({
-                databaseId: DATABASE_ID,
-                tableId: ARTICLES_COLLECTION_ID,
-                rowId: articleId,
-                data
-            }),
-            20000,
-            "DataContext: updateArticle"
-        );
-        setArticles(prev => prev.map(article => article.$id === articleId ? result : article).sort(compareByName));
-        return result;
-    }, []);
-
-    /**
-     * Cikk törlése az adatbázisból.
-     *
-     * @param {string} articleId - A törlendő cikk azonosítója.
-     */
-    const deleteArticle = useCallback(async (articleId) => {
-        await withTimeout(
-            tables.deleteRow({
-                databaseId: DATABASE_ID,
-                tableId: ARTICLES_COLLECTION_ID,
-                rowId: articleId
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: deleteArticle"
-        );
-        setArticles(prev => prev.filter(article => article.$id !== articleId));
-    }, []);
+    }, [withScope]);
 
     /**
      * Helyi cikk-state frissítése egy szerver-válasz dokumentummal, DB hívás nélkül.
@@ -685,9 +710,73 @@ export const DataProvider = ({ children }) => {
         }).sort(compareByName));
     }, []);
 
+    /**
+     * Cikk frissítése az adatbázisban az `update-article` Cloud Function-ön keresztül.
+     *
+     * A Plugin NEM ír közvetlenül az `articles` collection-be — minden írás
+     * ezen a CF-en fut át, amely szerver-oldalon validál és jogosultságot
+     * ellenőriz (Fázis 9 follow-up). Fail-closed: ha a CF `permissionDenied`-et
+     * jelez, a hívó `PermissionDeniedError`-t kap, és a hívó oldal kezeli
+     * (toast + optimista UI revert).
+     *
+     * A helyi állapot frissítése az `applyArticleUpdate`-en keresztül történik,
+     * amely `$updatedAt` staleness guardot alkalmaz — így egy párhuzamos másik
+     * user CF írása (magasabb `$updatedAt`-tel, Realtime-on már érkezett) nem
+     * íródik felül a saját, régebbi CF válaszunkkal.
+     *
+     * @param {string} articleId - A frissítendő cikk azonosítója.
+     * @param {Object} data - A frissítendő mezők (csak engedett whitelist).
+     * @returns {Promise<Object>} A szerver által visszaadott frissített dokumentum.
+     * @throws {PermissionDeniedError} Ha a szerver 403-mal utasítja el a kérést.
+     */
+    const updateArticle = useCallback(async (articleId, data) => {
+        const result = await callUpdateArticleCF(articleId, data, "DataContext: updateArticle");
+        applyArticleUpdate(result);
+        return result;
+    }, [applyArticleUpdate]);
+
+    /**
+     * Cikk törlése az adatbázisból.
+     *
+     * @param {string} articleId - A törlendő cikk azonosítója.
+     */
+    const deleteArticle = useCallback(async (articleId) => {
+        await withTimeout(
+            tables.deleteRow({
+                databaseId: DATABASE_ID,
+                tableId: COLLECTIONS.ARTICLES,
+                rowId: articleId
+            }),
+            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
+            "DataContext: deleteArticle"
+        );
+        setArticles(prev => prev.filter(article => article.$id !== articleId));
+    }, []);
+
     // ═══════════════════════════════════════════════════════════════════════════
     // Write-Through API — Felhasználói Validációk (User Validations)
     // ═══════════════════════════════════════════════════════════════════════════
+
+    /**
+     * Helyi validation-state frissítése egy szerver-válasz dokumentummal, DB hívás nélkül.
+     * Az `applyArticleUpdate`-hez analóg minta: `$updatedAt` staleness guardot alkalmaz,
+     * és normalizálja az `id`+`$id` duplát (a UI a duál mezőt használja).
+     *
+     * @param {Object} serverDocument - A szerver által visszaadott frissített validáció.
+     */
+    const applyValidationUpdate = useCallback((serverDocument) => {
+        if (!serverDocument?.$id) return;
+        const normalized = { ...serverDocument, id: serverDocument.$id, $id: serverDocument.$id };
+        setValidations(prev => prev.map(validation => {
+            if (validation.$id !== normalized.$id) return validation;
+            // $updatedAt elavulás-védelem: ne írjunk felül frissebb adatot régebbivel
+            if (validation.$updatedAt && normalized.$updatedAt && validation.$updatedAt > normalized.$updatedAt) {
+                logWarn(`[DataContext] applyValidationUpdate elavult dokumentum kihagyva (${validation.$id})`);
+                return validation;
+            }
+            return normalized;
+        }));
+    }, []);
 
     /**
      * Új validációs bejegyzés létrehozása.
@@ -699,9 +788,9 @@ export const DataProvider = ({ children }) => {
         const result = await withTimeout(
             tables.createRow({
                 databaseId: DATABASE_ID,
-                tableId: USER_VALIDATIONS_COLLECTION_ID,
+                tableId: COLLECTIONS.USER_VALIDATIONS,
                 rowId: ID.unique(),
-                data
+                data: withScope(data)
             }),
             FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: createValidation"
@@ -712,10 +801,15 @@ export const DataProvider = ({ children }) => {
             return [normalized, ...prev];
         });
         return result;
-    }, []);
+    }, [withScope]);
 
     /**
      * Validációs bejegyzés frissítése.
+     *
+     * A helyi állapotot az `applyValidationUpdate`-en keresztül frissíti —
+     * `$updatedAt` staleness guarddal, hogy egy párhuzamos írás (Realtime-on
+     * már érkezett, magasabb `$updatedAt`-tel) ne íródjon felül a saját,
+     * régebbi szerver válaszunkkal.
      *
      * @param {string} validationId - A frissítendő validáció azonosítója.
      * @param {Object} data - A frissítendő mezők.
@@ -725,17 +819,16 @@ export const DataProvider = ({ children }) => {
         const result = await withTimeout(
             tables.updateRow({
                 databaseId: DATABASE_ID,
-                tableId: USER_VALIDATIONS_COLLECTION_ID,
+                tableId: COLLECTIONS.USER_VALIDATIONS,
                 rowId: validationId,
                 data
             }),
             FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: updateValidation"
         );
-        const normalized = { ...result, id: result.$id, $id: result.$id };
-        setValidations(prev => prev.map(validation => validation.$id === validationId ? normalized : validation));
+        applyValidationUpdate(result);
         return result;
-    }, []);
+    }, [applyValidationUpdate]);
 
     /**
      * Validációs bejegyzés törlése.
@@ -746,149 +839,13 @@ export const DataProvider = ({ children }) => {
         await withTimeout(
             tables.deleteRow({
                 databaseId: DATABASE_ID,
-                tableId: USER_VALIDATIONS_COLLECTION_ID,
+                tableId: COLLECTIONS.USER_VALIDATIONS,
                 rowId: validationId
             }),
             FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: deleteValidation"
         );
         setValidations(prev => prev.filter(validation => validation.$id !== validationId));
-    }, []);
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Write-Through API — Layoutok
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /**
-     * Új layout létrehozása az adatbázisban.
-     *
-     * @param {Object} data - A layout adatai (publicationId, name, order)
-     * @returns {Promise<Object>} A létrehozott dokumentum.
-     */
-    const createLayout = useCallback(async (data) => {
-        const result = await withTimeout(
-            tables.createRow({
-                databaseId: DATABASE_ID,
-                tableId: LAYOUTS_COLLECTION_ID,
-                rowId: ID.unique(),
-                data
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: createLayout"
-        );
-        setLayouts(prev => {
-            if (prev.some(l => l.$id === result.$id)) return prev;
-            return [...prev, result].sort(compareByOrder);
-        });
-        return result;
-    }, []);
-
-    /**
-     * Layout frissítése az adatbázisban.
-     *
-     * @param {string} layoutId - A frissítendő layout azonosítója.
-     * @param {Object} data - A frissítendő mezők.
-     * @returns {Promise<Object>} A frissített dokumentum.
-     */
-    const updateLayout = useCallback(async (layoutId, data) => {
-        const result = await withTimeout(
-            tables.updateRow({
-                databaseId: DATABASE_ID,
-                tableId: LAYOUTS_COLLECTION_ID,
-                rowId: layoutId,
-                data
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: updateLayout"
-        );
-        setLayouts(prev => prev.map(layout => layout.$id === layoutId ? result : layout).sort(compareByOrder));
-        return result;
-    }, []);
-
-    /**
-     * Layout törlése az adatbázisból.
-     *
-     * @param {string} layoutId - A törlendő layout azonosítója.
-     */
-    const deleteLayout = useCallback(async (layoutId) => {
-        await withTimeout(
-            tables.deleteRow({
-                databaseId: DATABASE_ID,
-                tableId: LAYOUTS_COLLECTION_ID,
-                rowId: layoutId
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: deleteLayout"
-        );
-        setLayouts(prev => prev.filter(layout => layout.$id !== layoutId));
-    }, []);
-
-    // ═══════════════════════════════════════════════════════════════════════════
-    // Write-Through API — Határidők (Deadlines)
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /**
-     * Új határidő létrehozása az adatbázisban.
-     *
-     * @param {Object} data - A határidő adatai (publicationId, startPage, endPage, datetime)
-     * @returns {Promise<Object>} A létrehozott dokumentum.
-     */
-    const createDeadline = useCallback(async (data) => {
-        const result = await withTimeout(
-            tables.createRow({
-                databaseId: DATABASE_ID,
-                tableId: DEADLINES_COLLECTION_ID,
-                rowId: ID.unique(),
-                data
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: createDeadline"
-        );
-        setDeadlines(prev => {
-            if (prev.some(d => d.$id === result.$id)) return prev;
-            return [...prev, result].sort(compareByStartPage);
-        });
-        return result;
-    }, []);
-
-    /**
-     * Határidő frissítése az adatbázisban.
-     *
-     * @param {string} deadlineId - A frissítendő határidő azonosítója.
-     * @param {Object} data - A frissítendő mezők.
-     * @returns {Promise<Object>} A frissített dokumentum.
-     */
-    const updateDeadline = useCallback(async (deadlineId, data) => {
-        const result = await withTimeout(
-            tables.updateRow({
-                databaseId: DATABASE_ID,
-                tableId: DEADLINES_COLLECTION_ID,
-                rowId: deadlineId,
-                data
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: updateDeadline"
-        );
-        setDeadlines(prev => prev.map(deadline => deadline.$id === deadlineId ? result : deadline).sort(compareByStartPage));
-        return result;
-    }, []);
-
-    /**
-     * Határidő törlése az adatbázisból.
-     *
-     * @param {string} deadlineId - A törlendő határidő azonosítója.
-     */
-    const deleteDeadline = useCallback(async (deadlineId) => {
-        await withTimeout(
-            tables.deleteRow({
-                databaseId: DATABASE_ID,
-                tableId: DEADLINES_COLLECTION_ID,
-                rowId: deadlineId
-            }),
-            FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
-            "DataContext: deleteDeadline"
-        );
-        setDeadlines(prev => prev.filter(deadline => deadline.$id !== deadlineId));
     }, []);
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -901,31 +858,101 @@ export const DataProvider = ({ children }) => {
         log('[DataContext] Realtime feliratkozás...');
 
         const channels = [
-            `databases.${DATABASE_ID}.collections.${PUBLICATIONS_COLLECTION_ID}.documents`,
-            `databases.${DATABASE_ID}.collections.${ARTICLES_COLLECTION_ID}.documents`,
-            `databases.${DATABASE_ID}.collections.${USER_VALIDATIONS_COLLECTION_ID}.documents`,
-            `databases.${DATABASE_ID}.collections.${LAYOUTS_COLLECTION_ID}.documents`,
-            `databases.${DATABASE_ID}.collections.${DEADLINES_COLLECTION_ID}.documents`,
-            'teams'
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.PUBLICATIONS}.documents`,
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.ARTICLES}.documents`,
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.USER_VALIDATIONS}.documents`,
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.LAYOUTS}.documents`,
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.DEADLINES}.documents`,
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.GROUP_MEMBERSHIPS}.documents`,
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.WORKFLOWS}.documents`
         ];
 
         const unsubscribe = realtime.subscribe(channels, (response) => {
             const { events, payload } = response;
             const event = events[0];
 
+            // Scope out-of-scope check. Delete eseményeknél NEM szűrünk — a
+            // payload jellemzően nincs scope mezővel, és a downstream filter()
+            // amúgy is csak a scope-on belüli prev listán dolgozik (idegen
+            // office delete-je no-op).
+            const isOutOfScope = (evt, pl) => {
+                if (evt.includes(".delete")) return false;
+                const currentOfficeId = activeEditorialOfficeIdRef.current;
+                return !currentOfficeId || pl.editorialOfficeId !== currentOfficeId;
+            };
+
             // --- Publikációk ---
-            if (event.includes(PUBLICATIONS_COLLECTION_ID)) {
+            // A plugin kizárólag aktivált kiadványokat lát. Nem aktivált create-et
+            // figyelmen kívül hagyunk; update esetén, ha a payload nem aktivált,
+            // eltávolítjuk (deaktiválás vagy még nem aktivált szerkesztés kezelése).
+            //
+            // Post-write CF korlát: a validate-publication-update CF az írás UTÁN
+            // fut, ezért egy érvénytelen aktiválás rövid ideig (~1-2s) látszhat
+            // a pluginban, mielőtt a server-side revert megérkezik egy második
+            // Realtime eseményen. Normál Appwrite kézbesítési sorrend mellett a
+            // $updatedAt staleness guard biztosítja, hogy a revert felülírja a
+            // kezdeti aktivációt (a revert $updatedAt-ja frissebb). Halott
+            // socket / reconnect / failover alatt viszont egy elveszett revert
+            // esemény átmenetileg stale aktivált állapotot hagyhat — ez csak a
+            // következő Realtime update vagy fetch konvergálás után oldódik.
+            // A cikkek szerkesztése addig is blokkolva van, mert a scope query-k
+            // (workflow, validations) nem találnak semmit a még nem létező DB állapothoz.
+            if (event.includes(COLLECTIONS.PUBLICATIONS)) {
+                if (isOutOfScope(event, payload)) return;
+
+                // Ha a deaktivált (vagy törölt) publikáció éppen az aktív,
+                // töröljük az aktív állapotot is — különben stale cikkek /
+                // határidők / layoutok maradnának a UI-ban. Ez szimmetrikus
+                // a .delete és az office-váltás kezelésével.
+                const deactivation = event.includes(".update") && !payload.isActivated;
+                const deletion = event.includes(".delete");
+                if ((deactivation || deletion) && activePublicationIdRef.current === payload.$id) {
+                    setActivePublicationId(null);
+                    setArticles([]);
+                    setLayouts([]);
+                    setDeadlines([]);
+                    setValidations([]);
+                }
+
+                // A coverage-változás detektálása a setPublications ELŐTT, a prev state-ből,
+                // hogy Strict Mode-ban is idempotens legyen (a setter callback kétszer fut).
+                // Csak akkor érdekes az overlap validációnak, ha az érintett publikáció
+                // éppen az aktív (azaz cikkei betöltve vannak).
+                const shouldCheckCoverage = event.includes(".update")
+                    && payload.isActivated
+                    && payload.$id === activePublicationIdRef.current;
+                if (shouldCheckCoverage) {
+                    const existing = latestPublicationsRef.current.find(pub => pub.$id === payload.$id);
+                    const isStale = existing?.$updatedAt && payload.$updatedAt && existing.$updatedAt > payload.$updatedAt;
+                    if (existing && !isStale) {
+                        const coverageDidChange = existing.coverageStart !== payload.coverageStart
+                            || existing.coverageEnd !== payload.coverageEnd;
+                        if (coverageDidChange) {
+                            dispatchMaestroEvent(MaestroEvent.publicationCoverageChanged, { publication: payload });
+                        }
+                    }
+                }
+
                 setPublications(prev => {
                     if (event.includes(".update")) {
+                        const existing = prev.find(pub => pub.$id === payload.$id);
+                        if (!payload.isActivated) {
+                            // Nem aktivált: eltávolítjuk (ha eddig ott volt)
+                            return existing ? prev.filter(pub => pub.$id !== payload.$id) : prev;
+                        }
+                        if (!existing) {
+                            // Új aktivált publikáció (pl. first-time activation): hozzáadás
+                            return [...prev, payload].sort(compareByName);
+                        }
+                        // $updatedAt staleness guard — ha a helyi adat frissebb, skip
+                        const isStale = existing.$updatedAt && payload.$updatedAt && existing.$updatedAt > payload.$updatedAt;
                         return prev.map(publication => {
                             if (publication.$id !== payload.$id) return publication;
-                            // $updatedAt staleness guard
-                            if (publication.$updatedAt && payload.$updatedAt && publication.$updatedAt > payload.$updatedAt) {
-                                return publication;
-                            }
+                            if (isStale) return publication;
                             return payload;
                         }).sort(compareByName);
                     } else if (event.includes(".create")) {
+                        if (!payload.isActivated) return prev;
                         if (prev.some(publication => publication.$id === payload.$id)) return prev;
                         return [...prev, payload].sort(compareByName);
                     } else if (event.includes(".delete")) {
@@ -936,7 +963,8 @@ export const DataProvider = ({ children }) => {
             }
 
             // --- Cikkek ---
-            else if (event.includes(ARTICLES_COLLECTION_ID)) {
+            else if (event.includes(COLLECTIONS.ARTICLES)) {
+                if (isOutOfScope(event, payload)) return;
                 const currentActivePublicationId = activePublicationIdRef.current;
 
                 if (currentActivePublicationId) {
@@ -967,7 +995,8 @@ export const DataProvider = ({ children }) => {
             }
 
             // --- Validációk ---
-            else if (event.includes(USER_VALIDATIONS_COLLECTION_ID)) {
+            else if (event.includes(COLLECTIONS.USER_VALIDATIONS)) {
+                if (isOutOfScope(event, payload)) return;
                 const currentArticles = latestArticlesRef.current;
                 const isRelevant = currentArticles.some(article => article.$id === payload.articleId);
 
@@ -996,8 +1025,10 @@ export const DataProvider = ({ children }) => {
             }
 
             // --- Layoutok ---
-            else if (event.includes(LAYOUTS_COLLECTION_ID)) {
+            else if (event.includes(COLLECTIONS.LAYOUTS)) {
+                if (isOutOfScope(event, payload)) return;
                 const currentActivePublicationId = activePublicationIdRef.current;
+
                 if (payload.publicationId === currentActivePublicationId) {
                     setLayouts(prev => {
                         if (event.includes(".update")) {
@@ -1016,12 +1047,18 @@ export const DataProvider = ({ children }) => {
                         }
                         return prev;
                     });
+
+                    // Az useOverlapValidation hook a layoutChanged eseményre hallgat —
+                    // a Dashboard-oldali layout CRUD így triggereli az overlap újraszámítást.
+                    dispatchMaestroEvent(MaestroEvent.layoutChanged, { publicationId: payload.publicationId });
                 }
             }
 
             // --- Határidők ---
-            else if (event.includes(DEADLINES_COLLECTION_ID)) {
+            else if (event.includes(COLLECTIONS.DEADLINES)) {
+                if (isOutOfScope(event, payload)) return;
                 const currentActivePublicationId = activePublicationIdRef.current;
+
                 if (payload.publicationId === currentActivePublicationId) {
                     setDeadlines(prev => {
                         if (event.includes(".update")) {
@@ -1043,12 +1080,62 @@ export const DataProvider = ({ children }) => {
                 }
             }
 
-            // --- Csapattagság ---
-            // A `teams` csatornáról jövő membership események (pl. teams.designers.memberships.*.create)
-            else if (event.includes('teams.') && event.includes('.memberships.')) {
-                const teamId = payload.teamId;
-                log(`[DataContext] Csapattagság változás (Realtime): team=${teamId}`);
-                dispatchMaestroEvent(MaestroEvent.teamMembershipChanged, { teamId });
+            // --- Csoporttagság ---
+            // A groupMemberships collection-ről jövő események — csak az aktív szerkesztőség
+            else if (event.includes(COLLECTIONS.GROUP_MEMBERSHIPS)) {
+                if (payload.editorialOfficeId && payload.editorialOfficeId !== activeEditorialOfficeIdRef.current) {
+                    return; // Más szerkesztőség eseménye — ignoráljuk
+                }
+                const groupId = payload.groupId;
+                log(`[DataContext] Csoporttagság változás (Realtime): groupId=${groupId}`);
+                dispatchMaestroEvent(MaestroEvent.groupMembershipChanged, { groupId });
+            }
+
+            // --- Workflow ---
+            // 2-way visibility (#30) alapján szűrünk: a payload látható, ha
+            //  - visibility='editorial_office' ÉS editorialOfficeId === aktív office, VAGY
+            //  - visibility='organization' ÉS organizationId === aktív org.
+            // Legacy payload visibility=null → 'editorial_office' default.
+            // A derived `workflow` memo automatikusan újraszámolódik a publikáció
+            // workflowId-ja alapján, a workflowChanged event dispatch külön useEffect-ben.
+            else if (event.includes(COLLECTIONS.WORKFLOWS)) {
+                const payloadVisibility = payload.visibility || 'editorial_office';
+                const currentOfficeId = activeEditorialOfficeIdRef.current;
+                const currentOrgId = activeOrganizationIdRef.current;
+                const isVisible = (
+                    (payloadVisibility === 'editorial_office' && payload.editorialOfficeId === currentOfficeId)
+                    || (payloadVisibility === 'organization' && payload.organizationId === currentOrgId)
+                );
+                if (!isVisible) {
+                    // Visible → invisible átmenetkor a sort kivesszük a state-ből
+                    // (pl. másik office `organization` → `editorial_office` átminősítés),
+                    // különben ragadna. A `.delete` alul amúgy is $id alapján szűr.
+                    if (event.includes(".update")) {
+                        setWorkflows(prev => prev.filter(w => w.$id !== payload.$id));
+                    }
+                    if (!event.includes(".delete")) {
+                        return;
+                    }
+                }
+                if (event.includes(".create")) {
+                    log(`[DataContext] Workflow doc létrehozva (Realtime): ${payload.$id}`);
+                    setWorkflows(prev => {
+                        if (prev.some(w => w.$id === payload.$id)) return prev;
+                        return [...prev, payload].sort(compareByName);
+                    });
+                } else if (event.includes(".update")) {
+                    log(`[DataContext] Workflow doc frissítve (Realtime): ${payload.$id}`);
+                    setWorkflows(prev => {
+                        const idx = prev.findIndex(w => w.$id === payload.$id);
+                        if (idx === -1) return [...prev, payload].sort(compareByName);
+                        const next = [...prev];
+                        next[idx] = payload;
+                        return next.sort(compareByName);
+                    });
+                } else if (event.includes(".delete")) {
+                    logWarn(`[DataContext] Workflow doc törölve (Realtime): ${payload.$id}`);
+                    setWorkflows(prev => prev.filter(w => w.$id !== payload.$id));
+                }
             }
         });
 
@@ -1085,16 +1172,13 @@ export const DataProvider = ({ children }) => {
         validations,
         layouts,
         deadlines,
+        workflow,
+        workflows,
         isLoading,
         isSwitchingPublication,
         activePublicationId,
         setActivePublicationId: updateActivePublicationId,
         fetchData,
-
-        // Write-Through API — Publikációk
-        createPublication,
-        updatePublication,
-        deletePublication,
 
         // Write-Through API — Cikkek
         createArticle,
@@ -1105,26 +1189,13 @@ export const DataProvider = ({ children }) => {
         // Write-Through API — Validációk
         createValidation,
         updateValidation,
-        deleteValidation,
-
-        // Write-Through API — Layoutok
-        createLayout,
-        updateLayout,
-        deleteLayout,
-
-        // Write-Through API — Határidők
-        createDeadline,
-        updateDeadline,
-        deleteDeadline
+        deleteValidation
     }), [
-        publications, articles, validations, layouts, deadlines,
+        publications, articles, validations, layouts, deadlines, workflow, workflows,
         isLoading, isSwitchingPublication, activePublicationId,
         updateActivePublicationId, fetchData,
-        createPublication, updatePublication, deletePublication,
         createArticle, updateArticle, deleteArticle, applyArticleUpdate,
-        createValidation, updateValidation, deleteValidation,
-        createLayout, updateLayout, deleteLayout,
-        createDeadline, updateDeadline, deleteDeadline
+        createValidation, updateValidation, deleteValidation
     ]);
 
     return (
