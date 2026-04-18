@@ -239,32 +239,171 @@ export function AuthProvider({ children }) {
      */
     const [membershipsError, setMembershipsError] = useState(null);
     const checkedRef = useRef(false);
+    /**
+     * A Realtime filter-hez kell tudnunk, hogy az aktuális user mely
+     * organization / editorialOffice doc-ok érintettje. Set-be tartjuk
+     * és minden sikeres `loadAndSetMemberships` után frissítjük — így a
+     * subscription handler O(1)-ben tud dönteni anélkül, hogy a state
+     * tömböket dependency-ként a useEffect-be húzná (ami minden tagság-
+     * változásra újra-subscribe-olna).
+     */
+    const organizationIdsRef = useRef(new Set());
+    const editorialOfficeIdsRef = useRef(new Set());
+    /**
+     * Monoton reload token. Minden `loadAndSetMemberships` hívás kap egy
+     * sorozatszámot, és csak akkor írhat state-et, ha a sajátja a legfrissebb.
+     * Így egy ko-rábban induló, de később befejeződő reload (pl. lassú
+     * hálózat) nem ülteti vissza a régi snapshot-ot egy frissebb fölé —
+     * Codex adversarial review [medium] guard.
+     */
+    const reloadTokenRef = useRef(0);
 
     /**
      * Memberships betöltése + state frissítése egyetlen helyen.
      * - Sikeres fetch → state set + membershipsError null.
-     * - Hiba → state üres marad, membershipsError beállítva, hibát újradobja.
+     * - Hiba (default) → state üres, membershipsError beállítva, hibát dob.
+     * - Hiba (silent: true) → state érintetlen, csak warn — a Realtime
+     *   rename/update path használja, hogy egy tranziens reload hiba ne
+     *   tüntesse el a user már érvényes scope-jait.
      *
-     * A hívók eldönthetik, hogy a hibát propagálják-e (login/register flow)
-     * vagy csak a state-re hagyatkoznak (mount effect / ProtectedRoute).
+     * Out-of-order guard: minden hívás kap egy `reloadTokenRef`-ből
+     * növekvő tokent, és csak akkor ír state-et (sikeresen vagy üres
+     * fail-closed-ben), ha még az utolsóként kiadott token. Egy régebbi
+     * in-flight reload eredménye eldobódik. A hiba propagálódik a hívóhoz
+     * (login/register flow), de UI állapotot nem ír felül.
      */
-    const loadAndSetMemberships = useCallback(async (userId) => {
+    const loadAndSetMemberships = useCallback(async (userId, { silent = false } = {}) => {
+        const token = ++reloadTokenRef.current;
         try {
             const memberships = await fetchMemberships(userId);
+            if (token !== reloadTokenRef.current) return memberships;
             setOrganizations(memberships.organizations);
             setEditorialOffices(memberships.editorialOffices);
             setOrgMemberships(memberships.orgMemberships);
             setMembershipsError(null);
+            organizationIdsRef.current = new Set(memberships.organizations.map(o => o.$id));
+            editorialOfficeIdsRef.current = new Set(memberships.editorialOffices.map(o => o.$id));
             return memberships;
         } catch (err) {
+            if (token !== reloadTokenRef.current) throw err;
             console.warn('[AuthContext] fetchMemberships sikertelen:', err?.message);
-            setOrganizations([]);
-            setEditorialOffices([]);
-            setOrgMemberships([]);
-            setMembershipsError(err instanceof Error ? err : new Error(err?.message || 'memberships_load_failed'));
+            if (!silent) {
+                setOrganizations([]);
+                setEditorialOffices([]);
+                setOrgMemberships([]);
+                setMembershipsError(err instanceof Error ? err : new Error(err?.message || 'memberships_load_failed'));
+                organizationIdsRef.current = new Set();
+                editorialOfficeIdsRef.current = new Set();
+            }
             throw err;
         }
     }, []);
+
+    /**
+     * Realtime sync a tenant collection-ökre (organizations, editorialOffices,
+     * organizationMemberships, editorialOfficeMemberships). A handler a
+     * payload alapján szűr: csak a saját scope-ot érintő event-re reagál,
+     * majd debounce-olva (silent) újratölti a memberships-et — két tab /
+     * két user között szinkronban tartva pl. office rename-et.
+     *
+     * Filter szabályok (Codex review fix):
+     * - `*Memberships` event → csak ha `payload.userId === user.$id`.
+     *   Idegen tagság-változás nem érdekel.
+     * - `organizations` / `editorialOffices` update/delete → csak ha a doc
+     *   `$id` benne van a saját scope ref-ekben (`organizationIdsRef`,
+     *   `editorialOfficeIdsRef`). Idegen tenant módosítása nem trigger-el
+     *   felesleges Appwrite read-et.
+     * - `organizations` / `editorialOffices` create → skip. Ha az új rekord
+     *   a saját user-é, a kapcsolódó membership create külön event-tel jön,
+     *   és a reload után a doc úgyis bekerül a state-be.
+     *
+     * Silent vs fail-closed (Codex adversarial review [high] fix):
+     * - Update/rename event-ek (pl. office névmódosítás) → `silent: true`.
+     *   Tranziens reload-hiba NEM tünteti el a már érvényes scope-ot.
+     * - DELETE event a saját tagságra (membership.delete a saját userId-vel,
+     *   vagy org/office.delete a saját scope-on belül) → `silent: false`.
+     *   Ezek hozzáférés-vesztést jelölnek; ha a reload elszáll, fail-closed:
+     *   ürítjük a state-et és `membershipsError`-t állítunk, így a
+     *   ProtectedRoute blokkol/újrapróbál — nem fogad el cached scope-ot.
+     *
+     * Debounce: tipikusan 4-12 event érkezik egy cascade műveletnél
+     * (pl. szervezet törlése × N office × M membership). 300ms ablak
+     * egy fetch-be összevonja a saját scope-ot érintő burst-öt; ha a
+     * burst-ben van akár egyetlen destructive event is, az egész reload
+     * fail-closed lesz (sticky `pendingDestructive` flag).
+     *
+     * Csak akkor fut, ha van bejelentkezett user — logout-nál a
+     * subscription automatikusan lebomlik.
+     */
+    useEffect(() => {
+        if (!user?.$id) return;
+        const userId = user.$id;
+
+        const channelOf = (col) => `databases.${DATABASE_ID}.collections.${col}.documents`;
+        const channels = [
+            channelOf(COLLECTIONS.ORGANIZATIONS),
+            channelOf(COLLECTIONS.EDITORIAL_OFFICES),
+            channelOf(COLLECTIONS.ORGANIZATION_MEMBERSHIPS),
+            channelOf(COLLECTIONS.EDITORIAL_OFFICE_MEMBERSHIPS)
+        ];
+
+        const classify = (response) => {
+            const payload = response.payload;
+            const eventChannels = response.channels || [];
+            const events = response.events || [];
+            const isCreate = events.some(e => e.includes('.create'));
+            const isDelete = events.some(e => e.includes('.delete'));
+
+            const inMembershipChannel = eventChannels.some(ch =>
+                ch.includes(COLLECTIONS.ORGANIZATION_MEMBERSHIPS) ||
+                ch.includes(COLLECTIONS.EDITORIAL_OFFICE_MEMBERSHIPS)
+            );
+            if (inMembershipChannel) {
+                if (payload?.userId !== userId) return { relevant: false, destructive: false };
+                return { relevant: true, destructive: isDelete };
+            }
+
+            if (isCreate) return { relevant: false, destructive: false };
+
+            if (eventChannels.some(ch => ch.includes(COLLECTIONS.ORGANIZATIONS))) {
+                if (!organizationIdsRef.current.has(payload?.$id)) {
+                    return { relevant: false, destructive: false };
+                }
+                return { relevant: true, destructive: isDelete };
+            }
+            if (eventChannels.some(ch => ch.includes(COLLECTIONS.EDITORIAL_OFFICES))) {
+                if (!editorialOfficeIdsRef.current.has(payload?.$id)) {
+                    return { relevant: false, destructive: false };
+                }
+                return { relevant: true, destructive: isDelete };
+            }
+            return { relevant: false, destructive: false };
+        };
+
+        let timer = null;
+        let pendingDestructive = false;
+        const scheduleReload = (response) => {
+            const { relevant, destructive } = classify(response);
+            if (!relevant) return;
+            if (destructive) pendingDestructive = true;
+            if (timer) clearTimeout(timer);
+            timer = setTimeout(() => {
+                timer = null;
+                const silent = !pendingDestructive;
+                pendingDestructive = false;
+                loadAndSetMemberships(userId, { silent }).catch(err =>
+                    console.warn('[AuthContext] Realtime memberships reload sikertelen:', err?.message)
+                );
+            }, 300);
+        };
+
+        const unsubscribe = client.subscribe(channels, scheduleReload);
+
+        return () => {
+            if (timer) clearTimeout(timer);
+            try { unsubscribe(); } catch { /* nem baj */ }
+        };
+    }, [user?.$id, loadAndSetMemberships]);
 
     // Session ellenőrzés mount-kor
     useEffect(() => {
