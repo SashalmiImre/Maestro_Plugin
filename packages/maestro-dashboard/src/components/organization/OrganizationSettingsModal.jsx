@@ -14,10 +14,11 @@
  * Az aktív fül localStorage-ben perzisztált (`maestro.orgSettingsActiveTab`).
  */
 
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Databases, Query } from 'appwrite';
 import { getClient, useAuth } from '../../contexts/AuthContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
+import { useTenantRealtimeRefresh } from '../../hooks/useTenantRealtimeRefresh.js';
 import Tabs from '../Tabs.jsx';
 import AnimatedAutoHeight from '../AnimatedAutoHeight.jsx';
 import GeneralTab from './GeneralTab.jsx';
@@ -62,6 +63,10 @@ export default function OrganizationSettingsModal({ organizationId, initialTab }
     const [isLoading, setIsLoading] = useState(true);
     const [loadError, setLoadError] = useState('');
 
+    // Verseny-védelem: a scope-szűrt Realtime refresh + az explicit reloadInvites
+    // egyidejűleg is futhat; csak a legutolsó invocation commit-olja a state-et.
+    const loadGenRef = useRef(0);
+
     const client = getClient();
     const databases = useMemo(() => new Databases(client), [client]);
 
@@ -78,15 +83,12 @@ export default function OrganizationSettingsModal({ organizationId, initialTab }
             return;
         }
 
-        setIsLoading(true);
         setLoadError('');
-        setMembers([]);
-        setPendingInvites([]);
-        setOffices([]);
-        setUserNameMap(new Map());
-        setCallerRole(null);
-        setPublicationsCount(0);
-        setArticlesCount(0);
+        const gen = ++loadGenRef.current;
+        // Csak az első (mount) betöltésnél jelzünk loading-ot — a Realtime
+        // reload közben a régi adatot tartjuk, nincs „Betöltés…" flash.
+        // A state-törléseket is elhagyjuk: stale commit esetén a gen-őr szűr.
+        if (gen === 1) setIsLoading(true);
 
         try {
             const [
@@ -149,6 +151,8 @@ export default function OrganizationSettingsModal({ organizationId, initialTab }
                 })
             ]);
 
+            if (gen !== loadGenRef.current) return;
+
             setMembers(membersResult.documents);
             setPendingInvites(invitesResult.documents);
             setOffices(officesResult.documents.sort(
@@ -171,16 +175,26 @@ export default function OrganizationSettingsModal({ organizationId, initialTab }
             }
             setUserNameMap(nameMap);
         } catch (err) {
+            if (gen !== loadGenRef.current) return;
             console.error('[OrganizationSettingsModal] Adatok betöltése sikertelen:', err);
             setLoadError('Hiba az adatok betöltésekor.');
         } finally {
-            setIsLoading(false);
+            if (gen === loadGenRef.current) setIsLoading(false);
         }
     }, [organizationId, user?.$id, databases]);
 
     useEffect(() => {
         loadData();
     }, [loadData]);
+
+    // Scope-szűrt Realtime refresh: csak az ehhez az `organizationId`-hez tartozó
+    // groups / groupMemberships / organizationInvites event-ek triggerelik a
+    // reload-ot (300 ms debounce a hook-ban).
+    useTenantRealtimeRefresh({
+        scopeField: 'organizationId',
+        scopeId: organizationId,
+        reload: loadData
+    });
 
     /** Csak a pending invite listát frissítjük (UsersTab-ból új meghívó után). */
     const reloadInvites = useCallback(async () => {

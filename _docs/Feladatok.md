@@ -84,6 +84,16 @@ tags: [feladatok]
 - [x] 58. **Új kiadvány modal disabled CTA hint**: disabled „Létrehozás" mellé inline help: „Add meg a nevet és válassz workflow-t."
 - [x] 59. **Workflow állapot törlése confirm dialog**: copy: „Biztosan törlöd a(z) „{állapot neve}" állapotot? A cikkek, amelyek ebben az állapotban vannak, a kezdőállapotra kerülnek."
 
+#### H. Biztonság / ACL (Fázis 2 follow-up)
+
+> Forrás: Codex adversarial review (2026-04-18) — a dashboard tenant Realtime Fázis 2 diff-jére. Frontend-oldalon az `useTenantRealtimeRefresh` már scope-szűr (UX redundáns reload elkerülése), de a szerveroldali ACL továbbra is minden authenticated kliensnek push-olja a raw WS payload-ot → cross-tenant payload leakage.
+
+- [ ] 60. **Tenant scope ACL redesign — `groups` / `groupMemberships` / `organizationInvites`**. A 3 collection jelenleg `read("users")` ACL-lel (`rowSecurity: false` vagy equivalent) olvasható, így az Appwrite Realtime minden bejelentkezett usernek kézbesíti a payload-ot függetlenül a tenant-hovatartozástól. A raw WS üzenet így más szervezetek csoport-neveit, tag email-címeit és függő meghívóit is kiszivárogtatja minden klienshez — a frontend scope-szűrés csak a UI-reload zajt oldja meg, a confidentiality-t nem.
+    - Szerver: per-dokumentum ACL (pl. `read("team:${organizationId}")` vagy explicit `read("user:${userId}")` tag-ek a tagokra) + `rowSecurity: true`. Érintett CF write path-ok, amelyek ACL tag-et kell állítsanak dokumentum create/update-en: `bootstrap_organization`, `create_group` / `rename_group` / `delete_group`, `add_group_member` / `remove_group_member`, `invite-to-organization` (minden meghívó életciklus).
+    - Adat-migráció: meglévő `groups` / `groupMemberships` / `organizationInvites` dokumentumok backfill-je a korrekt ACL tag-ekkel (one-shot CF action, idempotens).
+    - Teszt: két külön szervezetbe belépett két user két különálló böngészőben — egyik tenantban végzett mutation (pl. új csoport, meghívó kiküldés, tag hozzáadás) ne generáljon WS payload-ot a másik tenant kliensén (Appwrite Realtime inspector / `client.subscribe` log).
+    - **Megjegyzés**: amíg ez nincs meg, Fázis 2 adminisztratív adatok (csoport struktúra, meghívó email-ek) gyakorlatilag nyilvánosak minden authenticated felhasználó számára — **mielőbbi fix javasolt**.
+
 ### Manuális smoke test checklist
 
 > Valós InDesign környezetben végigkattintani — a kód review nem helyettesíti.

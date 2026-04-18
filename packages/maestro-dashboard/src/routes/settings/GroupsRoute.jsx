@@ -10,12 +10,12 @@
  * Fázis 2 / B.13
  */
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import { Databases, Functions, Query } from 'appwrite';
-import { getClient } from '../../contexts/AuthContext.jsx';
-import { useAuth } from '../../contexts/AuthContext.jsx';
+import { getClient, useAuth } from '../../contexts/AuthContext.jsx';
 import { useScope } from '../../contexts/ScopeContext.jsx';
+import { useTenantRealtimeRefresh } from '../../hooks/useTenantRealtimeRefresh.js';
 import { DATABASE_ID, COLLECTIONS, FUNCTIONS } from '../../config.js';
 
 export default function GroupsRoute() {
@@ -27,6 +27,11 @@ export default function GroupsRoute() {
     const [isLoading, setIsLoading] = useState(true);
     const [actionError, setActionError] = useState('');
     const [actionPending, setActionPending] = useState(null); // 'add:groupId:userId' vagy 'remove:membershipId'
+
+    // Verseny-védelem: egyidejű loadData() hívásoknál (pl. explicit mutation-utáni
+    // reload + scope-szűrt Realtime refresh) csak a legutolsó invocation commit-olja
+    // a state-et, így régebbi válasz nem írja felül a frissebbet.
+    const loadGenRef = useRef(0);
 
     const client = getClient();
     const databases = new Databases(client);
@@ -43,7 +48,11 @@ export default function GroupsRoute() {
             return;
         }
 
-        setIsLoading(true);
+        const gen = ++loadGenRef.current;
+        // Csak az első (mount) betöltésnél jelzünk loading-ot — a Realtime
+        // reload közben a régi adatot tartjuk, nincs villogás.
+        if (gen === 1) setIsLoading(true);
+
         try {
             const [groupsResult, membershipsResult, officeMembersResult] = await Promise.all([
                 databases.listDocuments({
@@ -72,20 +81,32 @@ export default function GroupsRoute() {
                 })
             ]);
 
+            if (gen !== loadGenRef.current) return;
+
             setGroups(groupsResult.documents);
             setMemberships(membershipsResult.documents);
             setEligibleUsers(officeMembersResult.documents);
         } catch (err) {
+            if (gen !== loadGenRef.current) return;
             console.error('[GroupsRoute] Adatok betöltése sikertelen:', err);
             setActionError('Hiba az adatok betöltésekor.');
         } finally {
-            setIsLoading(false);
+            if (gen === loadGenRef.current) setIsLoading(false);
         }
     }, [activeEditorialOfficeId]);
 
     useEffect(() => {
         loadData();
     }, [loadData]);
+
+    // Scope-szűrt Realtime refresh — a hook fogyasztó-szinten szűri a payload-ot
+    // `editorialOfficeId`-re, így más office / tenant event-je nem triggereli a
+    // reload-ot. A 300 ms debounce-t a hook kezeli.
+    useTenantRealtimeRefresh({
+        scopeField: 'editorialOfficeId',
+        scopeId: activeEditorialOfficeId,
+        reload: loadData
+    });
 
     // --- CF hívás helper ---
 

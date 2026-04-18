@@ -10,6 +10,7 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { Databases, Query } from 'appwrite';
 import { getClient, useAuth } from '../../contexts/AuthContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
+import { useTenantRealtimeRefresh } from '../../hooks/useTenantRealtimeRefresh.js';
 import Tabs from '../Tabs.jsx';
 import AnimatedAutoHeight from '../AnimatedAutoHeight.jsx';
 import EditorialOfficeGeneralTab from './EditorialOfficeGeneralTab.jsx';
@@ -90,10 +91,11 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
             return;
         }
 
-        setIsLoading(true);
         setLoadError('');
-
         const gen = ++loadGenRef.current;
+        // Csak az első (mount) betöltésnél jelzünk loading-ot — a Realtime
+        // reload közben a régi adatot tartjuk, nincs villogás.
+        if (gen === 1) setIsLoading(true);
 
         try {
             // Workflows query: csak saját office workflow-i (visibility-től
@@ -155,6 +157,15 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
     useEffect(() => {
         loadData();
     }, [loadData]);
+
+    // Scope-szűrt Realtime refresh: csak a saját `editorialOfficeId` eventjei
+    // triggerelik a reload-ot (300 ms debounce a hook-ban). Más office / tenant
+    // event-je nem kelti fel a modal-t, így nincs keresztül-tenant zaj.
+    useTenantRealtimeRefresh({
+        scopeField: 'editorialOfficeId',
+        scopeId: editorialOfficeId,
+        reload: loadData
+    });
 
     // --- Render ---
 
