@@ -1530,7 +1530,7 @@ module.exports = async function ({ req, res, log, error }) {
                             editorialOfficeId,
                             name: sanitizedName,
                             slug: candidateSlug,
-                            isDefault: false
+                            createdByUserId: callerId
                         }
                     );
                     break;
