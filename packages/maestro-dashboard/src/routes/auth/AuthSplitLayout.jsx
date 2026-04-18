@@ -5,7 +5,7 @@
  * A child route komponens (Outlet) tartalmazza a kártyát.
  *
  * A meglévő `.login-container` / `.login-brand` / `.login-card` CSS class-okat
- * használja a `packages/maestro-dashboard/css/styles.css`-ben.
+ * használja a `packages/maestro-dashboard/css/layouts/auth.css`-ben.
  */
 
 import React from 'react';

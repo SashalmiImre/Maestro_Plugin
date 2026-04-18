@@ -15,6 +15,7 @@ import { useAuth } from '../contexts/AuthContext.jsx';
 import { useScope } from '../contexts/ScopeContext.jsx';
 import { useData } from '../contexts/DataContext.jsx';
 import { useModal } from '../contexts/ModalContext.jsx';
+import { useTheme } from '../hooks/useTheme.js';
 import BreadcrumbDropdown from './BreadcrumbDropdown.jsx';
 import UserAvatar from './UserAvatar.jsx';
 import PublicationSettingsModal from './publications/PublicationSettingsModal.jsx';
@@ -38,6 +39,7 @@ export default function BreadcrumbHeader({
     const { activeOrganizationId, activeEditorialOfficeId, setActiveOrganization, setActiveOffice } = useScope();
     const { publications, activePublicationId } = useData();
     const { openModal } = useModal();
+    const { theme, toggleTheme } = useTheme();
     const navigate = useNavigate();
     const location = useLocation();
 
@@ -80,8 +82,12 @@ export default function BreadcrumbHeader({
     // User avatar menü
     const userMenuItems = useMemo(() => [
         { label: 'Jelszó módosítása', onClick: () => navigate('/settings/password') },
+        {
+            label: theme === 'light' ? 'Sötét téma' : 'Világos téma',
+            onClick: toggleTheme
+        },
         { label: 'Kijelentkezés', onClick: logout, danger: true }
-    ], [navigate, logout]);
+    ], [navigate, logout, theme, toggleTheme]);
 
     // Szervezet váltás — az office is resetelődik a ScopeContext auto-pick-kel
     function handleOrgSelect(orgId) {
@@ -142,6 +148,7 @@ export default function BreadcrumbHeader({
                     items={orgItems}
                     onSelect={handleOrgSelect}
                     onSettings={isActiveOrgInScope ? handleOrganizationSettings : undefined}
+                    moreItemsLabel="További szervezetek"
                 />
 
                 <span className="breadcrumb-separator" aria-hidden="true">/</span>
@@ -152,6 +159,7 @@ export default function BreadcrumbHeader({
                     items={officeItems}
                     onSelect={handleOfficeSelect}
                     onSettings={isActiveOfficeInScope ? handleEditorialOfficeSettings : undefined}
+                    moreItemsLabel="További szerkesztőségek"
                 />
 
                 <span className="breadcrumb-separator" aria-hidden="true">/</span>
@@ -162,6 +170,7 @@ export default function BreadcrumbHeader({
                     items={pubItems}
                     onSelect={onPublicationSelect}
                     onSettings={isActivePubInScope ? handlePublicationSettings : undefined}
+                    moreItemsLabel="További kiadványok"
                     disabled={pubItems.length === 0 && !isActivePubInScope}
                     disabledTitle="Először hozz létre egy kiadványt a Szerkesztőség beállításokban"
                 />

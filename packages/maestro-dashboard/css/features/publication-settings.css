@@ -1,0 +1,170 @@
+/* ─── Publikáció aktiválás szekció ──────────────────────────────────────── */
+
+.publication-activation {
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+}
+
+.publication-activation .activation-errors {
+    list-style: disc;
+    padding-left: 20px;
+    margin: 4px 0 12px 0;
+}
+
+.publication-activation .activation-errors li {
+    line-height: 1.6;
+}
+
+.publication-activation .activation-button {
+    margin-top: 4px;
+}
+
+.activation-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    border-radius: var(--radius-lg);
+}
+
+.activation-status-active {
+    background: rgb(from var(--c-success) r g b / 0.12);
+    border: 1px solid rgb(from var(--c-success) r g b / 0.35);
+}
+
+.activation-badge {
+    font-weight: 600;
+    color: var(--c-success);
+    font-size: 13px;
+}
+
+.activation-date {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+/* ─── Publication settings modal: tab content konténer ─────────────────── */
+
+.publication-settings-modal {
+    display: flex;
+    flex-direction: column;
+}
+
+.publication-tab-content {
+    min-height: 280px;
+}
+
+/* ─── Layout sor (LayoutsTab) ──────────────────────────────────────────── */
+
+.layout-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+}
+
+.layout-name-input {
+    flex: 1;
+    padding: 8px 12px;
+    background: var(--bg-base);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.layout-name-input:focus {
+    border-color: rgb(from var(--accent) r g b / 0.5);
+    box-shadow: 0 0 0 3px rgb(from var(--accent) r g b / 0.10);
+}
+
+/* ─── Határidő sor (DeadlinesTab) ──────────────────────────────────────── */
+
+.deadline-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.deadline-page-input {
+    width: 64px;
+    padding: 8px 10px;
+    background: var(--bg-base);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    text-align: center;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.deadline-separator {
+    color: var(--text-muted);
+    font-size: 13px;
+}
+
+.deadline-date-input {
+    flex: 1;
+    padding: 8px 12px;
+    background: var(--bg-base);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.deadline-time-input {
+    width: 80px;
+    padding: 8px 10px;
+    background: var(--bg-base);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    text-align: center;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.deadline-page-input:focus,
+.deadline-date-input:focus,
+.deadline-time-input:focus {
+    border-color: rgb(from var(--accent) r g b / 0.5);
+    box-shadow: 0 0 0 3px rgb(from var(--accent) r g b / 0.10);
+}
+
+/* Validációs kártyák (DeadlinesTab alján) */
+
+.validation-cards {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 12px;
+}
+
+.validation-card {
+    padding: 8px 12px;
+    border-radius: var(--radius-md);
+    font-size: 12px;
+    color: #fff;
+}
+
+.validation-card-error {
+    background: var(--c-error-solid);
+}
+
+.validation-card-warning {
+    background: var(--c-warning-solid);
+}
+

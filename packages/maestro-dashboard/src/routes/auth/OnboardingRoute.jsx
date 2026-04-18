@@ -15,7 +15,7 @@
  * B.5 review javítások (2026-04-07):
  * - Form konvenció: a többi auth route-hoz igazodva `form-group` + `login-error`
  *   class-okat használjuk (az előző `auth-form` / `form-label` / `auth-error`
- *   class-ok nem léteztek a styles.css-ben → a form unstyled volt).
+ *   class-ok nem léteztek a CSS-ben → a form unstyled volt).
  * - Slug mezők HTML5 `pattern` attribútuma pontosan a szerver-oldali
  *   `SLUG_REGEX`-hez igazítva, hogy a kliens validáció ne legyen lazább.
  * - `errorMessage()` kibővítve az összes CF hibakóddal.

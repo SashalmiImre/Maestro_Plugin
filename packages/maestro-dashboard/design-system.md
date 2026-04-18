@@ -5,7 +5,9 @@
 
 ## Token forrás
 
-A runtime értékek a [css/styles.css](css/styles.css) `:root` blokkjában élnek. Ez a dokumentum ember-olvasható tükrözés; a kódváltás mindig ott történik.
+A runtime értékek a [css/tokens.css](css/tokens.css) `:root` blokkjában élnek. Ez a dokumentum ember-olvasható tükrözés; a kódváltás mindig ott történik.
+
+> **Szerkezet**: a stílusok modulosak, az [css/index.css](css/index.css) az entry — `tokens → base → layouts → components → features` sorrendben tölti be a fájlokat. Új komponens hozzáadása: új `components/<név>.css` + egy `@import` sor az `index.css`-ben.
 
 ## Paletta
 
@@ -93,7 +95,7 @@ A runtime értékek a [css/styles.css](css/styles.css) `:root` blokkjában élne
 | `--space-7` | 48px |
 | `--space-8` | 64px |
 
-**Sweep állapota (#48)**: a `border-radius`, `gap`, és single-value `padding` property-ket már `var(--space-*)` / `var(--radius-*)` tokenekre cseréltük a `styles.css`-ben. A shorthand értékek (pl. `padding: 8px 16px`) és a component-szintű `padding-left/right` property-k inkrementálisan tokenizálandók, amikor az érintett komponens módosul.
+**Sweep állapota (#48)**: a `border-radius`, `gap`, és single-value `padding` property-ket már `var(--space-*)` / `var(--radius-*)` tokenekre cseréltük a CSS modulokban. A shorthand értékek (pl. `padding: 8px 16px`) és a component-szintű `padding-left/right` property-k inkrementálisan tokenizálandók, amikor az érintett komponens módosul.
 
 ## Radius (kódban)
 
@@ -120,7 +122,7 @@ Minden interaktív elem:
 Háttér `--accent-solid`, szöveg fehér, padding `--space-3 --space-5`, radius `--radius-md`. Disabled: `--text-disabled` háttér, `--text-muted` szöveg.
 
 ### Danger Action (`.danger-action`)
-Subtle piros variáns egységes destruktív akciókhoz. CSS minta (styles.css):
+Subtle piros variáns egységes destruktív akciókhoz. CSS minta ([css/components/danger.css](css/components/danger.css)):
 - Háttér `rgba(255, 180, 171, 0.10)` (`--c-error` 10%)
 - Keret `1px solid rgba(255, 180, 171, 0.30)`
 - Szín `var(--c-error)` (`#ffb4ab`)
@@ -168,7 +170,7 @@ Subtle piros variáns egységes destruktív akciókhoz. CSS minta (styles.css):
 
 1. **Olvasás**: bármely Claude felületen (claude.ai, Claude Code, desktop) — ez a fájl `git pull` után naprakész.
 2. **Módosítás**: a markdown-t szerkeszteni lehet beszélgetés közben; commitálás után a többi felület is látja.
-3. **Kód-apply**: a markdown módosítás után `/design-handoff` skill → SCSS változások generálása + `styles.css` patch.
-4. **Kód → markdown visszasync**: ha valaki közvetlenül `styles.css`-t edit, a tokeneket a `:root` blokk a forrás; a markdown-t manuálisan kell frissíteni (vagy egy script-tel, ami a `:root`-ot lexeli).
+3. **Kód-apply**: a markdown módosítás után `/design-handoff` skill → CSS változások generálása + a megfelelő modul (`tokens.css` / `components/*.css`) patch-elése.
+4. **Kód → markdown visszasync**: ha valaki közvetlenül a CSS modulokat editeli, a tokeneket a `tokens.css` `:root` blokk a forrás; a markdown-t manuálisan kell frissíteni (vagy egy script-tel, ami a `:root`-ot lexeli).
 
 Nincs "live bi-directional sync" — a git a szinkronizáló mechanizmus.

@@ -23,7 +23,7 @@
     justify-content: space-between;
     padding: 10px 16px;
     background: var(--bg-elevated, #282a30);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    border-bottom: 1px solid rgb(from var(--text-primary) r g b / 0.06);
     flex-shrink: 0;
 }
 
@@ -43,7 +43,7 @@
 }
 
 .workflow-designer-toolbar__back:hover {
-    background: rgba(255, 255, 255, 0.06);
+    background: rgb(from var(--text-primary) r g b / 0.06);
     color: var(--text-primary, #e8e8e8);
 }
 
@@ -67,13 +67,13 @@
 }
 
 .workflow-designer-toolbar__name:hover {
-    border-color: rgba(255, 255, 255, 0.1);
+    border-color: rgb(from var(--text-primary) r g b / 0.1);
 }
 
 .workflow-designer-toolbar__name:focus {
     outline: none;
-    border-color: rgba(59, 130, 246, 0.5);
-    background: rgba(255, 255, 255, 0.04);
+    border-color: rgb(from var(--accent-solid) r g b / 0.5);
+    background: rgb(from var(--text-primary) r g b / 0.04);
 }
 
 /* Workflow selector dropdown — a rename input mellett, csak ha >1 workflow van */
@@ -81,27 +81,27 @@
     font-size: 12px;
     padding: 6px 10px;
     border-radius: 6px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    background: rgb(from var(--text-primary) r g b / 0.04);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.1);
     color: var(--text-secondary, #999);
     cursor: pointer;
     transition: border-color 0.15s, color 0.15s;
 }
 
 .workflow-designer-toolbar__selector:hover {
-    border-color: rgba(255, 255, 255, 0.2);
+    border-color: rgb(from var(--text-primary) r g b / 0.2);
     color: var(--text-primary, #e8e8e8);
 }
 
 .workflow-designer-toolbar__selector:focus {
     outline: none;
-    border-color: rgba(59, 130, 246, 0.5);
+    border-color: rgb(from var(--accent-solid) r g b / 0.5);
 }
 
 .workflow-designer-toolbar__version {
     font-size: 12px;
     color: var(--text-secondary, #999);
-    background: rgba(255, 255, 255, 0.06);
+    background: rgb(from var(--text-primary) r g b / 0.06);
     padding: 2px 8px;
     border-radius: 10px;
 }
@@ -114,12 +114,12 @@
 
 .workflow-designer-toolbar__dirty {
     font-size: 12px;
-    color: #fb923c;
+    color: var(--c-warning);
 }
 
 .workflow-designer-toolbar__error {
     font-size: 12px;
-    color: #f87171;
+    color: var(--c-error);
     max-width: 300px;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -132,14 +132,14 @@
     font-weight: 600;
     border: none;
     border-radius: 6px;
-    background: #3b82f6;
+    background: var(--accent-solid);
     color: #fff;
     cursor: pointer;
     transition: background 0.15s, opacity 0.15s;
 }
 
 .workflow-designer-toolbar__save:hover:not(:disabled) {
-    background: #2563eb;
+    background: var(--accent-hover);
 }
 
 .workflow-designer-toolbar__save:disabled {
@@ -151,16 +151,16 @@
     padding: 6px 12px;
     font-size: 12px;
     font-weight: 500;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.1);
     border-radius: 6px;
-    background: rgba(255, 255, 255, 0.04);
+    background: rgb(from var(--text-primary) r g b / 0.04);
     color: var(--text-secondary, #999);
     cursor: pointer;
     transition: background 0.15s, color 0.15s;
 }
 
 .workflow-designer-toolbar__btn-secondary:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: rgb(from var(--text-primary) r g b / 0.08);
     color: var(--text-primary, #e8e8e8);
 }
 
@@ -172,9 +172,9 @@
     justify-content: center;
     gap: 12px;
     padding: 8px 16px;
-    background: rgba(251, 146, 60, 0.15);
-    border-bottom: 1px solid rgba(251, 146, 60, 0.3);
-    color: #fb923c;
+    background: rgb(from var(--c-warning) r g b / 0.15);
+    border-bottom: 1px solid rgb(from var(--c-warning) r g b / 0.3);
+    color: var(--c-warning);
     font-size: 13px;
     flex-shrink: 0;
 }
@@ -183,16 +183,16 @@
     padding: 4px 12px;
     font-size: 12px;
     font-weight: 600;
-    border: 1px solid rgba(251, 146, 60, 0.4);
+    border: 1px solid rgb(from var(--c-warning) r g b / 0.4);
     border-radius: 6px;
-    background: rgba(251, 146, 60, 0.1);
-    color: #fb923c;
+    background: rgb(from var(--c-warning) r g b / 0.1);
+    color: var(--c-warning);
     cursor: pointer;
     transition: background 0.15s;
 }
 
 .workflow-designer-remote-warning__btn:hover {
-    background: rgba(251, 146, 60, 0.25);
+    background: rgb(from var(--c-warning) r g b / 0.25);
 }
 
 /* ─── Snapshot információs banner (#39) ─────────────────────────────────── */
@@ -203,9 +203,9 @@
     justify-content: center;
     gap: 12px;
     padding: 8px 16px;
-    background: rgba(96, 165, 250, 0.12);
-    border-bottom: 1px solid rgba(96, 165, 250, 0.3);
-    color: #60a5fa;
+    background: rgb(from var(--accent) r g b / 0.12);
+    border-bottom: 1px solid rgb(from var(--accent) r g b / 0.3);
+    color: var(--accent);
     font-size: 13px;
     line-height: 1.4;
     flex-shrink: 0;
@@ -232,27 +232,27 @@
 
 .workflow-canvas .react-flow__controls {
     background: var(--bg-elevated, #282a30);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.06);
     border-radius: 8px;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    box-shadow: 0 4px 12px rgba(var(--shadow-tint), 0.4);
 }
 
 .workflow-canvas .react-flow__controls-button {
     background: transparent;
     color: var(--text-secondary, #999);
-    border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+    border-bottom: 1px solid rgb(from var(--text-primary) r g b / 0.06);
     fill: var(--text-secondary, #999);
 }
 
 .workflow-canvas .react-flow__controls-button:hover {
-    background: rgba(255, 255, 255, 0.06);
+    background: rgb(from var(--text-primary) r g b / 0.06);
     color: var(--text-primary, #e8e8e8);
     fill: var(--text-primary, #e8e8e8);
 }
 
 .workflow-canvas .react-flow__minimap {
     background: var(--bg-elevated, #282a30);
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.06);
     border-radius: 8px;
 }
 
@@ -263,18 +263,18 @@
     background: var(--bg-elevated, #282a30);
     border-radius: 10px;
     overflow: hidden;
-    border: 1.5px solid rgba(255, 255, 255, 0.08);
+    border: 1.5px solid rgb(from var(--text-primary) r g b / 0.08);
     transition: border-color 0.15s, box-shadow 0.15s;
     cursor: pointer;
 }
 
 .state-node:hover {
-    border-color: rgba(255, 255, 255, 0.15);
+    border-color: rgb(from var(--text-primary) r g b / 0.15);
 }
 
 .state-node--selected {
-    border-color: #3b82f6;
-    box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.3), 0 4px 16px rgba(0, 0, 0, 0.4);
+    border-color: var(--accent-solid);
+    box-shadow: 0 0 0 2px rgb(from var(--accent-solid) r g b / 0.3), 0 4px 16px rgba(var(--shadow-tint), 0.4);
 }
 
 .state-node__accent {
@@ -326,13 +326,13 @@
 }
 
 .state-node__badge--validator {
-    background: rgba(74, 222, 128, 0.15);
-    color: #4ade80;
+    background: rgb(from var(--c-success) r g b / 0.15);
+    color: var(--c-success);
 }
 
 .state-node__badge--command {
-    background: rgba(59, 130, 246, 0.15);
-    color: #60a5fa;
+    background: rgb(from var(--accent-solid) r g b / 0.15);
+    color: var(--accent);
 }
 
 /* Státusz ikonok */
@@ -347,11 +347,11 @@
 }
 
 .state-node__status-icon--initial {
-    color: #22c55e;
+    color: var(--c-success);
 }
 
 .state-node__status-icon--terminal {
-    color: #a855f7;
+    color: var(--tertiary);
 }
 
 /* Handle-ek */
@@ -364,7 +364,7 @@
 }
 
 .state-node__handle:hover {
-    background: #3b82f6;
+    background: var(--accent-solid);
 }
 
 /* ─── TransitionEdge label ──────────────────────────────────────────────── */
@@ -375,14 +375,14 @@
     background: var(--bg-base, #111319);
     padding: 2px 6px;
     border-radius: 4px;
-    border: 1px solid rgba(255, 255, 255, 0.06);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.06);
     white-space: nowrap;
     cursor: pointer;
 }
 
 .transition-edge__label--selected {
-    color: #3b82f6;
-    border-color: rgba(59, 130, 246, 0.3);
+    color: var(--accent-solid);
+    border-color: rgb(from var(--accent-solid) r g b / 0.3);
 }
 
 /* ─── PropertiesSidebar ─────────────────────────────────────────────────── */
@@ -391,7 +391,7 @@
     width: 280px;
     flex-shrink: 0;
     background: var(--bg-elevated, #282a30);
-    border-left: 1px solid rgba(255, 255, 255, 0.06);
+    border-left: 1px solid rgb(from var(--text-primary) r g b / 0.06);
     overflow-y: auto;
     padding: 16px;
 }
@@ -405,12 +405,12 @@
 }
 
 .properties-sidebar::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgb(from var(--text-primary) r g b / 0.1);
     border-radius: 3px;
 }
 
 .properties-sidebar::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgb(from var(--text-primary) r g b / 0.2);
 }
 
 .properties-editor__title {
@@ -423,7 +423,7 @@
 .properties-editor__footer {
     margin-top: 16px;
     padding-top: 12px;
-    border-top: 1px solid rgba(255, 255, 255, 0.06);
+    border-top: 1px solid rgb(from var(--text-primary) r g b / 0.06);
 }
 
 /* ─── Designer mezők ────────────────────────────────────────────────────── */
@@ -444,8 +444,8 @@
     width: 100%;
     padding: 6px 10px;
     font-size: 13px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgb(from var(--text-primary) r g b / 0.04);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.08);
     border-radius: 6px;
     color: var(--text-primary, #e8e8e8);
     outline: none;
@@ -454,7 +454,7 @@
 }
 
 .designer-field__input:focus {
-    border-color: rgba(59, 130, 246, 0.5);
+    border-color: rgb(from var(--accent-solid) r g b / 0.5);
 }
 
 .designer-field__input:read-only {
@@ -471,8 +471,8 @@
     width: 100%;
     padding: 6px 10px;
     font-size: 13px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgb(from var(--text-primary) r g b / 0.04);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.08);
     border-radius: 6px;
     color: var(--text-primary, #e8e8e8);
     outline: none;
@@ -480,7 +480,7 @@
 }
 
 .designer-field__select:focus {
-    border-color: rgba(59, 130, 246, 0.5);
+    border-color: rgb(from var(--accent-solid) r g b / 0.5);
 }
 
 .designer-field__value {
@@ -511,7 +511,7 @@
 }
 
 .designer-field__checkbox-label input[type="checkbox"] {
-    accent-color: #3b82f6;
+    accent-color: var(--accent-solid);
 }
 
 /* Szín picker sor */
@@ -532,7 +532,7 @@
 }
 
 .designer-field__color-swatch::-webkit-color-swatch {
-    border: 1px solid rgba(255, 255, 255, 0.15);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.15);
     border-radius: 6px;
 }
 
@@ -550,7 +550,7 @@
 
 .designer-field__route-state {
     font-family: 'SF Mono', 'Menlo', 'Monaco', monospace;
-    background: rgba(255, 255, 255, 0.06);
+    background: rgb(from var(--text-primary) r g b / 0.06);
     padding: 2px 6px;
     border-radius: 4px;
     color: var(--text-primary, #e8e8e8);
@@ -571,7 +571,7 @@
     font-size: 11px;
     padding: 3px 8px;
     border-radius: 12px;
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.1);
     background: transparent;
     color: var(--text-secondary, #999);
     cursor: pointer;
@@ -579,14 +579,14 @@
 }
 
 .designer-chip:hover {
-    border-color: rgba(255, 255, 255, 0.2);
+    border-color: rgb(from var(--text-primary) r g b / 0.2);
     color: var(--text-primary, #e8e8e8);
 }
 
 .designer-chip--active {
-    background: rgba(59, 130, 246, 0.15);
-    border-color: rgba(59, 130, 246, 0.4);
-    color: #60a5fa;
+    background: rgb(from var(--accent-solid) r g b / 0.15);
+    border-color: rgb(from var(--accent-solid) r g b / 0.4);
+    color: var(--accent);
 }
 
 .designer-chip--small {
@@ -604,7 +604,7 @@
 .designer-field__command-item {
     margin-bottom: 10px;
     padding: 8px;
-    background: rgba(255, 255, 255, 0.03);
+    background: rgb(from var(--text-primary) r g b / 0.03);
     border-radius: 6px;
 }
 
@@ -631,7 +631,7 @@
 }
 
 .designer-field__remove-btn:hover {
-    color: #f87171;
+    color: var(--c-error);
 }
 
 /* Hozzáadás sor */
@@ -649,17 +649,17 @@
 
 .designer-field__add-btn {
     padding: 4px 10px;
-    background: rgba(59, 130, 246, 0.15);
-    border: 1px solid rgba(59, 130, 246, 0.3);
+    background: rgb(from var(--accent-solid) r g b / 0.15);
+    border: 1px solid rgb(from var(--accent-solid) r g b / 0.3);
     border-radius: 6px;
-    color: #60a5fa;
+    color: var(--accent);
     cursor: pointer;
     font-size: 14px;
     font-weight: 600;
 }
 
 .designer-field__add-btn:hover:not(:disabled) {
-    background: rgba(59, 130, 246, 0.25);
+    background: rgb(from var(--accent-solid) r g b / 0.25);
 }
 
 .designer-field__add-btn:disabled {
@@ -667,7 +667,7 @@
     cursor: not-allowed;
 }
 
-/* Törlés gomb — .danger-action (styles.css) */
+/* Törlés gomb — .danger-action (css/components/danger.css) */
 
 /* ─── Collapsible szekció ───────────────────────────────────────────────── */
 
@@ -681,7 +681,7 @@
     align-items: center;
     width: 100%;
     padding: 8px 10px;
-    background: rgba(255, 255, 255, 0.04);
+    background: rgb(from var(--text-primary) r g b / 0.04);
     border: none;
     border-radius: 6px;
     color: var(--text-primary, #e8e8e8);
@@ -692,7 +692,7 @@
 }
 
 .designer-collapsible__header:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: rgb(from var(--text-primary) r g b / 0.08);
 }
 
 .designer-collapsible__header--disabled {
@@ -701,7 +701,7 @@
 }
 
 .designer-collapsible__header--disabled:hover {
-    background: rgba(255, 255, 255, 0.04);
+    background: rgb(from var(--text-primary) r g b / 0.04);
 }
 
 .designer-collapsible__chevron {
@@ -719,7 +719,7 @@
     width: 160px;
     flex-shrink: 0;
     background: var(--bg-elevated, #282a30);
-    border-right: 1px solid rgba(255, 255, 255, 0.06);
+    border-right: 1px solid rgb(from var(--text-primary) r g b / 0.06);
     display: flex;
     flex-direction: column;
     padding: 12px;
@@ -747,8 +747,8 @@
     align-items: center;
     gap: 8px;
     padding: 8px;
-    background: rgba(255, 255, 255, 0.04);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: rgb(from var(--text-primary) r g b / 0.04);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.08);
     border-radius: 8px;
     cursor: grab;
     transition: background 0.15s, border-color 0.15s;
@@ -756,8 +756,8 @@
 }
 
 .node-palette__item:hover {
-    background: rgba(255, 255, 255, 0.08);
-    border-color: rgba(255, 255, 255, 0.15);
+    background: rgb(from var(--text-primary) r g b / 0.08);
+    border-color: rgb(from var(--text-primary) r g b / 0.15);
 }
 
 .node-palette__item:active {
@@ -793,7 +793,7 @@
 .import-dialog__overlay {
     position: fixed;
     inset: 0;
-    background: rgba(0, 0, 0, 0.6);
+    background: var(--modal-backdrop);
     display: flex;
     align-items: center;
     justify-content: center;
@@ -804,10 +804,10 @@
     width: 420px;
     max-width: 90vw;
     background: var(--bg-elevated, #282a30);
-    border: 1px solid rgba(255, 255, 255, 0.1);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.1);
     border-radius: 12px;
     padding: 24px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+    box-shadow: 0 8px 32px rgba(var(--shadow-tint), 0.5);
 }
 
 .import-dialog__title {
@@ -828,14 +828,14 @@
 
 .import-dialog__error {
     font-size: 12px;
-    color: #f87171;
+    color: var(--c-error);
     margin: 8px 0;
 }
 
 .import-dialog__diff {
     margin: 12px 0;
     padding: 10px;
-    background: rgba(255, 255, 255, 0.04);
+    background: rgb(from var(--text-primary) r g b / 0.04);
     border-radius: 8px;
 }
 
@@ -859,11 +859,11 @@
 }
 
 .import-dialog__diff-item--add {
-    color: #4ade80;
+    color: var(--c-success);
 }
 
 .import-dialog__diff-item--remove {
-    color: #f87171;
+    color: var(--c-error);
 }
 
 .import-dialog__actions {
@@ -884,21 +884,21 @@
 }
 
 .import-dialog__btn--cancel {
-    background: rgba(255, 255, 255, 0.06);
+    background: rgb(from var(--text-primary) r g b / 0.06);
     color: var(--text-secondary, #999);
 }
 
 .import-dialog__btn--cancel:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: rgb(from var(--text-primary) r g b / 0.1);
 }
 
 .import-dialog__btn--confirm {
-    background: #3b82f6;
+    background: var(--accent-solid);
     color: #fff;
 }
 
 .import-dialog__btn--confirm:hover:not(:disabled) {
-    background: #2563eb;
+    background: var(--accent-hover);
 }
 
 .import-dialog__btn--confirm:disabled {

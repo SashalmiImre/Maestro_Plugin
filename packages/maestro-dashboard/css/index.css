@@ -1,0 +1,39 @@
+/**
+ * Maestro Dashboard — Stílusok (entry)
+ * GitHub Dark-inspirált modern dizájn, rétegzett háttérrendszerrel.
+ *
+ * Sorrend: foundation → layouts → components → features.
+ * A kaszkád ezt a betöltési sorrendet követi — később jövő szabály felülír.
+ *
+ * Új komponens hozzáadásához:
+ *   1. Hozz létre egy `components/<név>.css` fájlt.
+ *   2. Add hozzá az alábbi listához a megfelelő szekcióba.
+ *
+ * Dark/light theme: a runtime változók a tokens.css `:root` blokkjában élnek.
+ * Light mód bevezetése egy `[data-theme="light"]` blokk hozzáadása ugyanott.
+ */
+
+/* ─── Foundation ───────────────────────────────────────────────────────────── */
+@import './tokens.css';
+@import './base.css';
+
+/* ─── Layouts ──────────────────────────────────────────────────────────────── */
+@import './layouts/auth.css';
+@import './layouts/dashboard.css';
+@import './layouts/responsive.css';
+@import './layouts/print.css';
+
+/* ─── Components ───────────────────────────────────────────────────────────── */
+@import './components/breadcrumb.css';
+@import './components/popover.css';
+@import './components/avatar.css';
+@import './components/filter-bar.css';
+@import './components/view-switcher.css';
+@import './components/toast.css';
+@import './components/modal.css';
+@import './components/danger.css';
+
+/* ─── Features ─────────────────────────────────────────────────────────────── */
+@import './features/article-table.css';
+@import './features/flatplan.css';
+@import './features/publication-settings.css';

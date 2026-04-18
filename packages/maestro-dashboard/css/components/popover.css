@@ -1,0 +1,39 @@
+/* ─── Közös popover elemek (dropdown menük, avatar menü) ──────────────────── */
+
+.popup-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: 8px 12px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+    white-space: nowrap;
+}
+
+.popup-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.popup-item.danger {
+    color: var(--c-error);
+}
+
+.popup-item.danger:hover {
+    background: rgb(from var(--c-error) r g b / 0.08);
+}
+
+.popup-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 8px;
+}
+

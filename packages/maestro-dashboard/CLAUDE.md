@@ -21,7 +21,7 @@
 | **Backend**   | Appwrite Cloud (közvetlen, proxy nélkül)        |
 | **Realtime**  | Appwrite Web SDK `client.subscribe()` (natív WS)|
 | **Bundler**   | Vite                                            |
-| **Stílusok**  | CSS (globális, `css/styles.css`)                |
+| **Stílusok**  | CSS (modulos, `css/index.css` → tokens / base / layouts / components / features) |
 | **Shared**    | `@shared` alias → `../maestro-shared`           |
 
 ### Különbségek a plugin-hez képest
@@ -151,7 +151,27 @@ maestro-dashboard/
 ├── deploy.sh                     ← Build + SCP deploy (maestro.emago.hu)
 │
 ├── css/
-│   └── styles.css                ← Globális stílusok (dark theme, responsive, modal/tabs/forms)
+│   ├── index.css                 ← Entry — csak `@import`-ok, ezt importálja `main.jsx`
+│   ├── tokens.css                ← Design tokenek (`:root`) — színek, spacing, radius. Itt jön majd a `[data-theme="light"]` blokk
+│   ├── base.css                  ← Reset, html/body, scrollbar
+│   ├── layouts/                  ← Page-szintű shell stílusok
+│   │   ├── auth.css              ← Login + auth tabs + auth segéd elemek
+│   │   ├── dashboard.css         ← Dashboard shell + fő tartalom (tábla terület)
+│   │   ├── responsive.css        ← `@media` query overrides
+│   │   └── print.css             ← PDF export / nyomtatás
+│   ├── components/               ← Újrafelhasználható UI primitivek
+│   │   ├── breadcrumb.css        ← BreadcrumbHeader + BreadcrumbDropdown
+│   │   ├── popover.css           ← Közös popover (dropdown / avatar menü)
+│   │   ├── avatar.css            ← UserAvatar
+│   │   ├── filter-bar.css        ← Szűrő sáv
+│   │   ├── view-switcher.css     ← Nézet-váltó gombok
+│   │   ├── toast.css             ← Toast értesítés
+│   │   ├── modal.css             ← Modal overlay / kártya / fejléc / tartalom / akció gombok
+│   │   └── danger.css            ← Veszélyes zóna + `.danger-action` egységes destruktív gomb
+│   └── features/                 ← Feature-specifikus stílusok
+│       ├── article-table.css    ← Cikk tábla + placeholder sorok + üres állapot + loading
+│       ├── flatplan.css         ← Layout (Flatplan) nézet
+│       └── publication-settings.css ← Publication settings modal: aktiválás + tab content + layout/határidő sorok
 │
 ├── src/
 │   ├── main.jsx                  ← ReactDOM.createRoot + RouterProvider

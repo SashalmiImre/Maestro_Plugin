@@ -26,6 +26,9 @@ import usePopoverClose from '../hooks/usePopoverClose.js';
  * @param {Function} props.onSelect — callback: (id) => void
  * @param {Function} [props.onSettings] — ha megadott, „Beállítások" menüpont jelenik meg
  * @param {string} [props.settingsLabel='Beállítások'] — beállítás menüpont szövege
+ * @param {string} [props.moreItemsLabel] — kis-kapitális szekciófejléc a divider alatt
+ *                                          (pl. „További szervezetek"). Csak ha van
+ *                                          onSettings ÉS van legalább egy további elem.
  * @param {boolean} [props.disabled=false] — letiltva-e
  * @param {string} [props.disabledTitle] — tooltip, ha disabled (pl. üres scope magyarázata)
  * @param {string} [props.className] — extra CSS osztály a trigger gombra
@@ -37,6 +40,7 @@ export default function BreadcrumbDropdown({
     onSelect,
     onSettings,
     settingsLabel = 'Beállítások',
+    moreItemsLabel,
     disabled = false,
     disabledTitle,
     className = ''
@@ -121,6 +125,11 @@ export default function BreadcrumbDropdown({
                                 {settingsLabel}
                             </button>
                             {sortedItems.length > 0 && <div className="bc-dropdown-divider" />}
+                            {sortedItems.length > 0 && moreItemsLabel && (
+                                <div className="bc-dropdown-section-label">
+                                    {moreItemsLabel}
+                                </div>
+                            )}
                         </>
                     )}
                     {sortedItems.map(item => (

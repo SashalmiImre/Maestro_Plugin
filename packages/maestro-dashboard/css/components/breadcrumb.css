@@ -1,0 +1,177 @@
+/* ─── Breadcrumb fejléc ───────────────────────────────────────────────────── */
+
+.breadcrumb-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 20px;
+    height: 48px;
+    background: var(--bg-surface);
+    flex-shrink: 0;
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    box-shadow: 0 12px 40px rgba(var(--shadow-tint), 0.4);
+    z-index: 10;
+}
+
+.breadcrumb-left {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    min-width: 0;
+}
+
+.breadcrumb-logo {
+    font-size: 14px;
+    font-weight: 800;
+    color: var(--text-primary);
+    letter-spacing: -0.02em;
+    text-decoration: none;
+    flex-shrink: 0;
+}
+
+.breadcrumb-logo:hover {
+    color: var(--accent);
+}
+
+.breadcrumb-separator {
+    color: var(--text-disabled);
+    font-size: 14px;
+    font-weight: 300;
+    flex-shrink: 0;
+    user-select: none;
+}
+
+.breadcrumb-right {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-shrink: 0;
+}
+
+/* ─── BreadcrumbDropdown ──────────────────────────────────────────────────── */
+
+.bc-dropdown {
+    position: relative;
+}
+
+.bc-dropdown-trigger {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    padding: 4px 8px;
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    max-width: 200px;
+    white-space: nowrap;
+}
+
+.bc-dropdown-trigger:hover:not(:disabled):not(.static) {
+    background: var(--bg-elevated);
+    color: var(--text-primary);
+}
+
+.bc-dropdown-trigger.open {
+    background: var(--bg-elevated);
+    border-color: var(--border);
+    color: var(--text-primary);
+}
+
+.bc-dropdown-trigger.static {
+    cursor: default;
+}
+
+.bc-dropdown-trigger:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.bc-dropdown-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bc-dropdown-chevron {
+    font-size: 10px;
+    color: var(--text-muted);
+    flex-shrink: 0;
+}
+
+.bc-dropdown-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    min-width: 200px;
+    max-width: 300px;
+    max-height: 320px;
+    overflow-y: auto;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: var(--space-1);
+    z-index: 100;
+    box-shadow: 0 12px 40px rgba(var(--shadow-tint), 0.45);
+    animation: modalSlideIn 0.15s ease-out;
+}
+
+.bc-dropdown-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    width: 100%;
+    padding: 8px 12px;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-md);
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s, color 0.12s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.bc-dropdown-item:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.bc-dropdown-item.danger {
+    color: var(--c-error);
+}
+
+.bc-dropdown-item.danger:hover {
+    background: rgb(from var(--c-error) r g b / 0.08);
+}
+
+.bc-dropdown-divider {
+    height: 1px;
+    background: var(--border);
+    margin: 4px 8px;
+}
+
+/* Szekció-fejléc a divider alatt (pl. „További szervezetek"). Diszkrét, nem
+   tolakodó — kis méret + uppercase + halvány accent kék, hogy a menü-
+   elemektől egyértelműen elkülönüljön és hierarchiát jelezzen. */
+.bc-dropdown-section-label {
+    padding: 6px 12px 2px;
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: var(--accent);
+    opacity: 0.75;
+    pointer-events: none;
+    user-select: none;
+}
+
