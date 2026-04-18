@@ -23,8 +23,14 @@ export {
 
 // ─── Dashboard-specifikus ───────────────────────────────────────────────────
 
-/** Közvetlen Appwrite endpoint (nem proxy-n keresztül). */
-export const APPWRITE_ENDPOINT = 'https://cloud.appwrite.io/v1';
+/**
+ * Közvetlen Appwrite endpoint (nem proxy-n keresztül).
+ * Production-ban érdemes saját custom domain-t használni (pl. `api.maestro.emago.hu`),
+ * hogy a böngésző első-feles cookie-ként kezelje a session-t — különben Safari ITP
+ * (és hamarosan Chrome) blokkolja a WebSocket upgrade-nél küldött session cookie-t,
+ * és a Realtime nem kap push-t.
+ */
+export const APPWRITE_ENDPOINT = import.meta.env.VITE_APPWRITE_ENDPOINT || 'https://cloud.appwrite.io/v1';
 
 /**
  * A Dashboard saját origin URL-je az Appwrite verifikációs/recovery callback-ekhez.
