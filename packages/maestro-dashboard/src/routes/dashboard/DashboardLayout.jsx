@@ -113,6 +113,19 @@ export default function DashboardLayout() {
         return () => { cancelled = true; };
     }, [activeEditorialOfficeId, isInitialized]); // eslint-disable-line react-hooks/exhaustive-deps
 
+    // Üres office → új kiadvány auto-select. Ha a DataContext Realtime handlere
+    // (scope-szűrt publications subscribe) új kiadványt ad a `publications`-höz,
+    // de nincs aktív kiválasztás (init vagy `switchPublication(null)` után),
+    // automatikusan az elsőre váltunk, hogy a felhasználó ne maradjon az
+    // „Válassz egy kiadványt" üres állapoton egy másik tab-ban létrehozott
+    // kiadvány után.
+    useEffect(() => {
+        if (!isInitialized) return;
+        if (activePublicationId) return;
+        if (publications.length === 0) return;
+        switchPublication(publications[0].$id).catch(() => {});
+    }, [publications, activePublicationId, isInitialized, switchPublication]);
+
     // Kiadvány váltás kezelő
     const handlePublicationSelect = useCallback(async (publicationId) => {
         localStorage.setItem(STORAGE_KEYS.SELECTED_PUBLICATION, publicationId);
