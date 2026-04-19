@@ -1,28 +1,338 @@
 /* ─── Responsive ───────────────────────────────────────────────────────────── */
+/*
+ * Breakpoint rendszer (ld. `src/hooks/useMediaQuery.js` BREAKPOINTS):
+ *   - tablet:  <= 960px (keskeny laptop / nagy tablet)
+ *   - mobile:  <= 640px (telefon álló + kis tablet álló)
+ *   - compact: <= 480px (keskeny telefon)
+ *
+ * A WorkflowDesigner `tablet` alatt `desktop-only` képernyőre vált (JSX guard),
+ * így ez a fájl csak a főoldalt érinti.
+ */
 
-@media (max-width: 768px) {
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* TABLET (≤ 960px)                                                           */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 960px) {
+    /* Modal konténer ne nyúljon túl a tablet-képernyőn */
+    .modal-sm,
+    .modal-md,
+    .modal-lg,
+    .modal-xl {
+        width: 94%;
+        max-width: min(720px, 94vw);
+    }
+
+    /* Modal fejléc/tartalom kissé szorosabb padding */
+    .modal-header {
+        padding: 18px 20px 0;
+    }
+    .modal-body {
+        padding: 16px 20px 20px;
+    }
+
+    /* Layout (Flatplan) toolbar: sok kontroll → wrap engedélyezés */
+    .layout-toolbar {
+        flex-wrap: wrap;
+        gap: var(--space-2);
+        padding: 10px 14px;
+    }
+    .layout-select {
+        margin-right: 0;
+        flex: 0 1 auto;
+    }
+    .zoom-control {
+        flex-wrap: wrap;
+    }
+    .zoom-slider {
+        width: 96px;
+    }
+
+    /* Tábla: csökkentett cella padding → több tartalom látszik */
+    .article-table th {
+        padding: 12px 16px;
+    }
+    .article-table td {
+        padding: 14px 16px;
+        font-size: 12px;
+    }
+
+    /* Szűrősáv: 2 oszlopos rács */
+    .filter-status-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+
+    /* Breadcrumb: kisebb padding */
     .breadcrumb-header {
-        padding: 0 12px;
+        padding: 0 14px;
+    }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* MOBILE (≤ 640px)                                                           */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+@media (max-width: 640px) {
+    /* ── Breadcrumb fejléc ─────────────────────────────────────────────── */
+    .breadcrumb-header {
+        padding: 0 10px;
+        height: 46px;
+        gap: var(--space-1);
+    }
+
+    .breadcrumb-left {
+        flex: 1;
+        min-width: 0;
+        gap: 2px;
+    }
+
+    .breadcrumb-right {
+        gap: var(--space-1);
     }
 
     .breadcrumb-separator {
         display: none;
     }
 
-    .bc-dropdown-trigger {
-        padding: 4px 6px;
-        font-size: 12px;
-        max-width: 120px;
-    }
-
     .breadcrumb-logo {
         font-size: 12px;
     }
 
-    .filter-status-grid {
-        grid-template-columns: repeat(2, 1fr);
+    .bc-dropdown-trigger {
+        padding: 4px 6px;
+        font-size: 12px;
+        max-width: 110px;
     }
+
+    /* Szervezet-szintű dropdown elrejtése szűk képernyőn — a legtöbb
+       felhasználónak 1 szervezete van, a breadcrumb pedig belefér, ha csak
+       a Szerkesztőség + Kiadvány látszik. */
+    .breadcrumb-left > .bc-dropdown:first-of-type {
+        display: none;
+    }
+
+    /* Cikkszám badge elrejtés mobilon — az aktív szűrő ikonja elég jelzés */
+    .article-count {
+        display: none;
+    }
+
+    .view-btn {
+        padding: 6px 8px;
+    }
+
+    /* ── Layout (Flatplan) nézet ─────────────────────────────────────────── */
+    .layout-toolbar {
+        justify-content: flex-start;
+        padding: 8px 10px;
+    }
+    .zoom-slider {
+        width: 80px;
+    }
+    .layout-view {
+        gap: 8px 10px;
+        padding: 14px 10px;
+    }
+
+    /* ── Cikk táblázat → card nézet ─────────────────────────────────────── */
+    /* A <table>, <tr>, <td> block megjelenítése + data-label ::before a cella
+       elé. Így minden sor egy önálló kártya, olvasható mobil képernyőn,
+       horizontális scroll nélkül. */
+    .table-container {
+        margin: 12px 10px;
+        border-radius: 12px;
+        overflow: visible;
+        background: transparent;
+        outline: none;
+        box-shadow: none;
+    }
+
+    .article-table {
+        display: block;
+        min-width: 0;
+        width: 100%;
+    }
+
+    .article-table thead {
+        display: none;
+    }
+
+    .article-table tbody,
+    .article-table tbody tr {
+        display: block;
+        width: 100%;
+    }
+
+    .article-table tbody tr {
+        margin-bottom: 10px;
+        padding: 12px 14px;
+        background: var(--surface-container);
+        border: 1px solid rgb(from var(--outline-variant) r g b / 0.12);
+        border-radius: 12px;
+        box-shadow: 0 4px 16px rgba(var(--shadow-tint), 0.2);
+    }
+
+    .article-table tbody tr:hover {
+        background: var(--surface-container) !important;
+    }
+
+    .article-table td {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-3);
+        padding: 6px 0;
+        border-bottom: 1px solid rgb(from var(--outline-variant) r g b / 0.08);
+        max-width: none;
+        overflow: visible;
+        text-overflow: clip;
+        font-size: 13px;
+    }
+
+    .article-table td:last-child {
+        border-bottom: none;
+    }
+
+    .article-table td::before {
+        content: attr(data-label);
+        flex: 0 0 84px;
+        font-size: 10px;
+        font-weight: 700;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--text-muted);
+    }
+
+    /* A cikknév külön sorban, word-break-kel, hogy hosszú nevek is törhessenek */
+    .article-table td.col-name {
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 4px;
+        white-space: normal;
+        word-break: break-word;
+    }
+
+    .article-table td.col-name::before {
+        flex: 0 0 auto;
+    }
+
+    /* Üres cellák (ha nincs lock / state / validáció) kártyán zavarók — rejtjük.
+       A React `null` gyereket nem rendereli → a td ténylegesen üres lesz. */
+    .article-table td.col-lock:empty,
+    .article-table td.col-state:empty,
+    .article-table td.col-validate:empty {
+        display: none;
+    }
+
+    /* ── Szűrősáv ──────────────────────────────────────────────────────── */
+    .filter-bar {
+        padding: var(--space-3) var(--space-4);
+    }
+
+    .filter-status-grid {
+        grid-template-columns: 1fr 1fr;
+        gap: 6px 12px;
+    }
+
+    .filter-extra {
+        flex-wrap: wrap;
+        gap: var(--space-2);
+    }
+
+    /* ── Modal ─────────────────────────────────────────────────────────── */
+    .modal-overlay {
+        padding: 8px;
+    }
+
+    .modal-sm,
+    .modal-md,
+    .modal-lg,
+    .modal-xl {
+        width: 100%;
+        max-width: none;
+        max-height: 94vh;
+    }
+
+    .modal-header {
+        padding: 16px 16px 0;
+    }
+
+    .modal-body {
+        padding: 14px 16px 18px;
+    }
+
+    .modal-title {
+        font-size: 15px;
+    }
+
+    /* Publication/Organization/EditorialOffice modalok fejléceiben tabok —
+       engedjük, hogy több sorba kerüljenek szűk képernyőn */
+    .tabs {
+        flex-wrap: wrap;
+        gap: 2px;
+    }
+
+    .tab {
+        padding: 8px 12px;
+        font-size: 12px;
+    }
+
+    /* Kétoszlopos formsor (pl. coverage start-end) → egymás alá */
+    .form-row {
+        flex-direction: column;
+        gap: var(--space-2);
+    }
+
+    /* Modal akció gombok — teljes szélességben, stackelve */
+    .modal-actions {
+        flex-direction: column-reverse;
+        align-items: stretch;
+        gap: var(--space-2);
+        padding-top: 14px;
+    }
+
+    .modal-actions .btn-primary,
+    .modal-actions .btn-secondary,
+    .modal-actions .btn-danger {
+        width: 100%;
+    }
+
+    .modal-actions .help-text {
+        margin-right: 0;
+        text-align: center;
+    }
+
+    .confirm-dialog-actions {
+        flex-direction: column-reverse;
+        align-items: stretch;
+        gap: var(--space-2);
+    }
+
+    .confirm-dialog-btn {
+        width: 100%;
+    }
+
+    /* ── Toast ─────────────────────────────────────────────────────────── */
+    .toast-container {
+        left: 10px;
+        right: 10px;
+        bottom: 10px;
+    }
+
+    .toast {
+        max-width: none;
+        font-size: 12px;
+        padding: 10px 14px;
+    }
+
+    /* ── Auth layout (login, register, forgot/reset, invite, settings/password) */
+    /* Ezt az `auth.css` saját media query-kkel kezeli — ha ott nincs, a split
+       layout ne forduljon fekvő formátumba szűk képernyőn. Nem érintjük,
+       mert az külön gondolkodást igényel és nincs benne a célban. */
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* COMPACT (≤ 480px)                                                          */
+/* ═══════════════════════════════════════════════════════════════════════════ */
 
 @media (max-width: 480px) {
     .breadcrumb-header {
@@ -30,12 +340,40 @@
         height: 44px;
     }
 
+    .breadcrumb-logo {
+        /* Szűk képernyőn csak a logó marad bal oldalon, dropdown-ok mögötte */
+        font-size: 11px;
+    }
+
     .bc-dropdown-trigger {
         max-width: 90px;
+        padding: 4px 5px;
+        font-size: 11px;
     }
 
-    .filter-status-grid {
-        grid-template-columns: 1fr 1fr;
+    .view-toggle {
+        padding: 2px;
+    }
+    .view-btn {
+        padding: 5px 6px;
+    }
+    .view-btn svg {
+        width: 16px;
+        height: 16px;
+    }
+
+    /* Layout toolbar: még tömörebb */
+    .zoom-slider {
+        width: 64px;
+    }
+
+    /* Filter bar reset gomb stackel */
+    .filter-extra {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .filter-extra .filter-checkbox {
+        padding: 6px 0;
     }
 }
-

@@ -911,3 +911,71 @@
 .workflow-designer-scaffold {
     padding: 32px;
 }
+
+/* ─── Desktop-only guard (mobil/tablet képernyőkre) ──────────────────────── */
+
+.workflow-designer-desktop-only {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+    min-height: 0;
+}
+
+.workflow-designer-desktop-only__card {
+    max-width: 420px;
+    width: 100%;
+    text-align: center;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    padding: 32px 24px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    box-shadow: 0 16px 40px rgba(var(--shadow-tint), 0.35);
+    color: var(--text-primary);
+}
+
+.workflow-designer-desktop-only__card > svg {
+    color: var(--accent);
+    flex-shrink: 0;
+}
+
+.workflow-designer-desktop-only__title {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+}
+
+.workflow-designer-desktop-only__desc {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+}
+
+.workflow-designer-desktop-only__btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    margin-top: 4px;
+    padding: 10px 18px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    text-decoration: none;
+    background: rgb(from var(--text-primary) r g b / 0.06);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.12);
+    border-radius: 8px;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.workflow-designer-desktop-only__btn:hover {
+    background: rgb(from var(--text-primary) r g b / 0.1);
+    border-color: rgb(from var(--text-primary) r g b / 0.2);
+}

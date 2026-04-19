@@ -14,19 +14,22 @@ import ValidationIcons from './ValidationIcons.jsx';
 const ArticleRow = React.memo(function ArticleRow({
     article, maxPage, urgency, validationItems, currentUser, getMemberName
 }) {
+    // data-label attribútumok a mobil card nézethez (responsive.css).
+    // A tablet-en+ felett ignorálva (table cellák maradnak), mobilon a ::before
+    // pseudo-elem olvassa ki a címket a cella elé.
     // Placeholder sor — szürke, nem interaktív
     if (article.isPlaceholder) {
         return (
             <tr className="placeholder-row">
-                <td className="col-range">
+                <td className="col-range" data-label="Terj.">
                     <PageRange article={article} maxPage={maxPage} />
                 </td>
-                <td className="col-name">
+                <td className="col-name" data-label="Cikknév">
                     <span className="placeholder-name">Nincs hozzárendelt cikk</span>
                 </td>
-                <td className="col-lock" />
-                <td className="col-state" />
-                <td className="col-validate" />
+                <td className="col-lock" data-label="Zárolta" />
+                <td className="col-state" data-label="Státusz" />
+                <td className="col-validate" data-label="Validáció" />
             </tr>
         );
     }
@@ -35,22 +38,22 @@ const ArticleRow = React.memo(function ArticleRow({
 
     return (
         <tr style={bgStyle}>
-            <td className="col-range">
+            <td className="col-range" data-label="Terj.">
                 <PageRange article={article} maxPage={maxPage} />
             </td>
-            <td className="col-name">
+            <td className="col-name" data-label="Cikknév">
                 {article.name
                     ? article.name
                     : <span className="article-unnamed">Névtelen</span>
                 }
             </td>
-            <td className="col-lock">
+            <td className="col-lock" data-label="Zárolta">
                 <LockLabel article={article} currentUser={currentUser} getMemberName={getMemberName} />
             </td>
-            <td className="col-state">
+            <td className="col-state" data-label="Státusz">
                 <StateIndicator article={article} />
             </td>
-            <td className="col-validate">
+            <td className="col-validate" data-label="Validáció">
                 <ValidationIcons items={validationItems} />
             </td>
         </tr>

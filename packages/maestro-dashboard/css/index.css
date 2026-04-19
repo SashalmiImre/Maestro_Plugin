@@ -20,7 +20,6 @@
 /* ─── Layouts ──────────────────────────────────────────────────────────────── */
 @import './layouts/auth.css';
 @import './layouts/dashboard.css';
-@import './layouts/responsive.css';
 @import './layouts/print.css';
 
 /* ─── Components ───────────────────────────────────────────────────────────── */
@@ -37,3 +36,8 @@
 @import './features/article-table.css';
 @import './features/flatplan.css';
 @import './features/publication-settings.css';
+
+/* ─── Responsive overrides ─────────────────────────────────────────────────── */
+/* Utoljára importálva: azonos specifikitású @media szabályok felülírják a fenti
+   desktop-alapú szabályokat kisebb breakpoint-okon. */
+@import './layouts/responsive.css';

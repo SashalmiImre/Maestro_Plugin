@@ -18,9 +18,10 @@ import { useNodesState, useEdgesState } from '@xyflow/react';
 import { Databases, Query } from 'appwrite';
 import { getClient } from '../../contexts/AuthContext.jsx';
 import { subscribeRealtime, documentChannel } from '../../contexts/realtimeBus.js';
-import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 import { useData } from '../../contexts/DataContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
+import { useMediaQuery, BREAKPOINTS } from '../../hooks/useMediaQuery.js';
+import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 import { useConfirm } from '../../components/ConfirmDialog.jsx';
 import { compiledToGraph, graphToCompiled, extractGraphData } from './compiler.js';
 import { validateWorkflow } from './validator.js';
@@ -42,6 +43,10 @@ export default function WorkflowDesignerPage() {
     const { workflows: availableWorkflows, publications } = useData();
     const { showToast } = useToast();
     const confirm = useConfirm();
+    // A xyflow canvas drag&drop-ja érintésen nem használható, + a properties
+    // sidebar és a node palette szűk képernyőn nem férnek el egyszerre.
+    // Mobilon csak tájékoztató képernyőt adunk.
+    const isBelowWorkflowMin = useMediaQuery(BREAKPOINTS.tablet);
 
     // ── Workflow dokumentum ─────────────────────────────────────────────────
     const [workflowDocId, setWorkflowDocId] = useState(null);
@@ -543,6 +548,47 @@ export default function WorkflowDesignerPage() {
     }, []);
 
     // ── Renderelés ──────────────────────────────────────────────────────────
+
+    // Mobil/tablet: desktop-only felület → informatív képernyő.
+    // Előre-visszatérő: a guard nem teljesíti a hook-szabályokat, ha a hookok
+    // után van, ezért kizárólag a hookok lefutása után térünk vissza.
+    if (isBelowWorkflowMin) {
+        return (
+            <div className="workflow-designer-page">
+                <div className="workflow-designer-desktop-only">
+                    <div className="workflow-designer-desktop-only__card">
+                        <svg
+                            width="48"
+                            height="48"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.5"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            aria-hidden="true"
+                        >
+                            <rect x="2" y="4" width="20" height="12" rx="2" />
+                            <line x1="8" y1="20" x2="16" y2="20" />
+                            <line x1="12" y1="16" x2="12" y2="20" />
+                        </svg>
+                        <h1 className="workflow-designer-desktop-only__title">
+                            A Workflow tervező asztali nézetre van optimalizálva
+                        </h1>
+                        <p className="workflow-designer-desktop-only__desc">
+                            A vizuális szerkesztő drag &amp; drop canvasa, a node-paletta és a
+                            tulajdonság oldalsáv nem fér el kis képernyőn. Nyisd meg a
+                            Dashboard-ot legalább 960 pixel széles eszközön (laptop vagy
+                            asztali gép) a workflow szerkesztéséhez.
+                        </p>
+                        <Link to="/" className="workflow-designer-desktop-only__btn">
+                            ← Vissza a kiadványokhoz
+                        </Link>
+                    </div>
+                </div>
+            </div>
+        );
+    }
 
     if (isLoading) {
         return (
