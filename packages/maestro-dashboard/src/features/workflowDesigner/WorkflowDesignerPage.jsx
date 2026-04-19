@@ -86,6 +86,30 @@ export default function WorkflowDesignerPage() {
     const [saveError, setSaveError] = useState(null);
     const [isImportOpen, setIsImportOpen] = useState(false);
     const [remoteVersionWarning, setRemoteVersionWarning] = useState(null);
+    // #73: oldalpanel collapse — localStorage-perzisztált, a designerbe visszatérve
+    // megőrződik a felhasználó preferenciája (széles canvas vs. teljes panelek).
+    const [isPaletteCollapsed, setIsPaletteCollapsed] = useState(() => {
+        try { return localStorage.getItem('maestro.workflowDesigner.paletteCollapsed') === '1'; }
+        catch { return false; }
+    });
+    const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(() => {
+        try { return localStorage.getItem('maestro.workflowDesigner.sidebarCollapsed') === '1'; }
+        catch { return false; }
+    });
+    const togglePaletteCollapsed = useCallback(() => {
+        setIsPaletteCollapsed(prev => {
+            const next = !prev;
+            try { localStorage.setItem('maestro.workflowDesigner.paletteCollapsed', next ? '1' : '0'); } catch {}
+            return next;
+        });
+    }, []);
+    const toggleSidebarCollapsed = useCallback(() => {
+        setIsSidebarCollapsed(prev => {
+            const next = !prev;
+            try { localStorage.setItem('maestro.workflowDesigner.sidebarCollapsed', next ? '1' : '0'); } catch {}
+            return next;
+        });
+    }, []);
 
     const reactFlowRef = useRef(null);
     const defaultViewportRef = useRef(null);
@@ -740,7 +764,11 @@ export default function WorkflowDesignerPage() {
 
             {/* Fő tartalom: palette + canvas + sidebar */}
             <div className="workflow-designer-body">
-                <NodePalette usedColors={usedNodeColors} />
+                <NodePalette
+                    usedColors={usedNodeColors}
+                    isCollapsed={isPaletteCollapsed}
+                    onToggleCollapsed={togglePaletteCollapsed}
+                />
                 <WorkflowCanvas
                     nodes={nodes}
                     edges={edges}
@@ -767,6 +795,8 @@ export default function WorkflowDesignerPage() {
                     metadata={metadata}
                     onMetadataChange={handleMetadataChange}
                     stateLabels={stateLabels}
+                    isCollapsed={isSidebarCollapsed}
+                    onToggleCollapsed={toggleSidebarCollapsed}
                 />
             </div>
 

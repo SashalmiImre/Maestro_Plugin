@@ -136,19 +136,21 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
 
             {/* ── Validációk (collapsible) ──────────────────────────────────── */}
             {/* #66: az „onEntry" akció (futtatás), a „requiredToEnter/Exit" kapu (ellenőrzés).
-                A label prefix + tooltip a két szemantikát egyértelműsíti. */}
+                A label prefix + tooltip a két szemantikát egyértelműsíti.
+                #69: aria-expanded + aria-controls a screen reader-eknek. */}
             <div className="designer-collapsible">
                 <button
                     type="button"
                     className="designer-collapsible__header"
                     onClick={() => setValidationsOpen(v => !v)}
                     aria-expanded={validationsOpen}
+                    aria-controls={`state-validations-${node.id}`}
                 >
                     <span>Validációk{validationsCount > 0 ? ` (${validationsCount})` : ''}</span>
                     <span className="designer-collapsible__chevron" aria-hidden="true">{validationsOpen ? '▾' : '▸'}</span>
                 </button>
                 {validationsOpen && (
-                    <div className="designer-collapsible__body">
+                    <div className="designer-collapsible__body" id={`state-validations-${node.id}`}>
                         <ValidationListField
                             label="Akció: belépéskor futtatódik"
                             helpText="Az állapotba lépés pillanatában lefutó művelet (pl. preflight). Nem blokkolja a belépést."
@@ -178,12 +180,13 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                     className="designer-collapsible__header"
                     onClick={() => setCommandsOpen(v => !v)}
                     aria-expanded={commandsOpen}
+                    aria-controls={`state-commands-${node.id}`}
                 >
                     <span>Parancsok{commandsCount > 0 ? ` (${commandsCount})` : ''}</span>
                     <span className="designer-collapsible__chevron" aria-hidden="true">{commandsOpen ? '▾' : '▸'}</span>
                 </button>
                 {commandsOpen && (
-                    <div className="designer-collapsible__body">
+                    <div className="designer-collapsible__body" id={`state-commands-${node.id}`}>
                         <CommandListField
                             value={data.commands || []}
                             availableGroups={availableGroups}
@@ -200,6 +203,7 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                     className="designer-collapsible__header"
                     onClick={() => setPermissionsOpen(v => !v)}
                     aria-expanded={permissionsOpen}
+                    aria-controls={`state-permissions-${node.id}`}
                 >
                     <span>
                         Mozgatási jogosultság
@@ -208,7 +212,7 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                     <span className="designer-collapsible__chevron" aria-hidden="true">{permissionsOpen ? '▾' : '▸'}</span>
                 </button>
                 {permissionsOpen && (
-                    <div className="designer-collapsible__body">
+                    <div className="designer-collapsible__body" id={`state-permissions-${node.id}`}>
                         <GroupMultiSelectField
                             label="Ki mozgathatja ki a cikket ebből az állapotból?"
                             value={data.statePermissions || []}

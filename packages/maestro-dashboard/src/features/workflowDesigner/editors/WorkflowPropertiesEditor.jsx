@@ -38,15 +38,37 @@ export default function WorkflowPropertiesEditor({ version, metadata, onMetadata
                 onChange={handleLeaderGroupsChange}
             />
 
-            {/* Contributor csoportok — megjelenítés (szerkesztés a GroupsPanel-ben Fázis 5+) */}
+            {/* Contributor csoportok — read-only listázás.
+                #75: explicit „csak olvasható" jelzés + utalás a forrásra
+                (Szerkesztőség → Csoportok), mert a chip-stílus alapján
+                a felhasználó kattinthatónak hihette. */}
             <div className="designer-field">
-                <label className="designer-field__label">Contributor csoportok</label>
-                <div className="designer-field__chips">
-                    {(metadata.contributorGroups || []).map(cg => (
-                        <span key={cg.slug} className="designer-chip designer-chip--active">
-                            {cg.label} ({cg.slug})
-                        </span>
-                    ))}
+                <label className="designer-field__label">
+                    Contributor csoportok
+                    <span className="designer-field__readonly-badge" aria-label="Csak olvasható">
+                        csak olvasható
+                    </span>
+                </label>
+                <p className="designer-field__help">
+                    A csoportokat a Szerkesztőség beállításai → Csoportok fülön
+                    kezelheted. Itt csak a workflow szempontjából elérhető
+                    listát látod.
+                </p>
+                <div className="designer-field__chips designer-field__chips--readonly">
+                    {(metadata.contributorGroups || []).length === 0 ? (
+                        <span className="designer-field__empty">Nincsenek contributor csoportok</span>
+                    ) : (
+                        (metadata.contributorGroups || []).map(cg => (
+                            <span
+                                key={cg.slug}
+                                className="designer-chip designer-chip--readonly"
+                                title={`${cg.label} (${cg.slug}) — csak olvasható`}
+                            >
+                                {cg.label}
+                                <span className="designer-chip__slug" aria-hidden="true">{cg.slug}</span>
+                            </span>
+                        ))
+                    )}
                 </div>
             </div>
 

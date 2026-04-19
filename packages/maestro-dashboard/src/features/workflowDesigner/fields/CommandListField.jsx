@@ -38,9 +38,19 @@ export default function CommandListField({ label, value = [], availableGroups = 
     // Elérhető parancsok az „Új parancs" dropdown-hoz (ami még nincs hozzáadva)
     const availableCommands = COMMAND_IDS.filter(id => !usedIds.has(id));
 
+    const isEmpty = value.length === 0;
+
     return (
         <div className="designer-field">
             {label && <label className="designer-field__label">{label}</label>}
+
+            {/* #71: empty state hint — egyértelműsíti, hogy lent a dropdown-ban
+                lehet parancsot hozzáadni (ha nincs hozzáadott parancs még). */}
+            {isEmpty && availableCommands.length > 0 && (
+                <p className="designer-field__empty-hint">
+                    Még nincs parancs hozzáadva. Válassz egyet lentről a hozzáadáshoz.
+                </p>
+            )}
 
             {/* Meglévő parancsok */}
             {value.map(cmd => (

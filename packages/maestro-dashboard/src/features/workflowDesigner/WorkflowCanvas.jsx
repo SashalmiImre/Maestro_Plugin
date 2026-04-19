@@ -63,6 +63,8 @@ export default function WorkflowCanvas({
         return (node) => node.data?.color || '#888';
     }, []);
 
+    const isEmpty = nodes.length === 0;
+
     return (
         <div className="workflow-canvas">
             <ReactFlow
@@ -100,6 +102,17 @@ export default function WorkflowCanvas({
                     maskColor="rgba(0, 0, 0, 0.6)"
                 />
             </ReactFlow>
+
+            {/* #70: üres canvas onboarding hint — eltűnik az első node lehelyezésekor.
+                pointer-events: none, hogy ne blokkolja a drop event-et a canvason. */}
+            {isEmpty && (
+                <div className="workflow-canvas__empty-hint" aria-hidden="true">
+                    <div className="workflow-canvas__empty-hint-arrow">←</div>
+                    <div className="workflow-canvas__empty-hint-text">
+                        Húzz ide egy <strong>+ Új állapot</strong> elemet a bal oldali palettáról
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

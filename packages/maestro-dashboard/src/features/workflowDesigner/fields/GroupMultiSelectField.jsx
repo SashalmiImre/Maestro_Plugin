@@ -24,9 +24,18 @@ export default function GroupMultiSelectField({ label, value = [], availableGrou
         onChange([...next]);
     }, [value, onChange]);
 
+    const isEmpty = value.length === 0;
+
     return (
         <div className="designer-field">
             {label && <label className="designer-field__label">{label}</label>}
+            {/* #71: empty state hint — a chip-grid kontextust ad, a hint
+                explicit használati útmutató („kattints a hozzáadáshoz"). */}
+            {isEmpty && availableGroups.length > 0 && (
+                <p className="designer-field__empty-hint">
+                    Kattints egy csoportra a hozzáadáshoz.
+                </p>
+            )}
             <div className="designer-field__chips">
                 {availableGroups.map(slug => (
                     <button

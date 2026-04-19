@@ -17,8 +17,10 @@ import { WORKFLOW_STATE_COLORS, nextAvailableColor } from '@shared/workflowState
 /**
  * @param {Object} props
  * @param {string[]} props.usedColors - A canvason már használt szín hex-ek (a palette ezekből választ)
+ * @param {boolean} [props.isCollapsed] - Összecsukott állapot (#73)
+ * @param {Function} [props.onToggleCollapsed] - Toggle callback
  */
-export default function NodePalette({ usedColors }) {
+export default function NodePalette({ usedColors, isCollapsed = false, onToggleCollapsed }) {
     const nextColor = useMemo(() => nextAvailableColor(usedColors), [usedColors]);
 
     // Hány paletta-szín van még szabadon — felhasználói visszajelzés a hint-ben
@@ -37,9 +39,42 @@ export default function NodePalette({ usedColors }) {
         event.dataTransfer.effectAllowed = 'move';
     }, [nextColor]);
 
+    // #73: összecsukott módban csak a toggle gomb + vertikális címke
+    if (isCollapsed) {
+        return (
+            <div className="node-palette node-palette--collapsed">
+                <button
+                    type="button"
+                    className="workflow-designer-collapse-btn workflow-designer-collapse-btn--palette"
+                    onClick={onToggleCollapsed}
+                    aria-label="Elemek panel kibontása"
+                    aria-expanded="false"
+                    title="Elemek panel kibontása"
+                >
+                    <span aria-hidden="true">›</span>
+                </button>
+                <div className="node-palette__collapsed-label" aria-hidden="true">Elemek</div>
+            </div>
+        );
+    }
+
     return (
         <div className="node-palette">
-            <div className="node-palette__header">Elemek</div>
+            <div className="node-palette__header">
+                <span>Elemek</span>
+                {onToggleCollapsed && (
+                    <button
+                        type="button"
+                        className="workflow-designer-collapse-btn"
+                        onClick={onToggleCollapsed}
+                        aria-label="Elemek panel összecsukása"
+                        aria-expanded="true"
+                        title="Elemek panel összecsukása"
+                    >
+                        <span aria-hidden="true">‹</span>
+                    </button>
+                )}
+            </div>
             <div className="node-palette__items">
                 <div
                     className="node-palette__item"

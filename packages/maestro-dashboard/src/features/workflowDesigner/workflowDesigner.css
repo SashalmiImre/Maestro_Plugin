@@ -277,12 +277,56 @@
     background: var(--bg-elevated, #282a30);
     border: 1px solid rgb(from var(--text-primary) r g b / 0.06);
     border-radius: 8px;
+    /* #74: cursor: pointer + hover border egyértelműsíti, hogy kattintható */
+    cursor: pointer;
+    transition: border-color 0.15s;
+}
+
+.workflow-canvas .react-flow__minimap:hover {
+    border-color: rgb(from var(--accent-solid) r g b / 0.4);
+}
+
+/* ─── Üres canvas onboarding hint (#70) ──────────────────────────────────── */
+
+.workflow-canvas__empty-hint {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 18px;
+    background: rgb(from var(--text-primary) r g b / 0.04);
+    border: 1px dashed rgb(from var(--text-primary) r g b / 0.18);
+    border-radius: 10px;
+    color: var(--text-muted, #888);
+    font-size: 13px;
+    line-height: 1.4;
+    pointer-events: none;
+    user-select: none;
+    z-index: 5;
+}
+
+.workflow-canvas__empty-hint-arrow {
+    font-size: 22px;
+    line-height: 1;
+    color: var(--text-secondary, #999);
+}
+
+.workflow-canvas__empty-hint-text strong {
+    color: var(--text-primary, #e8e8e8);
+    font-weight: 600;
 }
 
 /* ─── StateNode ─────────────────────────────────────────────────────────── */
 
 .state-node {
-    width: 190px;
+    /* #68: rugalmas szélesség hosszú magyar állapotneveknek
+       (pl. „Tervellenőrzés kiadó által"). A min/max tartomány tartja
+       a kompakt vizuálist, a word-break a nagyon hosszú szavakra. */
+    min-width: 180px;
+    max-width: 240px;
     background: var(--bg-elevated, #282a30);
     border-radius: 10px;
     overflow: hidden;
@@ -314,9 +358,10 @@
     font-weight: 600;
     color: var(--text-primary, #e8e8e8);
     margin-bottom: 2px;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
+    /* #68: hosszú magyar állapotnevek tördelése — overflow rejtett +
+       text-overflow ellipsis helyett word-break, hogy ne tűnjön el a név. */
+    word-break: break-word;
+    line-height: 1.25;
 }
 
 .state-node__id {
@@ -679,10 +724,70 @@
     padding: 2px 6px;
 }
 
+/* #75: read-only chip variant — vizuálisan elválik a kattintható chip-től
+   (nincs hover, default cursor, eltérő border-stílus). A WorkflowProperties
+   contributor-listájához. A chip slug-ot kisebb másodlagos szöveggel mutatja. */
+.designer-chip--readonly {
+    cursor: default;
+    background: rgb(from var(--text-primary) r g b / 0.04);
+    border-color: rgb(from var(--text-primary) r g b / 0.08);
+    border-style: dashed;
+    color: var(--text-secondary, #999);
+    display: inline-flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.designer-chip--readonly:hover {
+    background: rgb(from var(--text-primary) r g b / 0.04);
+    border-color: rgb(from var(--text-primary) r g b / 0.08);
+    color: var(--text-secondary, #999);
+}
+
+.designer-chip__slug {
+    font-size: 10px;
+    opacity: 0.65;
+    font-family: var(--font-mono, ui-monospace, monospace);
+}
+
+.designer-field__chips--readonly {
+    margin-top: 4px;
+}
+
+/* „csak olvasható" badge a label mellé (#75) — egyértelműsíti, hogy a
+   szekció a forrás-rendszerből származik (Szerkesztőség → Csoportok). */
+.designer-field__readonly-badge {
+    margin-left: 8px;
+    padding: 1px 6px;
+    font-size: 9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+    color: var(--text-secondary, #999);
+    background: rgb(from var(--text-primary) r g b / 0.08);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.12);
+    border-radius: 3px;
+    vertical-align: middle;
+    display: inline-block;
+}
+
 .designer-field__empty {
     font-size: 11px;
     color: var(--text-secondary, #999);
     font-style: italic;
+}
+
+/* #71: empty state hint — a kinyitott üres szekciókban segíti a usert
+   („Kattints egy csoportra…", „Még nincs parancs hozzáadva…"). */
+.designer-field__empty-hint {
+    font-size: 11px;
+    color: var(--text-muted, #888);
+    margin: 0 0 8px;
+    padding: 6px 8px;
+    background: rgb(from var(--text-primary) r g b / 0.03);
+    border-left: 2px solid rgb(from var(--accent-solid) r g b / 0.4);
+    border-radius: 0 4px 4px 0;
+    line-height: 1.4;
 }
 
 /* Command lista elem */
@@ -819,6 +924,10 @@
     text-transform: uppercase;
     letter-spacing: 0.5px;
     padding: 4px 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
 }
 
 .node-palette__items {
@@ -1063,4 +1172,88 @@
 .workflow-designer-desktop-only__btn:hover {
     background: rgb(from var(--text-primary) r g b / 0.1);
     border-color: rgb(from var(--text-primary) r g b / 0.2);
+}
+
+/* ─── #73: Oldalpanel collapse toggle ──────────────────────────────────── */
+/* A palette + sidebar összecsukható csíkká, hogy szűk monitoron / összetett
+   workflow vizsgálatkor a canvas full-width legyen. Az állapot localStorage-
+   perzisztált, így visszatéréskor megőrződik a felhasználó preferenciája. */
+
+.workflow-designer-collapse-btn {
+    width: 22px;
+    height: 22px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: rgb(from var(--text-primary) r g b / 0.06);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.12);
+    border-radius: 4px;
+    color: var(--text-secondary, #999);
+    cursor: pointer;
+    font-size: 13px;
+    line-height: 1;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+    flex-shrink: 0;
+}
+
+.workflow-designer-collapse-btn:hover {
+    background: rgb(from var(--accent-solid) r g b / 0.12);
+    border-color: rgb(from var(--accent-solid) r g b / 0.4);
+    color: var(--text-primary, #e8e8e8);
+}
+
+/* Sidebar inline trigger (bontott módban a panel jobb felső sarkában) */
+.workflow-designer-collapse-btn--sidebar-inline {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+}
+
+/* A sidebar relatív kell legyen az inline trigger pozícionálásához */
+.properties-sidebar {
+    position: relative;
+}
+
+/* ── Összecsukott palette (bal) ── */
+.node-palette--collapsed {
+    width: 28px;
+    padding: 8px 3px;
+    align-items: center;
+    gap: 12px;
+    overflow: hidden;
+}
+
+.node-palette__collapsed-label {
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-secondary, #999);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    user-select: none;
+    white-space: nowrap;
+}
+
+/* ── Összecsukott sidebar (jobb) ── */
+.properties-sidebar--collapsed {
+    width: 28px;
+    padding: 8px 3px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    overflow: hidden;
+}
+
+.properties-sidebar__collapsed-label {
+    writing-mode: vertical-rl;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-secondary, #999);
+    text-transform: uppercase;
+    letter-spacing: 0.8px;
+    user-select: none;
+    white-space: nowrap;
 }

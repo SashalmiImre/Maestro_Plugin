@@ -73,18 +73,32 @@ export default function TransitionPropertiesEditor({ edge, onDataChange, availab
                 />
             </div>
 
-            {/* Direction */}
+            {/* Direction — #72: natív <select> helyett chip-csoport (single-select),
+                hogy a designer többi mezőjének chip-stílusához illeszkedjen
+                (rendszerfüggő select widget eltérő platformokon zavaró). */}
             <div className="designer-field">
-                <label className="designer-field__label">Irány</label>
-                <select
-                    className="designer-field__select"
-                    value={data.direction || 'forward'}
-                    onChange={e => update('direction', e.target.value)}
+                <label className="designer-field__label" id={`transition-direction-${edge.id}`}>Irány</label>
+                <div
+                    className="designer-field__chips"
+                    role="radiogroup"
+                    aria-labelledby={`transition-direction-${edge.id}`}
                 >
-                    {DIRECTIONS.map(d => (
-                        <option key={d.value} value={d.value}>{d.label}</option>
-                    ))}
-                </select>
+                    {DIRECTIONS.map(d => {
+                        const isActive = (data.direction || 'forward') === d.value;
+                        return (
+                            <button
+                                key={d.value}
+                                type="button"
+                                role="radio"
+                                aria-checked={isActive}
+                                className={`designer-chip ${isActive ? 'designer-chip--active' : ''}`}
+                                onClick={() => update('direction', d.value)}
+                            >
+                                {d.label}
+                            </button>
+                        );
+                    })}
+                </div>
             </div>
 
             {/* Allowed Groups */}
