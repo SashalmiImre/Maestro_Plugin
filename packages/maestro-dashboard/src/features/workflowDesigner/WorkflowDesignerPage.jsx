@@ -294,6 +294,21 @@ export default function WorkflowDesignerPage() {
         [metadata.contributorGroups]
     );
 
+    // A canvason már használt színek (NodePalette next-color logikájához, #61)
+    const usedNodeColors = useMemo(
+        () => nodes.map(n => n.data?.color).filter(Boolean),
+        [nodes]
+    );
+
+    // State slug → label térkép a TransitionPropertiesEditor „Útvonal" részéhez (#65)
+    const stateLabels = useMemo(() => {
+        const map = {};
+        for (const n of nodes) {
+            if (n?.id) map[n.id] = n.data?.label || n.id;
+        }
+        return map;
+    }, [nodes]);
+
     const handleNodeDataChange = useCallback((newData) => {
         if (!selectedNodeId) return;
 
@@ -636,6 +651,16 @@ export default function WorkflowDesignerPage() {
                         maxLength={128}
                         aria-label="Workflow neve"
                     />
+                    {/* Dirty indikátor (#63): piros pötty a név mellett — VS Code tab minta.
+                        A jobb oldali szöveg redundáns, eltávolítva — ezt a pötty viseli. */}
+                    {isDirty && (
+                        <span
+                            className="workflow-designer-toolbar__dirty-dot"
+                            role="status"
+                            aria-label="Nem mentett változások"
+                            title="Nem mentett változások"
+                        />
+                    )}
                     {availableWorkflows && availableWorkflows.length > 1 && (
                         <select
                             className="workflow-designer-toolbar__selector"
@@ -715,7 +740,7 @@ export default function WorkflowDesignerPage() {
 
             {/* Fő tartalom: palette + canvas + sidebar */}
             <div className="workflow-designer-body">
-                <NodePalette nodeCount={nodes.length} />
+                <NodePalette usedColors={usedNodeColors} />
                 <WorkflowCanvas
                     nodes={nodes}
                     edges={edges}
@@ -741,6 +766,7 @@ export default function WorkflowDesignerPage() {
                     version={version}
                     metadata={metadata}
                     onMetadataChange={handleMetadataChange}
+                    stateLabels={stateLabels}
                 />
             </div>
 

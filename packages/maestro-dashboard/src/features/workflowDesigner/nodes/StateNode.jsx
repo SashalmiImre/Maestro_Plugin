@@ -89,7 +89,9 @@ function StateNode({ data, selected }) {
 
                 <div className="state-node__duration">{formatDuration(duration)}</div>
 
-                {/* Badge-ek */}
+                {/* Badge-ek — #62: hover-expand (kód → teljes név inline morph).
+                    Két span (rövid kód + teljes név), a CSS hover-on cserél köztük.
+                    Native title eltávolítva (aria-label marad screen reader-nek). */}
                 {(validatorBadges.length > 0 || commandBadges.length > 0) && (
                     <div className="state-node__badges">
                         {validatorBadges.map(({ code, id }) => {
@@ -98,10 +100,10 @@ function StateNode({ data, selected }) {
                                 <span
                                     key={code}
                                     className="state-node__badge state-node__badge--validator"
-                                    title={`${label} (${code})`}
                                     aria-label={`Validátor: ${label}`}
                                 >
-                                    {code}
+                                    <span className="state-node__badge-code" aria-hidden="true">{code}</span>
+                                    <span className="state-node__badge-full" aria-hidden="true">{label}</span>
                                 </span>
                             );
                         })}
@@ -111,10 +113,10 @@ function StateNode({ data, selected }) {
                                 <span
                                     key={id}
                                     className="state-node__badge state-node__badge--command"
-                                    title={`${label} (${code})`}
                                     aria-label={`Parancs: ${label}`}
                                 >
-                                    {code}
+                                    <span className="state-node__badge-code" aria-hidden="true">{code}</span>
+                                    <span className="state-node__badge-full" aria-hidden="true">{label}</span>
                                 </span>
                             );
                         })}

@@ -22,13 +22,15 @@ import WorkflowPropertiesEditor from './editors/WorkflowPropertiesEditor.jsx';
  * @param {number} props.version - Workflow verzió
  * @param {Object} props.metadata - Workflow-szintű adatok
  * @param {Function} props.onMetadataChange - Metadata módosítás callback
+ * @param {Object<string,string>} [props.stateLabels] - State slug → label térkép (TransitionPropertiesEditor #65)
  */
 export default function PropertiesSidebar({
     selectedNode, selectedEdge,
     onNodeDataChange, onEdgeDataChange,
     onDeleteNode, onDeleteEdge,
     availableGroups,
-    version, metadata, onMetadataChange
+    version, metadata, onMetadataChange,
+    stateLabels
 }) {
     return (
         <div className="properties-sidebar">
@@ -45,6 +47,7 @@ export default function PropertiesSidebar({
                     onDataChange={onEdgeDataChange}
                     availableGroups={availableGroups}
                     onDelete={onDeleteEdge}
+                    stateLabels={stateLabels}
                 />
             ) : (
                 <WorkflowPropertiesEditor

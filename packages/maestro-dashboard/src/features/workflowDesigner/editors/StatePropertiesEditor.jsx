@@ -6,7 +6,7 @@
  * validations, commands, statePermissions.
  */
 
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useState, useMemo } from 'react';
 import ColorPickerField from '../fields/ColorPickerField.jsx';
 import GroupMultiSelectField from '../fields/GroupMultiSelectField.jsx';
 import ValidationListField from '../fields/ValidationListField.jsx';
@@ -21,7 +21,9 @@ import CommandListField from '../fields/CommandListField.jsx';
  */
 export default function StatePropertiesEditor({ node, onDataChange, availableGroups, onDelete }) {
     const { data } = node;
-    const [validationsOpen, setValidationsOpen] = useState(true);
+    // #64: minden szekció ZÁRVA alapból — szimmetria + a Mozgatási jogosultság
+    // (kritikus policy) sem ragad „rejtett"-ben az aszimmetrikus default miatt.
+    const [validationsOpen, setValidationsOpen] = useState(false);
     const [commandsOpen, setCommandsOpen] = useState(false);
     const [permissionsOpen, setPermissionsOpen] = useState(false);
 
@@ -35,6 +37,17 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
             validations: { ...data.validations, [listKey]: value }
         });
     }, [data, onDataChange]);
+
+    // #64: szekció trigger label-ek itemszám badge-dzsel — a user a panel megnyitása
+    // nélkül lássa, hány elem van bent (alvó policy észrevétlenül nem maradhat).
+    const validationsCount = useMemo(() => {
+        const v = data.validations || {};
+        return (v.onEntry?.length || 0)
+            + (v.requiredToEnter?.length || 0)
+            + (v.requiredToExit?.length || 0);
+    }, [data.validations]);
+    const commandsCount = (data.commands || []).length;
+    const permissionsCount = (data.statePermissions || []).length;
 
     return (
         <div className="properties-editor">
@@ -122,29 +135,35 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
             </div>
 
             {/* ── Validációk (collapsible) ──────────────────────────────────── */}
+            {/* #66: az „onEntry" akció (futtatás), a „requiredToEnter/Exit" kapu (ellenőrzés).
+                A label prefix + tooltip a két szemantikát egyértelműsíti. */}
             <div className="designer-collapsible">
                 <button
                     type="button"
                     className="designer-collapsible__header"
                     onClick={() => setValidationsOpen(v => !v)}
+                    aria-expanded={validationsOpen}
                 >
-                    <span>Validációk</span>
-                    <span className="designer-collapsible__chevron">{validationsOpen ? '▾' : '▸'}</span>
+                    <span>Validációk{validationsCount > 0 ? ` (${validationsCount})` : ''}</span>
+                    <span className="designer-collapsible__chevron" aria-hidden="true">{validationsOpen ? '▾' : '▸'}</span>
                 </button>
                 {validationsOpen && (
                     <div className="designer-collapsible__body">
                         <ValidationListField
-                            label="Belépéskor futtatandó"
+                            label="Akció: belépéskor futtatódik"
+                            helpText="Az állapotba lépés pillanatában lefutó művelet (pl. preflight). Nem blokkolja a belépést."
                             value={data.validations?.onEntry || []}
                             onChange={v => updateValidation('onEntry', v)}
                         />
                         <ValidationListField
-                            label="Belépés feltétele"
+                            label="Ellenőrzés: belépés feltétele"
+                            helpText="Az állapotba lépés ELŐTT futó kapu — ha bukik, az átmenet blokkolva."
                             value={data.validations?.requiredToEnter || []}
                             onChange={v => updateValidation('requiredToEnter', v)}
                         />
                         <ValidationListField
-                            label="Kilépés feltétele"
+                            label="Ellenőrzés: kilépés feltétele"
+                            helpText="Az állapotból kilépés ELŐTT futó kapu — ha bukik, az átmenet blokkolva."
                             value={data.validations?.requiredToExit || []}
                             onChange={v => updateValidation('requiredToExit', v)}
                         />
@@ -158,9 +177,10 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                     type="button"
                     className="designer-collapsible__header"
                     onClick={() => setCommandsOpen(v => !v)}
+                    aria-expanded={commandsOpen}
                 >
-                    <span>Parancsok</span>
-                    <span className="designer-collapsible__chevron">{commandsOpen ? '▾' : '▸'}</span>
+                    <span>Parancsok{commandsCount > 0 ? ` (${commandsCount})` : ''}</span>
+                    <span className="designer-collapsible__chevron" aria-hidden="true">{commandsOpen ? '▾' : '▸'}</span>
                 </button>
                 {commandsOpen && (
                     <div className="designer-collapsible__body">
@@ -179,9 +199,13 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                     type="button"
                     className="designer-collapsible__header"
                     onClick={() => setPermissionsOpen(v => !v)}
+                    aria-expanded={permissionsOpen}
                 >
-                    <span>Mozgatási jogosultság</span>
-                    <span className="designer-collapsible__chevron">{permissionsOpen ? '▾' : '▸'}</span>
+                    <span>
+                        Mozgatási jogosultság
+                        {permissionsCount > 0 ? ` (${permissionsCount} csoport)` : ''}
+                    </span>
+                    <span className="designer-collapsible__chevron" aria-hidden="true">{permissionsOpen ? '▾' : '▸'}</span>
                 </button>
                 {permissionsOpen && (
                     <div className="designer-collapsible__body">

@@ -20,10 +20,11 @@ function getValidatorId(v) {
 /**
  * @param {Object} props
  * @param {string} props.label - Mező címke
+ * @param {string} [props.helpText] - Magyarázó szöveg a label alatt (#66)
  * @param {Array} props.value - Kiválasztott validátorok (string[] vagy object[])
  * @param {Function} props.onChange - (Array) => void
  */
-export default function ValidationListField({ label, value = [], onChange }) {
+export default function ValidationListField({ label, helpText, value = [], onChange }) {
     const selectedIds = new Set(value.map(getValidatorId));
 
     const handleToggle = useCallback((validatorId) => {
@@ -42,6 +43,7 @@ export default function ValidationListField({ label, value = [], onChange }) {
     return (
         <div className="designer-field">
             {label && <label className="designer-field__label">{label}</label>}
+            {helpText && <p className="designer-field__help">{helpText}</p>}
             <div className="designer-field__chips">
                 {VALIDATOR_IDS.map(id => (
                     <button
