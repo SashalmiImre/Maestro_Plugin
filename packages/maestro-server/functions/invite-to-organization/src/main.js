@@ -1,5 +1,14 @@
 const sdk = require("node-appwrite");
 const crypto = require("crypto");
+const {
+    buildOrgTeamId,
+    buildOfficeTeamId,
+    buildOrgAclPerms,
+    buildOfficeAclPerms,
+    ensureTeam,
+    ensureTeamMembership,
+    deleteTeamIfExists
+} = require("./teamHelpers.js");
 
 /**
  * Appwrite Function: Invite To Organization
@@ -134,7 +143,8 @@ const VALID_ACTIONS = new Set([
     'delete_workflow', 'duplicate_workflow',
     'update_organization',
     'create_editorial_office', 'update_editorial_office',
-    'delete_organization', 'delete_editorial_office'
+    'delete_organization', 'delete_editorial_office',
+    'backfill_tenant_acl'
 ]);
 
 // Workflow láthatóság enum — MVP 2-way (lásd _docs/Feladatok.md #30).
@@ -598,6 +608,7 @@ module.exports = async function ({ req, res, log, error }) {
 
         const databases = new sdk.Databases(client);
         const usersApi = new sdk.Users(client);
+        const teamsApi = new sdk.Teams(client);
 
         const databaseId = process.env.DATABASE_ID;
         const organizationsCollectionId = process.env.ORGANIZATIONS_COLLECTION_ID;
@@ -712,6 +723,18 @@ module.exports = async function ({ req, res, log, error }) {
                 });
             }
 
+            // Rollback-stack — LIFO: bármelyik hibapontnál visszafelé fut a
+            // fordított sorrendben, így elkerüli a korábbi verzió 5x-ismétlődő
+            // try/catch rollback láncát. Best-effort: minden lépés saját
+            // catch-csel, hogy egy delete hiba ne szakítsa meg a többit.
+            const rollbackSteps = [];
+            const runRollback = async () => {
+                for (let i = rollbackSteps.length - 1; i >= 0; i--) {
+                    try { await rollbackSteps[i](); }
+                    catch (e) { error(`[Bootstrap] rollback lépés hiba: ${e.message}`); }
+                }
+            };
+
             // 1. organizations
             let newOrgId = null;
             try {
@@ -726,12 +749,26 @@ module.exports = async function ({ req, res, log, error }) {
                     }
                 );
                 newOrgId = newOrg.$id;
+                rollbackSteps.push(() => databases.deleteDocument(databaseId, organizationsCollectionId, newOrgId));
             } catch (err) {
                 if (err?.type === 'document_already_exists' || /unique/i.test(err?.message || '')) {
                     return fail(res, 409, 'org_slug_taken');
                 }
                 error(`[Bootstrap] organizations create hiba: ${err.message}`);
                 return fail(res, 500, 'org_create_failed');
+            }
+
+            // 1.5. Org team — tenant ACL alapja, idempotens
+            const orgTeamId = buildOrgTeamId(newOrgId);
+            try {
+                const result = await ensureTeam(teamsApi, orgTeamId, `Org: ${orgName}`);
+                if (result.created) {
+                    rollbackSteps.push(() => teamsApi.delete(orgTeamId));
+                }
+            } catch (err) {
+                error(`[Bootstrap] org team create hiba: ${err.message}`);
+                await runRollback();
+                return fail(res, 500, 'org_team_create_failed');
             }
 
             // 2. organizationMemberships — owner role
@@ -749,15 +786,20 @@ module.exports = async function ({ req, res, log, error }) {
                     }
                 );
                 newMembershipId = membership.$id;
+                rollbackSteps.push(() => databases.deleteDocument(databaseId, membershipsCollectionId, newMembershipId));
             } catch (err) {
                 error(`[Bootstrap] organizationMemberships create hiba: ${err.message}`);
-                // Rollback: org törlés
-                try {
-                    await databases.deleteDocument(databaseId, organizationsCollectionId, newOrgId);
-                } catch (rollbackErr) {
-                    error(`[Bootstrap] org rollback sikertelen: ${rollbackErr.message}`);
-                }
+                await runRollback();
                 return fail(res, 500, 'membership_create_failed');
+            }
+
+            // 2.5. Owner a team-be (team törlése cascade-eli a memberships-et → nincs külön rollback step)
+            try {
+                await ensureTeamMembership(teamsApi, orgTeamId, callerId, ['owner']);
+            } catch (err) {
+                error(`[Bootstrap] org team membership hiba: ${err.message}`);
+                await runRollback();
+                return fail(res, 500, 'org_team_membership_create_failed');
             }
 
             // 3. editorialOffices
@@ -775,23 +817,27 @@ module.exports = async function ({ req, res, log, error }) {
                     }
                 );
                 newOfficeId = office.$id;
+                rollbackSteps.push(() => databases.deleteDocument(databaseId, officesCollectionId, newOfficeId));
             } catch (err) {
                 error(`[Bootstrap] editorialOffices create hiba: ${err.message}`);
-                // Rollback: membership + org törlés
-                try {
-                    await databases.deleteDocument(databaseId, membershipsCollectionId, newMembershipId);
-                } catch (rollbackErr) {
-                    error(`[Bootstrap] membership rollback sikertelen: ${rollbackErr.message}`);
-                }
-                try {
-                    await databases.deleteDocument(databaseId, organizationsCollectionId, newOrgId);
-                } catch (rollbackErr) {
-                    error(`[Bootstrap] org rollback sikertelen: ${rollbackErr.message}`);
-                }
+                await runRollback();
                 if (err?.type === 'document_already_exists' || /unique/i.test(err?.message || '')) {
                     return fail(res, 409, 'office_slug_taken');
                 }
                 return fail(res, 500, 'office_create_failed');
+            }
+
+            // 3.5. Office team
+            const officeTeamId = buildOfficeTeamId(newOfficeId);
+            try {
+                const result = await ensureTeam(teamsApi, officeTeamId, `Office: ${officeName}`);
+                if (result.created) {
+                    rollbackSteps.push(() => teamsApi.delete(officeTeamId));
+                }
+            } catch (err) {
+                error(`[Bootstrap] office team create hiba: ${err.message}`);
+                await runRollback();
+                return fail(res, 500, 'office_team_create_failed');
             }
 
             // 4. editorialOfficeMemberships — admin role
@@ -809,29 +855,32 @@ module.exports = async function ({ req, res, log, error }) {
                     }
                 );
                 newOfficeMembershipId = officeMembershipDoc.$id;
+                rollbackSteps.push(() => databases.deleteDocument(databaseId, officeMembershipsCollectionId, newOfficeMembershipId));
             } catch (err) {
                 error(`[Bootstrap] editorialOfficeMemberships create hiba: ${err.message}`);
-                // Rollback: office + membership + org törlés
-                try {
-                    await databases.deleteDocument(databaseId, officesCollectionId, newOfficeId);
-                } catch (rollbackErr) {
-                    error(`[Bootstrap] office rollback sikertelen: ${rollbackErr.message}`);
-                }
-                try {
-                    await databases.deleteDocument(databaseId, membershipsCollectionId, newMembershipId);
-                } catch (rollbackErr) {
-                    error(`[Bootstrap] membership rollback sikertelen: ${rollbackErr.message}`);
-                }
-                try {
-                    await databases.deleteDocument(databaseId, organizationsCollectionId, newOrgId);
-                } catch (rollbackErr) {
-                    error(`[Bootstrap] org rollback sikertelen: ${rollbackErr.message}`);
-                }
+                await runRollback();
                 return fail(res, 500, 'office_membership_create_failed');
             }
 
-            // 5. groups — 7 alapértelmezett csoport az új szerkesztőséghez
+            // 4.5. Admin az office team-be
+            try {
+                await ensureTeamMembership(teamsApi, officeTeamId, callerId, ['admin']);
+            } catch (err) {
+                error(`[Bootstrap] office team membership hiba: ${err.message}`);
+                await runRollback();
+                return fail(res, 500, 'office_team_membership_create_failed');
+            }
+
+            // 5. groups — 7 alapértelmezett csoport + office ACL tag
             const createdGroupIds = [];
+            // Rollback step ELŐTT pusholunk, hogy a mid-loop hiba is takarítsa
+            // a már létrehozott csoportokat (closure a mutable array-re).
+            rollbackSteps.push(async () => {
+                for (const gId of createdGroupIds) {
+                    try { await databases.deleteDocument(databaseId, groupsCollectionId, gId); }
+                    catch (e) { error(`[Bootstrap] group rollback sikertelen (${gId}): ${e.message}`); }
+                }
+            });
             try {
                 for (const groupDef of DEFAULT_GROUPS) {
                     const groupDoc = await databases.createDocument(
@@ -844,27 +893,14 @@ module.exports = async function ({ req, res, log, error }) {
                             editorialOfficeId: newOfficeId,
                             organizationId: newOrgId,
                             createdByUserId: callerId
-                        }
+                        },
+                        buildOfficeAclPerms(newOfficeId)
                     );
                     createdGroupIds.push(groupDoc.$id);
                 }
             } catch (err) {
                 error(`[Bootstrap] groups create hiba (${createdGroupIds.length}/${DEFAULT_GROUPS.length} kész): ${err.message}`);
-                // Rollback: groups + officeMembership + office + membership + org
-                for (const gId of createdGroupIds) {
-                    try { await databases.deleteDocument(databaseId, groupsCollectionId, gId); }
-                    catch (e) { error(`[Bootstrap] group rollback sikertelen (${gId}): ${e.message}`); }
-                }
-                if (newOfficeMembershipId) {
-                    try { await databases.deleteDocument(databaseId, officeMembershipsCollectionId, newOfficeMembershipId); }
-                    catch (e) { error(`[Bootstrap] officeMembership rollback sikertelen (${newOfficeMembershipId}): ${e.message}`); }
-                }
-                try { await databases.deleteDocument(databaseId, officesCollectionId, newOfficeId); }
-                catch (e) { error(`[Bootstrap] office rollback sikertelen: ${e.message}`); }
-                try { await databases.deleteDocument(databaseId, membershipsCollectionId, newMembershipId); }
-                catch (e) { error(`[Bootstrap] membership rollback sikertelen: ${e.message}`); }
-                try { await databases.deleteDocument(databaseId, organizationsCollectionId, newOrgId); }
-                catch (e) { error(`[Bootstrap] org rollback sikertelen: ${e.message}`); }
+                await runRollback();
                 return fail(res, 500, 'groups_create_failed');
             }
 
@@ -878,6 +914,12 @@ module.exports = async function ({ req, res, log, error }) {
             }
 
             const createdGroupMembershipIds = [];
+            rollbackSteps.push(async () => {
+                for (const gmId of createdGroupMembershipIds) {
+                    try { await databases.deleteDocument(databaseId, groupMembershipsCollectionId, gmId); }
+                    catch (e) { error(`[Bootstrap] groupMembership rollback sikertelen (${gmId}): ${e.message}`); }
+                }
+            });
             try {
                 for (const gId of createdGroupIds) {
                     const gmDoc = await databases.createDocument(
@@ -893,31 +935,14 @@ module.exports = async function ({ req, res, log, error }) {
                             addedByUserId: callerId,
                             userName: callerUser.name || '',
                             userEmail: callerUser.email || ''
-                        }
+                        },
+                        buildOfficeAclPerms(newOfficeId)
                     );
                     createdGroupMembershipIds.push(gmDoc.$id);
                 }
             } catch (err) {
                 error(`[Bootstrap] groupMemberships create hiba (${createdGroupMembershipIds.length}/${createdGroupIds.length} kész): ${err.message}`);
-                // Rollback: groupMemberships + groups + előző lépések
-                for (const gmId of createdGroupMembershipIds) {
-                    try { await databases.deleteDocument(databaseId, groupMembershipsCollectionId, gmId); }
-                    catch (e) { error(`[Bootstrap] groupMembership rollback sikertelen (${gmId}): ${e.message}`); }
-                }
-                for (const gId of createdGroupIds) {
-                    try { await databases.deleteDocument(databaseId, groupsCollectionId, gId); }
-                    catch (e) { error(`[Bootstrap] group rollback sikertelen (${gId}): ${e.message}`); }
-                }
-                if (newOfficeMembershipId) {
-                    try { await databases.deleteDocument(databaseId, officeMembershipsCollectionId, newOfficeMembershipId); }
-                    catch (e) { error(`[Bootstrap] officeMembership rollback sikertelen (${newOfficeMembershipId}): ${e.message}`); }
-                }
-                try { await databases.deleteDocument(databaseId, officesCollectionId, newOfficeId); }
-                catch (e) { error(`[Bootstrap] office rollback sikertelen: ${e.message}`); }
-                try { await databases.deleteDocument(databaseId, membershipsCollectionId, newMembershipId); }
-                catch (e) { error(`[Bootstrap] membership rollback sikertelen: ${e.message}`); }
-                try { await databases.deleteDocument(databaseId, organizationsCollectionId, newOrgId); }
-                catch (e) { error(`[Bootstrap] org rollback sikertelen: ${e.message}`); }
+                await runRollback();
                 return fail(res, 500, 'group_memberships_create_failed');
             }
 
@@ -1074,7 +1099,8 @@ module.exports = async function ({ req, res, log, error }) {
                         status: 'pending',
                         expiresAt,
                         invitedByUserId: callerId
-                    }
+                    },
+                    buildOrgAclPerms(organizationId)
                 );
             } catch (err) {
                 if (err?.type === 'document_already_exists' || /unique/i.test(err?.message || '')) {
@@ -1257,7 +1283,21 @@ module.exports = async function ({ req, res, log, error }) {
                 throw err;
             }
 
-            // 7. Invite státusz frissítés
+            // 7. Invitee hozzáadás az org team-hez (tenant ACL scope kiterjesztés).
+            // Ha a team még nem létezik (legacy org backfill előtt), skip — a
+            // `backfill_tenant_acl` action majd pótolja.
+            try {
+                await ensureTeamMembership(
+                    teamsApi,
+                    buildOrgTeamId(invite.organizationId),
+                    callerId,
+                    [invite.role || 'member']
+                );
+            } catch (err) {
+                error(`[Accept] org team membership hiba (non-blocking): ${err.message}`);
+            }
+
+            // 8. Invite státusz frissítés
             await databases.updateDocument(databaseId, invitesCollectionId, invite.$id, {
                 status: 'accepted'
             });
@@ -1340,7 +1380,7 @@ module.exports = async function ({ req, res, log, error }) {
                 });
             }
 
-            // 5. GroupMembership létrehozás (idempotens)
+            // 5. GroupMembership létrehozás (idempotens) — office ACL scope-pal
             try {
                 const gmDoc = await databases.createDocument(
                     databaseId,
@@ -1355,7 +1395,8 @@ module.exports = async function ({ req, res, log, error }) {
                         addedByUserId: callerId,
                         userName: targetUser.name || '',
                         userEmail: targetUser.email || ''
-                    }
+                    },
+                    buildOfficeAclPerms(group.editorialOfficeId)
                 );
                 log(`[AddGroupMember] User ${userId} hozzáadva a group ${groupId}-hoz (${group.slug})`);
                 return res.json({
@@ -1531,7 +1572,8 @@ module.exports = async function ({ req, res, log, error }) {
                             name: sanitizedName,
                             slug: candidateSlug,
                             createdByUserId: callerId
-                        }
+                        },
+                        buildOfficeAclPerms(editorialOfficeId)
                     );
                     break;
                 } catch (err) {
@@ -1573,7 +1615,8 @@ module.exports = async function ({ req, res, log, error }) {
                             addedByUserId: callerId,
                             userName: callerUser?.name || '',
                             userEmail: callerUser?.email || ''
-                        }
+                        },
+                        buildOfficeAclPerms(editorialOfficeId)
                     );
                     seedMembershipId = memDoc.$id;
                 } catch (err) {
@@ -2277,6 +2320,15 @@ module.exports = async function ({ req, res, log, error }) {
                 }
             }
 
+            // Rollback-stack (LIFO) — lásd bootstrap_organization komment.
+            const rollbackSteps = [];
+            const runRollback = async () => {
+                for (let i = rollbackSteps.length - 1; i >= 0; i--) {
+                    try { await rollbackSteps[i](); }
+                    catch (e) { error(`[CreateOffice] rollback lépés hiba: ${e.message}`); }
+                }
+            };
+
             // 3. Office létrehozás — slug auto-generálás + ütközéskor retry
             //    random suffix-szel. Max 3 próba.
             const baseSlug = slugifyName(sanitizedName);
@@ -2299,6 +2351,7 @@ module.exports = async function ({ req, res, log, error }) {
                     );
                     newOfficeId = officeDoc.$id;
                     usedSlug = candidateSlug;
+                    rollbackSteps.push(() => databases.deleteDocument(databaseId, officesCollectionId, newOfficeId));
                     break;
                 } catch (err) {
                     const isUnique = err?.type === 'document_already_exists' || /unique/i.test(err?.message || '');
@@ -2307,6 +2360,19 @@ module.exports = async function ({ req, res, log, error }) {
                     if (isUnique) return fail(res, 409, 'office_slug_taken');
                     return fail(res, 500, 'office_create_failed');
                 }
+            }
+
+            // 3.5. Office team — tenant ACL alapja, idempotens
+            const officeTeamId = buildOfficeTeamId(newOfficeId);
+            try {
+                const result = await ensureTeam(teamsApi, officeTeamId, `Office: ${sanitizedName}`);
+                if (result.created) {
+                    rollbackSteps.push(() => teamsApi.delete(officeTeamId));
+                }
+            } catch (err) {
+                error(`[CreateOffice] office team create hiba: ${err.message}`);
+                await runRollback();
+                return fail(res, 500, 'office_team_create_failed');
             }
 
             // 4. officeMembership — admin role a caller-hez.
@@ -2324,15 +2390,31 @@ module.exports = async function ({ req, res, log, error }) {
                     }
                 );
                 newOfficeMembershipId = memDoc.$id;
+                rollbackSteps.push(() => databases.deleteDocument(databaseId, officeMembershipsCollectionId, newOfficeMembershipId));
             } catch (err) {
                 error(`[CreateOffice] officeMembership create hiba: ${err.message}`);
-                try { await databases.deleteDocument(databaseId, officesCollectionId, newOfficeId); }
-                catch (e) { error(`[CreateOffice] office rollback sikertelen: ${e.message}`); }
+                await runRollback();
                 return fail(res, 500, 'office_membership_create_failed');
             }
 
-            // 5. 7 default group az új office-hoz.
+            // 4.5. Caller az office team-be (admin role — cascade-re épít: a team
+            //      törlése törli a memberships-et is, ezért nem kell explicit rollback step).
+            try {
+                await ensureTeamMembership(teamsApi, officeTeamId, callerId, ['admin']);
+            } catch (err) {
+                error(`[CreateOffice] office team membership hiba: ${err.message}`);
+                await runRollback();
+                return fail(res, 500, 'office_team_membership_create_failed');
+            }
+
+            // 5. 7 default group az új office-hoz — office ACL scope-pal.
             const createdGroupIds = [];
+            rollbackSteps.push(async () => {
+                for (const gId of createdGroupIds) {
+                    try { await databases.deleteDocument(databaseId, groupsCollectionId, gId); }
+                    catch (e) { error(`[CreateOffice] group rollback sikertelen (${gId}): ${e.message}`); }
+                }
+            });
             try {
                 for (const groupDef of DEFAULT_GROUPS) {
                     const groupDoc = await databases.createDocument(
@@ -2345,24 +2427,18 @@ module.exports = async function ({ req, res, log, error }) {
                             editorialOfficeId: newOfficeId,
                             organizationId,
                             createdByUserId: callerId
-                        }
+                        },
+                        buildOfficeAclPerms(newOfficeId)
                     );
                     createdGroupIds.push(groupDoc.$id);
                 }
             } catch (err) {
                 error(`[CreateOffice] groups create hiba (${createdGroupIds.length}/${DEFAULT_GROUPS.length} kész): ${err.message}`);
-                for (const gId of createdGroupIds) {
-                    try { await databases.deleteDocument(databaseId, groupsCollectionId, gId); }
-                    catch (e) { error(`[CreateOffice] group rollback sikertelen (${gId}): ${e.message}`); }
-                }
-                try { await databases.deleteDocument(databaseId, officeMembershipsCollectionId, newOfficeMembershipId); }
-                catch (e) { error(`[CreateOffice] officeMembership rollback sikertelen: ${e.message}`); }
-                try { await databases.deleteDocument(databaseId, officesCollectionId, newOfficeId); }
-                catch (e) { error(`[CreateOffice] office rollback sikertelen: ${e.message}`); }
+                await runRollback();
                 return fail(res, 500, 'groups_create_failed');
             }
 
-            // 6. groupMemberships — a caller tagja lesz mindegyiknek.
+            // 6. groupMemberships — a caller tagja lesz mindegyiknek + office ACL.
             let callerUser;
             try {
                 callerUser = await usersApi.get(callerId);
@@ -2372,6 +2448,12 @@ module.exports = async function ({ req, res, log, error }) {
             }
 
             const createdGmIds = [];
+            rollbackSteps.push(async () => {
+                for (const gmId of createdGmIds) {
+                    try { await databases.deleteDocument(databaseId, groupMembershipsCollectionId, gmId); }
+                    catch (e) { error(`[CreateOffice] groupMembership rollback sikertelen (${gmId}): ${e.message}`); }
+                }
+            });
             try {
                 for (const gId of createdGroupIds) {
                     const gmDoc = await databases.createDocument(
@@ -2387,24 +2469,14 @@ module.exports = async function ({ req, res, log, error }) {
                             addedByUserId: callerId,
                             userName: callerUser.name || '',
                             userEmail: callerUser.email || ''
-                        }
+                        },
+                        buildOfficeAclPerms(newOfficeId)
                     );
                     createdGmIds.push(gmDoc.$id);
                 }
             } catch (err) {
                 error(`[CreateOffice] groupMemberships create hiba (${createdGmIds.length}/${createdGroupIds.length} kész): ${err.message}`);
-                for (const gmId of createdGmIds) {
-                    try { await databases.deleteDocument(databaseId, groupMembershipsCollectionId, gmId); }
-                    catch (e) { error(`[CreateOffice] groupMembership rollback sikertelen (${gmId}): ${e.message}`); }
-                }
-                for (const gId of createdGroupIds) {
-                    try { await databases.deleteDocument(databaseId, groupsCollectionId, gId); }
-                    catch (e) { error(`[CreateOffice] group rollback sikertelen (${gId}): ${e.message}`); }
-                }
-                try { await databases.deleteDocument(databaseId, officeMembershipsCollectionId, newOfficeMembershipId); }
-                catch (e) { error(`[CreateOffice] officeMembership rollback sikertelen: ${e.message}`); }
-                try { await databases.deleteDocument(databaseId, officesCollectionId, newOfficeId); }
-                catch (e) { error(`[CreateOffice] office rollback sikertelen: ${e.message}`); }
+                await runRollback();
                 return fail(res, 500, 'group_memberships_create_failed');
             }
 
@@ -3363,6 +3435,15 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 500, 'office_delete_failed');
             }
 
+            // 5) Office team cleanup — best-effort. Az office doc már törölve,
+            //    a team törlés cascade-eli a memberships-et. Ha elbukik, a team
+            //    árva (nem létező office-ra mutat) — nem blokkoljuk a usert.
+            try {
+                await deleteTeamIfExists(teamsApi, buildOfficeTeamId(editorialOfficeId));
+            } catch (teamErr) {
+                error(`[DeleteOffice] office team törlés best-effort hiba: ${teamErr.message}`);
+            }
+
             log(`[DeleteOffice] User ${callerId} törölte office ${editorialOfficeId} ("${officeDoc.name}") + kaszkád`);
 
             return res.json({
@@ -3494,6 +3575,13 @@ module.exports = async function ({ req, res, log, error }) {
                         });
                     }
 
+                    // Office team cleanup — best-effort, lásd delete_editorial_office.
+                    try {
+                        await deleteTeamIfExists(teamsApi, buildOfficeTeamId(office.$id));
+                    } catch (teamErr) {
+                        error(`[DeleteOrg] office team törlés best-effort hiba (${office.$id}): ${teamErr.message}`);
+                    }
+
                     officeStats.push({ officeId: office.$id, name: office.name, stats });
                 }
 
@@ -3526,6 +3614,14 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 500, 'organization_delete_failed');
             }
 
+            // 5b) Org team cleanup — best-effort. Az org doc már törölve, a team
+            //     törlés cascade-eli az org memberships-et is.
+            try {
+                await deleteTeamIfExists(teamsApi, buildOrgTeamId(organizationId));
+            } catch (teamErr) {
+                error(`[DeleteOrg] org team törlés best-effort hiba: ${teamErr.message}`);
+            }
+
             // 6) Memberships takarítás — az org doc már nincs, a caller
             //    membership-e már nem ad semmilyen retry-lehetőséget.
             //    Ha ez elbukik, a maradék memberships árvák maradnak
@@ -3552,6 +3648,302 @@ module.exports = async function ({ req, res, log, error }) {
                 officeStats,
                 orgCleanup
             });
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // ACTION = 'backfill_tenant_acl'
+        // ════════════════════════════════════════════════════════════════
+        //
+        // Egy konkrét szervezet + annak minden szerkesztőségének egyszeri
+        // migrációja — létrehozza a hiányzó Appwrite Team-eket, szinkronizálja
+        // a tagságot (`organizationMemberships` / `editorialOfficeMemberships`
+        // alapján), és rewrite-olja a document-szintű ACL-t:
+        //   - organizationInvites.read  = team:org_${orgId}
+        //   - groups.read               = team:office_${officeId}
+        //   - groupMemberships.read     = team:office_${officeId}
+        //
+        // Caller: KIZÁRÓLAG a payload-beli org `owner` role-lal rendelkező tagja.
+        // Scoped action: csak a megadott `organizationId` + hozzá tartozó
+        // office-ok kerülnek migrálásra — NINCS project-wide scan, mert az
+        // lehetővé tenné, hogy A tenant owner-e mutassa B tenant ACL-jét.
+        // Több org migrálásához többször kell hívni (egyszeri művelet).
+        //
+        // Idempotens: ugyanabban az env-ben többször futtatható, a team- és
+        // membership-műveletek ugyanazt az eredményt adják (409 → skip),
+        // az ACL rewrite pedig determinisztikus.
+        //
+        // Payload:
+        //   - organizationId: string  (kötelező — target org)
+        //   - dryRun: true            (opcionális — nem ír, csak számolja mi változna)
+        //
+        // Fail-open per-doc: egy-egy ACL rewrite vagy team member hiba
+        // NEM szakítja meg a futást, a végeredményben `errors[]` kap egy
+        // sort. Így egy félbeszakadt első futás után a következő futás a
+        // maradékot is pótolja.
+        if (action === 'backfill_tenant_acl') {
+            const dryRun = payload.dryRun === true;
+            const { organizationId: targetOrgId } = payload;
+
+            if (!targetOrgId || typeof targetOrgId !== 'string') {
+                return fail(res, 400, 'missing_fields', { required: ['organizationId'] });
+            }
+
+            // Caller jogosultság: target org `owner` role.
+            const ownerMembership = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', targetOrgId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.select(['role']),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (ownerMembership.documents.length === 0) {
+                return fail(res, 403, 'not_a_member');
+            }
+            if (ownerMembership.documents[0].role !== 'owner') {
+                return fail(res, 403, 'insufficient_role', {
+                    yourRole: ownerMembership.documents[0].role,
+                    required: 'owner'
+                });
+            }
+
+            // Target org fetch — name kell a team labelnek + létezés check.
+            let targetOrg;
+            try {
+                targetOrg = await databases.getDocument(
+                    databaseId, organizationsCollectionId, targetOrgId
+                );
+            } catch (err) {
+                if (err?.code === 404) return fail(res, 404, 'organization_not_found');
+                error(`[Backfill] org fetch hiba: ${err.message}`);
+                return fail(res, 500, 'organization_fetch_failed');
+            }
+
+            const stats = {
+                dryRun,
+                organizationId: targetOrgId,
+                organizations: { scanned: 0, teamsCreated: 0, memberships: 0 },
+                offices: { scanned: 0, teamsCreated: 0, memberships: 0 },
+                acl: { invites: 0, groups: 0, groupMemberships: 0 },
+                errors: []
+            };
+
+            const listAll = async (collectionId, queries = []) => {
+                const out = [];
+                let cursor = null;
+                while (true) {
+                    const q = [...queries, sdk.Query.limit(CASCADE_BATCH_LIMIT)];
+                    if (cursor) q.push(sdk.Query.cursorAfter(cursor));
+                    const batch = await databases.listDocuments(databaseId, collectionId, q);
+                    out.push(...batch.documents);
+                    if (batch.documents.length < CASCADE_BATCH_LIMIT) break;
+                    cursor = batch.documents[batch.documents.length - 1].$id;
+                }
+                return out;
+            };
+
+            // ── 1) target organization: team + memberships + invites ACL
+            //
+            // Az org team HARD prerequisite az invite ACL rewrite-hoz.
+            // Ha a team nem jön létre, a doksik `read(team:org_...)`-ra
+            // kerülnének anélkül, hogy bárki tagja volna → minden user
+            // elveszítené az invite láthatóságát, de a CF success-t adna.
+            // Ezért: team create fail → abort az egész action 500-zal.
+            {
+                const org = targetOrg;
+                stats.organizations.scanned++;
+                const orgTeamId = buildOrgTeamId(org.$id);
+
+                if (!dryRun) {
+                    try {
+                        const result = await ensureTeam(teamsApi, orgTeamId, `Org: ${org.name}`);
+                        if (result.created) stats.organizations.teamsCreated++;
+                    } catch (err) {
+                        error(`[Backfill] org team create hard-fail (${org.$id}): ${err.message}`);
+                        return fail(res, 500, 'org_team_create_failed', {
+                            orgId: org.$id,
+                            message: err.message,
+                            hint: 'Org team create failure megakadályozta az ACL rewrite-ot az org invite-okra.'
+                        });
+                    }
+                }
+
+                let orgMembers;
+                try {
+                    orgMembers = await listAll(
+                        membershipsCollectionId,
+                        [sdk.Query.equal('organizationId', org.$id)]
+                    );
+                } catch (err) {
+                    stats.errors.push({ kind: 'org_members_list', orgId: org.$id, message: err.message });
+                    orgMembers = [];
+                }
+
+                for (const m of orgMembers) {
+                    if (dryRun) { stats.organizations.memberships++; continue; }
+                    try {
+                        const result = await ensureTeamMembership(
+                            teamsApi, orgTeamId, m.userId, [m.role || 'member']
+                        );
+                        if (result.added) {
+                            stats.organizations.memberships++;
+                        } else if (result.skipped === 'team_not_found') {
+                            // A team-et épp most hoztuk létre — ha itt kap 404-et,
+                            // a team időközben eltűnt (párhuzamos törlés?). Hard error.
+                            stats.errors.push({
+                                kind: 'org_membership', orgId: org.$id, userId: m.userId,
+                                message: 'team_not_found after ensureTeam succeeded'
+                            });
+                        }
+                    } catch (err) {
+                        stats.errors.push({
+                            kind: 'org_membership', orgId: org.$id, userId: m.userId, message: err.message
+                        });
+                    }
+                }
+
+                // Invites ACL rewrite — most már safe, a team biztosan létezik.
+                let invites;
+                try {
+                    invites = await listAll(
+                        invitesCollectionId,
+                        [sdk.Query.equal('organizationId', org.$id)]
+                    );
+                } catch (err) {
+                    stats.errors.push({ kind: 'invites_list', orgId: org.$id, message: err.message });
+                    invites = [];
+                }
+                const orgPerms = buildOrgAclPerms(org.$id);
+                for (const inv of invites) {
+                    if (dryRun) { stats.acl.invites++; continue; }
+                    try {
+                        await databases.updateDocument(
+                            databaseId, invitesCollectionId, inv.$id, {}, orgPerms
+                        );
+                        stats.acl.invites++;
+                    } catch (err) {
+                        stats.errors.push({
+                            kind: 'invite_acl', inviteId: inv.$id, message: err.message
+                        });
+                    }
+                }
+            }
+
+            // ── 2) target org editorialOffices: team + memberships + groups/groupMemberships ACL
+            let offices;
+            try {
+                offices = await listAll(
+                    officesCollectionId,
+                    [sdk.Query.equal('organizationId', targetOrgId)]
+                );
+            } catch (err) {
+                error(`[Backfill] offices list hiba: ${err.message}`);
+                return fail(res, 500, 'scan_failed', { step: 'offices_list' });
+            }
+            for (const office of offices) {
+                stats.offices.scanned++;
+                const officeTeamId = buildOfficeTeamId(office.$id);
+
+                if (!dryRun) {
+                    try {
+                        const result = await ensureTeam(teamsApi, officeTeamId, `Office: ${office.name}`);
+                        if (result.created) stats.offices.teamsCreated++;
+                    } catch (err) {
+                        stats.errors.push({ kind: 'office_team', officeId: office.$id, message: err.message });
+                        continue;
+                    }
+                }
+
+                let officeMembers;
+                try {
+                    officeMembers = await listAll(
+                        officeMembershipsCollectionId,
+                        [sdk.Query.equal('editorialOfficeId', office.$id)]
+                    );
+                } catch (err) {
+                    stats.errors.push({ kind: 'office_members_list', officeId: office.$id, message: err.message });
+                    officeMembers = [];
+                }
+
+                for (const m of officeMembers) {
+                    if (dryRun) { stats.offices.memberships++; continue; }
+                    try {
+                        const result = await ensureTeamMembership(
+                            teamsApi, officeTeamId, m.userId, [m.role || 'member']
+                        );
+                        if (result.added) {
+                            stats.offices.memberships++;
+                        } else if (result.skipped === 'team_not_found') {
+                            stats.errors.push({
+                                kind: 'office_membership', officeId: office.$id, userId: m.userId,
+                                message: 'team_not_found after ensureTeam succeeded'
+                            });
+                        }
+                    } catch (err) {
+                        stats.errors.push({
+                            kind: 'office_membership', officeId: office.$id, userId: m.userId, message: err.message
+                        });
+                    }
+                }
+
+                const officePerms = buildOfficeAclPerms(office.$id);
+
+                // Groups ACL rewrite
+                let groups;
+                try {
+                    groups = await listAll(
+                        groupsCollectionId,
+                        [sdk.Query.equal('editorialOfficeId', office.$id)]
+                    );
+                } catch (err) {
+                    stats.errors.push({ kind: 'groups_list', officeId: office.$id, message: err.message });
+                    groups = [];
+                }
+                for (const g of groups) {
+                    if (dryRun) { stats.acl.groups++; continue; }
+                    try {
+                        await databases.updateDocument(
+                            databaseId, groupsCollectionId, g.$id, {}, officePerms
+                        );
+                        stats.acl.groups++;
+                    } catch (err) {
+                        stats.errors.push({
+                            kind: 'group_acl', groupId: g.$id, message: err.message
+                        });
+                    }
+                }
+
+                // GroupMemberships ACL rewrite
+                let groupMembers;
+                try {
+                    groupMembers = await listAll(
+                        groupMembershipsCollectionId,
+                        [sdk.Query.equal('editorialOfficeId', office.$id)]
+                    );
+                } catch (err) {
+                    stats.errors.push({ kind: 'group_memberships_list', officeId: office.$id, message: err.message });
+                    groupMembers = [];
+                }
+                for (const gm of groupMembers) {
+                    if (dryRun) { stats.acl.groupMemberships++; continue; }
+                    try {
+                        await databases.updateDocument(
+                            databaseId, groupMembershipsCollectionId, gm.$id, {}, officePerms
+                        );
+                        stats.acl.groupMemberships++;
+                    } catch (err) {
+                        stats.errors.push({
+                            kind: 'group_membership_acl', gmId: gm.$id, message: err.message
+                        });
+                    }
+                }
+            }
+
+            log(`[Backfill] User ${callerId} — org=${targetOrgId}, dryRun=${dryRun}, offices=${stats.offices.scanned}, errors=${stats.errors.length}`);
+
+            return res.json({ success: true, action: 'backfilled', stats });
         }
 
     } catch (err) {

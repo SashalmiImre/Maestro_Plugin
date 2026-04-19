@@ -279,7 +279,7 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 
 **Bemeneti payload**:
 ```json
-{ "action": "bootstrap_organization" | "create" | "accept" | "add_group_member" | "remove_group_member" | "create_workflow" | "update_workflow" | "update_workflow_metadata" | "delete_workflow" | "duplicate_workflow" | "bootstrap_workflow_schema" | "bootstrap_publication_schema" | "delete_organization" | "delete_editorial_office", ... }
+{ "action": "bootstrap_organization" | "create" | "accept" | "add_group_member" | "remove_group_member" | "create_workflow" | "update_workflow" | "update_workflow_metadata" | "delete_workflow" | "duplicate_workflow" | "bootstrap_workflow_schema" | "bootstrap_publication_schema" | "delete_organization" | "delete_editorial_office" | "backfill_tenant_acl", ... }
 ```
 
 **Biztonsági megjegyzés**: Korábban létezett egy `organization-membership-guard` trigger CF, amely egy `modifiedByClientId === 'server-guard'` sentinellel engedélyezte az invite-eredetű membership-eket. Ez **kliens-forgeable** volt — bármely hitelesített user beállíthatta a payload-ban. A Codex adversarial review jelezte a kritikus sebezhetőséget, és a javítás ACL-alapú védelemre váltott (B.5 utolsó iteráció, 2026-04-07).
@@ -351,8 +351,45 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 6. **Org-szintű cleanup sorrend (harden reorder)**: (a) `organizationInvites` `deleteByQuery`, (b) az **org doc törlése**, (c) `organizationMemberships` `deleteByQuery`. A memberships az org doc UTÁN, hogy a caller owner-sége megmaradjon a kritikus pontig — különben egy félúton elhasalt delete árva, újra-törölhetetlen (not_a_member) szervezetet hagyna. A memberships cleanup az org doc törlése után már csak kozmetikus; ha elbukik, a hiba a server log-ba kerül, de a user `success`-t kap (az org úgyis eltűnt).
 7. Response: `{ success: true, organizationId, deletedOffices, officeStats, orgCleanup }`.
 
+#### Tenant scope Team ACL (Feladat #60, 2026-04-19)
+
+A Realtime WS payload minden authentikált usernek szétszór rá-feliratkozott collection-eventeket — a collection-szintű `read("users")` ACL tehát a Realtime push-t cross-tenant lefedi. Mivel a Dashboard és Plugin ugyanazokat a collection-eket tölti be, minden user látná az összes szervezet groups/groupMemberships/organizationInvites eventjeit (az UI oldali filter kozmetikus). A megoldás: per-tenant Appwrite Team alapú, dokumentum-szintű ACL.
+
+**Team ID konvenciók** (`teamHelpers.js`):
+- `org_${organizationId}` — minden szervezetre egy team, tagjai az `organizationMemberships` alapján.
+- `office_${editorialOfficeId}` — minden szerkesztőségre egy team, tagjai az `editorialOfficeMemberships` alapján.
+
+**Dokumentum ACL**:
+- `organizationInvites` — `read("team:org_${orgId}")`
+- `groups`, `groupMemberships` — `read("team:office_${officeId}")`
+
+**Team sync eseménynaptár** (minden változás ezen a CF-en keresztül):
+- `bootstrap_organization` → org team + office team + owner/admin tagság + minden seed group/groupMembership ACL-lel.
+- `create_editorial_office` → új office team + admin tagság + seed groupok/memberships ACL-lel.
+- `accept` (invite) → az új org-member-t ráhúzza az org team-re (best-effort, nem blokkol).
+- `create_group` / `add_group_member` → új group / groupMembership doc kapja az office ACL-t.
+- `delete_editorial_office` / `delete_organization` → office team + (org esetén) org team törlés cascade. A team törlése az Appwrite-oldalon a memberships-et is takarítja.
+
+**ACTION='backfill_tenant_acl'** (scoped migráció, owner-only):
+- Payload: `{ organizationId, dryRun? }` — kötelező `organizationId`, a caller annak `owner`-je kell legyen. NINCS project-wide scan (különben A tenant owner-e mutálhatná B tenant ACL-jét — Codex review [P1] 2026-04-19).
+- A target org + annak minden office-a kap team-et + szinkronizált tagságot a memberships collection-ök alapján, és a `organizationInvites` + `groups` + `groupMemberships` doc-okon újraíródik az ACL.
+- Idempotens: 409 → skip mind a team, mind a membership műveletnél.
+- **Hard prerequisite az org ágon**: ha az org team `ensureTeam` hibát dob, az action azonnal `500 org_team_create_failed`-del leáll, **mielőtt** bármelyik invite ACL-t átírná. Enélkül a `read(team:org_<id>)` egy nem létező team-re mutatna és az invite-ok láthatatlanná válnának (Codex adversarial review [high] 2026-04-19).
+- **`team_not_found` hard error**: ha a membership sync 404-et kap egy imént létrehozott team-en (párhuzamos törlés), a `errors[]`-be kerül (mind org, mind office ágon).
+- Fail-open per-doc az ACL rewrite loopokban: egyedi hiba belekerül a `errors[]` listába, a többi doc megy tovább.
+- Opcionális `dryRun: true` — csak számol, nem ír. Javasolt a deploy utáni első futásra.
+- Response: `{ success: true, action: 'backfilled', stats: { dryRun, organizationId, organizations, offices, acl, errors } }`.
+- Több org migrálásához többször kell hívni (egyszeri művelet, nem üzleti flow).
+
+**Deploy checklist** (egyszeri):
+1. `invite-to-organization` CF újradeploy (új `teamHelpers.js` miatt `--code functions/invite-to-organization` teljes feltöltés kell).
+2. API key scope-ok: a meglévő `databases.*` + `users.read` mellett `teams.read` + `teams.write` szükséges.
+3. `backfill_tenant_acl` futtatása `{ organizationId, dryRun: true }`-val minden org-ra → log ellenőrzés.
+4. `backfill_tenant_acl` futtatása éles móddal (`dryRun` nélkül) minden org-ra → stats validálás.
+5. Appwrite Console-on a 3 érintett collection (`organizationInvites`, `groups`, `groupMemberships`) `rowSecurity` flag-jét `true`-ra + a globális `read("users")` ACL-t eltávolítani (csak utána lesz aktív a tenant szűrés — addig a doc-szintű perms el van tárolva, de a collection-szintű olvasás még mindenkinek engedi).
+
 **Hibakódok** (mind a `fail()` wrapperen keresztül `{ success: false, reason, ...extra }` formátumban):
-`invalid_payload`, `invalid_action`, `unauthenticated`, `missing_fields`, `invalid_slug`, `org_slug_taken`, `org_create_failed`, `membership_create_failed`, `office_slug_taken`, `office_create_failed`, `office_membership_create_failed`, `invalid_email`, `invalid_role`, `not_a_member`, `insufficient_role`, `invite_not_found`, `invite_not_pending`, `invite_expired`, `email_mismatch`, `caller_lookup_failed`, `group_not_found`, `target_user_not_found`, `group_member_create_failed`, `misconfigured`, `office_not_found`, `office_fetch_failed`, `cascade_failed`, `office_delete_failed`, `organization_not_found`, `organization_fetch_failed`, `office_list_failed`, `org_cleanup_failed`, `organization_delete_failed`.
+`invalid_payload`, `invalid_action`, `unauthenticated`, `missing_fields`, `invalid_slug`, `org_slug_taken`, `org_create_failed`, `membership_create_failed`, `office_slug_taken`, `office_create_failed`, `office_membership_create_failed`, `org_team_create_failed`, `org_team_membership_create_failed`, `office_team_create_failed`, `office_team_membership_create_failed`, `invalid_email`, `invalid_role`, `not_a_member`, `insufficient_role`, `invite_not_found`, `invite_not_pending`, `invite_expired`, `email_mismatch`, `caller_lookup_failed`, `group_not_found`, `target_user_not_found`, `group_member_create_failed`, `misconfigured`, `office_not_found`, `office_fetch_failed`, `cascade_failed`, `office_delete_failed`, `organization_not_found`, `organization_fetch_failed`, `office_list_failed`, `org_cleanup_failed`, `organization_delete_failed`, `scan_failed`.
 
 ---
 
