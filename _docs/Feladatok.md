@@ -50,7 +50,10 @@ tags: [feladatok]
 
 #### F. User avatar menü bővítés (globális szint)
 
-- [ ] 40. **„Új szervezet…" menüpont** a user avatar dropdown-ban: modal-os create flow (név + slug). Jelenlegi `bootstrap_organization` CF újrahasznosítása.
+- [x] 40. **„Új szervezet…" menüpont** a user avatar dropdown-ban: modal-os create flow (név + slug). Jelenlegi `bootstrap_organization` CF újrahasznosítása.
+    - Szerver: új `create_organization` CF action a `bootstrap_organization` mellett — ugyanaz a 7 lépéses atomikus create logika, de az idempotencia check kihagyva (a caller már tagja egy meglévő orgnak, mégis explicit új-t kér).
+    - Dashboard: új `slugify()` utility (HU transliteráció + kebab-case) + `AuthContext.createNewOrganization()` callback + `CreateOrganizationModal` komponens (név → auto-slug, default office név „Általános" + slug `altalanos`). Sikeres create után scope váltás új org + office-ra, success toast.
+    - UserAvatar dropdown első menüpontja: „Új szervezet…" — kattintásra `sm` méretű modal nyílik.
 - [ ] 41. **„Maestro beállítások" menüpont**: modal, benne: saját szervezetek listája (váltás/kilépés), függőben lévő invite-ok (fogadás/elutasítás).
 
 #### G. Dashboard design review (2026-04-17)
@@ -93,6 +96,38 @@ tags: [feladatok]
     - Adat-migráció: meglévő `groups` / `groupMemberships` / `organizationInvites` dokumentumok backfill-je a korrekt ACL tag-ekkel (one-shot CF action, idempotens).
     - Teszt: két külön szervezetbe belépett két user két különálló böngészőben — egyik tenantban végzett mutation (pl. új csoport, meghívó kiküldés, tag hozzáadás) ne generáljon WS payload-ot a másik tenant kliensén (Appwrite Realtime inspector / `client.subscribe` log).
     - **Megjegyzés**: amíg ez nincs meg, Fázis 2 adminisztratív adatok (csoport struktúra, meghívó email-ek) gyakorlatilag nyilvánosak minden authenticated felhasználó számára — **mielőbbi fix javasolt**.
+
+#### I. Workflow Designer design review (2026-04-19)
+
+> Forrás: `/design-critique` live run a `/admin/office/:officeId/workflow/:workflowId` nézeten (6 screenshot, 7 kulcsnézet), persona: art director / managing editor, desktop 1440–1920px, ritka használat. A 42/43/46/48/51/59 pontokat NEM ismételjük.
+
+**Kritikus (🔴) — blokkoló vagy magas friction:**
+
+- [ ] 61. **NodePalette szemantikus újratervezés**: jelenleg 6 azonos „Új állapot" item csak színben különbözik — a user nem tudja, mit jelent a választás. Javaslat: (a) preset recept-ek (pl. „Kezdő / Tervezés / Jóváhagyás / Kész" tipikus szerkesztőségi lépések) VAGY (b) egyetlen „+ Új állapot" gomb, amely automatikusan húzza a következő színt a `WORKFLOW_STATE_COLORS` tokenből. [NodePalette.jsx](../packages/maestro-dashboard/src/features/workflowDesigner/NodePalette.jsx).
+- [ ] 62. **StateNode badge vizuális értelmezhetőség**: `FA/PN/FN/EP/CI` 2-betűs kódok opak-ok (slug első 2 betűje). `aria-label` a screen readernek megvan (46), de **vizuálisan** a nem-fejlesztő persona nem érti hover nélkül. Javaslat: ikon + kód kombó (📄 FA, 🔢 PN, 📝 FN, 📤 EP, 🖼 CI) VAGY 4-6 karakteres magyar rövidítés (Fájl, Oldal, Név, PDF, Képek). [StateNode.jsx](../packages/maestro-dashboard/src/features/workflowDesigner/nodes/StateNode.jsx) `validatorBadge`/`commandBadge` helpers.
+- [ ] 63. **Dirty indikátor kiemelése**: jelenleg 12px warning szöveg a toolbar gombok között, a Mentés CTA mellett elveszik — adatvesztés kockázat. Javaslat: (a) piros pötty a workflow név input mellett (VS Code tab minta) + (b) opcionálisan sárga vékony banner a toolbar alatt „Nem mentett változtatások". [WorkflowDesignerPage.jsx](../packages/maestro-dashboard/src/features/workflowDesigner/WorkflowDesignerPage.jsx) toolbar render.
+- [ ] 64. **State editor collapsible default + itemszám badge**: aszimmetrikus default (`Validációk: nyitva`, `Parancsok: zárva`, `Mozgatási jogosultság: zárva`) — a Mozgatási jogosultság kritikus policy, mégis el van rejtve. Javaslat: mindhárom szekció ZÁRVA alapból + minden trigger gomb mutassa az itemszámot (pl. „Parancsok (3)", „Mozgatási jogosultság (2 csoport)"). [StatePropertiesEditor.jsx](../packages/maestro-dashboard/src/features/workflowDesigner/editors/StatePropertiesEditor.jsx) `useState` initial values + trigger label.
+- [ ] 65. **TransitionPropertiesEditor „Útvonal" human label**: jelenleg `edge.source`/`edge.target` slug-okat mutat (`designing → design_approval`), nem olvasható a nem-fejlesztő számára. Javaslat: a `workflow.states[slug].label` értékét priorizáljuk, a slug monospace alatta kisbetűs másodlagos infó. [TransitionPropertiesEditor.jsx:38-42](../packages/maestro-dashboard/src/features/workflowDesigner/editors/TransitionPropertiesEditor.jsx#L38-L42).
+- [ ] 66. **Validáció oszlop-fejléc magyarázat**: „Belépéskor futtatandó / Belépés feltétele / Kilépés feltétele" — a user nem érti, hogy az első akció (futtatás), a másik kettő kapu (ellenőrzés). Javaslat: explicit prefix + tooltip ikon: „Akció: belépéskor futtatódik", „Ellenőrzés: blokkolja a belépést ha bukik", „Ellenőrzés: blokkolja a kilépést ha bukik". [StatePropertiesEditor.jsx](../packages/maestro-dashboard/src/features/workflowDesigner/editors/StatePropertiesEditor.jsx) validáció szekció.
+- [ ] 67. **`WORKFLOW_STATE_COLORS` közös token**: NodePalette lokális `PALETTE_COLORS` konstans (6 hex) + default workflow state-ek saját hex-ei → inkonzisztens paletta. Javaslat: közös token a `maestro-shared`-ben, mindkét hely onnan importál. Egyúttal `defaultWorkflow.json` és `NodePalette.jsx` szinkronizálása.
+
+**Mérsékelt (🟡):**
+
+- [ ] 68. **StateNode szélesség magyar címkéknek**: 190px fix szélesség truncál hosszabb magyar állapotneveket („Tervellenőrzés kiadó által"). Javaslat: `min-width: 180px; max-width: 240px` + `word-break: break-word` a `.state-node__label`-re. [workflowDesigner.css](../packages/maestro-dashboard/src/features/workflowDesigner/workflowDesigner.css) `.state-node` + `.state-node__label`.
+- [ ] 69. **Collapsible `aria-expanded` + `aria-controls`**: a Validációk / Parancsok / Mozgatási jogosultság trigger gombok csak vizuális chevron-t (▾/▸) mutatnak, screen reader nem tudja az állapotot. Javaslat: `aria-expanded={isOpen}` + `aria-controls={panelId}` minden triggerre. Ugyanez a `PropertiesSidebar` többi collapsible-jénél is.
+- [ ] 70. **Üres canvas onboarding hint**: új workflow létrehozás után üres dotted háttér — a user nem tudja, hol kezdjen. Javaslat: középre pozicionált fakó szöveg „Húzz ide egy állapotot a bal oldali palettáról" + nyíl ikon a palette irányába. Eltűnik az első node lehelyezésekor.
+- [ ] 71. **Parancsok / Mozgatási jogosultság — explicit „+ Hozzáadás" gomb**: kinyitott üres szekcióban nincs látható akció. Javaslat: block-szintű `+ Parancs hozzáadása` / `+ Csoport hozzáadása` gomb a szekció tetején (a jelenlegi chip-grid mellett).
+- [ ] 72. **Native `<select>` → design system Select**: TransitionPropertiesEditor „Irány" dropdown-ja natív `<select>`-et használ (rendszerfüggő megjelenés), miközben a többi multi-select chip-alapú. Javaslat: `CustomDropdown` (vagy azzal ekvivalens Dashboard komponens) a design system-ből.
+- [ ] 73. **Oldalpanel collapse toggle**: 1600px-n a 160px palette + 280px sidebar = 440px elvész, a canvas csak ~1100px-t kap. Javaslat: mindkét panelre `<<` / `>>` collapse toggle (VS Code Activity Bar minta), a kiválasztott állapot `localStorage`-ba mentve.
+- [ ] 74. **MiniMap interaktivitás jelzés**: a user nem tudja, hogy a minimap kattintható (ugrás + navigáció). Javaslat: `cursor: pointer` + halvány border hover-en.
+- [ ] 75. **WorkflowPropertiesEditor — Contributor csoportok read-only jelzés**: a szerepnév + slug táblázat read-only, de nincs vizuális jelzés. Javaslat: szürke háttér + „(csak olvasható)" felirat a szekció fejlécben, VAGY teljesen elrejteni, ha nincs szerkeszthető tartalom.
+
+**Minor (🟢) — polish:**
+
+- [ ] 76. **Snapshot-usage banner tömörítés**: jelenleg 3 mondatos magyarázat vizuálisan domináns. Javaslat: 1 mondatos TL;DR + „Részletek" collapse link („Ezt a workflow-t 3 aktív publikáció használja. Részletek…").
+- [ ] 77. **MiniMap node-szín színkódolás**: a minimap node-jai jelenleg egységes színűek; a state-színeket ingyen továbbadhatnánk. xyflow `MiniMap` `nodeColor` prop.
+- [ ] 78. **Toolbar gombcsoport separator**: `+ Új workflow` közvetlenül az Export/Import mellett van, a user véletlenül kattinthatja az Import-ra (destructive-ish). Javaslat: vertikális separator a két gombcsoport között.
+- [ ] 79. **Verzió chip (`v1`) láthatóság**: amíg nincs valódi workflow verziózás, a mindig `v1`-et mutató chip felesleges zaj. Javaslat: rejtsük el, VAGY alakítsuk információs tooltip-be (pl. „Verzió: v1 — jelenleg nincs verziózás").
 
 ### Manuális smoke test checklist
 

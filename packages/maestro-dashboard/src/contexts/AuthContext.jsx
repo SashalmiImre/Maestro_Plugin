@@ -636,6 +636,46 @@ export function AuthProvider({ children }) {
     }, [user?.$id, loadAndSetMemberships]);
 
     /**
+     * #40 — Új szervezet létrehozása az avatar dropdown „Új szervezet…"
+     * menüpontjából.
+     *
+     * Eltérés a `createOrganization`-tól: a `create_organization` CF action
+     * NEM idempotens (nincs „caller már tagja egy orgnak → existing return"
+     * ág). A user explicit új szervezetet kér miközben már van egy meglévő
+     * tagsága. Duplaklikk-védelem a hívó modal `isSubmitting` guardja.
+     *
+     * Memberships reload sikertelen → false-t ad vissza a `reloadMemberships`,
+     * a hívó dönthet (toast warning + closeModal vs. retry UI).
+     *
+     * @returns {Promise<{organizationId: string, editorialOfficeId: string, membershipsReloaded: boolean}>}
+     */
+    const createNewOrganization = useCallback(async (orgName, orgSlug, officeName, officeSlug) => {
+        if (!user?.$id) {
+            throw new Error('not_authenticated');
+        }
+
+        const response = await callInviteFunction(
+            'create_organization',
+            { orgName, orgSlug, officeName, officeSlug },
+            'create_organization_failed'
+        );
+
+        let membershipsReloaded = false;
+        try {
+            await loadAndSetMemberships(user.$id);
+            membershipsReloaded = true;
+        } catch (refreshErr) {
+            console.warn('[AuthContext] createNewOrganization: memberships reload sikertelen (a CF sikeres volt):', refreshErr?.message);
+        }
+
+        return {
+            organizationId: response.organizationId,
+            editorialOfficeId: response.editorialOfficeId,
+            membershipsReloaded
+        };
+    }, [user?.$id, loadAndSetMemberships]);
+
+    /**
      * B.5 — Meghívó (invite) elfogadása.
      *
      * Az `invite-to-organization` Cloud Function `accept` action-jét hívja.
@@ -900,6 +940,7 @@ export function AuthProvider({ children }) {
         updatePassword,
         reloadMemberships,
         createOrganization,
+        createNewOrganization,
         acceptInvite,
         createInvite,
         deleteOrganization,
@@ -929,6 +970,7 @@ export function AuthProvider({ children }) {
         updatePassword,
         reloadMemberships,
         createOrganization,
+        createNewOrganization,
         acceptInvite,
         createInvite,
         deleteOrganization,

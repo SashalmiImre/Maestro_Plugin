@@ -25,7 +25,12 @@ const {
  *     membership + 7 alapértelmezett csoport + csoporttagságok atomikus
  *     létrehozása. Az OnboardingRoute hívja első belépéskor. A CF létrehozza
  *     az összes rekordot az API key-jel. Ha bármelyik lépés elszáll, a már
- *     létrehozott rekordokat visszatörli (best-effort).
+ *     létrehozott rekordokat visszatörli (best-effort). Idempotens: ha a
+ *     caller már tagja egy orgnak, az existing rekordot adja vissza.
+ *
+ *   ACTION='create_organization' — ugyanaz a 7 lépéses create logika, de
+ *     az idempotencia check kihagyva (#40, avatar dropdown „Új szervezet…").
+ *     A user explicit új szervezetet akar, miközben már tagja egy meglévőnek.
  *
  *   ACTION='create' — admin meghívót küld egy e-mail címre.
  *     - Caller jogosultság: csak `owner` vagy `admin` role az adott orgban.
@@ -133,7 +138,7 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 // Érvényes action-ök halmaza
 const VALID_ACTIONS = new Set([
-    'bootstrap_organization', 'create', 'accept',
+    'bootstrap_organization', 'create_organization', 'create', 'accept',
     'add_group_member', 'remove_group_member',
     'create_group', 'rename_group', 'delete_group',
     'bootstrap_workflow_schema',
@@ -648,7 +653,7 @@ module.exports = async function ({ req, res, log, error }) {
         }
 
         // ════════════════════════════════════════════════════════
-        // ACTION = 'bootstrap_organization'
+        // ACTION = 'bootstrap_organization' | 'create_organization'
         // ════════════════════════════════════════════════════════
         //
         // Atomikus 4-collection write: organizations + organizationMemberships
@@ -656,7 +661,18 @@ module.exports = async function ({ req, res, log, error }) {
         //
         // Rollback: ha a 2-3-4. lépésnél hiba van, a már létrehozott
         // rekordokat visszatöröljük (best-effort).
-        if (action === 'bootstrap_organization') {
+        //
+        // Mindkét action ugyanazt a 7 lépéses logikát futtatja. Eltérés:
+        //   - bootstrap_organization (onboarding, első org): idempotens — ha
+        //     a caller már tagja BÁRMELY orgnak, az existing org ID-t adja
+        //     vissza (duplaklikk-védelem az első org létrehozásnál).
+        //   - create_organization (avatar dropdown „Új szervezet…", #40):
+        //     a caller már tagja egy orgnak, mégis explicit új-t akar — az
+        //     idempotens ág kihagyva, minden hívás új szervezetet hoz létre.
+        //     A frontend duplaklikk-védelmet a modal `isSubmitting` guardja
+        //     adja, a slug ütközés (`org_slug_taken`) a szerveroldali unique
+        //     index-en bukik el.
+        if (action === 'bootstrap_organization' || action === 'create_organization') {
             const orgName = sanitizeString(payload.orgName, NAME_MAX_LENGTH);
             const orgSlug = sanitizeString(payload.orgSlug, SLUG_MAX_LENGTH);
             const officeName = sanitizeString(payload.officeName, NAME_MAX_LENGTH);
@@ -674,53 +690,56 @@ module.exports = async function ({ req, res, log, error }) {
                 });
             }
 
-            // ── Idempotencia: ha a caller már tagja valamelyik orgnak, nem
-            // hozunk létre újat. Ez véd a duplaklikkelés és a retry ellen
-            // (pl. a kliens elhalt a válasz előtt és újraküldi a kérést).
-            // Ugyanazt a success payload-ot adjuk vissza, mint az első futás.
+            // ── Idempotencia (csak bootstrap_organization-nél): ha a caller
+            // már tagja valamelyik orgnak, nem hozunk létre újat. Ez véd a
+            // duplaklikkelés és a retry ellen (pl. a kliens elhalt a válasz
+            // előtt és újraküldi a kérést). Ugyanazt a success payload-ot
+            // adjuk vissza, mint az első futás.
             //
-            // Az OnboardingRoute amúgy is csak `organizations.length === 0`
-            // esetén éri el ezt az ágat — de a szerver-oldali guard zárja
-            // ki azt az esetet, amikor a kliens state még nem frissült.
-            const existingOrgMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.limit(1)
-                ]
-            );
-            if (existingOrgMembership.documents.length > 0) {
-                const existingOrgId = existingOrgMembership.documents[0].organizationId;
+            // A create_organization action SZÁNDÉKOSAN átugorja ezt — ott
+            // a user explicit új szervezetet kér az avatar menüből, miközben
+            // már van egy meglévő tagsága.
+            if (action === 'bootstrap_organization') {
+                const existingOrgMembership = await databases.listDocuments(
+                    databaseId,
+                    membershipsCollectionId,
+                    [
+                        sdk.Query.equal('userId', callerId),
+                        sdk.Query.limit(1)
+                    ]
+                );
+                if (existingOrgMembership.documents.length > 0) {
+                    const existingOrgId = existingOrgMembership.documents[0].organizationId;
 
-                // Office-t is próbáljuk felderíteni ugyanehhez a userhez —
-                // ha nincs, visszaadjuk csak az orgId-t, és a kliens a
-                // loadAndSetMemberships után úgy is az első tagot választja.
-                let existingOfficeId = null;
-                try {
-                    const existingOfficeMembership = await databases.listDocuments(
-                        databaseId,
-                        officeMembershipsCollectionId,
-                        [
-                            sdk.Query.equal('userId', callerId),
-                            sdk.Query.equal('organizationId', existingOrgId),
-                            sdk.Query.limit(1)
-                        ]
-                    );
-                    if (existingOfficeMembership.documents.length > 0) {
-                        existingOfficeId = existingOfficeMembership.documents[0].editorialOfficeId;
+                    // Office-t is próbáljuk felderíteni ugyanehhez a userhez —
+                    // ha nincs, visszaadjuk csak az orgId-t, és a kliens a
+                    // loadAndSetMemberships után úgy is az első tagot választja.
+                    let existingOfficeId = null;
+                    try {
+                        const existingOfficeMembership = await databases.listDocuments(
+                            databaseId,
+                            officeMembershipsCollectionId,
+                            [
+                                sdk.Query.equal('userId', callerId),
+                                sdk.Query.equal('organizationId', existingOrgId),
+                                sdk.Query.limit(1)
+                            ]
+                        );
+                        if (existingOfficeMembership.documents.length > 0) {
+                            existingOfficeId = existingOfficeMembership.documents[0].editorialOfficeId;
+                        }
+                    } catch (err) {
+                        log(`[Bootstrap] Office membership lookup (idempotens ág) hiba: ${err.message}`);
                     }
-                } catch (err) {
-                    log(`[Bootstrap] Office membership lookup (idempotens ág) hiba: ${err.message}`);
-                }
 
-                log(`[Bootstrap] Idempotens — caller ${callerId} már tagja az org ${existingOrgId}-nak, új rekord nem jött létre`);
-                return res.json({
-                    success: true,
-                    action: 'existing',
-                    organizationId: existingOrgId,
-                    editorialOfficeId: existingOfficeId
-                });
+                    log(`[Bootstrap] Idempotens — caller ${callerId} már tagja az org ${existingOrgId}-nak, új rekord nem jött létre`);
+                    return res.json({
+                        success: true,
+                        action: 'existing',
+                        organizationId: existingOrgId,
+                        editorialOfficeId: existingOfficeId
+                    });
+                }
             }
 
             // Rollback-stack — LIFO: bármelyik hibapontnál visszafelé fut a
@@ -982,11 +1001,11 @@ module.exports = async function ({ req, res, log, error }) {
                 error(`[Bootstrap] workflow seed hiba: ${err.message}`);
             }
 
-            log(`[Bootstrap] User ${callerId} új szervezetet hozott létre: org=${newOrgId}, office=${newOfficeId}, groups=${createdGroupIds.length}, memberships=${createdGroupMembershipIds.length}, workflow=${newWorkflowId || 'FAILED'}`);
+            log(`[Bootstrap] User ${callerId} új szervezetet hozott létre (action=${action}): org=${newOrgId}, office=${newOfficeId}, groups=${createdGroupIds.length}, memberships=${createdGroupMembershipIds.length}, workflow=${newWorkflowId || 'FAILED'}`);
 
             return res.json({
                 success: true,
-                action: 'bootstrapped',
+                action: action === 'bootstrap_organization' ? 'bootstrapped' : 'created',
                 organizationId: newOrgId,
                 editorialOfficeId: newOfficeId,
                 groupsSeeded: true,

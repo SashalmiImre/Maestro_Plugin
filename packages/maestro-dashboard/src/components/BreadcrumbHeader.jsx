@@ -21,6 +21,7 @@ import UserAvatar from './UserAvatar.jsx';
 import PublicationSettingsModal from './publications/PublicationSettingsModal.jsx';
 import OrganizationSettingsModal from './organization/OrganizationSettingsModal.jsx';
 import EditorialOfficeSettingsModal from './organization/EditorialOfficeSettingsModal.jsx';
+import CreateOrganizationModal from './organization/CreateOrganizationModal.jsx';
 
 /**
  * @param {Object} props
@@ -81,13 +82,20 @@ export default function BreadcrumbHeader({
 
     // User avatar menü
     const userMenuItems = useMemo(() => [
+        {
+            label: 'Új szervezet…',
+            onClick: () => openModal(<CreateOrganizationModal />, {
+                size: 'sm',
+                title: 'Új szervezet'
+            })
+        },
         { label: 'Jelszó módosítása', onClick: () => navigate('/settings/password') },
         {
             label: theme === 'light' ? 'Sötét téma' : 'Világos téma',
             onClick: toggleTheme
         },
         { label: 'Kijelentkezés', onClick: logout, danger: true }
-    ], [navigate, logout, theme, toggleTheme]);
+    ], [navigate, logout, theme, toggleTheme, openModal]);
 
     // Szervezet váltás — az office is resetelődik a ScopeContext auto-pick-kel
     function handleOrgSelect(orgId) {

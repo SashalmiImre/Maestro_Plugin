@@ -279,7 +279,7 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 
 **Bemeneti payload**:
 ```json
-{ "action": "bootstrap_organization" | "create" | "accept" | "add_group_member" | "remove_group_member" | "create_workflow" | "update_workflow" | "update_workflow_metadata" | "delete_workflow" | "duplicate_workflow" | "bootstrap_workflow_schema" | "bootstrap_publication_schema" | "delete_organization" | "delete_editorial_office" | "backfill_tenant_acl", ... }
+{ "action": "bootstrap_organization" | "create_organization" | "create" | "accept" | "add_group_member" | "remove_group_member" | "create_workflow" | "update_workflow" | "update_workflow_metadata" | "delete_workflow" | "duplicate_workflow" | "bootstrap_workflow_schema" | "bootstrap_publication_schema" | "delete_organization" | "delete_editorial_office" | "backfill_tenant_acl", ... }
 ```
 
 **Biztonsági megjegyzés**: Korábban létezett egy `organization-membership-guard` trigger CF, amely egy `modifiedByClientId === 'server-guard'` sentinellel engedélyezte az invite-eredetű membership-eket. Ez **kliens-forgeable** volt — bármely hitelesített user beállíthatta a payload-ban. A Codex adversarial review jelezte a kritikus sebezhetőséget, és a javítás ACL-alapú védelemre váltott (B.5 utolsó iteráció, 2026-04-07).
@@ -295,7 +295,13 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
    - **Fázis 2 — Group seeding**: 7 `groups` dokumentum (`DEFAULT_GROUPS` alapján, scope: officeId + orgId) + 7 `groupMemberships` (a bootstrapping user-t minden csoportba felveszi, denormalizált `userName`/`userEmail`-lel).
 4. **Best-effort rollback**: ha a 2-3-4. lépésnél hiba van, a már létrehozott rekordokat visszatörli fordított sorrendben (try/catch minden cleanup lépésen). A group seeding hiba nem akadályozza meg az org bootstrap sikerét (`groupsSeeded: false` a response-ban).
 5. Slug ütközés: `org_slug_taken` / `office_slug_taken` (409).
-6. Response: `{ success: true, organizationId, editorialOfficeId }`.
+6. Response: `{ success: true, action: 'bootstrapped' | 'existing', organizationId, editorialOfficeId }`.
+
+**ACTION='create_organization'** (#40, avatar dropdown „Új szervezet…"):
+
+A `bootstrap_organization`-vel azonos 7 lépéses atomikus create logika (4 collection write + team ACL + 7 default group + 7 group membership + workflow seed), de az idempotencia check kihagyva. Akkor használandó, ha a caller már tagja egy meglévő orgnak és explicit ÚJ szervezetet kér. Frontend-oldali duplaklikk-védelem szükséges (modal `isSubmitting` guard). Slug ütközés: szerveroldali unique index → `org_slug_taken` (409).
+
+Response: `{ success: true, action: 'created', organizationId, editorialOfficeId, groupsSeeded, workflowSeeded }`.
 
 **ACTION='create'** (admin meghívó küldés):
 1. Caller user lekérése (`x-appwrite-user-id` header).
