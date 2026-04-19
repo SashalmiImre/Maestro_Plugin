@@ -7,6 +7,7 @@ const {
     buildOfficeAclPerms,
     ensureTeam,
     ensureTeamMembership,
+    removeTeamMembership,
     deleteTeamIfExists
 } = require("./teamHelpers.js");
 
@@ -139,6 +140,7 @@ const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 // Érvényes action-ök halmaza
 const VALID_ACTIONS = new Set([
     'bootstrap_organization', 'create_organization', 'create', 'accept',
+    'list_my_invites', 'decline_invite', 'leave_organization',
     'add_group_member', 'remove_group_member',
     'create_group', 'rename_group', 'delete_group',
     'bootstrap_workflow_schema',
@@ -1329,6 +1331,458 @@ module.exports = async function ({ req, res, log, error }) {
                 organizationId: invite.organizationId,
                 membershipId: membership.$id,
                 role: membership.role
+            });
+        }
+
+        // ════════════════════════════════════════════════════════
+        // ACTION = 'list_my_invites'  (#41 — Maestro beállítások)
+        // ════════════════════════════════════════════════════════
+        //
+        // A meghívott (még nem org-tag) user nem tudja a saját pending
+        // invite-ját olvasni közvetlenül: az `organizationInvites` ACL
+        // `read("team:org_${orgId}")`-re szűkül, és ő még nincs benne a
+        // team-ben (az csak az `accept` után). Ezt az action-t ezért az
+        // API key-jel futtatjuk, és kizárólag a caller saját e-mail
+        // címére regisztrált pending invite-okat adja vissza, denormalizált
+        // org-név + meghívó név mezőkkel a UI listához.
+        //
+        // Read-only — nem módosít DB-t, nem küld e-mailt.
+        if (action === 'list_my_invites') {
+            // 1) Caller user lekérés az e-mail kinyeréséhez.
+            let callerUser;
+            try {
+                callerUser = await usersApi.get(callerId);
+            } catch (e) {
+                error(`[ListMyInvites] caller user lookup hiba (${callerId}): ${e.message}`);
+                return fail(res, 500, 'caller_lookup_failed');
+            }
+            const callerEmail = (callerUser.email || '').trim().toLowerCase();
+            if (!callerEmail) {
+                return fail(res, 400, 'missing_caller_email');
+            }
+
+            // 2) Pending invite-ok lekérése. Az e-mail összehasonlítás
+            //    case-insensitive a Modal/Server `EMAIL_REGEX` normalizálás
+            //    miatt (a `create` action lower-case-elve menti).
+            let invitesResp;
+            try {
+                invitesResp = await databases.listDocuments(
+                    databaseId,
+                    invitesCollectionId,
+                    [
+                        sdk.Query.equal('email', callerEmail),
+                        sdk.Query.equal('status', 'pending'),
+                        sdk.Query.orderDesc('$createdAt'),
+                        sdk.Query.limit(100)
+                    ]
+                );
+            } catch (e) {
+                error(`[ListMyInvites] invites listing hiba: ${e.message}`);
+                return fail(res, 500, 'invites_list_failed');
+            }
+
+            const now = Date.now();
+            // Lejárt invite-ok auto-expire — kvázi opportunista "látogatáskor
+            // takarítjuk" megközelítés. Best-effort: hiba esetén nem dobunk,
+            // a UI úgyis a `expired`-re elnémul, és a következő call újra
+            // próbálkozik.
+            const validInvites = [];
+            for (const inv of invitesResp.documents) {
+                if (new Date(inv.expiresAt).getTime() < now) {
+                    try {
+                        await databases.updateDocument(databaseId, invitesCollectionId, inv.$id, {
+                            status: 'expired'
+                        });
+                    } catch (expErr) {
+                        log(`[ListMyInvites] invite expire frissítés sikertelen (non-blocking, ${inv.$id}): ${expErr.message}`);
+                    }
+                    continue;
+                }
+                validInvites.push(inv);
+            }
+
+            // 3) Denormalizáció: org név + meghívó user név.
+            //    A duplikátumokat egy Map-pel kezeljük, hogy az ismétlődő
+            //    org/user lekérések cache-eljenek a per-request scope-ban.
+            const orgCache = new Map();
+            const userCache = new Map();
+
+            async function fetchOrg(orgId) {
+                if (!orgId) return null;
+                if (orgCache.has(orgId)) return orgCache.get(orgId);
+                try {
+                    const doc = await databases.getDocument(databaseId, organizationsCollectionId, orgId);
+                    orgCache.set(orgId, doc);
+                    return doc;
+                } catch (e) {
+                    orgCache.set(orgId, null);
+                    return null;
+                }
+            }
+
+            async function fetchInviter(userId) {
+                if (!userId) return null;
+                if (userCache.has(userId)) return userCache.get(userId);
+                try {
+                    const u = await usersApi.get(userId);
+                    userCache.set(userId, u);
+                    return u;
+                } catch (e) {
+                    userCache.set(userId, null);
+                    return null;
+                }
+            }
+
+            const enriched = [];
+            for (const inv of validInvites) {
+                const [org, inviter] = await Promise.all([
+                    fetchOrg(inv.organizationId),
+                    fetchInviter(inv.invitedByUserId)
+                ]);
+                enriched.push({
+                    $id: inv.$id,
+                    token: inv.token,
+                    email: inv.email,
+                    role: inv.role || 'member',
+                    organizationId: inv.organizationId,
+                    organizationName: org?.name || null,
+                    invitedByUserId: inv.invitedByUserId,
+                    invitedByName: inviter?.name || inviter?.email || null,
+                    expiresAt: inv.expiresAt,
+                    createdAt: inv.$createdAt
+                });
+            }
+
+            log(`[ListMyInvites] User ${callerId} (${callerEmail}) → ${enriched.length} pending invite (összes lapozott pending: ${invitesResp.documents.length})`);
+
+            return res.json({
+                success: true,
+                action: 'listed',
+                invites: enriched
+            });
+        }
+
+        // ════════════════════════════════════════════════════════
+        // ACTION = 'decline_invite'  (#41)
+        // ════════════════════════════════════════════════════════
+        //
+        // Pending invite elutasítása. Token + e-mail match védelem (mint
+        // az `accept` action-nél), majd status='declined' set. Idempotens:
+        // ha már declined / accepted / expired, megfelelő hibakód.
+        if (action === 'decline_invite') {
+            const { token } = payload;
+            if (!token || typeof token !== 'string') {
+                return fail(res, 400, 'missing_fields', { required: ['token'] });
+            }
+
+            // 1) Token lookup
+            let invite;
+            try {
+                const result = await databases.listDocuments(
+                    databaseId,
+                    invitesCollectionId,
+                    [sdk.Query.equal('token', token), sdk.Query.limit(1)]
+                );
+                if (result.documents.length === 0) {
+                    return fail(res, 404, 'invite_not_found');
+                }
+                invite = result.documents[0];
+            } catch (e) {
+                error(`[DeclineInvite] token lookup hiba: ${e.message}`);
+                return fail(res, 500, 'invite_lookup_failed');
+            }
+
+            // 2) Status check — csak pending-ből lehet declined-ra váltani.
+            if (invite.status !== 'pending') {
+                return fail(res, 410, 'invite_not_pending', { status: invite.status });
+            }
+
+            // 3) Expiry check — lejárt invite-ot nem utasítunk el (értelmetlen),
+            //    de auto-expire-oljuk, mint az accept-nél.
+            if (new Date(invite.expiresAt) < new Date()) {
+                try {
+                    await databases.updateDocument(databaseId, invitesCollectionId, invite.$id, {
+                        status: 'expired'
+                    });
+                } catch (e) {
+                    log(`[DeclineInvite] expire frissítés sikertelen: ${e.message}`);
+                }
+                return fail(res, 410, 'invite_expired');
+            }
+
+            // 4) E-mail egyezés ellenőrzése — mint az accept-nél.
+            let callerUser;
+            try {
+                callerUser = await usersApi.get(callerId);
+            } catch (e) {
+                error(`[DeclineInvite] caller user lookup hiba (${callerId}): ${e.message}`);
+                return fail(res, 500, 'caller_lookup_failed');
+            }
+
+            const callerEmail = (callerUser.email || '').trim().toLowerCase();
+            const inviteEmail = (invite.email || '').trim().toLowerCase();
+            if (callerEmail !== inviteEmail) {
+                log(`[DeclineInvite] e-mail eltérés — caller=${callerUser.email}, invite=${invite.email}`);
+                return fail(res, 403, 'email_mismatch');
+            }
+
+            // 5) Status update
+            try {
+                await databases.updateDocument(databaseId, invitesCollectionId, invite.$id, {
+                    status: 'declined'
+                });
+            } catch (e) {
+                error(`[DeclineInvite] status update hiba: ${e.message}`);
+                return fail(res, 500, 'invite_update_failed');
+            }
+
+            log(`[DeclineInvite] User ${callerId} elutasította invite ${invite.$id}-t (org=${invite.organizationId})`);
+
+            return res.json({
+                success: true,
+                action: 'declined',
+                inviteId: invite.$id,
+                organizationId: invite.organizationId
+            });
+        }
+
+        // ════════════════════════════════════════════════════════════════
+        // ACTION = 'leave_organization'  (#41)
+        // ════════════════════════════════════════════════════════════════
+        //
+        // Caller saját kilépése egy szervezetből. A teljes scope-takarítás
+        // a caller saját rekordjaira korlátozott:
+        //   - organizationMemberships (a caller 1 doca az adott orgban)
+        //   - editorialOfficeMemberships (a caller minden office-tagsága az
+        //     org alatt — több office is lehet)
+        //   - groupMemberships (a caller minden csoporttagsága az org-on belül)
+        //   - Appwrite Team membership-ek: `org_${orgId}` + per-office
+        //     `office_${officeId}` (Realtime ACL push leszűkítés)
+        //
+        // Last-owner blokk: ha a caller az utolsó `owner` role-ú tag és van
+        // legalább egy másik member (admin/member) → `last_owner_block`,
+        // a usernek delegálnia kell előbb. Ha a caller az utolsó tag (semmi
+        // egyéb membership), akkor is blokkoljuk — ilyenkor a UI a
+        // `delete_organization` flow-t kínálja fel (szándékos disambiguation,
+        // hogy a kilépés ne legyen árva-org generátor).
+        if (action === 'leave_organization') {
+            const { organizationId } = payload;
+            if (!organizationId || typeof organizationId !== 'string') {
+                return fail(res, 400, 'missing_fields', { required: ['organizationId'] });
+            }
+
+            // 1) Caller org membership lekérése — kötelező.
+            let callerMembership;
+            try {
+                const result = await databases.listDocuments(
+                    databaseId,
+                    membershipsCollectionId,
+                    [
+                        sdk.Query.equal('organizationId', organizationId),
+                        sdk.Query.equal('userId', callerId),
+                        sdk.Query.limit(1)
+                    ]
+                );
+                if (result.documents.length === 0) {
+                    return fail(res, 404, 'not_a_member');
+                }
+                callerMembership = result.documents[0];
+            } catch (e) {
+                error(`[LeaveOrg] caller membership lookup hiba: ${e.message}`);
+                return fail(res, 500, 'membership_lookup_failed');
+            }
+
+            // 2) Last-owner blokk. Ha a caller owner, ellenőrizzük, hogy
+            //    van-e másik owner. Ha nincs → blokkolva, de először
+            //    eldöntjük, hogy egyedüli-e (ekkor `last_member_block`,
+            //    a UI a delete_organization-t ajánlja fel).
+            if (callerMembership.role === 'owner') {
+                let otherOwners;
+                try {
+                    otherOwners = await databases.listDocuments(
+                        databaseId,
+                        membershipsCollectionId,
+                        [
+                            sdk.Query.equal('organizationId', organizationId),
+                            sdk.Query.equal('role', 'owner'),
+                            sdk.Query.notEqual('userId', callerId),
+                            sdk.Query.limit(1)
+                        ]
+                    );
+                } catch (e) {
+                    error(`[LeaveOrg] other-owner scan hiba: ${e.message}`);
+                    return fail(res, 500, 'owner_scan_failed');
+                }
+
+                if (otherOwners.documents.length === 0) {
+                    // Egyedüli owner — most külön nézzük, hogy van-e bármilyen
+                    // más tag. Ha van → owner-átruházás kell előtte. Ha nincs
+                    // → org törlés a megoldás.
+                    let otherMembers;
+                    try {
+                        otherMembers = await databases.listDocuments(
+                            databaseId,
+                            membershipsCollectionId,
+                            [
+                                sdk.Query.equal('organizationId', organizationId),
+                                sdk.Query.notEqual('userId', callerId),
+                                sdk.Query.limit(1)
+                            ]
+                        );
+                    } catch (e) {
+                        error(`[LeaveOrg] other-member scan hiba: ${e.message}`);
+                        return fail(res, 500, 'owner_scan_failed');
+                    }
+
+                    if (otherMembers.documents.length > 0) {
+                        return fail(res, 409, 'last_owner_block', {
+                            hint: 'transfer_ownership_first'
+                        });
+                    }
+                    return fail(res, 409, 'last_member_block', {
+                        hint: 'delete_organization_instead'
+                    });
+                }
+            }
+
+            // 3) Az org alá tartozó office-ok listája — a per-office team
+            //    cleanup-hoz kell. Lapozott listing.
+            const officeIds = [];
+            let cursor;
+            while (true) {
+                const queries = [
+                    sdk.Query.equal('organizationId', organizationId),
+                    sdk.Query.select(['$id']),
+                    sdk.Query.limit(CASCADE_BATCH_LIMIT)
+                ];
+                if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
+                let resp;
+                try {
+                    resp = await databases.listDocuments(databaseId, officesCollectionId, queries);
+                } catch (e) {
+                    error(`[LeaveOrg] office listing hiba: ${e.message}`);
+                    return fail(res, 500, 'office_list_failed');
+                }
+                if (resp.documents.length === 0) break;
+                for (const o of resp.documents) officeIds.push(o.$id);
+                if (resp.documents.length < CASCADE_BATCH_LIMIT) break;
+                cursor = resp.documents[resp.documents.length - 1].$id;
+            }
+
+            // 4) Caller saját office membership-ek törlése. Az
+            //    `editorialOfficeMemberships` collection a `(officeId, userId)`
+            //    composite indexen unique — a caller userId-jára egy office-ban
+            //    legfeljebb 1 doc lehet.
+            let officeMembershipsRemoved = 0;
+            const officeFailures = [];
+            try {
+                const resp = await databases.listDocuments(
+                    databaseId,
+                    officeMembershipsCollectionId,
+                    [
+                        sdk.Query.equal('organizationId', organizationId),
+                        sdk.Query.equal('userId', callerId),
+                        sdk.Query.limit(CASCADE_BATCH_LIMIT)
+                    ]
+                );
+                for (const m of resp.documents) {
+                    try {
+                        await databases.deleteDocument(databaseId, officeMembershipsCollectionId, m.$id);
+                        officeMembershipsRemoved++;
+                    } catch (delErr) {
+                        officeFailures.push({ docId: m.$id, message: delErr.message });
+                    }
+                }
+            } catch (e) {
+                error(`[LeaveOrg] office memberships listing hiba: ${e.message}`);
+                return fail(res, 500, 'office_memberships_failed');
+            }
+            if (officeFailures.length > 0) {
+                error(`[LeaveOrg] office membership delete failures: ${JSON.stringify(officeFailures)}`);
+                return fail(res, 500, 'office_memberships_failed', { failures: officeFailures });
+            }
+
+            // 5) Caller saját groupMembership-ek törlése (org-szintű szűrés).
+            let groupMembershipsRemoved = 0;
+            const groupFailures = [];
+            try {
+                while (true) {
+                    const resp = await databases.listDocuments(
+                        databaseId,
+                        groupMembershipsCollectionId,
+                        [
+                            sdk.Query.equal('organizationId', organizationId),
+                            sdk.Query.equal('userId', callerId),
+                            sdk.Query.limit(CASCADE_BATCH_LIMIT)
+                        ]
+                    );
+                    if (resp.documents.length === 0) break;
+                    for (const m of resp.documents) {
+                        try {
+                            await databases.deleteDocument(databaseId, groupMembershipsCollectionId, m.$id);
+                            groupMembershipsRemoved++;
+                        } catch (delErr) {
+                            groupFailures.push({ docId: m.$id, message: delErr.message });
+                        }
+                    }
+                    if (resp.documents.length < CASCADE_BATCH_LIMIT) break;
+                }
+            } catch (e) {
+                error(`[LeaveOrg] group memberships listing hiba: ${e.message}`);
+                return fail(res, 500, 'group_memberships_failed');
+            }
+            if (groupFailures.length > 0) {
+                error(`[LeaveOrg] group membership delete failures: ${JSON.stringify(groupFailures)}`);
+                return fail(res, 500, 'group_memberships_failed', { failures: groupFailures });
+            }
+
+            // 6) Org membership doc törlése — a fő rekord. Mostanra már
+            //    minden gyerek-membership (office + group) le van bontva,
+            //    az org doc-on a caller jogosultsága megszűnik.
+            try {
+                await databases.deleteDocument(
+                    databaseId,
+                    membershipsCollectionId,
+                    callerMembership.$id
+                );
+            } catch (e) {
+                error(`[LeaveOrg] org membership delete hiba (${callerMembership.$id}): ${e.message}`);
+                return fail(res, 500, 'membership_delete_failed');
+            }
+
+            // 7) Team cleanup — best-effort. A doc-szintű ACL-t a már törölt
+            //    rekordok már nem érintik, a team membership viszont a
+            //    Realtime push-t azonnal levágja a többi (még meglévő) doc-ról.
+            const teamCleanup = { officeTeams: 0, orgTeam: false, errors: [] };
+            for (const oid of officeIds) {
+                try {
+                    const r = await removeTeamMembership(teamsApi, buildOfficeTeamId(oid), callerId);
+                    if (r.removed > 0) teamCleanup.officeTeams += r.removed;
+                } catch (teamErr) {
+                    teamCleanup.errors.push({ teamId: buildOfficeTeamId(oid), message: teamErr.message });
+                    log(`[LeaveOrg] office team membership remove hiba (non-blocking, ${oid}): ${teamErr.message}`);
+                }
+            }
+            try {
+                const r = await removeTeamMembership(teamsApi, buildOrgTeamId(organizationId), callerId);
+                if (r.removed > 0) teamCleanup.orgTeam = true;
+            } catch (teamErr) {
+                teamCleanup.errors.push({ teamId: buildOrgTeamId(organizationId), message: teamErr.message });
+                log(`[LeaveOrg] org team membership remove hiba (non-blocking): ${teamErr.message}`);
+            }
+
+            log(`[LeaveOrg] User ${callerId} kilépett org ${organizationId}-ból — office=${officeMembershipsRemoved}, groupMemberships=${groupMembershipsRemoved}, teams.office=${teamCleanup.officeTeams}, teams.org=${teamCleanup.orgTeam}`);
+
+            return res.json({
+                success: true,
+                action: 'left',
+                organizationId,
+                removed: {
+                    organizationMembership: 1,
+                    editorialOfficeMemberships: officeMembershipsRemoved,
+                    groupMemberships: groupMembershipsRemoved
+                },
+                teamCleanup
             });
         }
 

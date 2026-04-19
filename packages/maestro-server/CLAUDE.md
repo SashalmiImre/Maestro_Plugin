@@ -279,7 +279,7 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 
 **Bemeneti payload**:
 ```json
-{ "action": "bootstrap_organization" | "create_organization" | "create" | "accept" | "add_group_member" | "remove_group_member" | "create_workflow" | "update_workflow" | "update_workflow_metadata" | "delete_workflow" | "duplicate_workflow" | "bootstrap_workflow_schema" | "bootstrap_publication_schema" | "delete_organization" | "delete_editorial_office" | "backfill_tenant_acl", ... }
+{ "action": "bootstrap_organization" | "create_organization" | "create" | "accept" | "list_my_invites" | "decline_invite" | "leave_organization" | "add_group_member" | "remove_group_member" | "create_workflow" | "update_workflow" | "update_workflow_metadata" | "delete_workflow" | "duplicate_workflow" | "bootstrap_workflow_schema" | "bootstrap_publication_schema" | "delete_organization" | "delete_editorial_office" | "backfill_tenant_acl", ... }
 ```
 
 **Biztonsági megjegyzés**: Korábban létezett egy `organization-membership-guard` trigger CF, amely egy `modifiedByClientId === 'server-guard'` sentinellel engedélyezte az invite-eredetű membership-eket. Ez **kliens-forgeable** volt — bármely hitelesített user beállíthatta a payload-ban. A Codex adversarial review jelezte a kritikus sebezhetőséget, és a javítás ACL-alapú védelemre váltott (B.5 utolsó iteráció, 2026-04-07).
@@ -323,6 +323,45 @@ Response: `{ success: true, action: 'created', organizationId, editorialOfficeId
 6. **Duplikátum check** — ha már van membership, csak az invite status frissül `accepted`-re (idempotens).
 7. `createDocument(memberships, { organizationId, userId: callerId, role, addedByUserId })` — API key-jel írja, az ACL miatt csak így lehetséges.
 8. `updateDocument(invite, { status: 'accepted' })`.
+
+**ACTION='list_my_invites'** (#41, Maestro beállítások „Függő meghívóim" szekció):
+
+A meghívott user nem tudja közvetlenül lekérdezni a saját pending invite-jait — az `organizationInvites` ACL `read("team:org_${orgId}")`-re szűkített, és az invitee még nincs a team-ben. Ez az action API key-jel keres a caller `email`-jére regisztrált pending invite-okra, és denormalizált org-név + meghívó user név mezőkkel adja vissza.
+
+1. `usersApi.get(callerId)` → caller `email` (lower-case-elve, hiány esetén `missing_caller_email` 400).
+2. `listDocuments(invites, [eq(email), eq(status, 'pending'), orderDesc($createdAt), limit(100)])`.
+3. Lejárt invite-okat opportunista módon `expired`-re állítja (best-effort, nem blokkolja a választ).
+4. Per-invite enrichment: `organizations.getDocument(orgId)` + `usersApi.get(invitedByUserId)` per-request cache-elve, hogy az ismétlődő lekérések egyszer fussanak.
+
+Response: `{ success: true, action: 'listed', invites: [{ $id, token, email, role, organizationId, organizationName, invitedByUserId, invitedByName, expiresAt, createdAt }, ...] }`.
+
+**ACTION='decline_invite'** (#41):
+
+Pending invite elutasítása. Token + e-mail match védelem (mint az `accept`-nél), majd `status='declined'`. Idempotens: nem-pending invite → megfelelő hibakód.
+
+1. Payload: `{ token }` (kötelező).
+2. Token lookup → 404 `invite_not_found`.
+3. Status check → 410 `invite_not_pending`.
+4. Expiry check → auto-expire + 410 `invite_expired`.
+5. E-mail match check → 403 `email_mismatch`.
+6. `updateDocument(invite, { status: 'declined' })`.
+
+Response: `{ success: true, action: 'declined', inviteId, organizationId }`.
+
+**ACTION='leave_organization'** (#41):
+
+A caller saját kilépése egy szervezetből — a teljes scope-takarítás a caller saját rekordjaira korlátozott. Last-owner blokk: ha a caller az utolsó owner és van más tag → `last_owner_block` (delegálás kell előtte). Ha a caller az egyedüli tag → `last_member_block` (a UI a `delete_organization` flow-t kínálja fel; szándékos disambiguation, hogy a leave ne legyen árva-org generátor).
+
+1. Payload: `{ organizationId }` (kötelező).
+2. **Caller membership lookup** — 404 `not_a_member`.
+3. **Last-owner check** — owner caller-nél ha nincs másik owner és van másik tag → 409 `last_owner_block` (`hint: 'transfer_ownership_first'`); ha egyetlen tag is → 409 `last_member_block` (`hint: 'delete_organization_instead'`).
+4. **Office ID-k listája** — lapozott listing a per-office team membership cleanup-hoz.
+5. **Office memberships törlés** — `deleteDocument` a caller `editorialOfficeMemberships` doksin az adott orgban (több office is lehet). Bármely failure → 500 `office_memberships_failed` (a fő membership még megvan, retry).
+6. **Group memberships törlés** — lapozott `deleteDocument` a caller `groupMemberships` doksin az adott orgban. Bármely failure → 500 `group_memberships_failed`.
+7. **Org membership doc törlés** — a fő rekord. Hiba → 500 `membership_delete_failed`. A gyerek-membership-ek már le vannak bontva, retry biztonságos (idempotens).
+8. **Team cleanup (best-effort)** — minden office-ra `removeTeamMembership(teamsApi, office_${oid}, callerId)`, majd az org team-ből is. A doc már törölt, csak a Realtime push-t vágja le a többi még-meglévő doc-ról. Hiba esetén csak log + a `teamCleanup.errors` a response-ban.
+
+Response: `{ success: true, action: 'left', organizationId, removed: { organizationMembership, editorialOfficeMemberships, groupMemberships }, teamCleanup }`.
 
 **ACTION='add_group_member'**:
 1. Caller user kötelező.
@@ -395,7 +434,7 @@ A Realtime WS payload minden authentikált usernek szétszór rá-feliratkozott 
 5. Appwrite Console-on a 3 érintett collection (`organizationInvites`, `groups`, `groupMemberships`) `rowSecurity` flag-jét `true`-ra + a globális `read("users")` ACL-t eltávolítani (csak utána lesz aktív a tenant szűrés — addig a doc-szintű perms el van tárolva, de a collection-szintű olvasás még mindenkinek engedi).
 
 **Hibakódok** (mind a `fail()` wrapperen keresztül `{ success: false, reason, ...extra }` formátumban):
-`invalid_payload`, `invalid_action`, `unauthenticated`, `missing_fields`, `invalid_slug`, `org_slug_taken`, `org_create_failed`, `membership_create_failed`, `office_slug_taken`, `office_create_failed`, `office_membership_create_failed`, `org_team_create_failed`, `org_team_membership_create_failed`, `office_team_create_failed`, `office_team_membership_create_failed`, `invalid_email`, `invalid_role`, `not_a_member`, `insufficient_role`, `invite_not_found`, `invite_not_pending`, `invite_expired`, `email_mismatch`, `caller_lookup_failed`, `group_not_found`, `target_user_not_found`, `group_member_create_failed`, `misconfigured`, `office_not_found`, `office_fetch_failed`, `cascade_failed`, `office_delete_failed`, `organization_not_found`, `organization_fetch_failed`, `office_list_failed`, `org_cleanup_failed`, `organization_delete_failed`, `scan_failed`.
+`invalid_payload`, `invalid_action`, `unauthenticated`, `missing_fields`, `invalid_slug`, `org_slug_taken`, `org_create_failed`, `membership_create_failed`, `office_slug_taken`, `office_create_failed`, `office_membership_create_failed`, `org_team_create_failed`, `org_team_membership_create_failed`, `office_team_create_failed`, `office_team_membership_create_failed`, `invalid_email`, `invalid_role`, `not_a_member`, `insufficient_role`, `invite_not_found`, `invite_not_pending`, `invite_expired`, `email_mismatch`, `missing_caller_email`, `invites_list_failed`, `invite_lookup_failed`, `invite_update_failed`, `last_owner_block`, `last_member_block`, `membership_lookup_failed`, `membership_delete_failed`, `owner_scan_failed`, `office_memberships_failed`, `group_memberships_failed`, `caller_lookup_failed`, `group_not_found`, `target_user_not_found`, `group_member_create_failed`, `misconfigured`, `office_not_found`, `office_fetch_failed`, `cascade_failed`, `office_delete_failed`, `organization_not_found`, `organization_fetch_failed`, `office_list_failed`, `org_cleanup_failed`, `organization_delete_failed`, `scan_failed`.
 
 ---
 

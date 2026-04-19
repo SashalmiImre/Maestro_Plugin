@@ -721,6 +721,78 @@ export function AuthProvider({ children }) {
     }, [user?.$id, loadAndSetMemberships]);
 
     /**
+     * #41 — A caller saját e-mail címére kiállított pending invite-ok listája.
+     *
+     * A meghívott user nem tudja közvetlenül lekérdezni a saját invite-jait
+     * (organizationInvites ACL `read("team:org_<orgId>")`-re szűkítve, és ő
+     * még nincs benne a team-ben). Ezért a CF `list_my_invites` action-je
+     * API key-jel keresi a caller email-jére regisztrált pending sorokat,
+     * és visszaadja denormalizált org-név + meghívó név mezőkkel.
+     *
+     * @returns {Promise<Array<{$id, token, email, role, organizationId, organizationName, invitedByUserId, invitedByName, expiresAt, createdAt}>>}
+     */
+    const listMyInvites = useCallback(async () => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        const response = await callInviteFunction(
+            'list_my_invites',
+            {},
+            'invites_list_failed'
+        );
+        return response.invites || [];
+    }, [user?.$id]);
+
+    /**
+     * #41 — Pending invite elutasítása (a meghívott user oldalán).
+     *
+     * Token + e-mail match védelem a CF-ben (mint az `accept`-nél),
+     * majd `status='declined'` set. Idempotens: ha már nem-pending,
+     * a CF megfelelő hibát ad vissza.
+     *
+     * @param {string} token
+     * @returns {Promise<{inviteId, organizationId}>}
+     */
+    const declineInvite = useCallback(async (token) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        if (!token) throw new Error('missing_token');
+        const response = await callInviteFunction(
+            'decline_invite',
+            { token },
+            'invite_decline_failed'
+        );
+        return {
+            inviteId: response.inviteId,
+            organizationId: response.organizationId
+        };
+    }, [user?.$id]);
+
+    /**
+     * #41 — Saját kilépés egy szervezetből.
+     *
+     * A CF törli a caller `organizationMembership`-ét, az org alá tartozó
+     * minden `editorialOfficeMembership`-jét és `groupMembership`-jét, és
+     * eltávolítja az `org_${orgId}` + per-office `office_${officeId}`
+     * Appwrite Team-ekből. Last-owner blokk: ha a caller az utolsó owner és
+     * van más tag → `last_owner_block`; ha egyedüli tag → `last_member_block`
+     * (a UI ekkor `delete_organization`-t kínáljon fel).
+     *
+     * Sikeres válasz után a hívó futtassa a `reloadMemberships()`-t, hogy
+     * a ScopeContext auto-pick effekt a következő org-ra ugorjon (vagy
+     * /onboarding-ra, ha nincs több).
+     *
+     * @param {string} organizationId
+     * @returns {Promise<{organizationId, removed, teamCleanup}>}
+     */
+    const leaveOrganization = useCallback(async (organizationId) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        if (!organizationId) throw new Error('missing_organization_id');
+        return callInviteFunction(
+            'leave_organization',
+            { organizationId },
+            'leave_organization_failed'
+        );
+    }, [user?.$id]);
+
+    /**
      * B.5 — Meghívó létrehozása (admin → e-mail).
      *
      * Az `invite-to-organization` Cloud Function `create` action-jét hívja.
@@ -942,6 +1014,9 @@ export function AuthProvider({ children }) {
         createOrganization,
         createNewOrganization,
         acceptInvite,
+        listMyInvites,
+        declineInvite,
+        leaveOrganization,
         createInvite,
         deleteOrganization,
         deleteEditorialOffice,
@@ -972,6 +1047,9 @@ export function AuthProvider({ children }) {
         createOrganization,
         createNewOrganization,
         acceptInvite,
+        listMyInvites,
+        declineInvite,
+        leaveOrganization,
         createInvite,
         deleteOrganization,
         deleteEditorialOffice,

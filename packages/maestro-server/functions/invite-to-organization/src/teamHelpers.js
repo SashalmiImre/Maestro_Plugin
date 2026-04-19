@@ -121,6 +121,50 @@ async function deleteTeamIfExists(teams, teamId) {
     }
 }
 
+/**
+ * Idempotens egy-user team membership eltávolítás. Listázza a team
+ * tagságait `userId` szűrővel, majd törli a megtalált membership doc-okat
+ * (általában 1 db). 404 (team nem létezik) → skip.
+ *
+ * Használata: `leave_organization` action — a user kilép, a tagsági doc
+ * marad a (másik) tag-okra, de a team-ből őt magát eltávolítjuk, hogy a
+ * tenant-scope ACL push ne menjen rá többet.
+ *
+ * @param {sdk.Teams} teams - initialized Teams SDK client.
+ * @param {string} teamId - custom team ID.
+ * @param {string} userId - user `$id`.
+ * @returns {Promise<{removed: number, skipped?: string}>}
+ */
+async function removeTeamMembership(teams, teamId, userId) {
+    const sdk = require('node-appwrite');
+    let memberships;
+    try {
+        memberships = await teams.listMemberships(teamId, [
+            sdk.Query.equal('userId', userId),
+            sdk.Query.limit(10)
+        ]);
+    } catch (err) {
+        if (err?.code === 404) return { removed: 0, skipped: 'team_not_found' };
+        throw err;
+    }
+
+    if (!memberships?.memberships?.length) {
+        return { removed: 0, skipped: 'not_a_member' };
+    }
+
+    let removed = 0;
+    for (const m of memberships.memberships) {
+        try {
+            await teams.deleteMembership(teamId, m.$id);
+            removed++;
+        } catch (err) {
+            if (err?.code === 404) continue;
+            throw err;
+        }
+    }
+    return { removed };
+}
+
 // ── Exports ─────────────────────────────────────────────────────────────────
 
 module.exports = {
@@ -130,5 +174,6 @@ module.exports = {
     buildOfficeAclPerms,
     ensureTeam,
     ensureTeamMembership,
+    removeTeamMembership,
     deleteTeamIfExists
 };

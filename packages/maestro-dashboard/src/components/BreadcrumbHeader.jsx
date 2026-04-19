@@ -22,6 +22,7 @@ import PublicationSettingsModal from './publications/PublicationSettingsModal.js
 import OrganizationSettingsModal from './organization/OrganizationSettingsModal.jsx';
 import EditorialOfficeSettingsModal from './organization/EditorialOfficeSettingsModal.jsx';
 import CreateOrganizationModal from './organization/CreateOrganizationModal.jsx';
+import MaestroSettingsModal from './organization/MaestroSettingsModal.jsx';
 
 /**
  * @param {Object} props
@@ -82,6 +83,13 @@ export default function BreadcrumbHeader({
 
     // User avatar menü
     const userMenuItems = useMemo(() => [
+        {
+            label: 'Maestro beállítások',
+            onClick: () => openModal(<MaestroSettingsModal />, {
+                size: 'md',
+                title: 'Maestro beállítások'
+            })
+        },
         {
             label: 'Új szervezet…',
             onClick: () => openModal(<CreateOrganizationModal />, {
