@@ -235,19 +235,19 @@ export default function BreadcrumbHeader({
  * komponens saját maga feliratkozik a context-re, és a név frissül a modal
  * fejlécében is.
  */
-function OrganizationSettingsTitle({ organizationId }) {
+export function OrganizationSettingsTitle({ organizationId }) {
     const { organizations } = useAuth();
     const org = (organizations || []).find(o => o.$id === organizationId);
     return org?.name || 'Szervezet beállításai';
 }
 
-function EditorialOfficeSettingsTitle({ editorialOfficeId }) {
+export function EditorialOfficeSettingsTitle({ editorialOfficeId }) {
     const { editorialOffices } = useAuth();
     const office = (editorialOffices || []).find(o => o.$id === editorialOfficeId);
     return office?.name || 'Szerkesztőség beállításai';
 }
 
-function PublicationSettingsTitle({ publicationId }) {
+export function PublicationSettingsTitle({ publicationId }) {
     const { publications } = useData();
     const pub = (publications || []).find(p => p.$id === publicationId);
     return pub?.name || 'Kiadvány beállításai';

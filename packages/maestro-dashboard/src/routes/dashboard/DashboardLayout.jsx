@@ -20,7 +20,10 @@ import { useFilters } from '../../hooks/useFilters.js';
 import { STORAGE_KEYS } from '../../config.js';
 import { buildPlaceholderRows } from '@shared/pageGapUtils.js';
 
-import BreadcrumbHeader from '../../components/BreadcrumbHeader.jsx';
+import BreadcrumbHeader, {
+    OrganizationSettingsTitle,
+    EditorialOfficeSettingsTitle
+} from '../../components/BreadcrumbHeader.jsx';
 import FilterBar from '../../components/FilterBar.jsx';
 import EmptyState from '../../components/EmptyState.jsx';
 import EditorialOfficeSettingsModal from '../../components/organization/EditorialOfficeSettingsModal.jsx';
@@ -147,7 +150,10 @@ export default function DashboardLayout() {
                 editorialOfficeId={activeEditorialOfficeId}
                 initialTab="general"
             />,
-            { size: 'lg', title: 'Szerkesztőség beállításai' }
+            {
+                size: 'lg',
+                title: <EditorialOfficeSettingsTitle editorialOfficeId={activeEditorialOfficeId} />
+            }
         );
     }, [activeEditorialOfficeId, openModal, showToast]);
 
@@ -155,7 +161,10 @@ export default function DashboardLayout() {
         if (!activeOrganizationId) return;
         openModal(
             <OrganizationSettingsModal organizationId={activeOrganizationId} />,
-            { size: 'lg', title: 'Szervezet beállításai' }
+            {
+                size: 'lg',
+                title: <OrganizationSettingsTitle organizationId={activeOrganizationId} />
+            }
         );
     }, [activeOrganizationId, openModal]);
 
