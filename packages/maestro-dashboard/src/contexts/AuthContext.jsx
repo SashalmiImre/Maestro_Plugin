@@ -644,10 +644,12 @@ export function AuthProvider({ children }) {
      * ág). A user explicit új szervezetet kér miközben már van egy meglévő
      * tagsága. Duplaklikk-védelem a hívó modal `isSubmitting` guardja.
      *
-     * Memberships reload sikertelen → false-t ad vissza a `reloadMemberships`,
-     * a hívó dönthet (toast warning + closeModal vs. retry UI).
+     * Memberships reload sikertelen → `membershipsReloaded: false`, a hívó
+     * dönthet (retry UI). A CF `workflowSeeded` flag-et is visszaadunk —
+     * ha false, a tenant létrejött, de a default workflow seed elbukott
+     * (a Modal partial-success banner-t mutathat, nem zárja be magát).
      *
-     * @returns {Promise<{organizationId: string, editorialOfficeId: string, membershipsReloaded: boolean}>}
+     * @returns {Promise<{organizationId: string, editorialOfficeId: string, membershipsReloaded: boolean, workflowSeeded: boolean}>}
      */
     const createNewOrganization = useCallback(async (orgName, orgSlug, officeName, officeSlug) => {
         if (!user?.$id) {
@@ -671,7 +673,8 @@ export function AuthProvider({ children }) {
         return {
             organizationId: response.organizationId,
             editorialOfficeId: response.editorialOfficeId,
-            membershipsReloaded
+            membershipsReloaded,
+            workflowSeeded: response.workflowSeeded !== false
         };
     }, [user?.$id, loadAndSetMemberships]);
 

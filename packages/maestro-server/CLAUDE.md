@@ -356,10 +356,10 @@ A caller saját kilépése egy szervezetből — a teljes scope-takarítás a ca
 2. **Caller membership lookup** — 404 `not_a_member`.
 3. **Last-owner check** — owner caller-nél ha nincs másik owner és van másik tag → 409 `last_owner_block` (`hint: 'transfer_ownership_first'`); ha egyetlen tag is → 409 `last_member_block` (`hint: 'delete_organization_instead'`).
 4. **Office ID-k listája** — lapozott listing a per-office team membership cleanup-hoz.
-5. **Office memberships törlés** — `deleteDocument` a caller `editorialOfficeMemberships` doksin az adott orgban (több office is lehet). Bármely failure → 500 `office_memberships_failed` (a fő membership még megvan, retry).
-6. **Group memberships törlés** — lapozott `deleteDocument` a caller `groupMemberships` doksin az adott orgban. Bármely failure → 500 `group_memberships_failed`.
-7. **Org membership doc törlés** — a fő rekord. Hiba → 500 `membership_delete_failed`. A gyerek-membership-ek már le vannak bontva, retry biztonságos (idempotens).
-8. **Team cleanup (best-effort)** — minden office-ra `removeTeamMembership(teamsApi, office_${oid}, callerId)`, majd az org team-ből is. A doc már törölt, csak a Realtime push-t vágja le a többi még-meglévő doc-ról. Hiba esetén csak log + a `teamCleanup.errors` a response-ban.
+5. **Team cleanup STRICT (DB delete ELŐTT)** — minden office-ra `removeTeamMembership(teamsApi, office_${oid}, callerId)`, majd az org team-ből is. Fázis 2 Team ACL óta a team membership szabályozza a Realtime + REST olvasási hozzáférést; ha előbb a DB doc-okat törölnénk és a team cleanup elbukna, a user továbbra is kapna Realtime push-t már-törölt rekordokról (ghost ACL access). Hiba → 500 `team_cleanup_failed`, a DB érintetlen, retry biztonságos (`removeTeamMembership` idempotens, 404/409 skip).
+6. **Office memberships törlés** — lapozott `deleteDocument` a caller `editorialOfficeMemberships` doksin az adott orgban (`CASCADE_BATCH_LIMIT=100`). Bármely delete hiba → loop break + 500 `office_memberships_failed` (infinite-loop guard: full-size page + tartós delete hiba különben örökre újrapörgetné a lapozást).
+7. **Group memberships törlés** — lapozott `deleteDocument` a caller `groupMemberships` doksin az adott orgban, ugyanazzal az infinite-loop guard-dal. Bármely failure → 500 `group_memberships_failed`.
+8. **Org membership doc törlés** — a fő rekord. Hiba → 500 `membership_delete_failed`. A gyerek-membership-ek már le vannak bontva, retry biztonságos (idempotens).
 
 Response: `{ success: true, action: 'left', organizationId, removed: { organizationMembership, editorialOfficeMemberships, groupMemberships }, teamCleanup }`.
 

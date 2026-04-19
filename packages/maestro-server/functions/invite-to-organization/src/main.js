@@ -1669,29 +1669,61 @@ module.exports = async function ({ req, res, log, error }) {
                 cursor = resp.documents[resp.documents.length - 1].$id;
             }
 
+            // 3.5) Team cleanup STRICT — a DB doc törlések ELŐTT fut le, mert
+            //      Fázis 2 ACL óta a team membership szabályozza a Realtime + REST
+            //      olvasási hozzáférést. Ha előbb DB-t törölnénk és a team cleanup
+            //      elbukna, a user továbbra is kapna payload-ot már-törölt
+            //      rekordokról (ghost ACL access). A sorrend fordított: előbb
+            //      levágjuk a push-csatornákat, utána pusztítunk DB-ben.
+            //
+            //      Hiba esetén 500-zal leállunk — a DB még érintetlen, a user
+            //      nyugodtan újrahívhat. A `removeTeamMembership` idempotens
+            //      (409/404 skip), így a retry nem ír felül semmit.
+            const teamCleanup = { officeTeams: 0, orgTeam: false };
+            try {
+                for (const oid of officeIds) {
+                    const r = await removeTeamMembership(teamsApi, buildOfficeTeamId(oid), callerId);
+                    if (r.removed > 0) teamCleanup.officeTeams += r.removed;
+                }
+                const r = await removeTeamMembership(teamsApi, buildOrgTeamId(organizationId), callerId);
+                if (r.removed > 0) teamCleanup.orgTeam = true;
+            } catch (teamErr) {
+                error(`[LeaveOrg] team membership remove hiba — abort, DB érintetlen: ${teamErr.message}`);
+                return fail(res, 500, 'team_cleanup_failed', { message: teamErr.message });
+            }
+
             // 4) Caller saját office membership-ek törlése. Az
             //    `editorialOfficeMemberships` collection a `(officeId, userId)`
-            //    composite indexen unique — a caller userId-jára egy office-ban
-            //    legfeljebb 1 doc lehet.
+            //    composite indexen unique, de egy user több office-ban is lehet
+            //    → lapozott törlés (analóg a lenti groupMemberships loop-pal).
             let officeMembershipsRemoved = 0;
             const officeFailures = [];
             try {
-                const resp = await databases.listDocuments(
-                    databaseId,
-                    officeMembershipsCollectionId,
-                    [
-                        sdk.Query.equal('organizationId', organizationId),
-                        sdk.Query.equal('userId', callerId),
-                        sdk.Query.limit(CASCADE_BATCH_LIMIT)
-                    ]
-                );
-                for (const m of resp.documents) {
-                    try {
-                        await databases.deleteDocument(databaseId, officeMembershipsCollectionId, m.$id);
-                        officeMembershipsRemoved++;
-                    } catch (delErr) {
-                        officeFailures.push({ docId: m.$id, message: delErr.message });
+                while (true) {
+                    const resp = await databases.listDocuments(
+                        databaseId,
+                        officeMembershipsCollectionId,
+                        [
+                            sdk.Query.equal('organizationId', organizationId),
+                            sdk.Query.equal('userId', callerId),
+                            sdk.Query.limit(CASCADE_BATCH_LIMIT)
+                        ]
+                    );
+                    if (resp.documents.length === 0) break;
+                    for (const m of resp.documents) {
+                        try {
+                            await databases.deleteDocument(databaseId, officeMembershipsCollectionId, m.$id);
+                            officeMembershipsRemoved++;
+                        } catch (delErr) {
+                            officeFailures.push({ docId: m.$id, message: delErr.message });
+                        }
                     }
+                    // Végtelen-loop guard: ha bármelyik delete hibázott, kilépünk és
+                    // lejjebb 500-zal elszállunk. Nélküle egy tartós delete-hiba +
+                    // full-size page esetén (documents.length === CASCADE_BATCH_LIMIT)
+                    // soha nem érne véget a ciklus.
+                    if (officeFailures.length > 0) break;
+                    if (resp.documents.length < CASCADE_BATCH_LIMIT) break;
                 }
             } catch (e) {
                 error(`[LeaveOrg] office memberships listing hiba: ${e.message}`);
@@ -1725,6 +1757,8 @@ module.exports = async function ({ req, res, log, error }) {
                             groupFailures.push({ docId: m.$id, message: delErr.message });
                         }
                     }
+                    // Ld. office-memberships loop fenti guardja — azonos infinite-loop rizikó.
+                    if (groupFailures.length > 0) break;
                     if (resp.documents.length < CASCADE_BATCH_LIMIT) break;
                 }
             } catch (e) {
@@ -1748,27 +1782,6 @@ module.exports = async function ({ req, res, log, error }) {
             } catch (e) {
                 error(`[LeaveOrg] org membership delete hiba (${callerMembership.$id}): ${e.message}`);
                 return fail(res, 500, 'membership_delete_failed');
-            }
-
-            // 7) Team cleanup — best-effort. A doc-szintű ACL-t a már törölt
-            //    rekordok már nem érintik, a team membership viszont a
-            //    Realtime push-t azonnal levágja a többi (még meglévő) doc-ról.
-            const teamCleanup = { officeTeams: 0, orgTeam: false, errors: [] };
-            for (const oid of officeIds) {
-                try {
-                    const r = await removeTeamMembership(teamsApi, buildOfficeTeamId(oid), callerId);
-                    if (r.removed > 0) teamCleanup.officeTeams += r.removed;
-                } catch (teamErr) {
-                    teamCleanup.errors.push({ teamId: buildOfficeTeamId(oid), message: teamErr.message });
-                    log(`[LeaveOrg] office team membership remove hiba (non-blocking, ${oid}): ${teamErr.message}`);
-                }
-            }
-            try {
-                const r = await removeTeamMembership(teamsApi, buildOrgTeamId(organizationId), callerId);
-                if (r.removed > 0) teamCleanup.orgTeam = true;
-            } catch (teamErr) {
-                teamCleanup.errors.push({ teamId: buildOrgTeamId(organizationId), message: teamErr.message });
-                log(`[LeaveOrg] org team membership remove hiba (non-blocking): ${teamErr.message}`);
             }
 
             log(`[LeaveOrg] User ${callerId} kilépett org ${organizationId}-ból — office=${officeMembershipsRemoved}, groupMemberships=${groupMembershipsRemoved}, teams.office=${teamCleanup.officeTeams}, teams.org=${teamCleanup.orgTeam}`);

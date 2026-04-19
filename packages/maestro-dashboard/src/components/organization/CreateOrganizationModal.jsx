@@ -55,7 +55,7 @@ function errorMessage(code) {
  *   az új org + office-ra váltson-e a ScopeContext (alapértelmezett: igen)
  */
 export default function CreateOrganizationModal({ switchScopeOnSuccess = true }) {
-    const { createNewOrganization } = useAuth();
+    const { createNewOrganization, reloadMemberships } = useAuth();
     const { closeModal } = useModal();
     const { showToast } = useToast();
     const { setActiveOrganization, setActiveOffice } = useScope();
@@ -64,6 +64,12 @@ export default function CreateOrganizationModal({ switchScopeOnSuccess = true })
     const [touched, setTouched] = useState({});
     const [submitError, setSubmitError] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
+    // Partial-success state: a CF sikeres volt, de a kliens oldali reload
+    // elbukott VAGY a workflow seed nem futott le. A modal ilyenkor nyitva
+    // marad és retry / scope-switch akciókat ajánl — különben a user a
+    // dropdown-ból újra „Új szervezet" menüpontra kattintva duplikálna.
+    const [createdOrg, setCreatedOrg] = useState(null);
+    const [isRetryingSync, setIsRetryingSync] = useState(false);
 
     // Lásd CreateEditorialOfficeModal kommentje — a ModalContext scope-auto-
     // close unmountolja a komponenst a setActiveOrganization() után, így a
@@ -95,6 +101,19 @@ export default function CreateOrganizationModal({ switchScopeOnSuccess = true })
         setTouched(prev => (prev[field] ? prev : { ...prev, [field]: true }));
     }
 
+    function switchToCreated(created) {
+        if (switchScopeOnSuccess && created.organizationId) {
+            // Először az org váltás — a ScopeContext office auto-pick
+            // amúgy is megtalálja az új office-t, de explicit setelve
+            // gyorsabb és determinisztikus.
+            setActiveOrganization(created.organizationId);
+            if (created.editorialOfficeId) {
+                setActiveOffice(created.editorialOfficeId);
+            }
+        }
+        closeModal();
+    }
+
     async function handleSubmit(e) {
         e?.preventDefault?.();
         setTouched({ name: true });
@@ -113,24 +132,21 @@ export default function CreateOrganizationModal({ switchScopeOnSuccess = true })
                 DEFAULT_OFFICE_SLUG
             );
 
-            if (response.membershipsReloaded) {
-                if (switchScopeOnSuccess && response.organizationId) {
-                    // Először az org váltás — a ScopeContext office auto-pick
-                    // amúgy is megtalálja az új office-t, de explicit setelve
-                    // gyorsabb és determinisztikus.
-                    setActiveOrganization(response.organizationId);
-                    if (response.editorialOfficeId) {
-                        setActiveOffice(response.editorialOfficeId);
-                    }
-                }
+            const created = {
+                organizationId: response.organizationId,
+                editorialOfficeId: response.editorialOfficeId,
+                name: trimmedName,
+                membershipsReloaded: response.membershipsReloaded,
+                workflowSeeded: response.workflowSeeded
+            };
+
+            if (created.membershipsReloaded && created.workflowSeeded) {
+                switchToCreated(created);
                 showToast(`„${trimmedName}" szervezet létrehozva.`, 'success');
             } else {
-                showToast(
-                    `„${trimmedName}" szervezet létrehozva, de a lista szinkron sikertelen. Frissítsd az oldalt.`,
-                    'warning'
-                );
+                // Partial success — modal nyitva marad, retry / switch gombok
+                setCreatedOrg(created);
             }
-            closeModal();
         } catch (err) {
             console.error('[CreateOrganizationModal] Létrehozás hiba:', err);
             if (isMountedRef.current) {
@@ -139,6 +155,79 @@ export default function CreateOrganizationModal({ switchScopeOnSuccess = true })
         } finally {
             if (isMountedRef.current) setIsSubmitting(false);
         }
+    }
+
+    async function handleRetrySync() {
+        if (isRetryingSync) return;
+        setIsRetryingSync(true);
+        try {
+            const ok = await reloadMemberships();
+            if (!isMountedRef.current) return;
+            if (ok) {
+                setCreatedOrg(prev => prev ? { ...prev, membershipsReloaded: true } : prev);
+            } else {
+                showToast('A szinkron továbbra sem sikerült. Frissítsd az oldalt.', 'warning');
+            }
+        } finally {
+            if (isMountedRef.current) setIsRetryingSync(false);
+        }
+    }
+
+    // Partial-success render: a tenant létrejött, de valami hiányzik.
+    // A user dönt: retry sync, scope-váltás, vagy bezárás.
+    if (createdOrg) {
+        const canSwitch = createdOrg.membershipsReloaded;
+        return (
+            <div className="publication-form">
+                <div className="form-hint form-hint-success">
+                    „{createdOrg.name}" szervezet létrejött.
+                </div>
+
+                {!createdOrg.membershipsReloaded && (
+                    <div className="form-error form-error-global">
+                        A lista szinkron sikertelen. Az új szervezet megjelenéséhez
+                        újraszinkronizálás vagy oldalfrissítés szükséges.
+                    </div>
+                )}
+
+                {!createdOrg.workflowSeeded && (
+                    <div className="form-error form-error-global">
+                        A szervezet használható, de a default workflow seed nem
+                        futott le. Az Admin panelen a workflow-t manuálisan kell
+                        beállítanod a szerkesztőséghez.
+                    </div>
+                )}
+
+                <div className="modal-actions">
+                    <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={closeModal}
+                    >
+                        Bezárás
+                    </button>
+                    {!createdOrg.membershipsReloaded && (
+                        <button
+                            type="button"
+                            className="btn-secondary"
+                            onClick={handleRetrySync}
+                            disabled={isRetryingSync}
+                        >
+                            {isRetryingSync ? 'Szinkron…' : 'Újraszinkronizálás'}
+                        </button>
+                    )}
+                    <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => switchToCreated(createdOrg)}
+                        disabled={!canSwitch}
+                        title={canSwitch ? undefined : 'Előbb szinkronizáld a listát'}
+                    >
+                        Megnyitás most
+                    </button>
+                </div>
+            </div>
+        );
     }
 
     return (
