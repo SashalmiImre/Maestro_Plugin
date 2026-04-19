@@ -157,7 +157,7 @@ export default function Modal({
                 tabIndex={-1}
                 role="dialog"
                 aria-modal="true"
-                aria-label={title || 'Párbeszédablak'}
+                aria-label={typeof title === 'string' ? title : 'Párbeszédablak'}
             >
                 {title && (
                     <div className="modal-header">

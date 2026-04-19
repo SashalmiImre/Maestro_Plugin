@@ -106,29 +106,26 @@ export default function BreadcrumbHeader({
     // ── Kiadvány modal ────────────────────────────────────────────────────
     function handlePublicationSettings() {
         if (!activePublicationId) return;
-        const activePub = publications.find(p => p.$id === activePublicationId);
         openModal(<PublicationSettingsModal publicationId={activePublicationId} />, {
             size: 'lg',
-            title: activePub?.name || 'Kiadvány beállításai'
+            title: <PublicationSettingsTitle publicationId={activePublicationId} />
         });
     }
 
     // ── Szervezet / Szerkesztőség modalok ─────────────────────────────────
     function handleOrganizationSettings() {
         if (!activeOrganizationId) return;
-        const activeOrg = (organizations || []).find(o => o.$id === activeOrganizationId);
         openModal(<OrganizationSettingsModal organizationId={activeOrganizationId} />, {
             size: 'lg',
-            title: activeOrg?.name || 'Szervezet beállításai'
+            title: <OrganizationSettingsTitle organizationId={activeOrganizationId} />
         });
     }
 
     function handleEditorialOfficeSettings() {
         if (!activeEditorialOfficeId) return;
-        const activeOffice = (editorialOffices || []).find(o => o.$id === activeEditorialOfficeId);
         openModal(<EditorialOfficeSettingsModal editorialOfficeId={activeEditorialOfficeId} />, {
             size: 'lg',
-            title: activeOffice?.name || 'Szerkesztőség beállításai'
+            title: <EditorialOfficeSettingsTitle editorialOfficeId={activeEditorialOfficeId} />
         });
     }
 
@@ -229,4 +226,29 @@ export default function BreadcrumbHeader({
             </div>
         </div>
     );
+}
+
+/**
+ * Reaktív modal-fejléc komponensek. A ModalContext a `title` prop-ot a stack-ben
+ * tárolja, így egy statikus string nem frissül az AuthContext / DataContext
+ * state-változásaira (rename Realtime event). React elementként átadva a
+ * komponens saját maga feliratkozik a context-re, és a név frissül a modal
+ * fejlécében is.
+ */
+function OrganizationSettingsTitle({ organizationId }) {
+    const { organizations } = useAuth();
+    const org = (organizations || []).find(o => o.$id === organizationId);
+    return org?.name || 'Szervezet beállításai';
+}
+
+function EditorialOfficeSettingsTitle({ editorialOfficeId }) {
+    const { editorialOffices } = useAuth();
+    const office = (editorialOffices || []).find(o => o.$id === editorialOfficeId);
+    return office?.name || 'Szerkesztőség beállításai';
+}
+
+function PublicationSettingsTitle({ publicationId }) {
+    const { publications } = useData();
+    const pub = (publications || []).find(p => p.$id === publicationId);
+    return pub?.name || 'Kiadvány beállításai';
 }
