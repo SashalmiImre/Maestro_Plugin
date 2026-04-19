@@ -20,13 +20,13 @@
  */
 
 import { useEffect } from 'react';
-import { getClient } from '../contexts/AuthContext.jsx';
-import { DATABASE_ID, COLLECTIONS } from '../config.js';
+import { subscribeRealtime, collectionChannel } from '../contexts/realtimeBus.js';
+import { COLLECTIONS } from '../config.js';
 
 const CHANNELS = [
-    `databases.${DATABASE_ID}.collections.${COLLECTIONS.GROUPS}.documents`,
-    `databases.${DATABASE_ID}.collections.${COLLECTIONS.GROUP_MEMBERSHIPS}.documents`,
-    `databases.${DATABASE_ID}.collections.${COLLECTIONS.ORGANIZATION_INVITES}.documents`
+    collectionChannel(COLLECTIONS.GROUPS),
+    collectionChannel(COLLECTIONS.GROUP_MEMBERSHIPS),
+    collectionChannel(COLLECTIONS.ORGANIZATION_INVITES)
 ];
 
 const DEBOUNCE_MS = 300;
@@ -42,7 +42,6 @@ export function useTenantRealtimeRefresh({ scopeField, scopeId, reload }) {
     useEffect(() => {
         if (!scopeField || !scopeId) return undefined;
 
-        const client = getClient();
         let debounceId = null;
 
         const handler = (response) => {
@@ -55,7 +54,7 @@ export function useTenantRealtimeRefresh({ scopeField, scopeId, reload }) {
             }, DEBOUNCE_MS);
         };
 
-        const unsubscribe = client.subscribe(CHANNELS, handler);
+        const unsubscribe = subscribeRealtime(CHANNELS, handler);
 
         return () => {
             if (debounceId) clearTimeout(debounceId);

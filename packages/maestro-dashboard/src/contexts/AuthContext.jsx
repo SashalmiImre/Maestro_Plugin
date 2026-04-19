@@ -41,6 +41,7 @@ import {
     DASHBOARD_URL
 } from '../config.js';
 import { resolveGroupSlugs } from '@shared/groups.js';
+import { subscribeRealtime, collectionChannel } from './realtimeBus.js';
 
 const AuthContext = createContext(null);
 
@@ -339,12 +340,11 @@ export function AuthProvider({ children }) {
         if (!user?.$id) return;
         const userId = user.$id;
 
-        const channelOf = (col) => `databases.${DATABASE_ID}.collections.${col}.documents`;
         const channels = [
-            channelOf(COLLECTIONS.ORGANIZATIONS),
-            channelOf(COLLECTIONS.EDITORIAL_OFFICES),
-            channelOf(COLLECTIONS.ORGANIZATION_MEMBERSHIPS),
-            channelOf(COLLECTIONS.EDITORIAL_OFFICE_MEMBERSHIPS)
+            collectionChannel(COLLECTIONS.ORGANIZATIONS),
+            collectionChannel(COLLECTIONS.EDITORIAL_OFFICES),
+            collectionChannel(COLLECTIONS.ORGANIZATION_MEMBERSHIPS),
+            collectionChannel(COLLECTIONS.EDITORIAL_OFFICE_MEMBERSHIPS)
         ];
 
         const classify = (response) => {
@@ -397,7 +397,7 @@ export function AuthProvider({ children }) {
             }, 300);
         };
 
-        const unsubscribe = client.subscribe(channels, scheduleReload);
+        const unsubscribe = subscribeRealtime(channels, scheduleReload);
 
         return () => {
             if (timer) clearTimeout(timer);

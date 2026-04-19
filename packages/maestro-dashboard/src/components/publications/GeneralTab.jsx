@@ -294,7 +294,7 @@ export default function GeneralTab({ publication }) {
                         checked={publication.excludeWeekends ?? true}
                         onChange={handleExcludeWeekendsToggle}
                     />
-                    <span>Hétvégék kihagyása a sürgősség-számításban</span>
+                    <span> Hétvégék kihagyása a sürgősség-számításban</span>
                 </label>
             </div>
 

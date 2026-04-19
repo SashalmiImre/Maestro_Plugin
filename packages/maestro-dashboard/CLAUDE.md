@@ -19,7 +19,7 @@
 | ------------- | ----------------------------------------------- |
 | **UI**        | React 18                                        |
 | **Backend**   | Appwrite Cloud (közvetlen, proxy nélkül)        |
-| **Realtime**  | Appwrite Web SDK `client.subscribe()` (natív WS)|
+| **Realtime**  | Megosztott bus (`contexts/realtimeBus.js`) — EGY `client.subscribe()` az összes fogyasztóhoz |
 | **Bundler**   | Vite                                            |
 | **Stílusok**  | CSS (modulos, `css/index.css` → tokens / base / layouts / components / features) |
 | **Shared**    | `@shared` alias → `../maestro-shared`           |
@@ -182,6 +182,7 @@ maestro-dashboard/
 │   │   ├── AuthContext.jsx       ← user, login(), logout(), register(), memberships
 │   │   ├── ScopeContext.jsx      ← activeOrganizationId/officeId (localStorage, auto-pick, stale guard)
 │   │   ├── DataContext.jsx       ← publications/articles/layouts/deadlines/workflow(s) + Realtime + write-through
+│   │   ├── realtimeBus.js        ← subscribeRealtime() — megosztott WS, union-diff guard, 50ms debounce
 │   │   ├── ToastContext.jsx      ← showToast(message, type, duration)
 │   │   └── ModalContext.jsx      ← openModal/closeModal stack, size + title prop
 │   │
@@ -314,3 +315,16 @@ A Dashboard **nem** közvetlenül `cloud.appwrite.io`-t hív, hanem az `api.maes
 - **Miért**: Safari ITP (és a készülődő Chrome 3rd-party cookie phaseout) blokkolja a session cookie-t a WebSocket upgrade kéréseknél, ha az Appwrite endpoint cross-site a Dashboard origin-hez képest. A custom domain ugyanazon `emago.hu` eTLD+1 alatt van, mint `maestro.emago.hu` → first-party cookie → a Realtime push megbízhatóan megy minden böngészőben.
 - **Fontos**: ez a változtatás **csak a Dashboard-ot érinti**. A Plugin (UXP InDesign) továbbra is a Railway dual-proxy failover-t használja, ami egy orthogonális problémát (UXP Origin header hiány) old meg.
 - **Appwrite Platform**: a Project Platform listában a `maestro.emago.hu` origin-nek kell szerepelnie (CORS). A custom domain-t nem Platform-ként, hanem Domain-ként adjuk hozzá a Console-ban.
+
+### Realtime Bus — SLOT 1 routing fix (2026-04-19)
+
+A custom domain migráció után kiderült: az Appwrite Web SDK 24.1.1 per-subscription query formátumával (`channel[slot][]={query}`) **csak a SLOT 0-ra érkeznek WS események** a custom domain-en át. Két külön `client.subscribe()` hívás ugyanazon WS-en → a második (SLOT 1) soha nem kap push-t. Ezzel a Dashboard Safari→Chrome realtime rename néma volt.
+
+**Megoldás**: minden `client.subscribe()` hívás konszolidálva egyetlen megosztott subscription-re a `src/contexts/realtimeBus.js`-ben.
+
+- **API**: `subscribeRealtime(channels, callback)` — `string | string[]` input, visszaad unsubscribe-ot. Plusz `collectionChannel(col)` / `documentChannel(col, id)` helperek.
+- **Belül**: handlers Map (modul-scope), union-diff guard (setsEqual → no-op rebuild), 50ms debounce a StrictMode dupla mount / gyors útvonalváltás burst-öknek.
+- **Fogyasztók**: `AuthContext` (tenant sync), `DataContext` (adat sync), `useTenantRealtimeRefresh` (group/invite sync), `WorkflowDesignerPage` (remote version warning).
+- **Tilos**: közvetlen `client.subscribe()` hívás a dashboardon. Új Realtime fogyasztó mindig a bus-on át.
+
+Részletes doc: `~/.claude/projects/-Users-imre-sashalmi-Documents-Maestro-Plugin/memory/dashboard-realtime-bus.md`.

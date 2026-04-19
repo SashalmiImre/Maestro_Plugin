@@ -17,6 +17,7 @@ import { useParams, Link, useBlocker, useNavigate } from 'react-router-dom';
 import { useNodesState, useEdgesState } from '@xyflow/react';
 import { Databases, Query } from 'appwrite';
 import { getClient } from '../../contexts/AuthContext.jsx';
+import { subscribeRealtime, documentChannel } from '../../contexts/realtimeBus.js';
 import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 import { useData } from '../../contexts/DataContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
@@ -188,10 +189,9 @@ export default function WorkflowDesignerPage() {
 
     useEffect(() => {
         if (!workflowDocId) return;
-        const client = getClient();
-        const channel = `databases.${DATABASE_ID}.collections.${COLLECTIONS.WORKFLOWS}.documents.${workflowDocId}`;
+        const channel = documentChannel(COLLECTIONS.WORKFLOWS, workflowDocId);
 
-        const unsubscribe = client.subscribe(channel, (response) => {
+        const unsubscribe = subscribeRealtime([channel], (response) => {
             if (response.events?.some(e => e.includes('.update'))) {
                 const payload = response.payload;
                 const remoteCompiled = typeof payload.compiled === 'string'

@@ -8,6 +8,7 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { Databases, Storage, Query, ID } from 'appwrite';
 import { getClient } from './AuthContext.jsx';
+import { subscribeRealtime, collectionChannel } from './realtimeBus.js';
 import { useScope } from './ScopeContext.jsx';
 import {
     DATABASE_ID, COLLECTIONS, BUCKETS,
@@ -502,19 +503,16 @@ export function DataProvider({ children }) {
     // ─── Realtime feliratkozás ──────────────────────────────────────────────
 
     useEffect(() => {
-        const client = getClient();
-        const channelName = (collection) =>
-            `databases.${DATABASE_ID}.collections.${collection}.documents`;
-
-        const unsubscribe = client.subscribe([
-            channelName(COLLECTIONS.ARTICLES),
-            channelName(COLLECTIONS.PUBLICATIONS),
-            channelName(COLLECTIONS.LAYOUTS),
-            channelName(COLLECTIONS.DEADLINES),
-            channelName(COLLECTIONS.USER_VALIDATIONS),
-            channelName(COLLECTIONS.SYSTEM_VALIDATIONS),
-            channelName(COLLECTIONS.WORKFLOWS)
-        ], (response) => {
+        const dataChannels = [
+            collectionChannel(COLLECTIONS.ARTICLES),
+            collectionChannel(COLLECTIONS.PUBLICATIONS),
+            collectionChannel(COLLECTIONS.LAYOUTS),
+            collectionChannel(COLLECTIONS.DEADLINES),
+            collectionChannel(COLLECTIONS.USER_VALIDATIONS),
+            collectionChannel(COLLECTIONS.SYSTEM_VALIDATIONS),
+            collectionChannel(COLLECTIONS.WORKFLOWS)
+        ];
+        const unsubscribe = subscribeRealtime(dataChannels, (response) => {
             const eventType = getEventType(response.events);
             if (!eventType) return;
 
