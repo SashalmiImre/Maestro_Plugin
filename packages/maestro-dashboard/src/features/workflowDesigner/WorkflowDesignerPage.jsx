@@ -697,11 +697,23 @@ export default function WorkflowDesignerPage() {
                             ))}
                         </select>
                     )}
-                    <span className="workflow-designer-toolbar__version">v{version}</span>
+                    {/* #79: verzió chip — amíg nincs valódi verziózás (mindig v1
+                        vagy a Realtime version increment-ek), a chip felesleges zaj.
+                        Csak akkor mutatjuk, ha v2+ — egyébként optimistic
+                        concurrency token-ként rejtve marad a state-ben. */}
+                    {version > 1 && (
+                        <span
+                            className="workflow-designer-toolbar__version"
+                            title="Optimistic concurrency token — minden mentés inkrementálja a szervezeti workflow-konfliktusok elkerülésére."
+                        >
+                            v{version}
+                        </span>
+                    )}
                 </div>
                 <div className="workflow-designer-toolbar__right">
                     {saveError && <span className="workflow-designer-toolbar__error">{saveError}</span>}
                     {isDirty && !saveError && <span className="workflow-designer-toolbar__dirty">Nem mentett változások</span>}
+                    {/* Workflow-szintű akció (új doc létrehozása) */}
                     <button
                         type="button"
                         className="workflow-designer-toolbar__btn-secondary"
@@ -710,6 +722,10 @@ export default function WorkflowDesignerPage() {
                     >
                         + Új workflow
                     </button>
+                    {/* #78: separator — elválasztja az „új workflow" akciót
+                        az adat IO csoporttól (Export/Import), így a user nem
+                        kattint véletlenül destructive Import-ra. */}
+                    <span className="workflow-designer-toolbar__separator" aria-hidden="true" />
                     <button
                         type="button"
                         className="workflow-designer-toolbar__btn-secondary"
@@ -726,6 +742,9 @@ export default function WorkflowDesignerPage() {
                     >
                         Import
                     </button>
+                    {/* #78: separator — a primary akciót (Mentés) is elválasztjuk
+                        az adat IO csoporttól, hogy vizuálisan kiemelkedjen. */}
+                    <span className="workflow-designer-toolbar__separator" aria-hidden="true" />
                     <button
                         type="button"
                         className="workflow-designer-toolbar__save"
@@ -751,14 +770,24 @@ export default function WorkflowDesignerPage() {
                 </div>
             )}
 
-            {/* Snapshot használat figyelmeztetés (#39) */}
+            {/* Snapshot használat figyelmeztetés (#39, #76).
+                #76: 3 mondatos magyarázat → 1 mondatos TL;DR + „Részletek"
+                collapse — vizuálisan kevésbé domináns, de a kontextus
+                egy kattintással elérhető. */}
             {snapshotUsageCount > 0 && (
                 <div className="workflow-designer-snapshot-info">
-                    <span>
-                        Ezt a workflow-t már {snapshotUsageCount} aktív publikáció használja
-                        snapshot-ként — a mentett módosítások csak új aktiválásoknál érvényesülnek.
-                        A meglévő publikációk a saját, rögzített verziójukon futnak tovább.
+                    <span className="workflow-designer-snapshot-info__tldr">
+                        Ezt a workflow-t {snapshotUsageCount} aktív publikáció snapshot-olta — a mentett módosítások csak új aktiválásoknál érvényesülnek.
                     </span>
+                    <details className="workflow-designer-snapshot-info__details">
+                        <summary>Részletek</summary>
+                        A meglévő aktivált publikációk a saját, rögzített
+                        workflow-verziójukon futnak tovább; a Designer-ben
+                        elvégzett módosítások csak újraaktiváláskor kerülnek be.
+                        Ha az érintett publikációk azonnal a frissített workflow-t
+                        kell hogy használják, deaktiváld őket a kiadvány
+                        beállításokban, majd aktiváld újra.
+                    </details>
                 </div>
             )}
 

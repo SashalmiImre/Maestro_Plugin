@@ -131,10 +131,10 @@ tags: [feladatok]
 
 **Minor (🟢) — polish:**
 
-- [ ] 76. **Snapshot-usage banner tömörítés**: jelenleg 3 mondatos magyarázat vizuálisan domináns. Javaslat: 1 mondatos TL;DR + „Részletek" collapse link („Ezt a workflow-t 3 aktív publikáció használja. Részletek…").
-- [ ] 77. **MiniMap node-szín színkódolás**: a minimap node-jai jelenleg egységes színűek; a state-színeket ingyen továbbadhatnánk. xyflow `MiniMap` `nodeColor` prop.
-- [ ] 78. **Toolbar gombcsoport separator**: `+ Új workflow` közvetlenül az Export/Import mellett van, a user véletlenül kattinthatja az Import-ra (destructive-ish). Javaslat: vertikális separator a két gombcsoport között.
-- [ ] 79. **Verzió chip (`v1`) láthatóság**: amíg nincs valódi workflow verziózás, a mindig `v1`-et mutató chip felesleges zaj. Javaslat: rejtsük el, VAGY alakítsuk információs tooltip-be (pl. „Verzió: v1 — jelenleg nincs verziózás").
+- [x] 76. **Snapshot-usage banner tömörítés**: jelenleg 3 mondatos magyarázat vizuálisan domináns. Javaslat: 1 mondatos TL;DR + „Részletek" collapse link („Ezt a workflow-t 3 aktív publikáció használja. Részletek…"). ✅ Egy mondatos TL;DR + `<details>`/`<summary>` collapse a részletekkel. Padding/font-size csökkentve, a banner kompakt.
+- [x] 77. **MiniMap node-szín színkódolás**: a minimap node-jai jelenleg egységes színűek; a state-színeket ingyen továbbadhatnánk. xyflow `MiniMap` `nodeColor` prop. ✅ Korábbi commit-ban megvolt: `WorkflowCanvas.jsx`-ben `miniMapNodeColor = (node) => node.data?.color || '#888'` + `<MiniMap nodeColor={...}>`. Ellenőrizve, működik.
+- [x] 78. **Toolbar gombcsoport separator**: `+ Új workflow` közvetlenül az Export/Import mellett van, a user véletlenül kattinthatja az Import-ra (destructive-ish). Javaslat: vertikális separator a két gombcsoport között. ✅ Két `.workflow-designer-toolbar__separator` (1px × 18px halvány vertikális csík): „+ Új workflow" / Export•Import / Mentés között. Az „IO csoport" és a primary akció vizuálisan elkülönül.
+- [x] 79. **Verzió chip (`v1`) láthatóság**: amíg nincs valódi workflow verziózás, a mindig `v1`-et mutató chip felesleges zaj. Javaslat: rejtsük el, VAGY alakítsuk információs tooltip-be (pl. „Verzió: v1 — jelenleg nincs verziózás"). ✅ A chip csak akkor renderel, ha `version > 1` (pl. konkurens mentés után), egyébként rejtett. A token továbbra is része a state-nek (optimistic concurrency), csak nem zajos a UI. A v2+ chip tooltip-tel magyarázza a szemantikát.
 
 ### Manuális smoke test checklist
 

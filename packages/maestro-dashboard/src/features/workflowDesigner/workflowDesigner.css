@@ -187,6 +187,18 @@
     color: var(--text-primary, #e8e8e8);
 }
 
+/* #78: Vertikális separator a toolbar gombcsoportok között — vizuális
+   csoportosítás (workflow akció / IO / primary save), véletlen kattintás
+   csökkentés. */
+.workflow-designer-toolbar__separator {
+    display: inline-block;
+    width: 1px;
+    height: 18px;
+    background: rgb(from var(--text-primary) r g b / 0.12);
+    margin: 0 4px;
+    flex-shrink: 0;
+}
+
 /* ─── Realtime figyelmeztetés ───────────────────────────────────────────── */
 
 .workflow-designer-remote-warning {
@@ -224,14 +236,49 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 12px;
-    padding: 8px 16px;
-    background: rgb(from var(--accent) r g b / 0.12);
-    border-bottom: 1px solid rgb(from var(--accent) r g b / 0.3);
+    flex-wrap: wrap;
+    gap: 8px 12px;
+    padding: 6px 16px;
+    background: rgb(from var(--accent) r g b / 0.1);
+    border-bottom: 1px solid rgb(from var(--accent) r g b / 0.25);
     color: var(--accent);
-    font-size: 13px;
+    font-size: 12px;
     line-height: 1.4;
     flex-shrink: 0;
+}
+
+/* #76: TL;DR + collapse — a banner vizuálisan kompakt, a részletek
+   <details> elemben pihennek. */
+.workflow-designer-snapshot-info__tldr {
+    font-weight: 500;
+}
+
+.workflow-designer-snapshot-info__details {
+    font-size: 12px;
+}
+
+.workflow-designer-snapshot-info__details > summary {
+    cursor: pointer;
+    font-weight: 500;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    user-select: none;
+    list-style: none;
+}
+
+.workflow-designer-snapshot-info__details > summary::-webkit-details-marker {
+    display: none;
+}
+
+.workflow-designer-snapshot-info__details[open] > summary {
+    margin-bottom: 6px;
+}
+
+.workflow-designer-snapshot-info__details[open] {
+    flex: 1 1 100%;
+    padding: 6px 0 2px;
+    color: var(--text-secondary, #999);
+    font-style: italic;
 }
 
 /* ─── Fő tartalom ───────────────────────────────────────────────────────── */
