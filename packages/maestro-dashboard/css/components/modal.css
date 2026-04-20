@@ -120,6 +120,33 @@
     line-height: 1.5;
 }
 
+/* A globális reset (`* { padding: 0 }`) miatt a confirm-dialog body-ban
+   használt <ul>/<ol> golyói (list-style-position: outside) a tartalom-
+   doboz BAL OLDALÁRA esnek — a dialog szélével egybe folynak. Külön
+   padding-left + bekezdés-ritmus visszaadja a szokott listamegjelenést. */
+.confirm-dialog-message ul,
+.confirm-dialog-message ol {
+    margin: var(--space-1) 0 var(--space-2);
+    padding-left: var(--space-5);
+    list-style-position: outside;
+}
+
+.confirm-dialog-message ul {
+    list-style: disc;
+}
+
+.confirm-dialog-message ol {
+    list-style: decimal;
+}
+
+.confirm-dialog-message li + li {
+    margin-top: var(--space-1);
+}
+
+.confirm-dialog-message p + p {
+    margin-top: var(--space-2);
+}
+
 .confirm-dialog-verification {
     display: flex;
     flex-direction: column;

@@ -143,12 +143,7 @@ export default function GeneralTab({ publication }) {
         const confirmMessage = (
             <>
                 <p>Az aktiválás után a kiadvány megjelenik a pluginban, és a szerkesztők elkezdhetnek cikkeket felvenni rá.</p>
-                <p><strong>A következő paraméterek aktiválás után nem módosíthatók:</strong></p>
-                <ul>
-                    <li>Workflow — a felhasználói jogosultságok ehhez kötődnek</li>
-                    <li>Határidők szerkezete (oldalszám tartományok, darabszám) — a teljes fedés invariáns megőrzéséhez</li>
-                </ul>
-                <p>A layoutok, a határidő-dátumok és a közreműködők továbbra is szerkeszthetők maradnak.</p>
+                <p>Aktiválás után <strong>a workflow nem módosítható</strong> — a felhasználói jogosultságok ehhez kötődnek. A layoutok, a határidők (oldalszám tartományok, darabszám és dátumok) és a közreműködők továbbra is szerkeszthetők maradnak.</p>
                 <p>Biztosan aktiválod a(z) <strong>{publication.name}</strong> kiadványt?</p>
             </>
         );
