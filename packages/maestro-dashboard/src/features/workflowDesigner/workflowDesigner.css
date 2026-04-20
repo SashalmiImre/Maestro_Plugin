@@ -199,6 +199,109 @@
     flex-shrink: 0;
 }
 
+/* ─── Scope chip a toolbar-on (láthatóság: public / organization / office) ── */
+
+.workflow-designer-toolbar__scope-chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 500;
+    border-radius: 999px;
+    letter-spacing: 0.02em;
+    border: 1px solid transparent;
+    flex-shrink: 0;
+}
+
+.workflow-designer-toolbar__scope-chip.is-public {
+    background: rgba(124, 89, 235, 0.15);
+    color: #a98bff;
+    border-color: rgba(124, 89, 235, 0.3);
+}
+
+.workflow-designer-toolbar__scope-chip.is-organization {
+    background: rgba(0, 130, 200, 0.15);
+    color: #6fb8e8;
+    border-color: rgba(0, 130, 200, 0.3);
+}
+
+.workflow-designer-toolbar__scope-chip.is-editorial_office {
+    background: rgba(var(--shadow-tint), 0.3);
+    color: var(--text-secondary, #999);
+    border-color: rgb(from var(--text-primary) r g b / 0.12);
+}
+
+/* ── Read-only label (inline a toolbar jobb oldalán) ── */
+
+.workflow-designer-toolbar__readonly-label {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 10px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text-muted, #888);
+    background: rgba(var(--shadow-tint), 0.25);
+    border: 1px solid rgb(from var(--text-primary) r g b / 0.1);
+    border-radius: 999px;
+    flex-shrink: 0;
+}
+
+/* ─── Read-only banner (idegen workflow → duplikál CTA) ─────────────────── */
+
+.workflow-designer-readonly-banner {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 16px;
+    background: rgb(from var(--accent) r g b / 0.08);
+    border-bottom: 1px solid rgb(from var(--accent) r g b / 0.2);
+    color: var(--text-primary, #e8e8e8);
+    font-size: 13px;
+    line-height: 1.5;
+    flex-shrink: 0;
+}
+
+.workflow-designer-readonly-banner__main {
+    flex: 1;
+    min-width: 0;
+}
+
+.workflow-designer-readonly-banner__main em {
+    font-style: normal;
+    font-weight: 500;
+    color: var(--accent);
+}
+
+.workflow-designer-readonly-banner__desc {
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-secondary, #999);
+    font-style: italic;
+}
+
+.workflow-designer-readonly-banner__btn {
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: inherit;
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    background: var(--accent-solid);
+    color: #fff;
+    cursor: pointer;
+    transition: background 0.15s, transform 0.1s;
+    flex-shrink: 0;
+}
+
+.workflow-designer-readonly-banner__btn:hover {
+    background: var(--accent);
+}
+
+.workflow-designer-readonly-banner__btn:active {
+    transform: translateY(1px);
+}
+
 /* ─── Realtime figyelmeztetés ───────────────────────────────────────────── */
 
 .workflow-designer-remote-warning {

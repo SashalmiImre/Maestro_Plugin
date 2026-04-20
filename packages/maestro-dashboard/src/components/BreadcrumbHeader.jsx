@@ -23,6 +23,14 @@ import OrganizationSettingsModal from './organization/OrganizationSettingsModal.
 import EditorialOfficeSettingsModal from './organization/EditorialOfficeSettingsModal.jsx';
 import CreateOrganizationModal from './organization/CreateOrganizationModal.jsx';
 import MaestroSettingsModal from './organization/MaestroSettingsModal.jsx';
+import WorkflowLibraryPanel from './workflows/WorkflowLibraryPanel.jsx';
+
+// Legacy marker: a `bootstrap_organization` CF 2026-04-20 előtt auto-létrehozott
+// egy „Általános" nevű első szerkesztőséget. Ha a user nem nevezte át, a
+// breadcrumb-ban halvány „alapértelmezett" jelzéssel tudatjuk, hogy ez valódi
+// (átnevezhető) név, nem placeholder. Új orgok már office nélkül jönnek létre,
+// de a legacy rekordok miatt a jelzés továbbra is él.
+const DEFAULT_OFFICE_NAME = 'Általános';
 
 /**
  * @param {Object} props
@@ -80,6 +88,14 @@ export default function BreadcrumbHeader({
         officeItems.some(o => o.id === activeEditorialOfficeId);
     const isActivePubInScope = !!activePublicationId &&
         pubItems.some(p => p.id === activePublicationId);
+
+    // Default office jelölés: ha a szervezetben csak 1 office van és a neve
+    // pontosan `Általános`, vizuális „alapértelmezett" felirattal jelezzük,
+    // hogy ez az auto-kreált default office (átnevezhető). Ha a user már
+    // átnevezte, a feltétel nem teljesül → nincs felirat.
+    const isDefaultOnlyOffice = officeItems.length === 1
+        && officeItems[0]?.id === activeEditorialOfficeId
+        && officeItems[0]?.name === DEFAULT_OFFICE_NAME;
 
     // User avatar menü
     const userMenuItems = useMemo(() => [
@@ -145,6 +161,14 @@ export default function BreadcrumbHeader({
         });
     }
 
+    function handleWorkflowLibrary() {
+        if (!activeEditorialOfficeId) return;
+        openModal(<WorkflowLibraryPanel context="breadcrumb" />, {
+            size: 'xl',
+            title: 'Workflow könyvtár'
+        });
+    }
+
     return (
         <div className="breadcrumb-header">
             {/* ── Bal oldal: logó + breadcrumb dropdown-ok ── */}
@@ -173,6 +197,7 @@ export default function BreadcrumbHeader({
                     onSelect={handleOfficeSelect}
                     onSettings={isActiveOfficeInScope ? handleEditorialOfficeSettings : undefined}
                     moreItemsLabel="További szerkesztőségek"
+                    labelSuffix={isDefaultOnlyOffice ? 'alapértelmezett' : undefined}
                 />
 
                 <span className="breadcrumb-separator" aria-hidden="true">/</span>
@@ -189,8 +214,28 @@ export default function BreadcrumbHeader({
                 />
             </div>
 
-            {/* ── Jobb oldal: nézet váltó + szűrő + cikkszám + avatar ── */}
+            {/* ── Jobb oldal: workflow chip + nézet váltó + szűrő + cikkszám + avatar ── */}
             <div className="breadcrumb-right">
+                <button
+                    type="button"
+                    className="breadcrumb-chip"
+                    onClick={handleWorkflowLibrary}
+                    disabled={!activeEditorialOfficeId}
+                    title={activeEditorialOfficeId
+                        ? 'Workflow könyvtár megnyitása'
+                        : 'Először válassz szerkesztőséget'}
+                    aria-label="Workflow könyvtár"
+                >
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <circle cx="6" cy="6" r="2.5"/>
+                        <circle cx="18" cy="6" r="2.5"/>
+                        <circle cx="12" cy="18" r="2.5"/>
+                        <path d="M8 7.5L11 16"/>
+                        <path d="M16 7.5L13 16"/>
+                    </svg>
+                    <span>Workflow</span>
+                </button>
+
                 <div className="view-toggle">
                     <Link
                         to="/"

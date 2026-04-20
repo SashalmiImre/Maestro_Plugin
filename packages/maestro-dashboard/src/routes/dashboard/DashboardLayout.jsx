@@ -28,9 +28,10 @@ import FilterBar from '../../components/FilterBar.jsx';
 import EmptyState from '../../components/EmptyState.jsx';
 import EditorialOfficeSettingsModal from '../../components/organization/EditorialOfficeSettingsModal.jsx';
 import OrganizationSettingsModal from '../../components/organization/OrganizationSettingsModal.jsx';
+import CreateEditorialOfficeModal from '../../components/organization/CreateEditorialOfficeModal.jsx';
 
 export default function DashboardLayout() {
-    const { user } = useAuth();
+    const { user, editorialOffices, orgMemberships } = useAuth();
     const { activeOrganizationId, activeEditorialOfficeId } = useScope();
     const {
         publications, articles, activePublicationId,
@@ -168,6 +169,48 @@ export default function DashboardLayout() {
         );
     }, [activeOrganizationId, openModal]);
 
+    // Onboarding splash akció: új szerkesztőség az aktív szervezetben.
+    // A `switchScopeOnSuccess` gondoskodik arról, hogy az új office legyen az
+    // aktív — így a splash eltűnik, és a user a „Még nincs kiadvány" ágon folytatja.
+    const handleCreateOffice = useCallback(() => {
+        if (!activeOrganizationId) return;
+        openModal(
+            <CreateEditorialOfficeModal
+                organizationId={activeOrganizationId}
+                switchScopeOnSuccess
+            />,
+            { size: 'small', title: 'Új szerkesztőség' }
+        );
+    }, [activeOrganizationId, openModal]);
+
+    // Onboarding állapot: az aktív szervezetben még 0 vagy 1 szerkesztőség
+    // van, és még egyetlen kiadvány sincs. Két esetet fed le:
+    //   - 0 office: a bootstrap_organization / create_organization CF 2026-04-20
+    //     óta nem hoz létre auto-kreált „Általános" office-t — a user 0
+    //     office-szal landol, és itt kell felajánlani a szerkesztőség létrehozást.
+    //   - 1 office: legacy bootstrap (még hoz létre single office-t) VAGY a user
+    //     épp létrehozta az első szerkesztőséget, de még nincs kiadvány.
+    // A névre (pl. „Általános") nem támaszkodunk — átnevezve is onboarding.
+    const currentOrgOfficesCount = useMemo(
+        () => (editorialOffices || []).filter(o => o.organizationId === activeOrganizationId).length,
+        [editorialOffices, activeOrganizationId]
+    );
+    const isOnboarding = !!activeOrganizationId
+        && currentOrgOfficesCount <= 1
+        && publications.length === 0;
+
+    // Szerepkör-alapú primary CTA: a „Szerkesztőség létrehozása" csak
+    // owner/admin-nak jelenik meg. Member-nek csak a „Szervezet beállításai"
+    // secondary action marad — onnan nem tud office-t létrehozni, viszont
+    // lát egy kontextust arról, hogy kihez fordulhat.
+    const activeOrgRole = useMemo(() => {
+        if (!user?.$id || !activeOrganizationId) return null;
+        return (orgMemberships || []).find(
+            m => m.userId === user.$id && m.organizationId === activeOrganizationId
+        )?.role || null;
+    }, [orgMemberships, user?.$id, activeOrganizationId]);
+    const isOrgAdmin = activeOrgRole === 'owner' || activeOrgRole === 'admin';
+
     // Szűrt cikkek
     const filteredArticles = useMemo(
         () => filters.applyFilters(articles, user),
@@ -231,18 +274,35 @@ export default function DashboardLayout() {
                         </div>
                     ) : !activePublicationId ? (
                         publications.length === 0 ? (
-                            <EmptyState
-                                title="Még nincs kiadvány"
-                                description="Ebben a szerkesztőségben még nincs kiadvány. Hozz létre egyet, hogy elkezdhesd a szerkesztést."
-                                primaryAction={activeEditorialOfficeId ? {
-                                    label: 'Kiadvány létrehozása',
-                                    onClick: handleCreatePublication
-                                } : undefined}
-                                secondaryAction={activeOrganizationId ? {
-                                    label: 'Szervezet beállításai',
-                                    onClick: handleOpenOrgSettings
-                                } : undefined}
-                            />
+                            isOnboarding ? (
+                                <EmptyState
+                                    title="Készítsd elő a szerkesztőséget"
+                                    description={currentOrgOfficesCount === 0
+                                        ? 'A szervezeted létrejött. Hozd létre az első szerkesztőséget, hogy megkezdhesd a kiadványok szerkesztését.'
+                                        : 'A szervezetedben egyetlen szerkesztőség van. A Szervezet beállításaiban átnevezheted, vagy hozz létre egy új szerkesztőséget a kiadványokhoz.'}
+                                    primaryAction={isOrgAdmin ? {
+                                        label: 'Szerkesztőség létrehozása',
+                                        onClick: handleCreateOffice
+                                    } : undefined}
+                                    secondaryAction={activeOrganizationId ? {
+                                        label: 'Szervezet beállításai',
+                                        onClick: handleOpenOrgSettings
+                                    } : undefined}
+                                />
+                            ) : (
+                                <EmptyState
+                                    title="Még nincs kiadvány"
+                                    description="Ebben a szerkesztőségben még nincs kiadvány. Hozz létre egyet, hogy elkezdhesd a szerkesztést."
+                                    primaryAction={activeEditorialOfficeId ? {
+                                        label: 'Kiadvány létrehozása',
+                                        onClick: handleCreatePublication
+                                    } : undefined}
+                                    secondaryAction={activeOrganizationId ? {
+                                        label: 'Szervezet beállításai',
+                                        onClick: handleOpenOrgSettings
+                                    } : undefined}
+                                />
+                            )
                         ) : (
                             <EmptyState
                                 title="Válassz egy kiadványt"

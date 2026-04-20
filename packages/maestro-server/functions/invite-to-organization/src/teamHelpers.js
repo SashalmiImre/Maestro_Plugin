@@ -49,6 +49,45 @@ function buildOfficeAclPerms(editorialOfficeId) {
     return [sdk.Permission.read(sdk.Role.team(buildOfficeTeamId(editorialOfficeId)))];
 }
 
+/**
+ * Workflow dokumentum ACL — Feladat #80 (2026-04-20). Három scope-szint:
+ *
+ * - `editorial_office` → `read("team:office_${officeId}")`
+ * - `organization`     → `read("team:org_${orgId}")`
+ * - `public`           → `read("users")` (minden authentikált felhasználó)
+ *
+ * Az írás-joga minden scope-on a CF API key-jé (collection-szintű ACL).
+ * A tulajdonos-ellenőrzést a CF action-ök végzik (`createdBy === callerId`),
+ * nem ACL-alapon — különben a duplikáló/archiváló CF flow-k nem működnének
+ * (az API key felülírja a per-user write ACL-t, de a read szűrő aktív marad
+ * a kliens SDK + Realtime push oldalon).
+ *
+ * `rowSecurity: true` kötelező a `workflows` collection-ön, különben a
+ * collection-szintű `read("users")` felülírja ezt (lásd Fázis 2 Team ACL
+ * deploy checklist, 60. feladat).
+ *
+ * @param {string} visibility - 'editorial_office' | 'organization' | 'public'
+ * @param {string} organizationId
+ * @param {string} editorialOfficeId
+ * @returns {string[]} Appwrite permission string-ek
+ */
+function buildWorkflowAclPerms(visibility, organizationId, editorialOfficeId) {
+    if (visibility === 'public') {
+        return [sdk.Permission.read(sdk.Role.users())];
+    }
+    if (visibility === 'organization') {
+        if (!organizationId) {
+            throw new Error('buildWorkflowAclPerms: organizationId required for organization visibility');
+        }
+        return [sdk.Permission.read(sdk.Role.team(buildOrgTeamId(organizationId)))];
+    }
+    // editorial_office (default) vagy ismeretlen legacy érték
+    if (!editorialOfficeId) {
+        throw new Error('buildWorkflowAclPerms: editorialOfficeId required for editorial_office visibility');
+    }
+    return [sdk.Permission.read(sdk.Role.team(buildOfficeTeamId(editorialOfficeId)))];
+}
+
 // ── Idempotens Team műveletek ───────────────────────────────────────────────
 
 /**
@@ -172,6 +211,7 @@ module.exports = {
     buildOfficeTeamId,
     buildOrgAclPerms,
     buildOfficeAclPerms,
+    buildWorkflowAclPerms,
     ensureTeam,
     ensureTeamMembership,
     removeTeamMembership,

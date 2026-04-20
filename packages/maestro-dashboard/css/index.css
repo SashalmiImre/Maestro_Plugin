@@ -36,6 +36,7 @@
 @import './features/article-table.css';
 @import './features/flatplan.css';
 @import './features/publication-settings.css';
+@import './features/workflow-library.css';
 
 /* ─── Responsive overrides ─────────────────────────────────────────────────── */
 /* Utoljára importálva: azonos specifikitású @media szabályok felülírják a fenti

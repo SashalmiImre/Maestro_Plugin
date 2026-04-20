@@ -32,6 +32,9 @@ import usePopoverClose from '../hooks/usePopoverClose.js';
  * @param {boolean} [props.disabled=false] — letiltva-e
  * @param {string} [props.disabledTitle] — tooltip, ha disabled (pl. üres scope magyarázata)
  * @param {string} [props.className] — extra CSS osztály a trigger gombra
+ * @param {React.ReactNode} [props.labelSuffix] — opcionális kiegészítő a trigger
+ *        címke mellett (pl. halvány „alapértelmezett"). Csak a triggerben
+ *        látszik, a menü-listában NEM jelenik meg.
  */
 export default function BreadcrumbDropdown({
     label,
@@ -43,7 +46,8 @@ export default function BreadcrumbDropdown({
     moreItemsLabel,
     disabled = false,
     disabledTitle,
-    className = ''
+    className = '',
+    labelSuffix
 }) {
     const [isOpen, setIsOpen] = useState(false);
     const containerRef = useRef(null);
@@ -106,6 +110,11 @@ export default function BreadcrumbDropdown({
                 <span className="bc-dropdown-label">
                     {activeName || label}
                 </span>
+                {labelSuffix && (
+                    <span className="bc-dropdown-label-suffix" aria-hidden="true">
+                        {labelSuffix}
+                    </span>
+                )}
                 {!isStatic && !isDirectSettings && (
                     <span className="bc-dropdown-chevron" aria-hidden="true">
                         {isOpen ? '▴' : '▾'}

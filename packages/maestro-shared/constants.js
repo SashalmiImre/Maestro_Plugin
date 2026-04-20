@@ -37,20 +37,43 @@ export const MARKERS = {
 };
 
 /**
- * Workflow láthatóság (#30).
+ * Workflow láthatóság (#30, #80 bővítés: `public`).
+ * - PUBLIC: az adott Appwrite instance minden authentikált user-e látja
  * - ORGANIZATION: az adott org bármely office-ának tagjai látják
  * - EDITORIAL_OFFICE: csak az adott office tagjai látják (default)
  *
  * @enum {string}
  */
 export const WORKFLOW_VISIBILITY = {
+    PUBLIC: 'public',
     ORGANIZATION: 'organization',
     EDITORIAL_OFFICE: 'editorial_office'
 };
 
 export const WORKFLOW_VISIBILITY_VALUES = [
+    WORKFLOW_VISIBILITY.PUBLIC,
     WORKFLOW_VISIBILITY.ORGANIZATION,
     WORKFLOW_VISIBILITY.EDITORIAL_OFFICE
 ];
 
 export const WORKFLOW_VISIBILITY_DEFAULT = WORKFLOW_VISIBILITY.EDITORIAL_OFFICE;
+
+/**
+ * A hatókörök szélessége (bővebb → szűkebb). A library panel
+ * chip-sort + a scope-váltás warning/info döntéshez használjuk.
+ */
+export const WORKFLOW_VISIBILITY_RANK = {
+    [WORKFLOW_VISIBILITY.PUBLIC]: 3,
+    [WORKFLOW_VISIBILITY.ORGANIZATION]: 2,
+    [WORKFLOW_VISIBILITY.EDITORIAL_OFFICE]: 1
+};
+
+/**
+ * UI címkék a láthatósági chip-ekhez és toast üzenetekhez.
+ * Magyar nyelvű, egy helyről — ne duplikáld komponensenként.
+ */
+export const WORKFLOW_VISIBILITY_LABELS = {
+    [WORKFLOW_VISIBILITY.PUBLIC]: 'Publikus',
+    [WORKFLOW_VISIBILITY.ORGANIZATION]: 'Szervezet',
+    [WORKFLOW_VISIBILITY.EDITORIAL_OFFICE]: 'Szerkesztőség'
+};

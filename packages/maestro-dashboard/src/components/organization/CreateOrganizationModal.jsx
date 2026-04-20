@@ -6,18 +6,21 @@
  * `create_organization` action NEM idempotens — minden hívás új orgot
  * hoz létre még akkor is, ha a caller már tagja egy meglévőnek.
  *
+ * 2026-04-20 óta a CF office nélkül hozza létre az orgot — az első
+ * szerkesztőséget a user a Dashboard onboarding splash-ből adja hozzá
+ * (`create_editorial_office`). A modal ezért csak orgnevet kér; az office
+ * mezők és a default office név/slug konstansok elhagyva.
+ *
  * Mezők:
  *   - Szervezet neve (kötelező, max 128 karakter)
- *   - Slug (auto-generált, read-only display — a názból szerver-konzisztens
+ *   - Slug (auto-generált, read-only display — a névből szerver-konzisztens
  *     szabályokkal képződik, ld. `utils/slugify.js`)
- *   - Default office név: "Általános" (rejtett — a user később az Office
- *     Settings-ben átnevezheti #28 alapján)
  *
  * Sikeres létrehozás után:
  *   - Memberships reload
- *   - Scope váltás új org-ra + új office-ra (switchScopeOnSuccess opcionális,
- *     alapértelmezett: igen). A ModalContext scope-auto-close effekt amúgy is
- *     bezárja a modalt a scope váltáskor.
+ *   - Scope váltás új org-ra (switchScopeOnSuccess opcionális, default: igen);
+ *     office még nincs — a ScopeContext auto-pick null-ra hagyja, a
+ *     DashboardLayout onboarding splash veszi fel a fonalat.
  *   - Success toast
  */
 
@@ -27,9 +30,6 @@ import { useModal } from '../../contexts/ModalContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
 import { useScope } from '../../contexts/ScopeContext.jsx';
 import { slugify } from '../../utils/slugify.js';
-
-const DEFAULT_OFFICE_NAME = 'Általános';
-const DEFAULT_OFFICE_SLUG = 'altalanos';
 
 function errorMessage(code) {
     if (typeof code !== 'string') return 'Ismeretlen hiba történt.';
@@ -64,10 +64,11 @@ export default function CreateOrganizationModal({ switchScopeOnSuccess = true })
     const [touched, setTouched] = useState({});
     const [submitError, setSubmitError] = useState('');
     const [isSubmitting, setIsSubmitting] = useState(false);
-    // Partial-success state: a CF sikeres volt, de a kliens oldali reload
-    // elbukott VAGY a workflow seed nem futott le. A modal ilyenkor nyitva
-    // marad és retry / scope-switch akciókat ajánl — különben a user a
-    // dropdown-ból újra „Új szervezet" menüpontra kattintva duplikálna.
+    // Partial-success state: a CF sikeres volt, de a kliens oldali memberships
+    // reload elbukott. A modal ilyenkor nyitva marad és retry / scope-switch
+    // akciókat ajánl — különben a user a dropdown-ból újra „Új szervezet"
+    // menüpontra kattintva duplikálna. (A workflow seed nem fut ezen az úton —
+    // a CF 2026-04-20 óta office nélkül hoz létre orgot, így nincs workflow.)
     const [createdOrg, setCreatedOrg] = useState(null);
     const [isRetryingSync, setIsRetryingSync] = useState(false);
 
@@ -125,22 +126,16 @@ export default function CreateOrganizationModal({ switchScopeOnSuccess = true })
         const trimmedName = name.trim();
 
         try {
-            const response = await createNewOrganization(
-                trimmedName,
-                orgSlug,
-                DEFAULT_OFFICE_NAME,
-                DEFAULT_OFFICE_SLUG
-            );
+            const response = await createNewOrganization(trimmedName, orgSlug);
 
             const created = {
                 organizationId: response.organizationId,
                 editorialOfficeId: response.editorialOfficeId,
                 name: trimmedName,
-                membershipsReloaded: response.membershipsReloaded,
-                workflowSeeded: response.workflowSeeded
+                membershipsReloaded: response.membershipsReloaded
             };
 
-            if (created.membershipsReloaded && created.workflowSeeded) {
+            if (created.membershipsReloaded) {
                 switchToCreated(created);
                 showToast(`„${trimmedName}" szervezet létrehozva.`, 'success');
             } else {
@@ -187,14 +182,6 @@ export default function CreateOrganizationModal({ switchScopeOnSuccess = true })
                     <div className="form-error form-error-global">
                         A lista szinkron sikertelen. Az új szervezet megjelenéséhez
                         újraszinkronizálás vagy oldalfrissítés szükséges.
-                    </div>
-                )}
-
-                {!createdOrg.workflowSeeded && (
-                    <div className="form-error form-error-global">
-                        A szervezet használható, de a default workflow seed nem
-                        futott le. Az Admin panelen a workflow-t manuálisan kell
-                        beállítanod a szerkesztőséghez.
                     </div>
                 )}
 
@@ -256,9 +243,9 @@ export default function CreateOrganizationModal({ switchScopeOnSuccess = true })
             </div>
 
             <div className="form-hint">
-                Az új szervezetbe automatikusan létrejön egy „{DEFAULT_OFFICE_NAME}"
-                szerkesztőség és 7 alapértelmezett csoport. Mindezt később
-                átnevezheted, illetve további szerkesztőségeket adhatsz hozzá.
+                A szervezet létrehozása után az első szerkesztőséget külön
+                lépésben tudod hozzáadni — a dashboardon fogad egy indító
+                ajánlat.
             </div>
 
             {submitError && (

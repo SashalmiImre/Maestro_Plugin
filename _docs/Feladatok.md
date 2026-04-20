@@ -136,6 +136,91 @@ tags: [feladatok]
 - [x] 78. **Toolbar gombcsoport separator**: `+ Új workflow` közvetlenül az Export/Import mellett van, a user véletlenül kattinthatja az Import-ra (destructive-ish). Javaslat: vertikális separator a két gombcsoport között. ✅ Két `.workflow-designer-toolbar__separator` (1px × 18px halvány vertikális csík): „+ Új workflow" / Export•Import / Mentés között. Az „IO csoport" és a primary akció vizuálisan elkülönül.
 - [x] 79. **Verzió chip (`v1`) láthatóság**: amíg nincs valódi workflow verziózás, a mindig `v1`-et mutató chip felesleges zaj. Javaslat: rejtsük el, VAGY alakítsuk információs tooltip-be (pl. „Verzió: v1 — jelenleg nincs verziózás"). ✅ A chip csak akkor renderel, ha `version > 1` (pl. konkurens mentés után), egyébként rejtett. A token továbbra is része a state-nek (optimistic concurrency), csak nem zajos a UI. A v2+ chip tooltip-tel magyarázza a szemantikát.
 
+#### J. Workflow életciklus & scope refactor (2026-04-20)
+
+> Forrás: felhasználói felvetés — a workflow-tervező és -kezelés szétválasztása. A workflow önálló életet él: a breadcrumb mellől egy chip nyitja meg a workflow-könyvtár modal-t (ComfyUI template-panel stílus), ugyanez a panel jelenik meg a kiadvány-hozzárendelésnél is. A Settings → Workflow tab megszűnik. Új `public` scope a publikus megosztáshoz.
+>
+> **Döntések (2026-04-20 egyeztetés):**
+> 1. Scope szabadon mozgatható; szűkítésnél popup figyelmeztet (aktív publikációk snapshot-tal védve, másolatok megmaradnak, de a szűken kívüli szerkesztőségek új kiadványt már nem indíthatnak); tágításnál csak info-tooltip.
+> 2. Publikálás joga egyelőre kizárólag a tulajdonosé (később részletes jogosultsági rendszer köti össze a user-kezeléssel).
+> 3. Törlés = 7 napos soft-delete (archív), utána cron-hard-delete (referencia-ellenőrzéssel).
+> 4. Idegen workflow-t **read-only**-ban nyit meg, hangsúlyos „Duplikál & Szerkeszt" CTA; ha a user mégis mentene, a dialog „Más néven mentés" flow-ra vált — új workflow `editorial_office` scope-on indul.
+> 5. Breadcrumb chip + nagy modal (első iteráció); az UX finomhangolás később.
+>
+> **Adatmegőrzés nincs** — a dev-adatbázisban lévő workflow-k eldobhatók, a `bootstrap_organization` seeding újrahúzza a default-okat. Nincs backfill.
+>
+> **Sorrend**: 80–81 szerver-oldal (az új schema + CF nélkül a kliens nem indulhat), utána 82–87 kliens.
+
+- [x] 80. **Adatmodell + ACL** (`workflows` collection): (2026-04-20)
+    - `visibility` enum bővítés: `editorial_office` | `organization` | `public`.
+    - Új mezők: `description` (string), `archivedAt` (datetime, nullable). `updatedAt` Appwrite-managed, „Utoljára mentve" kijelzésre.
+    - Fulltext index: `name` + `description` (szabadszavas kereső a library-ban).
+    - Doc-szintű ACL: tulajdonos `user:${createdBy}` write + scope-szerinti read (`team:office_${officeId}` / `team:org_${orgId}` / `any authenticated` publikus esetén). `rowSecurity: true` — Fázis 2 minta (60. pont), cross-tenant Realtime leak ellen.
+    - Nincs migráció: a dev-adatbázis workflow-dok eldobhatók, a `bootstrap_organization` újraseedeli a default-okat szerkesztőségenként.
+    - **Szerver-oldali kész (2026-04-20)**:
+        - `teamHelpers.js` `buildWorkflowAclPerms(visibility, orgId, officeId)` helper — `public` → `read("users")`, `organization` → `read("team:org_${orgId}")`, `editorial_office` → `read("team:office_${officeId}")`.
+        - `WORKFLOW_VISIBILITY_VALUES = ['organization', 'editorial_office', 'public']` (`main.js`).
+        - `bootstrap_workflow_schema` CF action bővítés: `visibility` enum 3 értékkel (createEnumAttribute → 409 fallback `updateEnumAttribute`-ra `public` bővítéssel), `description` (string 500), `archivedAt` (datetime nullable), fulltext indexek `name_fulltext` + `description_fulltext`. Válasz: `{ created, updated, skipped, indexesPending }`.
+        - `createWorkflowDoc` helper + 4 hívó (`bootstrap_organization`, `create_workflow`, `create_editorial_office`, `duplicate_workflow`) — mostantól dokumentum-szintű read ACL-lel írnak.
+        - `update_workflow_metadata` action átalakítva: `visibility_downgrade_blocked` (#30 hard block) → `visibility_shrinkage_warning` (soft warning + `force: true` override). Scope-váltáskor újraszámolt ACL-lel `databases.updateDocument(...)`.
+    - **Deploy checklist** (manuális lépések éles futás előtt — NEM robotizálható, mert az Appwrite Console collection-beállítás):
+        1. `invite-to-organization` CF újradeploy a frissített `teamHelpers.js` + `main.js` tartalommal (`--code functions/invite-to-organization`).
+        2. `bootstrap_workflow_schema` CF action futtatása owner-rel (payload: `{ action: 'bootstrap_workflow_schema' }`) → az enum / string / datetime mezők létrejönnek. Az Appwrite az attribútumokat aszinkron feldolgozza → ha a válasz `indexesPending`-et jelez, **10 másodperc múlva újra futtatni** ugyanazt az action-t, hogy a fulltext indexek is felépüljenek (már létező attribútumon).
+        3. Appwrite Console → `workflows` collection:
+            - **`rowSecurity` flag → `true`** (különben a collection-szintű `read("users")` ACL felülírja a doc-szintű permit-eket, és minden user látna minden workflow-t Realtime-on).
+            - **Globális `read("users")` ACL eltávolítása** a collection Permissions-ből (a doc-szintű read-et `buildWorkflowAclPerms` állítja be).
+            - A collection Permissions `Update`/`Delete` role-okat üresen hagyni — minden mutation a CF API key-n keresztül fut, a user direkt write-ra ne is kapjon jogot.
+        4. Dev-adatbázis workflow-dokumentumok eldobhatók (adatmegőrzés nincs, ld. J. szekció). Opcionális: a meglévő doc-ok törlése + `bootstrap_organization` újrafuttatása (vagy új office létrehozása) a helyes ACL-lel seed-el.
+        5. Smoke: két külön org tagja külön böngészőben — a `workflows` Realtime subscribe-ra A org workflow módosítása NE küldjön WS payload-ot B org kliensének. (Részletes adversarial teszt: 87. pont.)
+
+- [x] 81. **CF action-ök** (`invite-to-organization/src/main.js` + új scheduled CF): (2026-04-20)
+    - `archive_workflow` + `restore_workflow` — soft-delete / undo. Egy közös handler kezeli mindkét action-t (`isArchive` flag), `archivedAt = now()` / `null`. Auth: `createdBy === callerId` VAGY org owner/admin fallback (kilépett tag workflow-jának takarítására). Idempotens: már archivált → `already_archived`, már aktív → `already_active`. Read ACL marad (a futó publikáció UI-ja ne vesszen el); a collection-szintű write a CF API key-jé, tehát a user a kliens SDK-ból direkten nem módosíthatja.
+    - `update_workflow_metadata` owner-guard (#81 szigorítás): a **visibility** váltás kizárólag a `createdBy === callerId` tulajdonosnak engedett (ha a caller csak org admin/owner, 403 `not_workflow_owner { field: 'visibility' }`). A név és description továbbra is org owner/admin joggal szerkeszthető. Új `description` field-támogatás (string 500, trim→null→szándékos törlés, `undefined` = no-op). A szűkítés-warning (`visibility_shrinkage_warning` + `force: true`) és az ACL-újraírás (`buildWorkflowAclPerms` 5. paraméter) a #80-as iterációban beépült.
+    - `duplicate_workflow` cross-tenant bővítés: az `editorialOfficeId` payload mező mostantól a **TARGET** office (a caller aktív office-a), nem a source-é. A forrás bárhol lehet (saját, org, public) — a CF scope alapján validálja a read-access-t (`editorial_office` → same-office tagság, `organization` → same-org tagság, `public` → mindenki). A duplikátum MINDIG `visibility = editorial_office` scope-on indul (a user később tágíthatja `update_workflow_metadata`-val), `createdBy = caller`. Név-ütközés esetén az `explicitName` hiánya mellett auto-suffix (`(másolat)`, `(másolat 2)`, …, cap 20). Archivált forrás: 400 `source_archived`.
+    - `cleanup-archived-workflows` új scheduled CF (`packages/maestro-server/functions/cleanup-archived-workflows/`): napi 5:00 UTC (`0 5 * * *`), `databases.read + databases.write` scope. Az `archivedAt < now() - 7d` workflow-kra per-workflow blocking scan: ha **legalább egy snapshot-nélküli publikáció** hivatkozik rájuk, skip (a nem-aktivált publikáció a live doc-ra támaszkodik; a snapshot-tal védett aktív pub-ok NEM blokkolnak). Retention konfigurálható `ARCHIVED_RETENTION_DAYS` env var-ral (default 7). Stats response: `{ eligibleCount, deletedCount, skippedCount, skippedDetails }`.
+    - **Env var-ok** (`cleanup-archived-workflows`): `DATABASE_ID`, `WORKFLOWS_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, opcionálisan `ARCHIVED_RETENTION_DAYS`.
+    - **Deploy lépések**: (1) `invite-to-organization` CF újradeploy (új action-ök), (2) `cleanup-archived-workflows` első deploy a `maestro-server/appwrite.json`-ból (`appwrite functions create-deployment`). A scheduled CF a regisztráció után automatikusan fut a beállított cron szerint; első futtatás manuálisan is triggerelhető (Appwrite Console → Execute).
+
+- [ ] 82. **`WorkflowLibraryPanel` közös komponens** (modal):
+    - Props: `context: 'breadcrumb' | 'publication-assignment'`, `onSelect(workflowId)`, `onClose`.
+    - Szűrők: scope chip-ek (office/org/public multi-select), `updatedAt` date range, szabadszavas kereső (`name` + `description`), rendezés (név / dátum).
+    - Card: név, leírás, „Utoljára mentve" timestamp, szerző, scope-chip, „Saját" / „Idegen" jelölés.
+    - Akciók card-on: „Megnyit" (saját → edit route; idegen → read-only preview); „Duplikál" (mindenkinek elérhető); „Archivál" (csak saját); „Új workflow" gomb a panel fejlécében.
+    - Realtime: `subscribeRealtime` a `workflows` collection-re a `realtimeBus.js`-en keresztül (kötelező pattern).
+
+- [ ] 83. **Route refaktor + breadcrumb chip**:
+    - Új: `/workflows/:id` (edit), `/workflows/new` (üres designer). `DataProvider` wrapping marad.
+    - Legacy `/admin/office/:officeId/workflow/:workflowId` → redirect `/workflows/:id`-re (a `WorkflowDesignerRedirect` komponens bővítése).
+    - `BreadcrumbHeader.jsx`: új „Workflows" chip a breadcrumb után — **vizuálisan szeparált**, nem része a tenant-láncnak. Kattintás → `WorkflowLibraryPanel` (context='breadcrumb'), kiválasztás → `navigate('/workflows/:id')`.
+
+- [ ] 84. **Designer oldal átalakítás** (`WorkflowDesignerPage.jsx`):
+    - Title bar: név inline-edit, description textarea, `visibility` toggle (ownership guard — csak tulajdonos módosíthatja), „Utoljára mentve" timestamp.
+    - **Read-only mód** idegen workflow-n: canvas view-only, toolbar disabled, hangsúlyos „Duplikál & Szerkeszt" CTA (új példányt nyit a szerkesztőben).
+    - **Save As flow**: ha read-only view-ban mentést kísérel (Ctrl+S / mentés gomb), dialog: „Ez a workflow nem a tiéd. Más néven mented?" → új workflow `editorial_office` scope-pal, tulajdonos = caller.
+    - Scope-szűkítés popup copy: „A már futó publikációk továbbra is használhatják (snapshot védi őket), a korábbi másolatok megmaradnak, de a szűkített scope-on kívüli szerkesztőségek már nem indíthatnak új kiadványt ezzel a workflow-val. Biztos szűkíted?"
+    - Scope-tágítás info-tooltip (nem-blokkoló): „Mostantól szélesebb kör is látja és használhatja ezt a workflow-t."
+
+- [ ] 85. **Publikáció integráció** (`GeneralTab.jsx`):
+    - A jelenlegi workflow `<select>` dropdown cseréje: „Workflow kiválasztása" gomb + jelenleg aktív workflow-chip (név + scope jelzés).
+    - Gomb → ugyanaz a `WorkflowLibraryPanel` (context='publication-assignment'). `onSelect` patcheli a `publications.workflowId`-t (meglévő CF flow változatlan).
+    - Aktivált publikációnál letiltva (jelenlegi logika marad), a chip read-only látszik.
+
+- [ ] 86. **Settings cleanup**:
+    - `EditorialOfficeWorkflowTab.jsx` + kapcsolódó selector kód törlés. Az `EditorialOfficeSettingsModal` tab-listája rövidül (Általános + Csoportok marad).
+    - `bootstrap_organization` CF default workflow seeding megmarad (office-enként egy default).
+    - Minden belső navigáció, ami korábban Settings → Workflow tabra mutatott (pl. empty state linkek, reference dokok), átállítva a breadcrumb chip-re.
+
+- [ ] 87. **Smoke test + adversarial**:
+    - 2-tab Realtime: scope-váltás egyik user-nél → a másik library panel-jében azonnal látszik/eltűnik (a `rowSecurity: true` + doc-ACL pattern miatt csak a jogosult kliensek kapják meg a WS payload-ot).
+    - Cross-tenant teszt: B szervezet user nem látja A szervezet `editorial_office` vagy `organization` scope-ú workflow-ját; publikus látszik mindenkinek.
+    - Adversarial: idegen user direktben hívja a CF-eket (`updateWorkflow`, `archiveWorkflow`, `deleteWorkflow`) → szerver 403. Read-only designer UI megkerülhető-e a browser dev-tools-ból (pl. state patch)? → a CF guard a szerveroldalon véd.
+    - Soft-delete → 7 nap után cron hard-delete élesben nem tesztelhető; helyette manuális trigger (ideiglenes mock-date vagy admin-only CF action).
+
+- [ ] 88. **Design question — duplicate_workflow member access** (harden #J utóirat, 2026-04-20):
+    - A `duplicate_workflow` CF (`invite-to-organization/src/main.js:3965-3967`) jelenleg org `owner`/`admin` szerepkörhöz köti a duplikálást (`insufficient_role` 403 `member`-eknek). A UI (WorkflowLibraryPanel) a phase 4 harden gate után szintén csak owner/admin-nak mutatja a „Duplikál & szerkeszt" + kebab „Duplikálás" akciókat.
+    - A 80–84. feladat design intent-je szerint a `public`/`organization` scope-ú workflow-kat read-only módban minden tag megnyithatja, és a `Duplikál & Szerkeszt` CTA az egyetlen útja annak, hogy egy non-admin szerkesztő saját scope-ba forkolja a workflow-t. A jelenlegi CF-gate ezt non-admin-nak eljárásilag blokkolja.
+    - **Eldöntendő**: (a) a CF policy lazítása — tetszőleges org member duplikálhat a saját active office-ába (UI gate visszavonásával); VAGY (b) a CTA owner/admin-only jelöléssel kiegészítve, non-admin-nak explicit „kérd owner-től" üzenet. Az (a) konzisztens a read-only UX intent-jével, a (b) szigorúbb kontrollt tart.
+
 ### Manuális smoke test checklist
 
 > Valós InDesign környezetben végigkattintani — a kód review nem helyettesíti.

@@ -1,13 +1,17 @@
 /**
- * Maestro Dashboard — OnboardingRoute (B.5 — éles 4-collection write)
+ * Maestro Dashboard — OnboardingRoute
  *
  * Az `/onboarding` route. Az első belépéskor itt hoz létre a user új
- * organization-t és editorial office-t (4-collection write az AuthContext
- * `createOrganization`-on keresztül), VAGY ha a localStorage tartalmaz
- * pending invite tokent, fel tudja ajánlani a meghívó elfogadását
- * (`acceptInvite()` → `invite-to-organization` CF accept ág).
+ * organization-t (AuthContext `createOrganization` → `bootstrap_organization`
+ * CF action), VAGY ha a localStorage tartalmaz pending invite tokent, fel
+ * tudja ajánlani a meghívó elfogadását (`acceptInvite()` → `invite-to-
+ * organization` CF accept ág).
  *
- * Ha az új org létrejött, a ScopeContext aktívvá teszi → navigate('/').
+ * 2026-04-20 óta a CF NEM hoz létre auto-kreált „Általános" szerkesztőséget —
+ * csak az orgot. Az első szerkesztőséget a user a Dashboard onboarding
+ * splash-ről adja hozzá (`create_editorial_office`). A form itt ezért csak
+ * orgnevet + org slug-ot kér. Sikeres létrehozás után `/` → DashboardLayout
+ * onboarding splash veszi fel a fonalat.
  *
  * Kijelentkezés gomb a card alján marad — escape hatch, ha a user
  * mégsem akarja most ezt a flow-t.
@@ -113,7 +117,7 @@ function errorMessage(err) {
 
 export default function OnboardingRoute() {
     const { user, organizations, logout, createOrganization, acceptInvite } = useAuth();
-    const { setActiveOrganization, setActiveOffice } = useScope();
+    const { setActiveOrganization } = useScope();
     const navigate = useNavigate();
 
     // Pending invite token a localStorage-ből
@@ -132,13 +136,11 @@ export default function OnboardingRoute() {
         }
     }, [pendingToken, organizations, navigate]);
 
-    // Form state
+    // Form state — az első szerkesztőséget külön lépésben, a Dashboard
+    // onboarding splash-ről hozza létre a user.
     const [orgName, setOrgName] = useState('');
     const [orgSlug, setOrgSlug] = useState('');
     const [orgSlugTouched, setOrgSlugTouched] = useState(false);
-    const [officeName, setOfficeName] = useState('');
-    const [officeSlug, setOfficeSlug] = useState('');
-    const [officeSlugTouched, setOfficeSlugTouched] = useState(false);
 
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState('');
@@ -147,10 +149,6 @@ export default function OnboardingRoute() {
     useEffect(() => {
         if (!orgSlugTouched) setOrgSlug(slugify(orgName));
     }, [orgName, orgSlugTouched]);
-
-    useEffect(() => {
-        if (!officeSlugTouched) setOfficeSlug(slugify(officeName));
-    }, [officeName, officeSlugTouched]);
 
     const handleLogout = useCallback(async () => {
         await logout();
@@ -162,34 +160,27 @@ export default function OnboardingRoute() {
         setError('');
 
         const trimmedOrgName = orgName.trim();
-        const trimmedOfficeName = officeName.trim();
         const trimmedOrgSlug = orgSlug.trim();
-        const trimmedOfficeSlug = officeSlug.trim();
 
-        if (!trimmedOrgName || !trimmedOfficeName) {
+        if (!trimmedOrgName) {
             setError('Tölts ki minden kötelező mezőt.');
             return;
         }
-        if (!trimmedOrgSlug || !trimmedOfficeSlug) {
-            setError('A slug mezők nem lehetnek üresek. Használj kisbetűt, számot és kötőjelet.');
+        if (!trimmedOrgSlug) {
+            setError('A slug nem lehet üres. Használj kisbetűt, számot és kötőjelet.');
             return;
         }
-        if (!SLUG_REGEX.test(trimmedOrgSlug) || !SLUG_REGEX.test(trimmedOfficeSlug)) {
+        if (!SLUG_REGEX.test(trimmedOrgSlug)) {
             setError('A slug csak kisbetűt, számot és kötőjelet tartalmazhat, és nem kezdődhet/végződhet kötőjellel.');
             return;
         }
 
         setSubmitting(true);
         try {
-            const result = await createOrganization(
-                trimmedOrgName,
-                trimmedOrgSlug,
-                trimmedOfficeName,
-                trimmedOfficeSlug
-            );
-            // Az új org+office aktívvá tétele
+            const result = await createOrganization(trimmedOrgName, trimmedOrgSlug);
+            // Az új org aktívvá tétele — office még nincs, a DashboardLayout
+            // onboarding splash fogja felajánlani a `create_editorial_office`-t.
             setActiveOrganization(result.organizationId);
-            setActiveOffice(result.editorialOfficeId);
             navigate('/', { replace: true });
         } catch (err) {
             console.warn('[OnboardingRoute] createOrganization sikertelen:', err);
@@ -197,7 +188,7 @@ export default function OnboardingRoute() {
         } finally {
             setSubmitting(false);
         }
-    }, [orgName, orgSlug, officeName, officeSlug, createOrganization, setActiveOrganization, setActiveOffice, navigate]);
+    }, [orgName, orgSlug, createOrganization, setActiveOrganization, navigate]);
 
     const handleAcceptInvite = useCallback(async () => {
         if (!pendingToken) return;
@@ -265,7 +256,8 @@ export default function OnboardingRoute() {
             {!pendingToken && (
                 <form onSubmit={handleSubmit}>
                     <p className="auth-help">
-                        Még nincs szervezeted. Hozz létre egyet, és add hozzá az első szerkesztőséget.
+                        Még nincs szervezeted. Hozz létre egyet — az első
+                        szerkesztőséget utána a dashboardról tudod hozzáadni.
                     </p>
 
                     <div className="form-group">
@@ -289,34 +281,6 @@ export default function OnboardingRoute() {
                             type="text"
                             value={orgSlug}
                             onChange={(e) => { setOrgSlug(e.target.value); setOrgSlugTouched(true); }}
-                            disabled={submitting}
-                            required
-                            pattern={SLUG_PATTERN}
-                            maxLength={64}
-                            title="Csak kisbetű, szám és kötőjel. Nem kezdődhet/végződhet kötőjellel."
-                        />
-                    </div>
-
-                    <div className="form-group">
-                        <label htmlFor="onb-office-name">Szerkesztőség neve</label>
-                        <input
-                            id="onb-office-name"
-                            type="text"
-                            value={officeName}
-                            onChange={(e) => setOfficeName(e.target.value)}
-                            disabled={submitting}
-                            required
-                            maxLength={128}
-                        />
-                    </div>
-
-                    <div className="form-group">
-                        <label htmlFor="onb-office-slug">Szerkesztőség slug</label>
-                        <input
-                            id="onb-office-slug"
-                            type="text"
-                            value={officeSlug}
-                            onChange={(e) => { setOfficeSlug(e.target.value); setOfficeSlugTouched(true); }}
                             disabled={submitting}
                             required
                             pattern={SLUG_PATTERN}

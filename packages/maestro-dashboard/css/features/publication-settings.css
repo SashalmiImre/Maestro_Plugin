@@ -194,3 +194,72 @@
     background: var(--c-warning-solid);
 }
 
+/* ─── Workflow picker (GeneralTab) ──────────────────────────────────────── */
+/* A korábbi `<select>` helyett egy „current + cserélés" stílust alkalmazunk.
+   A display-doboz mutatja az aktuális workflow-t + láthatóság chip-et, a
+   jobb oldalon a gomb megnyitja a közös WorkflowLibraryPanel modal-t. */
+
+.publication-workflow-picker {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.publication-workflow-picker__display {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    min-height: 36px;
+}
+
+.publication-workflow-picker__name {
+    font-size: 13px;
+    color: var(--text-primary);
+    font-weight: 500;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+}
+
+.publication-workflow-picker__empty {
+    font-size: 13px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.publication-workflow-picker__chip {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 500;
+    border-radius: 999px;
+    letter-spacing: 0.02em;
+    border: 1px solid transparent;
+    flex-shrink: 0;
+}
+
+.publication-workflow-picker__chip.is-public {
+    background: rgba(124, 89, 235, 0.15);
+    color: #a98bff;
+    border-color: rgba(124, 89, 235, 0.3);
+}
+
+.publication-workflow-picker__chip.is-organization {
+    background: rgba(0, 130, 200, 0.15);
+    color: #6fb8e8;
+    border-color: rgba(0, 130, 200, 0.3);
+}
+
+.publication-workflow-picker__chip.is-editorial_office {
+    background: rgba(var(--shadow-tint), 0.3);
+    color: var(--text-secondary);
+    border-color: var(--outline-variant);
+}

@@ -155,6 +155,28 @@
             "deploymentRetention": 0
         },
         {
+            "$id": "cleanup-archived-workflows",
+            "name": "Cleanup Archived Workflows",
+            "runtime": "node-18.0",
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "timeout": 60,
+            "enabled": true,
+            "logging": true,
+            "path": "functions/cleanup-archived-workflows",
+            "scopes": [
+                "databases.read",
+                "databases.write"
+            ],
+            "events": [],
+            "schedule": "0 5 * * *",
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [],
+            "buildSpecification": "s-0.5vcpu-512mb",
+            "runtimeSpecification": "s-0.5vcpu-512mb",
+            "deploymentRetention": 0
+        },
+        {
             "$id": "migrate-legacy-paths",
             "name": "Migrate Legacy Paths",
             "runtime": "node-18.0",

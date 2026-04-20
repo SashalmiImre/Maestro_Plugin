@@ -19,13 +19,17 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
+import { Databases } from 'appwrite';
 import { validatePublicationActivation } from '@shared/publicationActivation.js';
+import { WORKFLOW_VISIBILITY_DEFAULT, WORKFLOW_VISIBILITY_LABELS } from '@shared/constants.js';
 import { useData } from '../../contexts/DataContext.jsx';
-import { useAuth } from '../../contexts/AuthContext.jsx';
+import { useAuth, getClient } from '../../contexts/AuthContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
 import { useConfirm } from '../ConfirmDialog.jsx';
+import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 import DangerZone from '../DangerZone.jsx';
+import WorkflowLibraryPanel from '../workflows/WorkflowLibraryPanel.jsx';
 
 function formatActivatedAt(iso) {
     if (!iso) return '';
@@ -41,7 +45,7 @@ function formatActivatedAt(iso) {
 export default function GeneralTab({ publication }) {
     const { workflows, deadlines, articles, updatePublication, deletePublication } = useData();
     const { user, orgMemberships } = useAuth();
-    const { closeModal } = useModal();
+    const { openModal, closeModal } = useModal();
     const { showToast } = useToast();
     const confirm = useConfirm();
 
@@ -108,10 +112,9 @@ export default function GeneralTab({ publication }) {
         await saveField('excludeWeekends', next);
     }
 
-    async function handleWorkflowChange(e) {
-        const next = e.target.value;
-        if (!next || next === publication.workflowId) return;
-        await saveField('workflowId', next);
+    async function handleWorkflowSelect(workflowId) {
+        if (!workflowId || workflowId === publication.workflowId) return;
+        await saveField('workflowId', workflowId);
         showToast('Workflow megváltozott — az új szabályok a következő átmeneteknél lépnek életbe.', 'info');
     }
 
@@ -125,7 +128,56 @@ export default function GeneralTab({ publication }) {
         () => articles.some((a) => a.publicationId === publication.$id),
         [articles, publication.$id]
     );
-    const workflowDisabled = workflows.length <= 1 || isActivated || hasArticles;
+
+    // A workflow-váltás akkor tiltott, ha a kiadvány már aktív, vagy ha
+    // vannak cikkek (a workflow állapotgépe határozná meg érvénytelen
+    // átmeneteket). Egyébként a library könyvtárból bárhonnan választható.
+    const workflowDisabled = isActivated || hasArticles;
+
+    // A jelenlegi workflow dokumentum (a library lista összegzése UI-ra).
+    // A `workflows` lista aktív workflow-kat tart (archiváltakat nem) — ha a
+    // publikáció workflowId-ja archivált workflow-ra mutat, direkt fetch-el
+    // kérjük le, hogy a név + láthatóság chip megjelenjen.
+    const [archivedFallback, setArchivedFallback] = useState(null);
+    const inlineWorkflow = useMemo(
+        () => workflows.find((wf) => wf.$id === publication.workflowId) || null,
+        [workflows, publication.workflowId]
+    );
+    useEffect(() => {
+        const wfId = publication.workflowId;
+        if (!wfId || inlineWorkflow) {
+            setArchivedFallback(null);
+            return;
+        }
+        let cancelled = false;
+        (async () => {
+            try {
+                const databases = new Databases(getClient());
+                const doc = await databases.getDocument(
+                    DATABASE_ID,
+                    COLLECTIONS.WORKFLOWS,
+                    wfId
+                );
+                if (!cancelled) setArchivedFallback(doc);
+            } catch {
+                if (!cancelled) setArchivedFallback(null);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [publication.workflowId, inlineWorkflow]);
+    const currentWorkflow = inlineWorkflow || archivedFallback;
+
+    function handleOpenWorkflowLibrary() {
+        if (workflowDisabled) return;
+        openModal(
+            <WorkflowLibraryPanel
+                context="publication-assignment"
+                currentWorkflowId={publication.workflowId}
+                onSelect={handleWorkflowSelect}
+            />,
+            { size: 'xl', title: 'Workflow kiválasztása' }
+        );
+    }
 
     // Publikáció-hoz tartozó deadline-ok (scope-on belül, DataContext szűr)
     const pubDeadlines = useMemo(
@@ -293,31 +345,47 @@ export default function GeneralTab({ publication }) {
                 </label>
             </div>
 
-            {/* Workflow */}
+            {/* Workflow — a korábbi dropdown helyett a közös WorkflowLibraryPanel
+                modal-t nyitjuk meg. A kártyás lista támogatja a szűrést, a 3-way
+                visibility-t és a megtekintés/duplikálás akciókat. */}
             <div className="form-group">
-                <label htmlFor="ps-workflow">Workflow</label>
-                <select
-                    id="ps-workflow"
-                    className="form-select"
-                    value={publication.workflowId || ''}
-                    onChange={handleWorkflowChange}
-                    disabled={workflowDisabled}
-                    title={
-                        isActivated
-                            ? 'Workflow aktiválás után nem módosítható.'
-                            : hasArticles
-                                ? 'A kiadványhoz már tartoznak cikkek — a workflow nem módosítható.'
-                                : undefined
-                    }
-                >
-                    {workflows.length === 0 && <option value="">— Nincs elérhető workflow —</option>}
-                    {!publication.workflowId && workflows.length > 0 && (
-                        <option value="">Válassz workflow-t…</option>
-                    )}
-                    {workflows.map((wf) => (
-                        <option key={wf.$id} value={wf.$id}>{wf.name}</option>
-                    ))}
-                </select>
+                <label>Workflow</label>
+                <div className="publication-workflow-picker">
+                    <div className="publication-workflow-picker__display">
+                        {currentWorkflow ? (
+                            <>
+                                <span className="publication-workflow-picker__name">{currentWorkflow.name}</span>
+                                <span
+                                    className={`publication-workflow-picker__chip is-${currentWorkflow.visibility || WORKFLOW_VISIBILITY_DEFAULT}`}
+                                >
+                                    {WORKFLOW_VISIBILITY_LABELS[currentWorkflow.visibility || WORKFLOW_VISIBILITY_DEFAULT]}
+                                </span>
+                            </>
+                        ) : (
+                            <span className="publication-workflow-picker__empty">Még nincs workflow választva</span>
+                        )}
+                    </div>
+                    <button
+                        type="button"
+                        className="btn-secondary"
+                        onClick={handleOpenWorkflowLibrary}
+                        disabled={workflowDisabled}
+                        title={
+                            isActivated
+                                ? 'Workflow aktiválás után nem módosítható.'
+                                : hasArticles
+                                    ? 'A kiadványhoz már tartoznak cikkek — a workflow nem módosítható.'
+                                    : 'Workflow kiválasztása a könyvtárból'
+                        }
+                    >
+                        {currentWorkflow ? 'Cserélés…' : 'Kiválaszt…'}
+                    </button>
+                </div>
+                {workflows.length === 0 && (
+                    <div className="form-hint">
+                        Nincs elérhető workflow ehhez a szerkesztőséghez. Kérd meg a szervezet adminját, hogy hozzon létre egyet, vagy nyisd meg a Workflow könyvtárat a breadcrumb-ból.
+                    </div>
+                )}
             </div>
 
             {/* Aktiválás szekció */}

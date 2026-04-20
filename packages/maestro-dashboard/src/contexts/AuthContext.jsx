@@ -595,28 +595,30 @@ export function AuthProvider({ children }) {
     }, [user?.$id, loadAndSetMemberships]);
 
     /**
-     * B.5 — Új organization + editorial office létrehozása az OnboardingRoute-ról.
+     * B.5 — Új organization létrehozása az OnboardingRoute-ról.
      *
      * Az `invite-to-organization` Cloud Function `bootstrap_organization`
-     * action-jét hívja. A CF API key-jel, atomikusan hoz létre 4 rekordot
-     * (organizations + organizationMemberships[owner] + editorialOffices +
-     * editorialOfficeMemberships[admin]), és hibakezelés + rollback is a
-     * szerveren történik.
+     * action-jét hívja. A CF API key-jel hozza létre az org + owner membership
+     * + org team rekordokat, hibakezelés + rollback a szerveren.
      *
-     * Miért CF és nem közvetlen kliens-írás? A 4 tenant collection ACL-je
+     * 2026-04-20 óta NEM hoz létre auto-kreált „Általános" szerkesztőséget —
+     * a user 0 office-szal landol, a Dashboard onboarding splash felajánlja a
+     * `create_editorial_office`-t. Így `editorialOfficeId` a response-ban `null`.
+     *
+     * Miért CF és nem közvetlen kliens-írás? A tenant collection-ök ACL-je
      * `read("users")`-re van szűkítve — csak a szerver írhat. Így nincs
      * módja egy malicious kliensnek arbitrárisan membership-et létrehozni.
      *
-     * @returns {Promise<{organizationId: string, editorialOfficeId: string}>}
+     * @returns {Promise<{organizationId: string, editorialOfficeId: string|null}>}
      */
-    const createOrganization = useCallback(async (orgName, orgSlug, officeName, officeSlug) => {
+    const createOrganization = useCallback(async (orgName, orgSlug) => {
         if (!user?.$id) {
             throw new Error('not_authenticated');
         }
 
         const response = await callInviteFunction(
             'bootstrap_organization',
-            { orgName, orgSlug, officeName, officeSlug },
+            { orgName, orgSlug },
             'bootstrap_failed'
         );
 
@@ -631,7 +633,7 @@ export function AuthProvider({ children }) {
 
         return {
             organizationId: response.organizationId,
-            editorialOfficeId: response.editorialOfficeId
+            editorialOfficeId: response.editorialOfficeId || null
         };
     }, [user?.$id, loadAndSetMemberships]);
 
@@ -645,20 +647,27 @@ export function AuthProvider({ children }) {
      * tagsága. Duplaklikk-védelem a hívó modal `isSubmitting` guardja.
      *
      * Memberships reload sikertelen → `membershipsReloaded: false`, a hívó
-     * dönthet (retry UI). A CF `workflowSeeded` flag-et is visszaadunk —
-     * ha false, a tenant létrejött, de a default workflow seed elbukott
-     * (a Modal partial-success banner-t mutathat, nem zárja be magát).
+     * dönthet (retry UI).
      *
-     * @returns {Promise<{organizationId: string, editorialOfficeId: string, membershipsReloaded: boolean, workflowSeeded: boolean}>}
+     * A CF 2026-04-20 óta nem hoz létre auto-kreált „Általános" office-t —
+     * csak az orgot. Az első szerkesztőséget a user külön hozza létre a
+     * Dashboard onboarding splash-ből (`create_editorial_office` action).
+     * Ezért az `editorialOfficeId` a response-ban mindig `null`, és a default
+     * workflow seed sem fut le itt (a `create_editorial_office` hozza létre
+     * az office-szal együtt). A modal sikerfeltétele tehát csak
+     * `membershipsReloaded` — workflow seed flag-et nem adunk vissza, mert
+     * az új kontraktusban mindig hamis lenne (fals partial-success).
+     *
+     * @returns {Promise<{organizationId: string, editorialOfficeId: string|null, membershipsReloaded: boolean}>}
      */
-    const createNewOrganization = useCallback(async (orgName, orgSlug, officeName, officeSlug) => {
+    const createNewOrganization = useCallback(async (orgName, orgSlug) => {
         if (!user?.$id) {
             throw new Error('not_authenticated');
         }
 
         const response = await callInviteFunction(
             'create_organization',
-            { orgName, orgSlug, officeName, officeSlug },
+            { orgName, orgSlug },
             'create_organization_failed'
         );
 
@@ -672,9 +681,8 @@ export function AuthProvider({ children }) {
 
         return {
             organizationId: response.organizationId,
-            editorialOfficeId: response.editorialOfficeId,
-            membershipsReloaded,
-            workflowSeeded: response.workflowSeeded !== false
+            editorialOfficeId: response.editorialOfficeId || null,
+            membershipsReloaded
         };
     }, [user?.$id, loadAndSetMemberships]);
 

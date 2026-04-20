@@ -14,6 +14,7 @@ import {
     DATABASE_ID, COLLECTIONS, BUCKETS,
     PAGE_SIZE, TEAM_CACHE_DURATION_MS
 } from '../config.js';
+import { WORKFLOW_VISIBILITY, WORKFLOW_VISIBILITY_DEFAULT } from '@shared/constants.js';
 
 const DataContext = createContext(null);
 
@@ -254,9 +255,14 @@ export function DataProvider({ children }) {
     // nincs workflowId, az első (név szerint rendezett) workflow a fallback. Ezt a
     // filterek / jogosultsági hookok / Workflow Designer használják.
 
+    // 3-way visibility fetch (#80): az aktív officeId ÉS az aktív orgId szerint
+    // egyaránt szűr, plusz a `public` workflow-kat minden authentikált user látja.
+    // Az `archivedAt IS NULL` szűrés kizárja a soft-delete-elteket — azok a
+    // `WorkflowLibraryPanel` külön „Archívum" nézetében tölthetők be.
     const fetchWorkflow = useCallback(async () => {
         const editorialOfficeId = activeEditorialOfficeIdRef.current;
-        if (!editorialOfficeId) {
+        const organizationId = activeOrganizationIdRef.current;
+        if (!editorialOfficeId || !organizationId) {
             setWorkflows([]);
             return;
         }
@@ -266,7 +272,23 @@ export function DataProvider({ children }) {
                 databaseId: DATABASE_ID,
                 collectionId: COLLECTIONS.WORKFLOWS,
                 queries: [
-                    Query.equal('editorialOfficeId', editorialOfficeId),
+                    Query.or([
+                        Query.equal('visibility', WORKFLOW_VISIBILITY.PUBLIC),
+                        Query.and([
+                            Query.equal('visibility', WORKFLOW_VISIBILITY.ORGANIZATION),
+                            Query.equal('organizationId', organizationId)
+                        ]),
+                        Query.and([
+                            Query.equal('visibility', WORKFLOW_VISIBILITY.EDITORIAL_OFFICE),
+                            Query.equal('editorialOfficeId', editorialOfficeId)
+                        ]),
+                        // Legacy fallback: null visibility → editorial_office
+                        Query.and([
+                            Query.isNull('visibility'),
+                            Query.equal('editorialOfficeId', editorialOfficeId)
+                        ])
+                    ]),
+                    Query.isNull('archivedAt'),
                     Query.orderAsc('name'),
                     Query.limit(100)
                 ]
@@ -278,10 +300,10 @@ export function DataProvider({ children }) {
         }
     }, [databases]);
 
-    // Workflow(k) betöltése induláskor, és scope-váltáskor újra.
+    // Workflow(k) betöltése induláskor, és scope-váltáskor újra (org + office).
     useEffect(() => {
         fetchWorkflow();
-    }, [fetchWorkflow, activeEditorialOfficeId]);
+    }, [fetchWorkflow, activeEditorialOfficeId, activeOrganizationId]);
 
     // Származtatott workflow: az aktív kiadvány `workflowId`-ja szerint.
     // Ha a publikációnak van workflowId-ja, de a referencia stale (a workflow
@@ -561,26 +583,39 @@ export function DataProvider({ children }) {
                         applySystemValidationEvent(eventType, payload, articleIdsRef, setValidations);
                         break;
                     case 'workflows': {
-                        // A `workflows[]` lista frissül; a származtatott `workflow`
-                        // useMemo automatikusan recompute-ol az aktív kiadvány
-                        // workflowId-ja alapján.
+                        // #80 — 3-way visibility + archivedAt szűrés. A származtatott
+                        // `workflow` useMemo automatikusan recompute-ol az aktív
+                        // publikáció workflowId-ja alapján.
                         const activeOfficeId = activeEditorialOfficeIdRef.current;
+                        const activeOrgId = activeOrganizationIdRef.current;
                         if (eventType === 'delete') {
                             setWorkflows((prev) => prev.filter((w) => w.$id !== payload.$id));
-                        } else if (payload.editorialOfficeId === activeOfficeId) {
-                            setWorkflows((prev) => {
-                                const idx = prev.findIndex((w) => w.$id === payload.$id);
-                                let next;
-                                if (idx >= 0) {
-                                    next = [...prev];
-                                    next[idx] = payload;
-                                } else {
-                                    next = [...prev, payload];
-                                }
-                                next.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-                                return next;
-                            });
+                            break;
                         }
+                        // Scope vizibilitás check (3-way, legacy null → editorial_office)
+                        const visibility = payload.visibility || WORKFLOW_VISIBILITY_DEFAULT;
+                        const isVisible =
+                            (visibility === WORKFLOW_VISIBILITY.PUBLIC) ||
+                            (visibility === WORKFLOW_VISIBILITY.ORGANIZATION && payload.organizationId === activeOrgId) ||
+                            (visibility === WORKFLOW_VISIBILITY.EDITORIAL_OFFICE && payload.editorialOfficeId === activeOfficeId);
+                        // Archivált workflow-kat kivesszük a fő listából
+                        const isArchived = typeof payload.archivedAt === 'string' && payload.archivedAt.length > 0;
+                        if (!isVisible || isArchived) {
+                            setWorkflows((prev) => prev.filter((w) => w.$id !== payload.$id));
+                            break;
+                        }
+                        setWorkflows((prev) => {
+                            const idx = prev.findIndex((w) => w.$id === payload.$id);
+                            let next;
+                            if (idx >= 0) {
+                                next = [...prev];
+                                next[idx] = payload;
+                            } else {
+                                next = [...prev, payload];
+                            }
+                            next.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+                            return next;
+                        });
                         break;
                     }
                 }

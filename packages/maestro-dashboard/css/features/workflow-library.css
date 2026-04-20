@@ -1,0 +1,381 @@
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* WorkflowLibraryPanel — közös workflow böngésző (breadcrumb + publikáció)  */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+.workflow-library {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    min-height: 400px;
+}
+
+/* ─── Toolbar ─── */
+
+.workflow-library-toolbar {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.workflow-library-search {
+    width: 100%;
+    padding: 10px 14px;
+    background: var(--bg-base);
+    border: 1px solid transparent;
+    border-radius: var(--radius-lg);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.workflow-library-search:focus {
+    border-color: rgb(from var(--accent) r g b / 0.5);
+    box-shadow: 0 0 0 3px rgb(from var(--accent) r g b / 0.10);
+}
+
+.workflow-library-search::placeholder {
+    color: var(--text-disabled);
+}
+
+.workflow-library-chips {
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+}
+
+.workflow-library-chip {
+    padding: 5px 12px;
+    font-size: 12px;
+    font-family: inherit;
+    color: var(--text-secondary);
+    background: transparent;
+    border: 1px solid var(--outline-variant);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.workflow-library-chip:hover:not(.is-active) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.workflow-library-chip.is-active {
+    background: var(--accent-solid);
+    color: #fff;
+    border-color: transparent;
+}
+
+/* ─── Tabs — a meglévő `.tabs` komponens alá. */
+
+.workflow-library-tabs {
+    margin-bottom: 4px;
+}
+
+/* ─── Lista + kártya ─── */
+
+.workflow-library-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.workflow-library-card {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 12px 14px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    transition: border-color 0.15s, background 0.15s;
+}
+
+.workflow-library-card:hover {
+    background: var(--bg-hover);
+    border-color: var(--outline-variant);
+}
+
+.workflow-library-card.is-current {
+    border-color: rgb(from var(--accent-solid) r g b / 0.7);
+    box-shadow: 0 0 0 1px rgb(from var(--accent-solid) r g b / 0.35);
+}
+
+.workflow-library-card-main {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.workflow-library-card-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.workflow-library-card-name {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.workflow-library-card-desc {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.4;
+}
+
+.workflow-library-card-meta {
+    display: flex;
+    gap: 10px;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 2px;
+}
+
+.workflow-library-card-meta > span + span {
+    position: relative;
+    padding-left: 10px;
+}
+
+.workflow-library-card-meta > span + span::before {
+    content: '·';
+    position: absolute;
+    left: 2px;
+    color: var(--text-disabled);
+}
+
+.workflow-library-archived-at {
+    color: var(--c-warning, #d59800);
+}
+
+/* ─── Badge-ek + scope chip a kártyán ─── */
+
+.workflow-library-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 7px;
+    font-size: 10px;
+    font-weight: 500;
+    border-radius: 999px;
+    letter-spacing: 0.02em;
+}
+
+.workflow-library-badge.is-current {
+    background: rgb(from var(--accent-solid) r g b / 0.15);
+    color: var(--accent);
+}
+
+.workflow-library-badge.is-own {
+    background: rgb(from var(--accent-solid) r g b / 0.12);
+    color: var(--accent);
+}
+
+.workflow-library-badge.is-foreign {
+    background: rgba(var(--shadow-tint), 0.3);
+    color: var(--text-muted);
+}
+
+.workflow-library-chip-visibility {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 500;
+    border-radius: 999px;
+    letter-spacing: 0.02em;
+    border: 1px solid transparent;
+}
+
+.workflow-library-chip-visibility.is-public {
+    background: rgba(124, 89, 235, 0.15);
+    color: #a98bff;
+    border-color: rgba(124, 89, 235, 0.3);
+}
+
+.workflow-library-chip-visibility.is-organization {
+    background: rgba(0, 130, 200, 0.15);
+    color: #6fb8e8;
+    border-color: rgba(0, 130, 200, 0.3);
+}
+
+.workflow-library-chip-visibility.is-editorial_office {
+    background: rgba(var(--shadow-tint), 0.3);
+    color: var(--text-secondary);
+    border-color: var(--outline-variant);
+}
+
+/* ─── Akciók a kártyán ─── */
+
+.workflow-library-card-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+}
+
+.workflow-library-card-actions .btn-primary,
+.workflow-library-card-actions .btn-secondary {
+    padding: 6px 12px;
+    font-size: 12px;
+}
+
+/* ─── Kebab menü ─── */
+
+.workflow-library-kebab {
+    position: relative;
+}
+
+.workflow-library-kebab-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    border: 1px solid var(--outline-variant);
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.workflow-library-kebab-btn:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.workflow-library-kebab-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+    list-style: none;
+    margin: 0;
+    padding: 4px;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    min-width: 180px;
+    box-shadow: 0 8px 24px rgba(var(--shadow-tint), 0.45);
+    z-index: 10;
+}
+
+.workflow-library-kebab-menu li {
+    list-style: none;
+}
+
+.workflow-library-kebab-menu button {
+    display: block;
+    width: 100%;
+    text-align: left;
+    background: none;
+    color: var(--text-primary);
+    border: none;
+    padding: 7px 10px;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+    font-size: 12px;
+    font-family: inherit;
+    transition: background 0.12s;
+}
+
+.workflow-library-kebab-menu button:hover:not(:disabled) {
+    background: var(--bg-hover);
+}
+
+.workflow-library-kebab-menu button.is-danger {
+    color: var(--c-error);
+}
+
+.workflow-library-kebab-menu button.is-danger:hover:not(:disabled) {
+    background: rgb(from var(--c-error-solid) r g b / 0.12);
+}
+
+.workflow-library-kebab-submenu {
+    padding: 6px 4px 4px;
+    border-top: 1px solid var(--border);
+    margin-top: 4px;
+}
+
+.workflow-library-kebab-label {
+    display: block;
+    padding: 2px 8px 4px;
+    font-size: 10px;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.workflow-library-kebab-visibility {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.workflow-library-kebab-visibility button.is-active {
+    background: rgb(from var(--accent-solid) r g b / 0.12);
+    color: var(--accent);
+    font-weight: 500;
+}
+
+/* ─── Footer ─── */
+
+.workflow-library-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding-top: 12px;
+    margin-top: auto;
+    border-top: 1px solid var(--border);
+}
+
+/* ─── CreateWorkflowModal — importált fájl preview sor ─── */
+
+.workflow-import-preview {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 12px;
+    background: var(--bg-base);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+}
+
+.workflow-import-preview__info {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow: hidden;
+}
+
+.workflow-import-preview__info strong {
+    font-size: 13px;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.workflow-import-preview__meta {
+    font-size: 12px;
+    color: var(--text-muted);
+}

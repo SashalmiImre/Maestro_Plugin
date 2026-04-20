@@ -96,17 +96,22 @@ export async function saveWorkflow(editorialOfficeId, workflowId, compiled, grap
  *
  * @param {string} editorialOfficeId - Szerkesztőség ID
  * @param {string} name - Az új workflow neve (unique az office-on belül)
- * @param {string} [visibility] - Láthatóság (`organization` / `editorial_office`)
- * @returns {Promise<{ workflowId: string, name: string, visibility: string }>}
+ * @param {Object} [options]
+ * @param {string} [options.visibility] - Láthatóság (`public` / `organization` / `editorial_office`)
+ * @param {string} [options.description] - Rövid leírás (max 500 karakter)
+ * @returns {Promise<{ workflowId: string, name: string, visibility: string, description: string|null }>}
  * @throws {Error} Ha a CF hívás sikertelen
  */
-export async function createWorkflow(editorialOfficeId, name, visibility) {
+export async function createWorkflow(editorialOfficeId, name, options = {}) {
+    // Backward-compat: ha a 3. paraméter string, akkor visibility-ként értelmezzük.
+    const opts = typeof options === 'string' ? { visibility: options } : (options || {});
     const body = {
         action: 'create_workflow',
         editorialOfficeId,
         name
     };
-    if (visibility !== undefined) body.visibility = visibility;
+    if (opts.visibility !== undefined) body.visibility = opts.visibility;
+    if (opts.description !== undefined) body.description = opts.description;
 
     const response = await callCF(body);
 
@@ -127,30 +132,46 @@ export async function createWorkflow(editorialOfficeId, name, visibility) {
         if (reason === 'invalid_visibility') {
             throw new Error('Érvénytelen láthatóság érték.');
         }
+        if (reason === 'invalid_description') {
+            throw new Error('Érvénytelen leírás (maximum 500 karakter).');
+        }
         throw new Error(`Workflow létrehozási hiba: ${reason}`);
     }
 
     return {
         workflowId: response.workflowId,
         name: response.name,
-        visibility: response.visibility
+        visibility: response.visibility,
+        description: response.description ?? null
     };
 }
 
 /**
- * Workflow metaadat módosítása (név és/vagy láthatóság).
+ * Workflow metaadat módosítása (név / láthatóság / leírás).
  *
- * Nem módosítja a compiled JSON-t — erre a `saveWorkflow` szolgál. Owner/admin only.
+ * Nem módosítja a compiled JSON-t — erre a `saveWorkflow` szolgál. Owner/admin
+ * a rename + description mezőkre, a visibility módosítás viszont `createdBy === caller`
+ * tulajdonoshoz kötött (#81).
+ *
+ * Scope szűkítésnél (pl. `public → organization`) a CF a `visibility_shrinkage_warning`
+ * reason-nel tér vissza — a hívónak popup-ban meg kell erősíttetnie a usert,
+ * és `force: true` flag-gel újraküldenie.
  *
  * @param {string} editorialOfficeId - Szerkesztőség ID
  * @param {string} workflowId - Módosítandó workflow doc ID
  * @param {Object} changes
  * @param {string} [changes.name] - Új név (opcionális)
  * @param {string} [changes.visibility] - Új láthatóság (opcionális)
- * @returns {Promise<{ workflowId: string, name: string, visibility: string }>}
- * @throws {Error} Ha a CF hívás sikertelen
+ * @param {string|null} [changes.description] - Új leírás (null / üres = törlés, undefined = no-op)
+ * @param {boolean} [changes.force] - Szűkítési warning override
+ * @returns {Promise<{ workflowId: string, name: string, visibility: string, description: string|null }>}
+ * @throws {Error} Ha a CF hívás sikertelen. Scope shrinkage esetén `err.code === 'visibility_shrinkage_warning'`.
  */
-export async function updateWorkflowMetadata(editorialOfficeId, workflowId, { name, visibility } = {}) {
+export async function updateWorkflowMetadata(
+    editorialOfficeId,
+    workflowId,
+    { name, visibility, description, force } = {}
+) {
     const body = {
         action: 'update_workflow_metadata',
         editorialOfficeId,
@@ -158,11 +179,38 @@ export async function updateWorkflowMetadata(editorialOfficeId, workflowId, { na
     };
     if (name !== undefined) body.name = name;
     if (visibility !== undefined) body.visibility = visibility;
+    if (description !== undefined) body.description = description;
+    if (force === true) body.force = true;
 
     const response = await callCF(body);
 
     if (!response.success) {
         const reason = response.reason || 'unknown_error';
+        if (reason === 'visibility_shrinkage_warning') {
+            // Soft warning — a hívónak popup-ban meg kell erősíttetnie,
+            // majd `{ ..., force: true }` flag-gel újra kell hívnia.
+            const count = Array.isArray(response.orphanedPublications)
+                ? response.orphanedPublications.length
+                : (response.count || 0);
+            const err = new Error(
+                `A szűkítés után ${count} kiadvány nem érné el a workflow-t. Megerősítés szükséges.`
+            );
+            err.code = 'visibility_shrinkage_warning';
+            err.from = response.from;
+            err.to = response.to;
+            err.orphanedPublications = response.orphanedPublications || [];
+            err.count = count;
+            err.note = response.note || null;
+            throw err;
+        }
+        if (reason === 'not_workflow_owner') {
+            const err = new Error(
+                'A láthatóság (scope) módosítását csak a workflow tulajdonosa végezheti el.'
+            );
+            err.code = 'not_workflow_owner';
+            err.field = response.field;
+            throw err;
+        }
         if (reason === 'insufficient_role') {
             throw new Error('Nincs jogosultságod a workflow módosításához.');
         }
@@ -171,6 +219,9 @@ export async function updateWorkflowMetadata(editorialOfficeId, workflowId, { na
         }
         if (reason === 'invalid_name') {
             throw new Error('Érvénytelen név.');
+        }
+        if (reason === 'invalid_description') {
+            throw new Error('Érvénytelen leírás (maximum 500 karakter).');
         }
         if (reason === 'invalid_visibility') {
             throw new Error('Érvénytelen láthatóság érték.');
@@ -182,11 +233,12 @@ export async function updateWorkflowMetadata(editorialOfficeId, workflowId, { na
             throw new Error('A workflow nem az adott szerkesztőséghez tartozik.');
         }
         if (reason === 'visibility_downgrade_blocked') {
+            // Legacy alias (#30 előtt). Maradjon itt a backward-compat miatt.
             const count = Array.isArray(response.orphanedPublications)
                 ? response.orphanedPublications.length
                 : 0;
             const suffix = count > 0 ? ` (${count} másik szerkesztőségbeli kiadvány hivatkozik rá)` : '';
-            const err = new Error(`A láthatóság nem szűkíthető le „Szerkesztőség" szintre${suffix}, amíg más szerkesztőségek publikációi hivatkoznak a workflow-ra.`);
+            const err = new Error(`A láthatóság nem szűkíthető le „Szerkesztőség" szintre${suffix}.`);
             err.code = 'visibility_downgrade_blocked';
             err.orphanedPublications = response.orphanedPublications || [];
             throw err;
@@ -197,33 +249,114 @@ export async function updateWorkflowMetadata(editorialOfficeId, workflowId, { na
     return {
         workflowId: response.workflowId,
         name: response.name,
-        visibility: response.visibility
+        visibility: response.visibility,
+        description: response.description ?? null
     };
 }
 
 /**
- * Workflow duplikálás — a forrás compiled JSON klónozása új doc-ba.
+ * Workflow archiválása (soft-delete) — `archivedAt = now()`.
  *
- * A duplikátum örökli a forrás `visibility` értékét; a `createdBy` a caller.
+ * Auth: a `createdBy === caller` tulajdonos VAGY org owner/admin.
+ * Idempotens: már archivált → `{ action: 'already_archived' }`.
  *
- * @param {string} editorialOfficeId - Szerkesztőség ID
- * @param {string} workflowId - Forrás workflow doc ID
- * @param {string} name - Új név (unique az office-on belül)
- * @returns {Promise<{ workflowId: string, name: string, visibility: string }>}
- * @throws {Error} Ha a CF hívás sikertelen
+ * @param {string} editorialOfficeId
+ * @param {string} workflowId
+ * @returns {Promise<{ success: boolean, workflowId: string, action: string, archivedAt: string|null }>}
  */
-export async function duplicateWorkflow(editorialOfficeId, workflowId, name) {
+export async function archiveWorkflow(editorialOfficeId, workflowId) {
     const response = await callCF({
-        action: 'duplicate_workflow',
+        action: 'archive_workflow',
         editorialOfficeId,
-        workflowId,
-        name
+        workflowId
     });
 
     if (!response.success) {
         const reason = response.reason || 'unknown_error';
         if (reason === 'insufficient_role') {
+            throw new Error('Nincs jogosultságod a workflow archiválásához.');
+        }
+        if (reason === 'workflow_not_found') {
+            throw new Error('A workflow nem található.');
+        }
+        if (reason === 'scope_mismatch') {
+            throw new Error('A workflow nem az adott szerkesztőséghez tartozik.');
+        }
+        throw new Error(`Archiválási hiba: ${reason}`);
+    }
+
+    return response;
+}
+
+/**
+ * Workflow visszaállítása archiválásból — `archivedAt = null`.
+ *
+ * Auth azonos az archive action-nel. Idempotens: már aktív → `{ action: 'already_active' }`.
+ *
+ * @param {string} editorialOfficeId
+ * @param {string} workflowId
+ * @returns {Promise<{ success: boolean, workflowId: string, action: string }>}
+ */
+export async function restoreWorkflow(editorialOfficeId, workflowId) {
+    const response = await callCF({
+        action: 'restore_workflow',
+        editorialOfficeId,
+        workflowId
+    });
+
+    if (!response.success) {
+        const reason = response.reason || 'unknown_error';
+        if (reason === 'insufficient_role') {
+            throw new Error('Nincs jogosultságod a workflow visszaállításához.');
+        }
+        if (reason === 'workflow_not_found') {
+            throw new Error('A workflow nem található.');
+        }
+        if (reason === 'scope_mismatch') {
+            throw new Error('A workflow nem az adott szerkesztőséghez tartozik.');
+        }
+        throw new Error(`Visszaállítási hiba: ${reason}`);
+    }
+
+    return response;
+}
+
+/**
+ * Workflow duplikálás — a forrás compiled JSON klónozása új doc-ba.
+ *
+ * #81 óta cross-tenant: az `editorialOfficeId` a TARGET office (a caller
+ * aktív szerkesztősége), a forrás bármilyen scope-ban lehet, amelyhez a
+ * callernek olvasási joga van. A duplikátum MINDIG `editorial_office`
+ * scope-on indul, `createdBy = caller`. Ha a név nincs megadva, a CF
+ * automatikus `(másolat)` / `(másolat 2)` suffix-szel névütközés-mentes
+ * nevet képez.
+ *
+ * @param {string} editorialOfficeId - Cél szerkesztőség ID (target)
+ * @param {string} workflowId - Forrás workflow doc ID
+ * @param {string} [name] - Új név (opcionális; ha hiányzik, auto-suffix)
+ * @returns {Promise<{ workflowId: string, name: string, visibility: string, crossTenant?: boolean }>}
+ * @throws {Error} Ha a CF hívás sikertelen
+ */
+export async function duplicateWorkflow(editorialOfficeId, workflowId, name) {
+    const body = {
+        action: 'duplicate_workflow',
+        editorialOfficeId,
+        workflowId
+    };
+    if (name !== undefined && name !== null) body.name = name;
+
+    const response = await callCF(body);
+
+    if (!response.success) {
+        const reason = response.reason || 'unknown_error';
+        if (reason === 'insufficient_role') {
             throw new Error('Nincs jogosultságod workflow duplikálásához.');
+        }
+        if (reason === 'source_archived') {
+            throw new Error('A forrás workflow archivált, előbb állítsd vissza.');
+        }
+        if (reason === 'source_read_denied') {
+            throw new Error('Nem fér hozzá ehhez a workflow-hoz.');
         }
         if (reason === 'name_taken') {
             throw new Error(`Már létezik workflow ezzel a névvel: „${response.name || name}".`);
@@ -232,7 +365,6 @@ export async function duplicateWorkflow(editorialOfficeId, workflowId, name) {
             throw new Error('Érvénytelen név.');
         }
         if (reason === 'source_not_found' || reason === 'workflow_not_found') {
-            // A CF `workflow_not_found`-ot ad vissza; a `source_not_found` legacy alias.
             throw new Error('A forrás workflow nem található.');
         }
         if (reason === 'scope_mismatch') {
@@ -244,7 +376,8 @@ export async function duplicateWorkflow(editorialOfficeId, workflowId, name) {
     return {
         workflowId: response.workflowId,
         name: response.name,
-        visibility: response.visibility
+        visibility: response.visibility,
+        crossTenant: !!response.crossTenant
     };
 }
 

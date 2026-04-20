@@ -1,9 +1,13 @@
 /**
  * Maestro Dashboard — EditorialOfficeSettingsModal
  *
- * Szerkesztőség kezelő modal (Általános / Csoportok / Workflow fülek). A
- * BreadcrumbDropdown szerkesztőség-dropdownjának „Beállítások" menüpontja
- * nyitja meg. Aktív fül localStorage-ben perzisztált.
+ * Szerkesztőség kezelő modal (Általános / Csoportok fülek). A BreadcrumbDropdown
+ * szerkesztőség-dropdownjának „Beállítások" menüpontja nyitja meg. Aktív fül
+ * localStorage-ben perzisztált.
+ *
+ * A workflow-k kezelése (#82–#86) a közös `WorkflowLibraryPanel` modalba
+ * költözött — a breadcrumb „Workflow" chip-jéből érhető el, scope-független
+ * böngészéssel (3-way visibility: public / organization / editorial_office).
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -15,13 +19,11 @@ import Tabs from '../Tabs.jsx';
 import AnimatedAutoHeight from '../AnimatedAutoHeight.jsx';
 import EditorialOfficeGeneralTab from './EditorialOfficeGeneralTab.jsx';
 import EditorialOfficeGroupsTab from './EditorialOfficeGroupsTab.jsx';
-import EditorialOfficeWorkflowTab from './EditorialOfficeWorkflowTab.jsx';
 import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 
 const TAB_DEFS = [
     { id: 'general', label: 'Általános' },
-    { id: 'groups', label: 'Csoportok' },
-    { id: 'workflow', label: 'Workflow' }
+    { id: 'groups', label: 'Csoportok' }
 ];
 
 const ACTIVE_TAB_STORAGE_KEY = 'maestro.editorialOfficeSettingsActiveTab';
@@ -53,11 +55,10 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
 
     const [activeTab, setActiveTab] = useState(() => initialTab || getStoredTab());
 
-    // --- Groups + Workflow tab-ok adata (a shell tölti, a tabok propon kapják) ---
+    // --- Groups tab adata (a shell tölti, a tab propon kapja) ---
     const [groups, setGroups] = useState([]);
     const [groupMemberships, setGroupMemberships] = useState([]);
     const [officeMembers, setOfficeMembers] = useState([]);
-    const [workflows, setWorkflows] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [loadError, setLoadError] = useState('');
 
@@ -98,13 +99,7 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
         if (gen === 1) setIsLoading(true);
 
         try {
-            // Workflows query: csak saját office workflow-i (visibility-től
-            // függetlenül — legacy null és `organization` own-office is ide esik).
-            // Szándékosan szcópolt: az `organization` láthatóság a Plugin-oldali
-            // cross-office fogyasztás miatt létezik (DataContext Query.or), a
-            // kezelés mindig az ownership office `Beállítások > Workflow` fülén
-            // történik — így a scope_mismatch footgun elkerülve.
-            const [groupsResult, membershipsResult, officeMembersResult, workflowsResult] = await Promise.all([
+            const [groupsResult, membershipsResult, officeMembersResult] = await Promise.all([
                 databases.listDocuments({
                     databaseId: DATABASE_ID,
                     collectionId: COLLECTIONS.GROUPS,
@@ -128,14 +123,6 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
                         Query.equal('editorialOfficeId', editorialOfficeId),
                         Query.limit(200)
                     ]
-                }),
-                databases.listDocuments({
-                    databaseId: DATABASE_ID,
-                    collectionId: COLLECTIONS.WORKFLOWS,
-                    queries: [
-                        Query.equal('editorialOfficeId', editorialOfficeId),
-                        Query.limit(100)
-                    ]
                 })
             ]);
 
@@ -144,7 +131,6 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
             setGroups(groupsResult.documents);
             setGroupMemberships(membershipsResult.documents);
             setOfficeMembers(officeMembersResult.documents);
-            setWorkflows(workflowsResult.documents);
         } catch (err) {
             if (gen !== loadGenRef.current) return;
             console.error('[EditorialOfficeSettingsModal] Adatok betöltése sikertelen:', err);
@@ -208,16 +194,6 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
                             groups={groups}
                             groupMemberships={groupMemberships}
                             officeMembers={officeMembers}
-                            isLoading={isLoading}
-                            isOrgAdmin={isOrgAdmin}
-                            onReload={loadData}
-                        />
-                    )}
-
-                    {activeTab === 'workflow' && (
-                        <EditorialOfficeWorkflowTab
-                            office={office}
-                            workflows={workflows}
                             isLoading={isLoading}
                             isOrgAdmin={isOrgAdmin}
                             onReload={loadData}

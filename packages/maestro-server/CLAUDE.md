@@ -81,6 +81,9 @@ maestro-server/
     ├── cleanup-orphaned-thumbnails/   ← Árva thumbnail fájlok takarítása (hetente, Storage ↔ DB)
     │   ├── package.json
     │   └── src/main.js
+    ├── cleanup-archived-workflows/    ← Soft-delete-elt workflow-k hard-delete-je (naponta, 7 napos retention, snapshot-nélküli pub blokkoló)
+    │   ├── package.json
+    │   └── src/main.js
     ├── migrate-legacy-paths/          ← Régi útvonalak batch migrációja (manuális, DRY_RUN)
     │   ├── package.json
     │   └── src/main.js
@@ -104,6 +107,7 @@ maestro-server/
 | `cascade-delete` | Cascade Delete | node-18.0 | 15s | `articles/publications.*.delete` |
 | `cleanup-orphaned-locks` | Cleanup Orphaned Locks | node-18.0 | 30s | Schedule: `0 3 * * *` |
 | `cleanup-orphaned-thumbnails` | Cleanup Orphaned Thumbnails | node-18.0 | 120s | Schedule: `0 4 * * 0` |
+| `cleanup-archived-workflows` | Cleanup Archived Workflows | node-18.0 | 60s | Schedule: `0 5 * * *` |
 | `migrate-legacy-paths` | Migrate Legacy Paths | node-18.0 | 120s | Manuális (HTTP) |
 | `invite-to-organization` | Invite To Organization | node-18.0 | 15s | Kliens hívás (HTTP, `execute: ["users"]`) |
 
@@ -131,6 +135,7 @@ maestro-server/
 | `cascade-delete` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `USER_VALIDATIONS_COLLECTION_ID`, `SYSTEM_VALIDATIONS_COLLECTION_ID`, `DEADLINES_COLLECTION_ID`, `LAYOUTS_COLLECTION_ID`, `THUMBNAILS_BUCKET_ID` |
 | `cleanup-orphaned-locks` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID` |
 | `cleanup-orphaned-thumbnails` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `THUMBNAILS_BUCKET_ID` |
+| `cleanup-archived-workflows` | `DATABASE_ID`, `WORKFLOWS_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, opcionálisan `ARCHIVED_RETENTION_DAYS` (default 7) |
 | `migrate-legacy-paths` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `DRY_RUN` |
 | `invite-to-organization` | `DATABASE_ID`, `ORGANIZATIONS_COLLECTION_ID`, `ORGANIZATION_MEMBERSHIPS_COLLECTION_ID`, `EDITORIAL_OFFICES_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `ORGANIZATION_INVITES_COLLECTION_ID`, `GROUPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID` (csak a delete ágakhoz kell; hiánya esetén a `delete_organization` / `delete_editorial_office` / `delete_group` action 500 `misconfigured`-et ad, a többi action nem érintett), `ARTICLES_COLLECTION_ID` (csak `delete_group`-hoz kell a contributor scan miatt; hiánya esetén az action 500 `misconfigured`-et ad) |
 
@@ -148,6 +153,7 @@ maestro-server/
 | `cascade-delete` | `databases.read`, `databases.write`, `files.read`, `files.write` |
 | `cleanup-orphaned-locks` | `databases.read`, `databases.write`, `users.read` |
 | `cleanup-orphaned-thumbnails` | `databases.read`, `files.read`, `files.write` |
+| `cleanup-archived-workflows` | `databases.read`, `databases.write` |
 | `migrate-legacy-paths` | `databases.read`, `databases.write` |
 | `invite-to-organization` | `databases.read`, `databases.write`, `users.read` |
 
@@ -269,6 +275,10 @@ Naponta 3:00 UTC. Zárolások ellenőrzése: owner létezik-e, `$updatedAt` > 24
 
 Hetente vasárnap 4:00 UTC. Storage bucket ↔ DB `thumbnails` mezők összehasonlítása. Nem hivatkozott fájlok törlése. Hibás JSON → abort (nem töröl semmit).
 
+### cleanup-archived-workflows
+
+Naponta 5:00 UTC. A soft-delete-elt workflow-k (`archivedAt` a user által beállítva az `archive_workflow` action-ön keresztül) közül a `ARCHIVED_RETENTION_DAYS` napnál (default 7) régebbieket hard-delete-eli. **Blocking scan**: per-workflow lekéri az összes hivatkozó publikációt (`publications.workflowId === wf.$id`) és szűri a `compiledWorkflowSnapshot`-tal rendelkezőket — ha legalább egy **snapshot-nélküli** publikáció referálja, skip (a nem-aktivált vagy legacy snapshot-nélküli aktív pub a live doc-ra támaszkodik). Aktivált, snapshot-tal védett publikációk NEM blokkolnak (a snapshot leválasztja a runtime-ot a live doc-tól, ld. Feladat #37). Korai blocker-cap: 5 blocker/workflow (elég a skip döntéshez). Retention env var-ral konfigurálható.
+
 ### migrate-legacy-paths
 
 Manuális futtatás. `DRY_RUN=true` alapértelmezett — csak logol. Publications: `/Volumes/...` → kanonikus. Articles: abszolút filePath → relatív.
@@ -279,7 +289,7 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 
 **Bemeneti payload**:
 ```json
-{ "action": "bootstrap_organization" | "create_organization" | "create" | "accept" | "list_my_invites" | "decline_invite" | "leave_organization" | "add_group_member" | "remove_group_member" | "create_workflow" | "update_workflow" | "update_workflow_metadata" | "delete_workflow" | "duplicate_workflow" | "bootstrap_workflow_schema" | "bootstrap_publication_schema" | "delete_organization" | "delete_editorial_office" | "backfill_tenant_acl", ... }
+{ "action": "bootstrap_organization" | "create_organization" | "create" | "accept" | "list_my_invites" | "decline_invite" | "leave_organization" | "add_group_member" | "remove_group_member" | "create_workflow" | "update_workflow" | "update_workflow_metadata" | "delete_workflow" | "duplicate_workflow" | "archive_workflow" | "restore_workflow" | "bootstrap_workflow_schema" | "bootstrap_publication_schema" | "delete_organization" | "delete_editorial_office" | "backfill_tenant_acl", ... }
 ```
 
 **Biztonsági megjegyzés**: Korábban létezett egy `organization-membership-guard` trigger CF, amely egy `modifiedByClientId === 'server-guard'` sentinellel engedélyezte az invite-eredetű membership-eket. Ez **kliens-forgeable** volt — bármely hitelesített user beállíthatta a payload-ban. A Codex adversarial review jelezte a kritikus sebezhetőséget, és a javítás ACL-alapú védelemre váltott (B.5 utolsó iteráció, 2026-04-07).
@@ -478,11 +488,12 @@ Két új attribútum a `workflows` collection-ön:
 - `validate-article-creation` CF `loadValidStates(parentPublication)` — ugyanez a preferencia: a snapshot-ból vett states set elfogadja a Plugin által a pillanatkép alapján választott initial state-et akkor is, ha a live workflow-ból már hiányzik.
 - `article-update-guard` CF (post-event safety net) `getWorkflowForPublication()` — snapshot preferencia a teljes stack konzisztenciájáért: plugin, write-path CF és guard mind ugyanazt a workflow verziót látják.
 
-**Új CF action-ök (#30)**:
-- `update_workflow_metadata` — `{ editorialOfficeId, workflowId, name?, visibility? }`, org admin/owner auth, office scope match, name uniqueness per office, visibility whitelist. **Downgrade blocking scan**: `organization` → `editorial_office` váltásnál a szervezet más office-aiban lévő publikációkat ellenőrzi (`publications.workflowId === workflowId` + `organizationId === orgId` + `editorialOfficeId !== callerOffice`) — ha van, `visibility_downgrade_blocked` + `orphanedPublications: [{$id, name, editorialOfficeId}]`. Analóg cap/pagination mint a `delete_workflow` scan.
-- `duplicate_workflow` — `{ editorialOfficeId, workflowId, name }`, org admin/owner auth, a `compiled` JSON másolódik, `visibility` az eredetiről öröklődik (whitelist fallback), `createdBy = caller`, `version = 1`.
-- `delete_workflow` — `{ editorialOfficeId, workflowId }`, org admin/owner auth. **Blocking scan**: a workflow-ra hivatkozó publikációk listája (`publications.workflowId === workflowId`) — ha van, `workflow_in_use` + `usedByPublications: [...]`. Hatókör: ha `visibility='organization'`, az egész org minden office-át scan-eli; egyébként csak a saját office-t. Cap: `MAX_REFERENCES_PER_SCAN=50` (korai kilépés), `CASCADE_BATCH_LIMIT=100` (paginált listDocuments).
-- `create_workflow` kiegészítés: új row `visibility` (default `editorial_office`) + `createdBy = caller`.
+**Új CF action-ök (#30, #80, #81)**:
+- `update_workflow_metadata` — `{ editorialOfficeId, workflowId, name?, visibility?, description?, force? }`, org admin/owner auth, office scope match, name uniqueness per office, visibility whitelist. **#80 szűkítés warning**: a `#30`-as `visibility_downgrade_blocked` hard block lecserélve `visibility_shrinkage_warning + force: true` soft warning flow-ra — a kliens popup-ban megerősítteti a usert és `force: true` flag-gel újraküldi. **#81 owner-guard**: a `visibility` változtatást csak a `createdBy === callerId` tulajdonos végezheti (rename/description továbbra is org admin/owner). A `description` field nullable, a trim-elt üres string `null` szándékos törlést jelent (`undefined` = no-op). ACL újraszámolás (`buildWorkflowAclPerms`) minden visibility-váltásnál.
+- `duplicate_workflow` — `{ editorialOfficeId, workflowId, name? }`, **#81 cross-tenant**. Az `editorialOfficeId` mostantól a TARGET office (a caller aktív office-a), a forrás bárhol lehet ha a caller olvashatja (scope alapján). A duplikátum MINDIG `editorial_office` scope-on indul, `createdBy = caller`. Auto-suffix a name-hez (`(másolat)`, `(másolat 2)`, …) ha a user nem ad explicit nevet és van ütközés (cap 20). Archivált forrás: 400 `source_archived`.
+- `archive_workflow` + `restore_workflow` (#81) — `{ editorialOfficeId, workflowId }`, közös handler (`isArchive` flag). Auth: `createdBy === callerId` VAGY org owner/admin fallback. Soft-delete: `archivedAt = now()` / `null`. Idempotens: már archivált → `already_archived`, már aktív → `already_active`. A doc read ACL-je változatlan marad, hogy a még futó publikáció UI-ja tovább lássa.
+- `delete_workflow` — `{ editorialOfficeId, workflowId }`, org owner/admin auth. **Blocking scan**: a workflow-ra hivatkozó publikációk listája (`publications.workflowId === workflowId`) — ha van, `workflow_in_use` + `usedByPublications: [...]`. Hatókör: ha `visibility='organization'`, az egész org minden office-át scan-eli; egyébként csak a saját office-t. Cap: `MAX_REFERENCES_PER_SCAN=50` (korai kilépés), `CASCADE_BATCH_LIMIT=100` (paginált listDocuments). A hard-delete a `cleanup-archived-workflows` scheduled CF-en keresztül automatizált — a 7 napon túl archivált workflow-kra.
+- `create_workflow` kiegészítés (#30): új row `visibility` (default `editorial_office`) + `createdBy = caller` + `organization` / `public` scope választás support.
 
 **Plugin 2-way fetch query** (`DataContext.jsx`):
 ```js
@@ -493,6 +504,52 @@ Query.or([
 ```
 
 A Realtime handler `isVisible` logikával ugyanezt a kétágú szűrést alkalmazza minden `.create`/`.update` eseményre (legacy null → `editorial_office` fallback).
+
+### Workflow életciklus + scope refactor (#80, 2026-04-20)
+
+Három irányú scope-modell + doc-szintű Team ACL + archiválás (soft-delete) + fulltext keresés. A Realtime cross-tenant leak-et ugyanaz a Team ACL pattern zárja le, mint a Fázis 2 tenant collection-öké (#60).
+
+**Adatmodell bővítés**:
+
+| Mező | Típus | Default | Célja |
+|------|-------|---------|-------|
+| `visibility` | enum (`organization`, `editorial_office`, `public`) | `editorial_office` | Három szintű scope — a `public` új érték. |
+| `description` | string (500, nullable) | null | Rövid leírás a library panel cardjára. |
+| `archivedAt` | datetime (nullable) | null | Soft-delete időpont; `restoreWorkflow` null-ozza. Hard-delete cron trigger 7 nap után. |
+| `name_fulltext`, `description_fulltext` | fulltext index | — | Szabadszavas kereső a `WorkflowLibraryPanel`-ben. |
+
+**Doc-szintű ACL** — `teamHelpers.buildWorkflowAclPerms(visibility, orgId, officeId)`:
+- `public` → `read("users")` (minden authentikált felhasználó).
+- `organization` → `read("team:org_${orgId}")`.
+- `editorial_office` → `read("team:office_${officeId}")`.
+- Write-jog a CF API key-jé (collection-szintű Update/Delete szerep NEM kap `users`-t). A tulajdonos-ellenőrzést a CF action-ök végzik (`createdBy === callerId`), nem ACL-alapon — ez kell ahhoz, hogy a duplikáló / archiváló CF flow-k az API key-vel írhassanak.
+- **`rowSecurity: true` kötelező** a `workflows` collection-ön (különben a collection-szintű olvasás felülírja a doc ACL-t).
+
+**CF hívási pontok, ahol a doc ACL-t ki kell írni** (mind `buildWorkflowAclPerms(...)`-et kap a `createWorkflowDoc` / `updateDocument` 5. paraméterén):
+- `bootstrap_organization` — seed default workflow, `WORKFLOW_VISIBILITY_DEFAULT = 'editorial_office'` scope-pal.
+- `create_editorial_office` — új office seed workflow, szintén `editorial_office` default.
+- `create_workflow` — felhasználó által kért scope (a `visibility` payload érvényes értéke vagy fallback default).
+- `duplicate_workflow` — örökölt scope a source workflow-ból (whitelist fallback-kel).
+- `update_workflow_metadata` — scope-váltáskor újraszámolt ACL, `databases.updateDocument(..., perms)` 5. paramétere.
+
+**`bootstrap_workflow_schema` (#80 bővítés)**:
+- `visibility` enum attribútum: `createEnumAttribute(['organization', 'editorial_office', 'public'])`. Meglévő 2-elemű enum-on 409 → fallback `updateEnumAttribute('public')` hozzáadással. Ha az is elbukik, skip + a response `skipped[]`-be kerül (manuális Console-bump szükséges).
+- `description` (string 500, nullable), `archivedAt` (datetime, nullable) létrehozás `createAttribute` 409-fallback-kel.
+- Fulltext indexek `name_fulltext` + `description_fulltext` az attribútumok `available` státusza után. Appwrite aszinkron feldolgozása miatt az első futás 400-zal elbukhat a még nem elérhető attribútumokon — ilyenkor a response `indexesPending: true`, és a user 10 másodperc múlva újra futtathatja (idempotens).
+- Válasz: `{ success: true, created: [...], updated: [...], skipped: [...], indexesPending: bool, note? }`.
+
+**`update_workflow_metadata` scope-váltás szemantika (#80 átírás)**:
+- Korábbi (#30) `visibility_downgrade_blocked` hard block lecserélve `visibility_shrinkage_warning` soft warning + `force: true` override flow-ra.
+- Szűkítés (`public → org/office`, `organization → editorial_office`): a CF scan-eli az érintett publikációkat, és ha van `orphanedPublications` lista, `{ success: false, reason: 'visibility_shrinkage_warning', from, to, orphanedPublications, count, note }` választ ad. A kliens popup-ban megkérdezi, majd `force: true` flag-gel újraküldi.
+- Tágítás (`editorial_office → org/public`, `organization → public`): nincs warning, ACL egyszerűen átíródik. A kliens a UI-ban info-tooltipot mutat („mostantól szélesebb kör látja").
+- Minden scope-módosításnál `buildWorkflowAclPerms(...)`-szel újraszámolt permission-t a `databases.updateDocument(..., perms)` 5. paramétere kap.
+
+**Deploy checklist (egyszeri, manuális Console)**:
+1. `invite-to-organization` CF újradeploy (új `teamHelpers.js` + `main.js`) — `--code functions/invite-to-organization` teljes feltöltés.
+2. `bootstrap_workflow_schema` action futtatás owner-rel. Ha `indexesPending: true`, várj 10s-t és futtasd újra.
+3. Appwrite Console → `workflows` collection: `rowSecurity` → **true**, collection Permissions-ből a globális `read("users")` eltávolítása. Update/Delete role üresen marad (CF API key-vel íródik).
+4. Dev-adatbázis workflow-ok eldobhatók; `bootstrap_organization` újraseedeli a default-okat helyes ACL-lel.
+5. 2-tab smoke: A org workflow create/update → B org kliens Realtime subscribe-ján NEM jön WS payload.
 
 ---
 
