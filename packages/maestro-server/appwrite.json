@@ -248,7 +248,9 @@
                 "databases.write",
                 "documents.read",
                 "documents.write",
-                "users.read"
+                "users.read",
+                "teams.read",
+                "teams.write"
             ],
             "events": [],
             "specification": "s-0.5vcpu-512mb",
