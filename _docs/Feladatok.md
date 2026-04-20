@@ -181,34 +181,41 @@ tags: [feladatok]
     - **Env var-ok** (`cleanup-archived-workflows`): `DATABASE_ID`, `WORKFLOWS_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, opcionálisan `ARCHIVED_RETENTION_DAYS`.
     - **Deploy lépések**: (1) `invite-to-organization` CF újradeploy (új action-ök), (2) `cleanup-archived-workflows` első deploy a `maestro-server/appwrite.json`-ból (`appwrite functions create-deployment`). A scheduled CF a regisztráció után automatikusan fut a beállított cron szerint; első futtatás manuálisan is triggerelhető (Appwrite Console → Execute).
 
-- [ ] 82. **`WorkflowLibraryPanel` közös komponens** (modal):
+- [x] 82. **`WorkflowLibraryPanel` közös komponens** (modal): (2026-04-20)
     - Props: `context: 'breadcrumb' | 'publication-assignment'`, `onSelect(workflowId)`, `onClose`.
     - Szűrők: scope chip-ek (office/org/public multi-select), `updatedAt` date range, szabadszavas kereső (`name` + `description`), rendezés (név / dátum).
     - Card: név, leírás, „Utoljára mentve" timestamp, szerző, scope-chip, „Saját" / „Idegen" jelölés.
     - Akciók card-on: „Megnyit" (saját → edit route; idegen → read-only preview); „Duplikál" (mindenkinek elérhető); „Archivál" (csak saját); „Új workflow" gomb a panel fejlécében.
     - Realtime: `subscribeRealtime` a `workflows` collection-re a `realtimeBus.js`-en keresztül (kötelező pattern).
+    - **Implementálva**: `src/components/workflows/WorkflowLibraryPanel.jsx` (676 sor) + `CreateWorkflowModal.jsx` + `css/features/workflow-library.css` (381 sor). A BreadcrumbHeader chip-je + a GeneralTab workflow-picker gombja egyaránt ezt a modal-t nyitja.
 
-- [ ] 83. **Route refaktor + breadcrumb chip**:
+- [x] 83. **Route refaktor + breadcrumb chip**: (2026-04-20)
     - Új: `/workflows/:id` (edit), `/workflows/new` (üres designer). `DataProvider` wrapping marad.
     - Legacy `/admin/office/:officeId/workflow/:workflowId` → redirect `/workflows/:id`-re (a `WorkflowDesignerRedirect` komponens bővítése).
     - `BreadcrumbHeader.jsx`: új „Workflows" chip a breadcrumb után — **vizuálisan szeparált**, nem része a tenant-láncnak. Kattintás → `WorkflowLibraryPanel` (context='breadcrumb'), kiválasztás → `navigate('/workflows/:id')`.
+    - **Implementálva**: `App.jsx` 4 új route — `/workflows/:workflowId` (designer), `/workflows/new` (új workflow belépési pont), plusz 2 legacy redirect (`/admin/office/:officeId/workflow` → `WorkflowDesignerRedirect`, `/admin/office/:officeId/workflow/:workflowId` → inline `LegacyWorkflowRedirect` komponens, param preservál). Új fájl: `features/workflowDesigner/WorkflowNewRoute.jsx` — modal-alapú belépési pont `modalCount` figyeléssel (mégse → `/`-ra, siker → `/workflows/:id`-re a modal-on belül). `WorkflowDesignerPage.jsx` `useParams()`-ból csak `workflowId`-t vesz, az office ID a betöltött doc-ból (`workflowOwnerOfficeId`) származik — így idegen office-beli workflow olvasása is működik. `WorkflowDesignerRedirect` target-je `/workflows/:id`-re állítva. Minden `navigate()` hívó (`WorkflowLibraryPanel`, `CreateWorkflowModal`, `WorkflowDesignerPage.handleDuplicate/handleSwitchWorkflow`) az új URL-re mutat. `organization/GeneralTab.jsx` „Workflow tervező →" gombja helyett scope-váltás + dashboard nyitás („Megnyitás →"), a workflow böngészőt a breadcrumb chip nyitja.
+    - **Harden pass (5 iteráció, 2026-04-20)**: `WorkflowNewRoute` `canCreateWorkflow` role-gate (csak owner/admin az aktív office org-jában kapja meg a modal-t; member user explicit toast + `navigate('/', { replace: true })`). `WorkflowDesignerRedirect` magyar `localeCompare('hu')` kliens-oldali sort visszaállítva (query-szinten nincs collation). Scope-init deep-link race: fresh session + direkt URL `/workflows/new`-re nem redirect-el, amíg a ScopeProvider memberships-alapú auto-pick lefut (loading spinner render). StrictMode double-mount guardok (`hasOpenedRef`, `hasNotifiedRef`). Visszatartva (Iter 5 adversarial push-back): cross-office admin auto-scope-switch + `/workflows/new` explicit office-picker — feature-add, nem hardening.
 
-- [ ] 84. **Designer oldal átalakítás** (`WorkflowDesignerPage.jsx`):
+- [x] 84. **Designer oldal átalakítás** (`WorkflowDesignerPage.jsx`): (2026-04-20)
     - Title bar: név inline-edit, description textarea, `visibility` toggle (ownership guard — csak tulajdonos módosíthatja), „Utoljára mentve" timestamp.
     - **Read-only mód** idegen workflow-n: canvas view-only, toolbar disabled, hangsúlyos „Duplikál & Szerkeszt" CTA (új példányt nyit a szerkesztőben).
     - **Save As flow**: ha read-only view-ban mentést kísérel (Ctrl+S / mentés gomb), dialog: „Ez a workflow nem a tiéd. Más néven mented?" → új workflow `editorial_office` scope-pal, tulajdonos = caller.
     - Scope-szűkítés popup copy: „A már futó publikációk továbbra is használhatják (snapshot védi őket), a korábbi másolatok megmaradnak, de a szűkített scope-on kívüli szerkesztőségek már nem indíthatnak új kiadványt ezzel a workflow-val. Biztos szűkíted?"
     - Scope-tágítás info-tooltip (nem-blokkoló): „Mostantól szélesebb kör is látja és használhatja ezt a workflow-t."
+    - **Implementálva**: `WorkflowDesignerPage.jsx` `isReadOnly` state, canvas `readOnly` prop, a toolbar mentés gomb helyén „Duplikál & szerkeszt" CTA (2 helyen: toolbar + üres-state). `duplicateWorkflow` CF hívás → navigálás az új doc-ra.
+    - **Harden pass (2026-04-20)**: `isReadOnly` kettős feltétel — `isForeignOffice || isInsufficientRole` (office-boundary + role-gate). Foreign-office esetén org admin is read-only módba esik (szándékolt: a termék duplicate-to-edit UX-et tart fenn cross-office accidental edit ellen). Toolbar akciók (`+ Új workflow`, `Duplikál & szerkeszt`, workflow-switcher) `canCreateInActiveOrg`-gated — member-user-nek elrejtve a halál-végű CTA-k (`create_workflow` / `duplicate_workflow` CF owner/admin-only). Read-only label tooltip conditional (`isForeignOffice` vs insufficient role — pontos üzenet). `snapshotUsageCount` memo scope-gated: csak akkor számol, ha `workflowOwnerOfficeId === activeEditorialOfficeId` (idegen office `publications`-éből derivált banner félrevezető lenne). Workflow switcher dropdown scope-gated: nem jelenik meg idegen workflow nézetben (a lista az aktív scope-ra szűrt).
 
-- [ ] 85. **Publikáció integráció** (`GeneralTab.jsx`):
+- [x] 85. **Publikáció integráció** (`GeneralTab.jsx`): (2026-04-20)
     - A jelenlegi workflow `<select>` dropdown cseréje: „Workflow kiválasztása" gomb + jelenleg aktív workflow-chip (név + scope jelzés).
     - Gomb → ugyanaz a `WorkflowLibraryPanel` (context='publication-assignment'). `onSelect` patcheli a `publications.workflowId`-t (meglévő CF flow változatlan).
     - Aktivált publikációnál letiltva (jelenlegi logika marad), a chip read-only látszik.
+    - **Implementálva**: `GeneralTab.jsx` `handleOpenWorkflowLibrary` + `handleWorkflowSelect`. Archivált workflow-fallback `getDocument()`-tel (a GeneralTab nem törik, ha a publikáció archivált workflow-ra mutat). `publication-workflow-picker__chip is-${visibility}` scope-chip. Új CSS: `css/features/publication-settings.css` (69 sor kiegészítés).
 
-- [ ] 86. **Settings cleanup**:
+- [x] 86. **Settings cleanup**: (2026-04-20)
     - `EditorialOfficeWorkflowTab.jsx` + kapcsolódó selector kód törlés. Az `EditorialOfficeSettingsModal` tab-listája rövidül (Általános + Csoportok marad).
     - `bootstrap_organization` CF default workflow seeding megmarad (office-enként egy default).
     - Minden belső navigáció, ami korábban Settings → Workflow tabra mutatott (pl. empty state linkek, reference dokok), átállítva a breadcrumb chip-re.
+    - **Implementálva**: `EditorialOfficeWorkflowTab.jsx` törölve (−522 sor), a modal most csak `EditorialOfficeGeneralTab` + `EditorialOfficeGroupsTab` tab-okat tart. A `bootstrap_organization` seeding változatlan.
 
 - [ ] 87. **Smoke test + adversarial**:
     - 2-tab Realtime: scope-váltás egyik user-nél → a másik library panel-jében azonnal látszik/eltűnik (a `rowSecurity: true` + doc-ACL pattern miatt csak a jogosult kliensek kapják meg a WS payload-ot).

@@ -1,33 +1,84 @@
 /**
- * Maestro Dashboard — Workflow Designer Redirect
+ * Maestro Dashboard — Workflow Designer legacy URL redirectek
  *
- * Fázis 7 backward-compat: a régi `/admin/office/:officeId/workflow` URL
- * automatikusan az adott szerkesztőség első workflow-jára irányít át
- * (név szerint rendezve). Ez a komponens a `DataContext.workflows`-ból
- * olvas — ez a state a DataProvider fetch-re tölt be (Fázis 4).
+ * Két komponens egy fájlban, cél-specifikus:
  *
- * Ha nincs workflow a szerkesztőségben, hibaüzenetet jelenít meg.
+ * 1) `WorkflowDesignerRedirect` — a régi `/admin/office/:officeId/workflow`
+ *    URL (workflowId nélkül) az URL-ben szereplő office első workflow-jára
+ *    ugrik (név szerint rendezve). A DataContext-et szándékosan NEM használjuk:
+ *    annak listája az aktív scope-ra szűrt, így egy másik office-ba mutató
+ *    legacy bookmark üresnek tűnne. Közvetlen Appwrite lekérdezéssel az URL
+ *    office-ára keresünk (ACL-t az Appwrite enforce-olja).
+ *
+ * 2) `LegacyWorkflowRedirect` — a régi `/admin/office/:officeId/workflow/:id`
+ *    URL a workflowId-t átemeli az új `/workflows/:id`-re; az officeId-re
+ *    nincs szükség (a doc maga tudja).
  */
 
-import React, { useMemo } from 'react';
-import { Navigate, useParams, Link } from 'react-router-dom';
-import { useData } from '../../contexts/DataContext.jsx';
+import React, { useEffect, useState } from 'react';
+import { Navigate, useParams } from 'react-router-dom';
+import { Databases, Query } from 'appwrite';
+import { getClient } from '../../contexts/AuthContext.jsx';
+import { DATABASE_ID, COLLECTIONS } from '../../config.js';
+import { workflowPath } from '../../routes/paths.js';
+import BackToDashboardLink from './BackToDashboardLink.jsx';
 import './workflowDesigner.css';
 
 export default function WorkflowDesignerRedirect() {
     const { officeId } = useParams();
-    const { workflows, isLoading } = useData();
+    const [state, setState] = useState({ status: 'loading', targetId: null, error: null });
 
-    // Scope-szűrés + név szerinti rendezés (a fetch már office-scope-ban
-    // tölt, de redundáns védelem: több provider példány esetén is helyes.)
-    const sortedWorkflows = useMemo(() => {
-        return (workflows || [])
-            .filter(wf => wf.editorialOfficeId === officeId)
-            .slice()
-            .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'hu'));
-    }, [workflows, officeId]);
+    useEffect(() => {
+        if (!officeId) {
+            setState({ status: 'error', targetId: null, error: 'Hiányzó szerkesztőség azonosító.' });
+            return;
+        }
+        let cancelled = false;
+        (async () => {
+            try {
+                const databases = new Databases(getClient());
+                // Appwrite `orderAsc` bytewise rendez — a magyar ékezetes nevek
+                // (Árvíz, Értekezés, Ősz…) nem a nyelvi várakozás szerint esnek
+                // sorba. A legacy viselkedés (ld. pre-refactor client-side sort)
+                // magyar collation-t várt, ezért itt is `localeCompare(..., 'hu')`-t
+                // használunk. A limit feloldva, mert az első doc kiválasztása a
+                // kliensoldali sort után történik.
+                const result = await databases.listDocuments({
+                    databaseId: DATABASE_ID,
+                    collectionId: COLLECTIONS.WORKFLOWS,
+                    queries: [
+                        Query.equal('editorialOfficeId', officeId),
+                        Query.isNull('archivedAt'),
+                        Query.limit(100)
+                    ]
+                });
+                if (cancelled) return;
+                const sorted = [...result.documents].sort(
+                    (a, b) => (a.name || '').localeCompare(b.name || '', 'hu')
+                );
+                const first = sorted[0];
+                if (first) {
+                    setState({ status: 'redirect', targetId: first.$id, error: null });
+                } else {
+                    setState({ status: 'empty', targetId: null, error: null });
+                }
+            } catch (err) {
+                if (cancelled) return;
+                setState({
+                    status: 'error',
+                    targetId: null,
+                    error: err?.message || 'Workflow lekérdezési hiba.'
+                });
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [officeId]);
 
-    if (isLoading) {
+    if (state.status === 'redirect') {
+        return <Navigate to={workflowPath(state.targetId)} replace />;
+    }
+
+    if (state.status === 'loading') {
         return (
             <div className="workflow-designer-page">
                 <div className="loading-overlay">
@@ -38,21 +89,21 @@ export default function WorkflowDesignerRedirect() {
         );
     }
 
-    if (sortedWorkflows.length === 0) {
-        return (
-            <div className="workflow-designer-page">
-                <div className="workflow-designer-scaffold">
-                    <Link to="/" className="auth-link" style={{ marginBottom: 16, display: 'inline-block' }}>
-                        ← Vissza a kiadványokhoz
-                    </Link>
-                    <p style={{ color: 'var(--c-error, #f87171)' }}>
-                        Nincs workflow ehhez a szerkesztőséghez. Kérj segítséget a rendszergazdától.
-                    </p>
-                </div>
+    return (
+        <div className="workflow-designer-page">
+            <div className="workflow-designer-scaffold">
+                <BackToDashboardLink />
+                <p style={{ color: 'var(--c-error, #f87171)' }}>
+                    {state.status === 'empty'
+                        ? 'Nincs workflow ehhez a szerkesztőséghez. Kérj segítséget a rendszergazdától.'
+                        : state.error}
+                </p>
             </div>
-        );
-    }
+        </div>
+    );
+}
 
-    const firstWorkflowId = sortedWorkflows[0].$id;
-    return <Navigate to={`/admin/office/${officeId}/workflow/${firstWorkflowId}`} replace />;
+export function LegacyWorkflowRedirect() {
+    const { workflowId } = useParams();
+    return <Navigate to={workflowPath(workflowId)} replace />;
 }

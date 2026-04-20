@@ -30,6 +30,7 @@ import { useModal } from '../../contexts/ModalContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
 import { createWorkflow, saveWorkflow } from '../../features/workflowDesigner/api.js';
 import { parseImportFile } from '../../features/workflowDesigner/exportImport.js';
+import { workflowPath } from '../../routes/paths.js';
 
 const NAME_MAX = 128;
 
@@ -128,7 +129,7 @@ export default function CreateWorkflowModal({ editorialOfficeId, navigateOnSucce
 
             closeModal();
             if (navigateOnSuccess) {
-                navigate(`/admin/office/${editorialOfficeId}/workflow/${created.workflowId}`);
+                navigate(workflowPath(created.workflowId));
             }
         } catch (err) {
             console.error('[CreateWorkflowModal] Létrehozás hiba:', err);
@@ -236,5 +237,17 @@ export default function CreateWorkflowModal({ editorialOfficeId, navigateOnSucce
                 </button>
             </div>
         </form>
+    );
+}
+
+/**
+ * Egy helyre konszolidálja a modal megnyitás default propjait (title + size),
+ * hogy a hívóhelyek (breadcrumb library, designer toolbar, /workflows/new route)
+ * ne drift-eljenek el.
+ */
+export function openCreateWorkflowModal(openModal, editorialOfficeId, modalProps) {
+    openModal(
+        <CreateWorkflowModal editorialOfficeId={editorialOfficeId} />,
+        { title: 'Új workflow', size: 'sm', ...modalProps }
     );
 }

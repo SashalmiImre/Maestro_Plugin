@@ -70,7 +70,9 @@ RootLayout (createBrowserRouter)
             └── WorkflowDesignerWithProviders
                 └── ToastProvider
                     └── DataProvider
-                        └── WorkflowDesignerPage (/admin/office/:officeId/workflow)
+                        ├── WorkflowDesignerPage (/workflows/:workflowId)
+                        ├── WorkflowNewRoute (/workflows/new)
+                        └── WorkflowDesignerRedirect (/admin/office/:officeId/workflow — legacy)
 ```
 
 A routing `react-router-dom` `createBrowserRouter`-en (data router) alapul — a `useBlocker`

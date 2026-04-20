@@ -57,7 +57,8 @@ import {
     duplicateWorkflow,
     bootstrapWorkflowSchema
 } from '../../features/workflowDesigner/api.js';
-import CreateWorkflowModal from './CreateWorkflowModal.jsx';
+import { openCreateWorkflowModal } from './CreateWorkflowModal.jsx';
+import { workflowPath } from '../../routes/paths.js';
 
 const VISIBILITY_DESCRIPTIONS = {
     [WORKFLOW_VISIBILITY.PUBLIC]: 'Az Appwrite instance bármely authentikált tagja látja.',
@@ -224,9 +225,11 @@ export default function WorkflowLibraryPanel({
             closeModal();
             return;
         }
-        // breadcrumb — Designer megnyitás
+        // breadcrumb — Designer megnyitás. A scope NEM vált át a workflow
+        // office-ára: a WorkflowDesignerPage membership-alapon dönt a
+        // szerkeszthetőségről, így az aktív scope érintetlenül maradhat.
         closeModal();
-        navigate(`/admin/office/${workflow.editorialOfficeId}/workflow/${workflow.$id}`);
+        navigate(workflowPath(workflow.$id));
     }
 
     async function handleDuplicate(workflow) {
@@ -242,7 +245,7 @@ export default function WorkflowLibraryPanel({
             );
             if (context === 'breadcrumb') {
                 closeModal();
-                navigate(`/admin/office/${activeEditorialOfficeId}/workflow/${res.workflowId}`);
+                navigate(workflowPath(res.workflowId));
             }
         } catch (err) {
             showToast(err?.message || 'Duplikálás sikertelen.', 'error');
@@ -394,10 +397,7 @@ export default function WorkflowLibraryPanel({
         // szükség. Ha megszakítja a user, a Library a breadcrumb-ból újra
         // nyitható.
         closeModal();
-        openModal(
-            <CreateWorkflowModal editorialOfficeId={activeEditorialOfficeId} />,
-            { title: 'Új workflow', size: 'sm' }
-        );
+        openCreateWorkflowModal(openModal, activeEditorialOfficeId);
     }
 
     const activeCount = workflows?.length || 0;

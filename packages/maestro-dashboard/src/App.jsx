@@ -35,7 +35,8 @@ import DashboardLayout from './routes/dashboard/DashboardLayout.jsx';
 import TableViewRoute from './routes/dashboard/TableViewRoute.jsx';
 import LayoutViewRoute from './routes/dashboard/LayoutViewRoute.jsx';
 import WorkflowDesignerPage from './features/workflowDesigner/WorkflowDesignerPage.jsx';
-import WorkflowDesignerRedirect from './features/workflowDesigner/WorkflowDesignerRedirect.jsx';
+import WorkflowDesignerRedirect, { LegacyWorkflowRedirect } from './features/workflowDesigner/WorkflowDesignerRedirect.jsx';
+import WorkflowNewRoute from './features/workflowDesigner/WorkflowNewRoute.jsx';
 import { ModalProvider } from './contexts/ModalContext.jsx';
 
 /**
@@ -55,10 +56,12 @@ function DashboardLayoutWithProviders() {
 
 /**
  * A Workflow Designer-hez szintén szükséges a DataProvider (workflow fetch)
- * és ToastProvider (toast értesítések). A gyermek komponenst route-onként
- * különböző komponens adja: a régi URL-en a `WorkflowDesignerRedirect` az
- * első workflow-ra navigál, az új paraméteres URL-en pedig a
- * `WorkflowDesignerPage` tölti be a konkrét workflow doc-ot.
+ * és ToastProvider (toast értesítések). A gyermek komponens route-függő:
+ * az új `/workflows/:workflowId` a `WorkflowDesignerPage`-t tölti a konkrét
+ * doc-hoz; a `/workflows/new` a `WorkflowNewRoute`-on át nyitja a
+ * CreateWorkflowModal-t. A legacy URL redirectek (WorkflowDesignerRedirect,
+ * LegacyWorkflowRedirect) NEM szerepelnek itt — azok DataProvider nélkül
+ * futnak (közvetlen Appwrite query / paraméter-továbbítás).
  */
 function WorkflowDesignerWithProviders({ children }) {
     return (
@@ -133,23 +136,35 @@ export const router = createBrowserRouter([
                         ]
                     },
 
-                    // Workflow Designer — régi URL: redirect az első workflow-ra
+                    // Workflow Designer — új route: konkrét workflow szerkesztése
                     {
-                        path: '/admin/office/:officeId/workflow',
-                        element: (
-                            <WorkflowDesignerWithProviders>
-                                <WorkflowDesignerRedirect />
-                            </WorkflowDesignerWithProviders>
-                        )
-                    },
-                    // Workflow Designer — paraméterezett URL: konkrét workflow szerkesztése
-                    {
-                        path: '/admin/office/:officeId/workflow/:workflowId',
+                        path: '/workflows/:workflowId',
                         element: (
                             <WorkflowDesignerWithProviders>
                                 <WorkflowDesignerPage />
                             </WorkflowDesignerWithProviders>
                         )
+                    },
+                    // Workflow Designer — új workflow belépési pont (CreateWorkflowModal)
+                    {
+                        path: '/workflows/new',
+                        element: (
+                            <WorkflowDesignerWithProviders>
+                                <WorkflowNewRoute />
+                            </WorkflowDesignerWithProviders>
+                        )
+                    },
+                    // Legacy URL-ek — redirect az új `/workflows/:id`-re.
+                    // Egyik sem igényli a DataProvider-t: a listázó közvetlen
+                    // Appwrite query-vel dolgozik az URL office-ára, a másik
+                    // csak a paramétert továbbítja.
+                    {
+                        path: '/admin/office/:officeId/workflow',
+                        element: <WorkflowDesignerRedirect />
+                    },
+                    {
+                        path: '/admin/office/:officeId/workflow/:workflowId',
+                        element: <LegacyWorkflowRedirect />
                     }
                 ]
             },

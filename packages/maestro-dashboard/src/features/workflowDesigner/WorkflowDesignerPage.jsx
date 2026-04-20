@@ -2,10 +2,12 @@
  * Maestro Dashboard — Workflow Designer oldal
  *
  * A vizuális workflow szerkesztő gyökér komponense.
- * Route: /admin/office/:officeId/workflow/:workflowId
+ * Route: /workflows/:workflowId (a legacy /admin/office/... URL-ek redirect-elnek)
  *
  * Betölti a teljes workflow dokumentumot (compiled + graph),
- * konvertálja xyflow állapotra, és rendereli a canvast.
+ * konvertálja xyflow állapotra, és rendereli a canvast. A tulajdonos
+ * szerkesztőség ID-ját (`editorialOfficeId`) a doc-ból olvassuk ki — ez
+ * a CF-híváshoz (mentés/duplikálás) szükséges paraméter.
  *
  * Egy szerkesztőség több workflow-t is tarthat (Fázis 7). A toolbar
  * selector dropdown-ja engedi a váltást, a „+ Új workflow" gomb új
@@ -25,27 +27,29 @@ import { useModal } from '../../contexts/ModalContext.jsx';
 import { useMediaQuery, BREAKPOINTS } from '../../hooks/useMediaQuery.js';
 import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 import { useConfirm } from '../../components/ConfirmDialog.jsx';
-import CreateWorkflowModal from '../../components/workflows/CreateWorkflowModal.jsx';
+import { openCreateWorkflowModal } from '../../components/workflows/CreateWorkflowModal.jsx';
 import { WORKFLOW_VISIBILITY_DEFAULT, WORKFLOW_VISIBILITY_LABELS } from '@shared/constants.js';
 import { compiledToGraph, graphToCompiled, extractGraphData } from './compiler.js';
 import { validateWorkflow } from './validator.js';
 import { saveWorkflow, duplicateWorkflow } from './api.js';
 import { exportWorkflow } from './exportImport.js';
+import { workflowPath } from '../../routes/paths.js';
 
 import NodePalette from './NodePalette.jsx';
 import ImportDialog from './ImportDialog.jsx';
 import WorkflowCanvas from './WorkflowCanvas.jsx';
 import PropertiesSidebar from './PropertiesSidebar.jsx';
+import BackToDashboardLink from './BackToDashboardLink.jsx';
 import './workflowDesigner.css';
 
 /** Graph-mutáló change típusok, amelyeknél dirty-t kell állítani */
 const DIRTY_CHANGE_TYPES = new Set(['remove', 'add', 'replace']);
 
 export default function WorkflowDesignerPage() {
-    const { officeId, workflowId } = useParams();
+    const { workflowId } = useParams();
     const navigate = useNavigate();
     const { workflows: availableWorkflows, publications, getMemberName } = useData();
-    const { user } = useAuth();
+    const { user, orgMemberships, editorialOffices } = useAuth();
     const { activeEditorialOfficeId } = useScope();
     const { showToast } = useToast();
     const { openModal } = useModal();
@@ -62,17 +66,54 @@ export default function WorkflowDesignerPage() {
     const [workflowDescription, setWorkflowDescription] = useState('');
     const [workflowVisibility, setWorkflowVisibility] = useState(WORKFLOW_VISIBILITY_DEFAULT);
     const [workflowOwnerOfficeId, setWorkflowOwnerOfficeId] = useState(null);
+    const [workflowOwnerOrgId, setWorkflowOwnerOrgId] = useState(null);
     const [workflowCreatedBy, setWorkflowCreatedBy] = useState(null);
     const [version, setVersion] = useState(0);
     const [isLoading, setIsLoading] = useState(true);
     const [loadError, setLoadError] = useState(null);
 
     // ── Read-only (#84) ──
-    // A workflow MÁS szerkesztőséghez tartozik (foreign public/organization),
-    // vagy a doc archivált. Megnyitható, de nem szerkeszthető — a "Duplikál
-    // & szerkeszt" CTA a user saját scope-jába másolja.
-    const isForeign = workflowOwnerOfficeId !== null && workflowOwnerOfficeId !== activeEditorialOfficeId;
-    const isReadOnly = isForeign;
+    // Két független feltétel együtt billenti „csak olvashatóra” a designert:
+    //   1. Office-boundary: a workflow másik szerkesztőséghez tartozik, mint az
+    //      aktív scope — a duplikál-és-szerkeszt UX-et tartjuk fenn még org
+    //      admin esetén is, hogy a cross-office accidental edit ne történhessen
+    //      meg (a szerver `update_workflow` elfogadná, de a termék-kontraktus
+    //      az office-izolációt ígéri).
+    //   2. Role-gate: a user nem owner/admin a workflow tulajdonos
+    //      szervezetében — az `update_workflow` CF `insufficient_role`-lal
+    //      visszadobná a mentést, így a member-szerepű user ne pazarolja el a
+    //      munkáját.
+    const callerRoleInOwnerOrg = useMemo(() => {
+        if (!user?.$id || !workflowOwnerOrgId) return null;
+        const m = (orgMemberships || []).find(
+            (mm) => mm.organizationId === workflowOwnerOrgId && mm.userId === user.$id
+        );
+        return m?.role || null;
+    }, [orgMemberships, user?.$id, workflowOwnerOrgId]);
+    const isAdminInOwnerOrg = callerRoleInOwnerOrg === 'owner' || callerRoleInOwnerOrg === 'admin';
+    const isForeignOffice = workflowOwnerOfficeId !== null && workflowOwnerOfficeId !== activeEditorialOfficeId;
+    const isInsufficientRole = workflowOwnerOfficeId !== null && !isAdminInOwnerOrg;
+    const isReadOnly = isForeignOffice || isInsufficientRole;
+
+    // Az aktív office org-jában admin/owner? Ez vezérli a Duplikál &
+    // szerkeszt + Új workflow CTA-kat — `duplicate_workflow` és
+    // `create_workflow` is az aktív scope-ot kéri officeId-ként, és szerver
+    // oldalon owner/admin-hoz kötött. Ha a user itt „member”, a CTA
+    // elrejtődik, hogy ne kínáljunk fel bizonyos halál-végű akciót.
+    const activeOfficeOrgId = useMemo(() => {
+        if (!activeEditorialOfficeId) return null;
+        const office = (editorialOffices || []).find(o => o.$id === activeEditorialOfficeId);
+        return office?.organizationId || null;
+    }, [editorialOffices, activeEditorialOfficeId]);
+    const callerRoleInActiveOrg = useMemo(() => {
+        if (!user?.$id || !activeOfficeOrgId) return null;
+        const m = (orgMemberships || []).find(
+            (mm) => mm.organizationId === activeOfficeOrgId && mm.userId === user.$id
+        );
+        return m?.role || null;
+    }, [orgMemberships, user?.$id, activeOfficeOrgId]);
+    const canCreateInActiveOrg = callerRoleInActiveOrg === 'owner' || callerRoleInActiveOrg === 'admin';
+
     const isDuplicating = useRef(false);
 
     // ── Xyflow állapot ──────────────────────────────────────────────────────
@@ -134,15 +175,23 @@ export default function WorkflowDesignerPage() {
     // (a saját `compiledWorkflowSnapshot` mezőjükben egy pillanatképet őriznek).
     // A workflow módosításai ezekre a publikációkra NEM érvényesülnek — a
     // designer banner figyelmezteti a szerkesztőt erről a szándékos viselkedésről.
+    //
+    // A `publications` lista a DataContext-ből jön, ami az aktív scope-ra szűrt
+    // (`editorialOfficeId === activeEditorialOfficeId`). Cross-office nézetben
+    // (foreign workflow, isReadOnly=true) a count hamis 0-t adna — ezért csak
+    // akkor számolunk, ha a workflow tulajdonos office-a megegyezik az aktív
+    // scope-pal. Foreign nézetben a banner elrejtve marad (a user úgysem
+    // szerkeszt, csak duplikál → a cél publikáció friss snapshotot kap).
     const snapshotUsageCount = useMemo(() => {
         if (!workflowDocId || !Array.isArray(publications)) return 0;
+        if (workflowOwnerOfficeId !== activeEditorialOfficeId) return 0;
         return publications.filter(p =>
             p.isActivated === true
             && p.workflowId === workflowDocId
             && typeof p.compiledWorkflowSnapshot === 'string'
             && p.compiledWorkflowSnapshot.length > 0
         ).length;
-    }, [publications, workflowDocId]);
+    }, [publications, workflowDocId, workflowOwnerOfficeId, activeEditorialOfficeId]);
 
     // Version ref szinkronban tartása (Realtime handler-nek)
     useEffect(() => { versionRef.current = version; }, [version]);
@@ -163,10 +212,11 @@ export default function WorkflowDesignerPage() {
 
     // ── Workflow betöltés ────────────────────────────────────────────────────
     // A workflowId route param szerint töltjük be a konkrét workflow doc-ot.
-    // Scope check: a doc editorialOfficeId-ja egyezzen a route officeId-vel.
+    // A scope (aktív office vs. a doc `editorialOfficeId`-ja) eltérésekor a
+    // read-only mód aktiválódik — a külső user csak duplikálhatja a workflow-t.
 
     useEffect(() => {
-        if (!officeId || !workflowId) return;
+        if (!workflowId) return;
         let cancelled = false;
 
         (async () => {
@@ -207,6 +257,7 @@ export default function WorkflowDesignerPage() {
                 setWorkflowDescription(doc.description || '');
                 setWorkflowVisibility(doc.visibility || WORKFLOW_VISIBILITY_DEFAULT);
                 setWorkflowOwnerOfficeId(doc.editorialOfficeId || null);
+                setWorkflowOwnerOrgId(doc.organizationId || null);
                 setWorkflowCreatedBy(doc.createdBy || null);
                 setVersion(compiled?.version ?? doc.version ?? 1);
 
@@ -231,7 +282,7 @@ export default function WorkflowDesignerPage() {
         })();
 
         return () => { cancelled = true; };
-    }, [officeId, workflowId]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [workflowId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ── Realtime awareness: más felhasználó mentett ────────────────────────
 
@@ -523,7 +574,7 @@ export default function WorkflowDesignerPage() {
                     COLLECTIONS.ARTICLES,
                     [
                         Query.equal('state', removedIds),
-                        Query.equal('editorialOfficeId', officeId),
+                        Query.equal('editorialOfficeId', workflowOwnerOfficeId),
                         Query.limit(1)
                     ]
                 );
@@ -546,7 +597,7 @@ export default function WorkflowDesignerPage() {
         setIsSaving(true);
         try {
             const nameToSend = trimmedName !== originalName ? trimmedName : undefined;
-            const result = await saveWorkflow(officeId, workflowDocId, compiled, graph, version, nameToSend);
+            const result = await saveWorkflow(workflowOwnerOfficeId, workflowDocId, compiled, graph, version, nameToSend);
             setVersion(result.version);
             setIsGraphDirty(false);
             setSaveError(null);
@@ -559,7 +610,7 @@ export default function WorkflowDesignerPage() {
         } finally {
             setIsSaving(false);
         }
-    }, [isSaving, nodes, edges, metadata, officeId, workflowDocId, version, workflowName, originalName]);
+    }, [isSaving, nodes, edges, metadata, workflowOwnerOfficeId, workflowDocId, version, workflowName, originalName]);
 
     // ── Workflow switch (selector dropdown) ────────────────────────────────
 
@@ -567,17 +618,17 @@ export default function WorkflowDesignerPage() {
         if (!newWorkflowId || newWorkflowId === workflowDocId) return;
         // A useBlocker elkapja a dirty állapotot, a felhasználó maradhat
         // vagy elhagyhatja az oldalt — mindkét útvonalat a standard blocker kezeli.
-        navigate(`/admin/office/${officeId}/workflow/${newWorkflowId}`);
-    }, [workflowDocId, officeId, navigate]);
+        navigate(workflowPath(newWorkflowId));
+    }, [workflowDocId, navigate]);
 
     // ── Új workflow létrehozás ─────────────────────────────────────────────
+    // Az új workflow a user aktív scope-jában jön létre (nem a doc office-ában,
+    // ami read-only foreign is lehet).
 
     const handleOpenCreateDialog = useCallback(() => {
-        openModal(
-            <CreateWorkflowModal editorialOfficeId={officeId} />,
-            { title: 'Új workflow', size: 'sm' }
-        );
-    }, [openModal, officeId]);
+        if (!activeEditorialOfficeId) return;
+        openCreateWorkflowModal(openModal, activeEditorialOfficeId);
+    }, [openModal, activeEditorialOfficeId]);
 
     // ── Duplikál & szerkeszt (foreign workflow → user saját scope-ja) ──────
 
@@ -588,7 +639,7 @@ export default function WorkflowDesignerPage() {
         try {
             const result = await duplicateWorkflow(activeEditorialOfficeId, workflowDocId);
             showToast(`Workflow duplikálva: „${result.name}".`, 'success');
-            navigate(`/admin/office/${activeEditorialOfficeId}/workflow/${result.workflowId}`);
+            navigate(workflowPath(result.workflowId));
         } catch (err) {
             showToast(err?.message || 'Nem sikerült a duplikálás.', 'error');
         } finally {
@@ -679,9 +730,7 @@ export default function WorkflowDesignerPage() {
         return (
             <div className="workflow-designer-page">
                 <div className="workflow-designer-scaffold">
-                    <Link to="/" className="auth-link" style={{ marginBottom: 16, display: 'inline-block' }}>
-                        ← Vissza a kiadványokhoz
-                    </Link>
+                    <BackToDashboardLink />
                     <p style={{ color: 'var(--c-error, #f87171)' }}>{loadError}</p>
                 </div>
             </div>
@@ -730,7 +779,14 @@ export default function WorkflowDesignerPage() {
                     >
                         {WORKFLOW_VISIBILITY_LABELS[workflowVisibility] || workflowVisibility}
                     </span>
-                    {availableWorkflows && availableWorkflows.length > 1 && !isReadOnly && (
+                    {/* Workflow switcher csak akkor, ha a megjelenített workflow
+                        tulajdonosa MEGEGYEZIK az aktív scope office-ával. Admin
+                        esetén is így: az `availableWorkflows` a DataContext-ből
+                        jön, ami az aktív scope-ra szűrt — másik office-beli
+                        workflow nézetében ez a lista félrevezető választékot
+                        kínálna (aktuálisan nyitott workflow kimaradna, a
+                        rákattintás átugrana egy ismeretlen office-ba). */}
+                    {availableWorkflows && availableWorkflows.length > 1 && !isReadOnly && workflowOwnerOfficeId === activeEditorialOfficeId && (
                         <select
                             className="workflow-designer-toolbar__selector"
                             value={workflowDocId || ''}
@@ -760,33 +816,50 @@ export default function WorkflowDesignerPage() {
                     {isDirty && !saveError && !isReadOnly && <span className="workflow-designer-toolbar__dirty">Nem mentett változások</span>}
                     {isReadOnly ? (
                         <>
-                            <span className="workflow-designer-toolbar__readonly-label" title="Ez a workflow másik szerkesztőséghez tartozik — duplikálással tudod szerkeszteni.">
+                            <span
+                                className="workflow-designer-toolbar__readonly-label"
+                                title={isForeignOffice
+                                    ? 'Ez a workflow másik szerkesztőséghez tartozik — duplikálással tudod szerkeszteni.'
+                                    : 'A szerkesztéshez admin jogosultság szükséges — duplikálással a saját scope-odban szerkesztheted.'}
+                            >
                                 Csak olvasható
                             </span>
-                            <button
-                                type="button"
-                                className="workflow-designer-toolbar__save"
-                                onClick={handleDuplicate}
-                                title="Workflow duplikálása a saját szerkesztőséged alá"
-                            >
-                                Duplikál & szerkeszt
-                            </button>
+                            {/* Duplikál CTA csak akkor, ha a user tud is létrehozni az
+                                aktív scope-ban. A `duplicate_workflow` CF owner/admin
+                                role-ra gate-elt — member user-nek a gomb halál-végű
+                                lenne, ezért elrejtjük. */}
+                            {canCreateInActiveOrg && (
+                                <button
+                                    type="button"
+                                    className="workflow-designer-toolbar__save"
+                                    onClick={handleDuplicate}
+                                    title="Workflow duplikálása a saját szerkesztőséged alá"
+                                >
+                                    Duplikál & szerkeszt
+                                </button>
+                            )}
                         </>
                     ) : (
                         <>
-                            {/* Workflow-szintű akció (új doc létrehozása) */}
-                            <button
-                                type="button"
-                                className="workflow-designer-toolbar__btn-secondary"
-                                onClick={handleOpenCreateDialog}
-                                title="Új workflow létrehozása ebben a szerkesztőségben"
-                            >
-                                + Új workflow
-                            </button>
-                            {/* #78: separator — elválasztja az „új workflow" akciót
-                                az adat IO csoporttól (Export/Import), így a user nem
-                                kattint véletlenül destructive Import-ra. */}
-                            <span className="workflow-designer-toolbar__separator" aria-hidden="true" />
+                            {/* Workflow-szintű akció (új doc létrehozása) — csak
+                                owner/admin hívhatja; member user-nek elrejtve, hogy
+                                ne ütközzön `insufficient_role` CF hibába. */}
+                            {canCreateInActiveOrg && (
+                                <>
+                                    <button
+                                        type="button"
+                                        className="workflow-designer-toolbar__btn-secondary"
+                                        onClick={handleOpenCreateDialog}
+                                        title="Új workflow létrehozása ebben a szerkesztőségben"
+                                    >
+                                        + Új workflow
+                                    </button>
+                                    {/* #78: separator — elválasztja az „új workflow"
+                                        akciót az adat IO csoporttól (Export/Import), így a
+                                        user nem kattint véletlenül destructive Import-ra. */}
+                                    <span className="workflow-designer-toolbar__separator" aria-hidden="true" />
+                                </>
+                            )}
                             <button
                                 type="button"
                                 className="workflow-designer-toolbar__btn-secondary"
@@ -837,22 +910,30 @@ export default function WorkflowDesignerPage() {
                 <div className="workflow-designer-readonly-banner">
                     <div className="workflow-designer-readonly-banner__main">
                         <strong>Csak olvasható.</strong>{' '}
-                        Ez a workflow másik szerkesztőséghez tartozik
+                        {isForeignOffice
+                            ? 'Ez a workflow másik szerkesztőséghez tartozik'
+                            : 'A workflow szerkesztéséhez admin jogosultság szükséges a szervezetben'}
                         {workflowCreatedBy && (
                             <> — létrehozta: <em>{getMemberName?.(workflowCreatedBy) || workflowCreatedBy}</em></>
                         )}
-                        . A szerkesztéshez duplikáld a saját szerkesztőséged alá.
+                        {canCreateInActiveOrg
+                            ? '. A szerkesztéshez duplikáld a saját szerkesztőséged alá.'
+                            : '.'}
                         {workflowDescription && (
                             <div className="workflow-designer-readonly-banner__desc">{workflowDescription}</div>
                         )}
                     </div>
-                    <button
-                        type="button"
-                        className="workflow-designer-readonly-banner__btn"
-                        onClick={handleDuplicate}
-                    >
-                        Duplikál & szerkeszt
-                    </button>
+                    {/* Duplikál gomb csak akkor, ha a user létrehozási
+                        jogosultsággal rendelkezik az aktív scope-ban. */}
+                    {canCreateInActiveOrg && (
+                        <button
+                            type="button"
+                            className="workflow-designer-readonly-banner__btn"
+                            onClick={handleDuplicate}
+                        >
+                            Duplikál & szerkeszt
+                        </button>
+                    )}
                 </div>
             )}
 

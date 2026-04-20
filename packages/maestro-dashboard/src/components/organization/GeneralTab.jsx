@@ -12,6 +12,7 @@
 import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext.jsx';
+import { useScope } from '../../contexts/ScopeContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
 import { useConfirm } from '../ConfirmDialog.jsx';
@@ -52,6 +53,7 @@ export default function GeneralTab({
     articlesCount
 }) {
     const { renameOrganization, deleteOrganization, reloadMemberships } = useAuth();
+    const { setActiveOrganization, setActiveOffice } = useScope();
     const { openModal, closeModal } = useModal();
     const { showToast } = useToast();
     const confirm = useConfirm();
@@ -100,9 +102,14 @@ export default function GeneralTab({
         );
     }
 
+    // A workflow-k saját `/workflows/:id` route-on élnek (nem office-kötött),
+    // a library-t a breadcrumb chip nyitja. Ez a gomb csak a scope-ot billenti
+    // a user helyébe, majd a dashboard-ra ugrik — onnan nyithat workflow-t.
     function handleOpenWorkflowDesigner(officeId) {
+        setActiveOrganization(org.$id);
+        setActiveOffice(officeId);
         closeModal();
-        navigate(`/admin/office/${officeId}/workflow`);
+        navigate('/');
     }
 
     const cascadeNode = useMemo(() => (
@@ -283,8 +290,9 @@ export default function GeneralTab({
                                         background: 'none', border: 'none', cursor: 'pointer',
                                         padding: 0
                                     }}
+                                    title={'A szerkesztőség aktívvá válik; a workflow-kat a breadcrumb „Workflow” chipről nyithatod meg.'}
                                 >
-                                    Workflow tervező →
+                                    Megnyitás →
                                 </button>
                             </li>
                         ))}
