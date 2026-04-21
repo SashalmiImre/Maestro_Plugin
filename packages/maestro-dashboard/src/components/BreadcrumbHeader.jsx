@@ -197,12 +197,12 @@ export default function BreadcrumbHeader({
 
                 <BreadcrumbDropdown
                     label="Szerkesztőség"
-                    activeId={activeEditorialOfficeId}
+                    activeId={isOfficeSetupPending ? null : activeEditorialOfficeId}
                     items={officeItems}
                     onSelect={handleOfficeSelect}
                     onSettings={isActiveOfficeInScope ? handleEditorialOfficeSettings : undefined}
                     moreItemsLabel="További szerkesztőségek"
-                    labelSuffix={isDefaultOnlyOffice ? 'alapértelmezett' : undefined}
+                    labelSuffix={isDefaultOnlyOffice && !isOfficeSetupPending ? 'alapértelmezett' : undefined}
                     disabled={isOfficeSetupPending}
                     disabledTitle="Először hozz létre egy szerkesztőséget a Szervezet beállításokban"
                 />
