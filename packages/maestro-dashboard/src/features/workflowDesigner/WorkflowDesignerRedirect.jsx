@@ -1,14 +1,13 @@
 /**
  * Maestro Dashboard — Workflow Designer legacy URL redirectek
  *
- * Két komponens egy fájlban, cél-specifikus:
- *
  * 1) `WorkflowDesignerRedirect` — a régi `/admin/office/:officeId/workflow`
  *    URL (workflowId nélkül) az URL-ben szereplő office első workflow-jára
  *    ugrik (név szerint rendezve). A DataContext-et szándékosan NEM használjuk:
- *    annak listája az aktív scope-ra szűrt, így egy másik office-ba mutató
- *    legacy bookmark üresnek tűnne. Közvetlen Appwrite lekérdezéssel az URL
- *    office-ára keresünk (ACL-t az Appwrite enforce-olja).
+ *    annak listája scope-szűrt, így cross-office bookmark üresnek tűnne.
+ *    A komponens DataProvider-en KÍVÜL fut (AuthSplitLayout sibling), ezért
+ *    a modul-szintű `getDatabases()`-t használja — stale-client nincs, mert
+ *    a Dashboardon nincs endpoint-rotáció (az `EndpointManager` Plugin-only).
  *
  * 2) `LegacyWorkflowRedirect` — a régi `/admin/office/:officeId/workflow/:id`
  *    URL a workflowId-t átemeli az új `/workflows/:id`-re; az officeId-re
@@ -17,8 +16,8 @@
 
 import React, { useEffect, useState } from 'react';
 import { Navigate, useParams } from 'react-router-dom';
-import { Databases, Query } from 'appwrite';
-import { getClient } from '../../contexts/AuthContext.jsx';
+import { Query } from 'appwrite';
+import { getDatabases } from '../../contexts/AuthContext.jsx';
 import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 import { workflowPath } from '../../routes/paths.js';
 import BackToDashboardLink from './BackToDashboardLink.jsx';
@@ -36,7 +35,7 @@ export default function WorkflowDesignerRedirect() {
         let cancelled = false;
         (async () => {
             try {
-                const databases = new Databases(getClient());
+                const databases = getDatabases();
                 // Appwrite `orderAsc` bytewise rendez — a magyar ékezetes nevek
                 // (Árvíz, Értekezés, Ősz…) nem a nyelvi várakozás szerint esnek
                 // sorba. A legacy viselkedés (ld. pre-refactor client-side sort)

@@ -12,11 +12,15 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Link } from 'react-router-dom';
-import { Databases, Functions, Query } from 'appwrite';
-import { getClient, useAuth } from '../../contexts/AuthContext.jsx';
+import { Query } from 'appwrite';
+import { useAuth, getDatabases, getFunctions } from '../../contexts/AuthContext.jsx';
 import { useScope } from '../../contexts/ScopeContext.jsx';
 import { useTenantRealtimeRefresh } from '../../hooks/useTenantRealtimeRefresh.js';
 import { DATABASE_ID, COLLECTIONS, FUNCTIONS } from '../../config.js';
+
+// Modul-szintű singleton — a route DataProvider-en kívül fut, `useData()` nem elérhető.
+const databases = getDatabases();
+const functions = getFunctions();
 
 export default function GroupsRoute() {
     const { user } = useAuth();
@@ -32,10 +36,6 @@ export default function GroupsRoute() {
     // reload + scope-szűrt Realtime refresh) csak a legutolsó invocation commit-olja
     // a state-et, így régebbi válasz nem írja felül a frissebbet.
     const loadGenRef = useRef(0);
-
-    const client = getClient();
-    const databases = new Databases(client);
-    const functions = new Functions(client);
 
     // --- Adatok betöltése ---
 

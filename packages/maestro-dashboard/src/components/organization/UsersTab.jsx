@@ -14,6 +14,7 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext.jsx';
 import { DASHBOARD_URL } from '../../config.js';
+import { useCopyDialog } from '../CopyDialog.jsx';
 
 function errorMessage(reason) {
     if (typeof reason !== 'string') return 'Ismeretlen hiba történt.';
@@ -66,6 +67,7 @@ export default function UsersTab({
     onInviteSent
 }) {
     const { user, createInvite } = useAuth();
+    const copyDialog = useCopyDialog();
 
     const [inviteEmail, setInviteEmail] = useState('');
     const [inviteRole, setInviteRole] = useState('member');
@@ -128,7 +130,11 @@ export default function UsersTab({
             if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
             copyTimerRef.current = setTimeout(() => setCopiedId(null), 2000);
         } catch {
-            window.prompt('Másold ki a meghívó linket:', link);
+            copyDialog({
+                title: 'Meghívó link',
+                value: link,
+                description: 'A böngésző nem engedi az automatikus másolást. Jelöld ki Ctrl+C-vel.'
+            });
         }
     }
 

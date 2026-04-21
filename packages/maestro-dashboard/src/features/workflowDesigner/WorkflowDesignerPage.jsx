@@ -17,8 +17,8 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useParams, Link, useBlocker, useNavigate } from 'react-router-dom';
 import { useNodesState, useEdgesState } from '@xyflow/react';
-import { Databases, Query } from 'appwrite';
-import { getClient, useAuth } from '../../contexts/AuthContext.jsx';
+import { Query } from 'appwrite';
+import { useAuth } from '../../contexts/AuthContext.jsx';
 import { subscribeRealtime, documentChannel } from '../../contexts/realtimeBus.js';
 import { useData } from '../../contexts/DataContext.jsx';
 import { useScope } from '../../contexts/ScopeContext.jsx';
@@ -49,7 +49,7 @@ const DIRTY_CHANGE_TYPES = new Set(['remove', 'add', 'replace']);
 export default function WorkflowDesignerPage() {
     const { workflowId } = useParams();
     const navigate = useNavigate();
-    const { workflows: availableWorkflows, publications, getMemberName } = useData();
+    const { workflows: availableWorkflows, publications, getMemberName, databases } = useData();
     const { editorialOffices } = useAuth();
     const { activeEditorialOfficeId } = useScope();
     const { showToast } = useToast();
@@ -215,8 +215,6 @@ export default function WorkflowDesignerPage() {
             setSaveError(null);
             setRemoteVersionWarning(null);
             try {
-                const client = getClient();
-                const databases = new Databases(client);
                 const doc = await databases.getDocument(
                     DATABASE_ID,
                     COLLECTIONS.WORKFLOWS,
@@ -554,8 +552,6 @@ export default function WorkflowDesignerPage() {
 
         if (removedIds.length > 0) {
             try {
-                const client = getClient();
-                const databases = new Databases(client);
                 const articlesInRemoved = await databases.listDocuments(
                     DATABASE_ID,
                     COLLECTIONS.ARTICLES,
@@ -597,7 +593,7 @@ export default function WorkflowDesignerPage() {
         } finally {
             setIsSaving(false);
         }
-    }, [isSaving, nodes, edges, metadata, workflowOwnerOfficeId, workflowDocId, version, workflowName, originalName]);
+    }, [isSaving, nodes, edges, metadata, workflowOwnerOfficeId, workflowDocId, version, workflowName, originalName, databases]);
 
     // ── Workflow switch (selector dropdown) ────────────────────────────────
 

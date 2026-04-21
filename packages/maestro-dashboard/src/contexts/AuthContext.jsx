@@ -61,6 +61,14 @@ const functions = new Functions(client);
 export function getClient() { return client; }
 export function getAccount() { return account; }
 
+// Modul-szintű singleton belépési pont a DataProvider-en kívüli hívóknak. A
+// DataProvider szándékosan saját `servicesRef`-et tart (scope-reset lifecycle).
+// A Dashboardon az endpoint immutábilis (custom domain, nincs failover, ld.
+// CLAUDE.md), ezért a `client` soha nem cserélődik — session state a böngésző
+// cookie-ban él, nem a JS instance-ban, így logout/login sem érinti a singleton-t.
+export function getDatabases() { return databases; }
+export function getFunctions() { return functions; }
+
 /**
  * Lekéri a bejelentkezett felhasználó csoporttagságait a groupMemberships +
  * groups collection-ökből. Az editorialOfficeId-t localStorage-ból olvassa

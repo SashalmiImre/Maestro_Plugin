@@ -14,16 +14,17 @@
  * Az aktív fül localStorage-ben perzisztált (`maestro.orgSettingsActiveTab`).
  */
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Databases, Query } from 'appwrite';
-import { getClient, useAuth } from '../../contexts/AuthContext.jsx';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Query } from 'appwrite';
+import { useAuth } from '../../contexts/AuthContext.jsx';
+import { useData } from '../../contexts/DataContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import { useTenantRealtimeRefresh } from '../../hooks/useTenantRealtimeRefresh.js';
+import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 import Tabs from '../Tabs.jsx';
 import AnimatedAutoHeight from '../AnimatedAutoHeight.jsx';
 import GeneralTab from './GeneralTab.jsx';
 import UsersTab from './UsersTab.jsx';
-import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 
 const TAB_DEFS = [
     { id: 'general', label: 'Általános' },
@@ -47,6 +48,7 @@ function getStoredTab() {
  */
 export default function OrganizationSettingsModal({ organizationId, initialTab }) {
     const { user, organizations } = useAuth();
+    const { databases } = useData();
     const { closeModal } = useModal();
 
     const org = organizations?.find(o => o.$id === organizationId) || null;
@@ -66,9 +68,6 @@ export default function OrganizationSettingsModal({ organizationId, initialTab }
     // Verseny-védelem: a scope-szűrt Realtime refresh + az explicit reloadInvites
     // egyidejűleg is futhat; csak a legutolsó invocation commit-olja a state-et.
     const loadGenRef = useRef(0);
-
-    const client = getClient();
-    const databases = useMemo(() => new Databases(client), [client]);
 
     function handleTabChange(tabId) {
         setActiveTab(tabId);

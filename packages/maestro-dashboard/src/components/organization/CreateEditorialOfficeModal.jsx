@@ -14,13 +14,11 @@
  */
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Query } from 'appwrite';
 import { useAuth } from '../../contexts/AuthContext.jsx';
 import { useData } from '../../contexts/DataContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
 import { useScope } from '../../contexts/ScopeContext.jsx';
-import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 
 function errorMessage(code) {
     if (typeof code !== 'string') return 'Ismeretlen hiba történt.';
@@ -50,7 +48,7 @@ function errorMessage(code) {
  */
 export default function CreateEditorialOfficeModal({ organizationId, switchScopeOnSuccess = true }) {
     const { createEditorialOffice, reloadMemberships } = useAuth();
-    const { databases } = useData();
+    const { fetchAllOrgWorkflows } = useData();
     const { closeModal } = useModal();
     const { showToast } = useToast();
     const { setActiveOffice } = useScope();
@@ -75,31 +73,21 @@ export default function CreateEditorialOfficeModal({ organizationId, switchScope
         return () => { isMountedRef.current = false; };
     }, []);
 
-    // ─── Workflow lista — az egész szervezetből (nem csak az aktív office-ból) ───
-    // A felhasználó bármelyik meglévő workflow-t klónozhatja az új office-hoz;
-    // ha nincs meglévő, az új office workflow nélkül jön létre (#30-ban rendelhető).
+    // Org-szintű workflow lista (cross-office klón forrás). A scope-szűrt
+    // `useData().workflows` helyett a `fetchAllOrgWorkflows` opt-in helper —
+    // multi-office admin is látja más office `editorial_office` scope-ú workflow-it.
+    // A try/finally a `workflowsLoading` flag-et akkor is felszabadítja, ha a helper
+    // szinkron hibát dob (provider-bug, stale ref) — a modal nem marad loading-ban.
     useEffect(() => {
         let cancelled = false;
         (async () => {
             setWorkflowsLoading(true);
             try {
-                const result = await databases.listDocuments({
-                    databaseId: DATABASE_ID,
-                    collectionId: COLLECTIONS.WORKFLOWS,
-                    queries: [
-                        Query.equal('organizationId', organizationId),
-                        Query.limit(100)
-                    ]
-                });
-                if (!cancelled) {
-                    const sorted = [...result.documents].sort(
-                        (a, b) => (a.name || '').localeCompare(b.name || '', 'hu')
-                    );
-                    setWorkflows(sorted);
-                }
+                const sorted = await fetchAllOrgWorkflows(organizationId);
+                if (!cancelled) setWorkflows(sorted);
             } catch (err) {
                 if (!cancelled) {
-                    console.warn('[CreateEditorialOfficeModal] workflows lekérés hiba:', err);
+                    console.warn('[CreateEditorialOfficeModal] workflow lista hiba:', err);
                     setWorkflows([]);
                 }
             } finally {
@@ -107,7 +95,7 @@ export default function CreateEditorialOfficeModal({ organizationId, switchScope
             }
         })();
         return () => { cancelled = true; };
-    }, [databases, organizationId]);
+    }, [fetchAllOrgWorkflows, organizationId]);
 
     // ─── Validáció ──────────────────────────────────────────────────────────
     const errors = useMemo(() => {

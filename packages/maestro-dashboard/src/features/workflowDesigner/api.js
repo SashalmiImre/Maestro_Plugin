@@ -5,9 +5,10 @@
  * Az invite-to-organization CF action-öket hívja.
  */
 
-import { Functions } from 'appwrite';
-import { getClient } from '../../contexts/AuthContext.jsx';
+import { getFunctions } from '../../contexts/AuthContext.jsx';
 import { FUNCTIONS } from '../../config.js';
+
+const functions = getFunctions();
 
 /**
  * CF execution wrapper — parse + hibaüzenet.
@@ -17,9 +18,6 @@ import { FUNCTIONS } from '../../config.js';
  * @throws {Error} Ha a CF hívás sikertelen
  */
 async function callCF(body) {
-    const client = getClient();
-    const functions = new Functions(client);
-
     const execution = await functions.createExecution({
         functionId: FUNCTIONS.INVITE_TO_ORGANIZATION,
         body: JSON.stringify(body),

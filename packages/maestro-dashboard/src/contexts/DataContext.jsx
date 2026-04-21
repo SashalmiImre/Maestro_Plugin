@@ -307,6 +307,32 @@ export function DataProvider({ children }) {
         fetchWorkflow();
     }, [fetchWorkflow, activeEditorialOfficeId, activeOrganizationId]);
 
+    // Opt-in, nem cache-elt lekérdezés a szervezet workflow-jaira (minden office,
+    // minden visibility, archivált is) — megkerüli a `workflows[]` scope-szűrést,
+    // hogy multi-office admin cross-office `editorial_office` scope-okat is lásson
+    // klón forrásként. Az Appwrite rowSecurity szűri az olvasási jogot. Archivált
+    // szűrést a hívó kell alkalmazzon, ha relevánsak.
+    const fetchAllOrgWorkflows = useCallback(async (orgId) => {
+        const targetOrgId = orgId || activeOrganizationIdRef.current;
+        if (!targetOrgId) return [];
+        try {
+            const result = await databases.listDocuments({
+                databaseId: DATABASE_ID,
+                collectionId: COLLECTIONS.WORKFLOWS,
+                queries: [
+                    Query.equal('organizationId', targetOrgId),
+                    Query.limit(100)
+                ]
+            });
+            return [...result.documents].sort(
+                (a, b) => (a.name || '').localeCompare(b.name || '', 'hu')
+            );
+        } catch (err) {
+            console.warn('[DataContext] fetchAllOrgWorkflows hiba:', err);
+            return [];
+        }
+    }, [databases]);
+
     // Származtatott workflow: az aktív kiadvány `workflowId`-ja szerint.
     // Ha a publikációnak van workflowId-ja, de a referencia stale (a workflow
     // már nem létezik a listában) → null (fail-closed, a szerver policy egyezik).
@@ -602,7 +628,12 @@ export function DataProvider({ children }) {
         return () => unsubscribe();
     }, []);
 
-    const value = {
+    // Minden mező memoizált — a state-ek / useCallback-ek maguk stabilak, itt
+    // a külső consumer-ek miatt biztosítunk identitás-stabilitást: a Provider
+    // re-renderénél ne kapjon minden context-fogyasztó új objektumot. A
+    // deps-listában minden mező szerepel, amit a value objektum közvetlenül
+    // átad (state + callback + stabil singleton).
+    const value = useMemo(() => ({
         publications, articles, layouts, deadlines, validations,
         workflow, workflows,
         activePublicationId, isLoading,
@@ -610,13 +641,26 @@ export function DataProvider({ children }) {
         // saját `new Databases(getClient())` instance-t (singleton per Provider).
         databases, storage,
         fetchPublications, switchPublication, fetchWorkflow,
+        fetchAllOrgWorkflows,
         fetchAllGroupMembers, getMemberName,
         // Write-through API
         createPublication, updatePublication, deletePublication,
         createLayout, updateLayout, deleteLayout,
         createDeadline, updateDeadline, deleteDeadline,
         updateArticle
-    };
+    }), [
+        publications, articles, layouts, deadlines, validations,
+        workflow, workflows,
+        activePublicationId, isLoading,
+        databases, storage,
+        fetchPublications, switchPublication, fetchWorkflow,
+        fetchAllOrgWorkflows,
+        fetchAllGroupMembers, getMemberName,
+        createPublication, updatePublication, deletePublication,
+        createLayout, updateLayout, deleteLayout,
+        createDeadline, updateDeadline, deleteDeadline,
+        updateArticle
+    ]);
 
     return (
         <DataContext.Provider value={value}>
