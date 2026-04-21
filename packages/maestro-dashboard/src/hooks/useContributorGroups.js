@@ -14,8 +14,8 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
-import { Databases, Query } from 'appwrite';
-import { getClient } from '../contexts/AuthContext.jsx';
+import { Query } from 'appwrite';
+import { useData } from '../contexts/DataContext.jsx';
 import { useScope } from '../contexts/ScopeContext.jsx';
 import { DATABASE_ID, COLLECTIONS } from '../config.js';
 import { DEFAULT_GROUPS } from '@shared/groups.js';
@@ -57,18 +57,12 @@ function sortGroups(groups) {
  */
 export function useContributorGroups() {
     const { activeEditorialOfficeId } = useScope();
+    const { databases } = useData();
     const [groups, setGroups] = useState([]);
     const [membersBySlug, setMembersBySlug] = useState({});
     const [loading, setLoading] = useState(true);
     const mountedRef = useRef(true);
     const generationRef = useRef(0);
-
-    // Appwrite Databases szolgáltatás (stabil referencia)
-    const databasesRef = useRef(null);
-    if (!databasesRef.current) {
-        databasesRef.current = new Databases(getClient());
-    }
-    const databases = databasesRef.current;
 
     const fetchData = useCallback(async () => {
         const generation = ++generationRef.current;

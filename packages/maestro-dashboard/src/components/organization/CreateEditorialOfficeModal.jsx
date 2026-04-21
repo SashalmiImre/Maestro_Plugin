@@ -14,8 +14,9 @@
  */
 
 import React, { useState, useMemo, useEffect, useRef } from 'react';
-import { Databases, Query } from 'appwrite';
-import { getClient, useAuth } from '../../contexts/AuthContext.jsx';
+import { Query } from 'appwrite';
+import { useAuth } from '../../contexts/AuthContext.jsx';
+import { useData } from '../../contexts/DataContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
 import { useScope } from '../../contexts/ScopeContext.jsx';
@@ -49,6 +50,7 @@ function errorMessage(code) {
  */
 export default function CreateEditorialOfficeModal({ organizationId, switchScopeOnSuccess = true }) {
     const { createEditorialOffice, reloadMemberships } = useAuth();
+    const { databases } = useData();
     const { closeModal } = useModal();
     const { showToast } = useToast();
     const { setActiveOffice } = useScope();
@@ -76,7 +78,6 @@ export default function CreateEditorialOfficeModal({ organizationId, switchScope
     // ─── Workflow lista — az egész szervezetből (nem csak az aktív office-ból) ───
     // A felhasználó bármelyik meglévő workflow-t klónozhatja az új office-hoz;
     // ha nincs meglévő, az új office workflow nélkül jön létre (#30-ban rendelhető).
-    const databases = useMemo(() => new Databases(getClient()), []);
     useEffect(() => {
         let cancelled = false;
         (async () => {

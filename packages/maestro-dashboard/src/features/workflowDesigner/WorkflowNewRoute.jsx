@@ -19,11 +19,12 @@ import { useAuth } from '../../contexts/AuthContext.jsx';
 import { useScope } from '../../contexts/ScopeContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
+import { useOrgRole } from '../../hooks/useOrgRole.js';
 import { openCreateWorkflowModal } from '../../components/workflows/CreateWorkflowModal.jsx';
 
 export default function WorkflowNewRoute() {
     const navigate = useNavigate();
-    const { loading, user, editorialOffices, orgMemberships } = useAuth();
+    const { loading, editorialOffices } = useAuth();
     const { activeEditorialOfficeId } = useScope();
     const { openModal, modalCount } = useModal();
     const { showToast } = useToast();
@@ -31,16 +32,13 @@ export default function WorkflowNewRoute() {
     // Az aktív office org-jában owner/admin? A `create_workflow` CF action
     // csak ezeket fogadja el (insufficient_role különben). A member-szerepű
     // user ne kerüljön be egy olyan modalba, amit úgysem tud lementeni.
-    const canCreateWorkflow = useMemo(() => {
-        if (!user?.$id || !activeEditorialOfficeId) return false;
+    const activeOfficeOrgId = useMemo(() => {
+        if (!activeEditorialOfficeId) return null;
         const office = (editorialOffices || []).find(o => o.$id === activeEditorialOfficeId);
-        const orgId = office?.organizationId;
-        if (!orgId) return false;
-        const m = (orgMemberships || []).find(
-            (mm) => mm.organizationId === orgId && mm.userId === user.$id
-        );
-        return m?.role === 'owner' || m?.role === 'admin';
-    }, [orgMemberships, editorialOffices, user?.$id, activeEditorialOfficeId]);
+        return office?.organizationId || null;
+    }, [editorialOffices, activeEditorialOfficeId]);
+    const { isOrgAdmin } = useOrgRole(activeOfficeOrgId);
+    const canCreateWorkflow = Boolean(activeEditorialOfficeId && isOrgAdmin);
 
     // StrictMode double-mount + re-render guard: csak egyszer nyitjuk meg.
     const hasOpenedRef = useRef(false);

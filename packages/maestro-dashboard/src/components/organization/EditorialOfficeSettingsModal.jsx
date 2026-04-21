@@ -10,11 +10,13 @@
  * böngészéssel (3-way visibility: public / organization / editorial_office).
  */
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Databases, Query } from 'appwrite';
-import { getClient, useAuth } from '../../contexts/AuthContext.jsx';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { Query } from 'appwrite';
+import { useAuth } from '../../contexts/AuthContext.jsx';
+import { useData } from '../../contexts/DataContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import { useTenantRealtimeRefresh } from '../../hooks/useTenantRealtimeRefresh.js';
+import { useOrgRole } from '../../hooks/useOrgRole.js';
 import Tabs from '../Tabs.jsx';
 import AnimatedAutoHeight from '../AnimatedAutoHeight.jsx';
 import EditorialOfficeGeneralTab from './EditorialOfficeGeneralTab.jsx';
@@ -42,16 +44,13 @@ function getStoredTab() {
  * @param {string} [props.initialTab] — kezdeti fül override (különben a localStorage)
  */
 export default function EditorialOfficeSettingsModal({ editorialOfficeId, initialTab }) {
-    const {
-        user,
-        organizations,
-        editorialOffices,
-        orgMemberships
-    } = useAuth();
+    const { organizations, editorialOffices } = useAuth();
+    const { databases } = useData();
     const { closeModal } = useModal();
 
     const office = editorialOffices?.find(o => o.$id === editorialOfficeId) || null;
     const org = office ? organizations?.find(o => o.$id === office.organizationId) || null : null;
+    const { role: callerRole, isOrgAdmin } = useOrgRole(office?.organizationId);
 
     const [activeTab, setActiveTab] = useState(() => initialTab || getStoredTab());
 
@@ -63,19 +62,6 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
     const [loadError, setLoadError] = useState('');
 
     const loadGenRef = useRef(0);
-
-    const client = getClient();
-    const databases = useMemo(() => new Databases(client), [client]);
-
-    const callerRole = useMemo(() => {
-        if (!office?.organizationId || !user?.$id) return null;
-        const membership = (orgMemberships || []).find(
-            m => m.organizationId === office.organizationId && m.userId === user.$id
-        );
-        return membership?.role || null;
-    }, [orgMemberships, office?.organizationId, user?.$id]);
-
-    const isOrgAdmin = callerRole === 'owner' || callerRole === 'admin';
 
     function handleTabChange(tabId) {
         setActiveTab(tabId);

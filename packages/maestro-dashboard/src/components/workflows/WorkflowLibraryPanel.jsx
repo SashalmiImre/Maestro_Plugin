@@ -25,7 +25,9 @@ import { useScope } from '../../contexts/ScopeContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
 import { useConfirm } from '../ConfirmDialog.jsx';
+import { usePrompt } from '../PromptDialog.jsx';
 import usePopoverClose from '../../hooks/usePopoverClose.js';
+import { useOrgRole } from '../../hooks/useOrgRole.js';
 import {
     WORKFLOW_VISIBILITY,
     WORKFLOW_VISIBILITY_RANK,
@@ -90,11 +92,12 @@ export default function WorkflowLibraryPanel({
 }) {
     const navigate = useNavigate();
     const { workflows, getMemberName, databases } = useData();
-    const { user, orgMemberships } = useAuth();
+    const { user } = useAuth();
     const { activeOrganizationId, activeEditorialOfficeId } = useScope();
     const { openModal, closeModal } = useModal();
     const { showToast } = useToast();
     const confirm = useConfirm();
+    const prompt = usePrompt();
 
     const [searchQuery, setSearchQuery] = useState('');
     const [scopeFilter, setScopeFilter] = useState(SCOPE_FILTER.ALL);
@@ -109,15 +112,7 @@ export default function WorkflowLibraryPanel({
     usePopoverClose(kebabRef, !!openKebabId, () => setOpenKebabId(null));
 
     // ── Caller jogosultság ───
-    const callerOrgRole = useMemo(() => {
-        if (!user?.$id || !activeOrganizationId) return null;
-        const membership = (orgMemberships || []).find(
-            (m) => m.organizationId === activeOrganizationId && m.userId === user.$id
-        );
-        return membership?.role || null;
-    }, [orgMemberships, user?.$id, activeOrganizationId]);
-
-    const isOrgAdmin = callerOrgRole === 'owner' || callerOrgRole === 'admin';
+    const { isOrgAdmin } = useOrgRole(activeOrganizationId);
 
     // ── Archivált fetch ───
     // Auto-heal: ha a `archivedAt` attribútum nincs még a collection schema-ban
@@ -269,10 +264,20 @@ export default function WorkflowLibraryPanel({
 
     async function handleRename(workflow) {
         const current = workflow.name || '';
-        const input = window.prompt('Új név:', current);
-        if (input === null) return;
-        const trimmed = input.trim();
-        if (!trimmed || trimmed === current) return;
+        const trimmed = await prompt({
+            title: 'Workflow átnevezése',
+            label: 'Add meg az új nevet.',
+            initialValue: current,
+            maxLength: 128,
+            validate: (v) => {
+                const t = v.trim();
+                if (!t) return 'A név nem lehet üres.';
+                if (t.length > 128) return 'A név legfeljebb 128 karakter lehet.';
+                return null;
+            },
+            confirmLabel: 'Átnevezés'
+        });
+        if (trimmed === null || trimmed === current) return;
         setActionPending(`rename:${workflow.$id}`);
         try {
             await updateWorkflowMetadata(workflow.editorialOfficeId, workflow.$id, { name: trimmed });
@@ -286,10 +291,16 @@ export default function WorkflowLibraryPanel({
 
     async function handleEditDescription(workflow) {
         const current = workflow.description || '';
-        const input = window.prompt('Rövid leírás (max 500 karakter):', current);
-        if (input === null) return;
-        const trimmed = input.trim();
-        if (trimmed === current) return;
+        const trimmed = await prompt({
+            title: 'Leírás szerkesztése',
+            label: 'Rövid leírás (max 500 karakter). Hagyd üresen a leírás törléséhez.',
+            initialValue: current,
+            maxLength: 500,
+            multiline: true,
+            validate: (v) => (v.length > 500 ? 'A leírás legfeljebb 500 karakter lehet.' : null),
+            confirmLabel: 'Mentés'
+        });
+        if (trimmed === null || trimmed === current) return;
         setActionPending(`desc:${workflow.$id}`);
         try {
             await updateWorkflowMetadata(workflow.editorialOfficeId, workflow.$id, {

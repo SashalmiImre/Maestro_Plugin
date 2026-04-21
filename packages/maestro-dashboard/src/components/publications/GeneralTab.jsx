@@ -19,11 +19,10 @@
  */
 
 import React, { useState, useEffect, useMemo } from 'react';
-import { Databases } from 'appwrite';
 import { validatePublicationActivation } from '@shared/publicationActivation.js';
 import { WORKFLOW_VISIBILITY_DEFAULT, WORKFLOW_VISIBILITY_LABELS } from '@shared/constants.js';
 import { useData } from '../../contexts/DataContext.jsx';
-import { useAuth, getClient } from '../../contexts/AuthContext.jsx';
+import { useOrgRole } from '../../hooks/useOrgRole.js';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
 import { useConfirm } from '../ConfirmDialog.jsx';
@@ -43,8 +42,8 @@ function formatActivatedAt(iso) {
 }
 
 export default function GeneralTab({ publication }) {
-    const { workflows, deadlines, articles, updatePublication, deletePublication } = useData();
-    const { user, orgMemberships } = useAuth();
+    const { workflows, deadlines, articles, databases, updatePublication, deletePublication } = useData();
+    const { isOrgAdmin: canDeletePublication } = useOrgRole(publication.organizationId);
     const { openModal, closeModal } = useModal();
     const { showToast } = useToast();
     const confirm = useConfirm();
@@ -152,7 +151,6 @@ export default function GeneralTab({ publication }) {
         let cancelled = false;
         (async () => {
             try {
-                const databases = new Databases(getClient());
                 const doc = await databases.getDocument(
                     DATABASE_ID,
                     COLLECTIONS.WORKFLOWS,
@@ -164,7 +162,7 @@ export default function GeneralTab({ publication }) {
             }
         })();
         return () => { cancelled = true; };
-    }, [publication.workflowId, inlineWorkflow]);
+    }, [databases, publication.workflowId, inlineWorkflow]);
     const currentWorkflow = inlineWorkflow || archivedFallback;
 
     function handleOpenWorkflowLibrary() {
@@ -219,21 +217,10 @@ export default function GeneralTab({ publication }) {
         }
     }
 
-    // Fázis 8 — Veszélyes zóna (publikáció törlés)
-    //
-    // Ideiglenes jogosultság-szűrés: csak a publikáció szervezetének
-    // owner/admin szerepkörű tagjai látják a „Kiadvány törlése" gombot.
-    // Ezt egy későbbi, részletes UI jog rendszer felülírja; a szerver-
-    // oldali védelmet a DB ACL + validate-publication-update CF adja.
-    const callerOrgRole = useMemo(() => {
-        if (!user?.$id || !publication.organizationId) return null;
-        const membership = (orgMemberships || []).find(
-            (m) => m.organizationId === publication.organizationId && m.userId === user.$id
-        );
-        return membership?.role || null;
-    }, [orgMemberships, user?.$id, publication.organizationId]);
-
-    const canDeletePublication = callerOrgRole === 'owner' || callerOrgRole === 'admin';
+    // Fázis 8 — Veszélyes zóna: a „Kiadvány törlése" gomb ideiglenesen csak
+    // a publikáció szervezetének owner/admin tagjainak (`canDeletePublication`).
+    // Szerver-oldalon DB ACL + validate-publication-update CF véd; ezt egy
+    // későbbi részletes UI jog rendszer felülírja.
 
     async function handleDeletePublication() {
         const confirmMessage = (

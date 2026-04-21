@@ -17,6 +17,7 @@ import { useScope } from '../../contexts/ScopeContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import { useFilters } from '../../hooks/useFilters.js';
+import { useOrgRole } from '../../hooks/useOrgRole.js';
 import { STORAGE_KEYS } from '../../config.js';
 import { buildPlaceholderRows } from '@shared/pageGapUtils.js';
 
@@ -31,8 +32,13 @@ import OrganizationSettingsModal from '../../components/organization/Organizatio
 import CreateEditorialOfficeModal from '../../components/organization/CreateEditorialOfficeModal.jsx';
 
 export default function DashboardLayout() {
-    const { user, editorialOffices, orgMemberships } = useAuth();
+    const { user, editorialOffices } = useAuth();
     const { activeOrganizationId, activeEditorialOfficeId } = useScope();
+    // Szerepkör-alapú primary CTA: a „Szerkesztőség létrehozása" csak
+    // owner/admin-nak jelenik meg. Member-nek a „Szervezet beállításai"
+    // secondary action marad — onnan nem tud office-t létrehozni, viszont
+    // lát egy kontextust arról, hogy kihez fordulhat.
+    const { isOrgAdmin } = useOrgRole(activeOrganizationId);
     const {
         publications, articles, activePublicationId,
         isLoading, fetchPublications, switchPublication,
@@ -198,18 +204,6 @@ export default function DashboardLayout() {
     const isOnboarding = !!activeOrganizationId
         && currentOrgOfficesCount <= 1
         && publications.length === 0;
-
-    // Szerepkör-alapú primary CTA: a „Szerkesztőség létrehozása" csak
-    // owner/admin-nak jelenik meg. Member-nek csak a „Szervezet beállításai"
-    // secondary action marad — onnan nem tud office-t létrehozni, viszont
-    // lát egy kontextust arról, hogy kihez fordulhat.
-    const activeOrgRole = useMemo(() => {
-        if (!user?.$id || !activeOrganizationId) return null;
-        return (orgMemberships || []).find(
-            m => m.userId === user.$id && m.organizationId === activeOrganizationId
-        )?.role || null;
-    }, [orgMemberships, user?.$id, activeOrganizationId]);
-    const isOrgAdmin = activeOrgRole === 'owner' || activeOrgRole === 'admin';
 
     // Szűrt cikkek
     const filteredArticles = useMemo(

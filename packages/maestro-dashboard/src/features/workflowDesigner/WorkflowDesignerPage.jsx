@@ -25,6 +25,7 @@ import { useScope } from '../../contexts/ScopeContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import { useMediaQuery, BREAKPOINTS } from '../../hooks/useMediaQuery.js';
+import { useOrgRole } from '../../hooks/useOrgRole.js';
 import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 import { useConfirm } from '../../components/ConfirmDialog.jsx';
 import { openCreateWorkflowModal } from '../../components/workflows/CreateWorkflowModal.jsx';
@@ -49,7 +50,7 @@ export default function WorkflowDesignerPage() {
     const { workflowId } = useParams();
     const navigate = useNavigate();
     const { workflows: availableWorkflows, publications, getMemberName } = useData();
-    const { user, orgMemberships, editorialOffices } = useAuth();
+    const { editorialOffices } = useAuth();
     const { activeEditorialOfficeId } = useScope();
     const { showToast } = useToast();
     const { openModal } = useModal();
@@ -83,14 +84,7 @@ export default function WorkflowDesignerPage() {
     //      szervezetében — az `update_workflow` CF `insufficient_role`-lal
     //      visszadobná a mentést, így a member-szerepű user ne pazarolja el a
     //      munkáját.
-    const callerRoleInOwnerOrg = useMemo(() => {
-        if (!user?.$id || !workflowOwnerOrgId) return null;
-        const m = (orgMemberships || []).find(
-            (mm) => mm.organizationId === workflowOwnerOrgId && mm.userId === user.$id
-        );
-        return m?.role || null;
-    }, [orgMemberships, user?.$id, workflowOwnerOrgId]);
-    const isAdminInOwnerOrg = callerRoleInOwnerOrg === 'owner' || callerRoleInOwnerOrg === 'admin';
+    const { isOrgAdmin: isAdminInOwnerOrg } = useOrgRole(workflowOwnerOrgId);
     const isForeignOffice = workflowOwnerOfficeId !== null && workflowOwnerOfficeId !== activeEditorialOfficeId;
     const isInsufficientRole = workflowOwnerOfficeId !== null && !isAdminInOwnerOrg;
     const isReadOnly = isForeignOffice || isInsufficientRole;
@@ -105,14 +99,7 @@ export default function WorkflowDesignerPage() {
         const office = (editorialOffices || []).find(o => o.$id === activeEditorialOfficeId);
         return office?.organizationId || null;
     }, [editorialOffices, activeEditorialOfficeId]);
-    const callerRoleInActiveOrg = useMemo(() => {
-        if (!user?.$id || !activeOfficeOrgId) return null;
-        const m = (orgMemberships || []).find(
-            (mm) => mm.organizationId === activeOfficeOrgId && mm.userId === user.$id
-        );
-        return m?.role || null;
-    }, [orgMemberships, user?.$id, activeOfficeOrgId]);
-    const canCreateInActiveOrg = callerRoleInActiveOrg === 'owner' || callerRoleInActiveOrg === 'admin';
+    const { isOrgAdmin: canCreateInActiveOrg } = useOrgRole(activeOfficeOrgId);
 
     const isDuplicating = useRef(false);
 

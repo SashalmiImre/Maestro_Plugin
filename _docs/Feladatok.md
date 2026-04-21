@@ -232,13 +232,12 @@ tags: [feladatok]
 
 > Forrás: Dashboard harden pass a `DataContext.jsx` / `WorkflowLibraryPanel.jsx` / `BreadcrumbHeader.jsx` hármason (2026-04-21). A scope-on kívülre eső, de a review során azonosított refaktor-lehetőségek.
 
-- [ ] 89. **`window.prompt` → Modal migráció** (dashboard polish):
+- [x] 89. **`window.prompt` → Modal migráció** (dashboard polish): (2026-04-21)
     - Több helyen natív `window.prompt()` dialógus fut (pl. workflow átnevezés, description edit). Ezek blokkoló, stílusozhatatlan, screen reader-re nem optimalizált és mobile-on rossz UX-et adnak.
     - Javasolt: a meglévő `Modal` + `ConfirmDialog` mintára egy `openPrompt(title, initialValue, { validate, placeholder, maxLength })` Promise-alapú util a `ModalContext`-ben, és az összes `window.prompt` hívó lecserélése.
-    - Érintett: `WorkflowLibraryPanel.jsx` (rename, description edit), egyéb sweep-elendő call-site-ok.
-    - **Előny**: egységes UI-stílus, validáció, autofókusz, Esc-záró, label + placeholder támogatás.
+    - **Implementálva**: új `components/PromptDialog.jsx` — Promise-alapú `usePrompt()` hook a `ConfirmDialog` mintájára (auto-focus + select, Enter=submit single-line módban, textarea multiline módban, validate-on-blur, `.confirm-dialog-*` CSS újrahasznosítva). `WorkflowLibraryPanel.handleRename` (maxLength 128) és `handleEditDescription` (multiline, maxLength 500, üres → null) átírva. A `CreateWorkflowModal.jsx` docstring a migráció kontextusát hivatkozza. `UsersTab.jsx:131` (copy-link dialog) szándékosan nem változott — nem input, clipboard fallback read-only szövegmezővel, külön UX. Potenciális follow-up: `openCopyDialog` util (→ #94).
 
-- [ ] 90. **`useOrgRole(orgId)` hook kiemelés** (redundancia takarítás):
+- [x] 90. **`useOrgRole(orgId)` hook kiemelés** (redundancia takarítás): (2026-04-21)
     - A dashboard legalább 9 komponensben ismétli ugyanazt a callerOrgRole pattern-t:
       ```js
       const callerOrgRole = useMemo(() => {
@@ -251,13 +250,56 @@ tags: [feladatok]
       ```
     - Érintett fájlok (harden review): `WorkflowLibraryPanel.jsx`, `CreateWorkflowModal.jsx`, `WorkflowDesignerPage.jsx`, `WorkflowNewRoute.jsx`, `organization/UsersTab.jsx`, `organization/GeneralTab.jsx`, `publications/GeneralTab.jsx`, `EditorialOfficeGroupsTab.jsx`, `EditorialOfficeGeneralTab.jsx` (teljes sweep a `findOrgMembership` mintáért).
     - Javasolt API: `src/hooks/useOrgRole.js` → `{ role, isOwner, isAdmin, isOrgAdmin, isMember }` scope-szűrt, `activeOrganizationId` default-ra bontva.
-    - **Előny**: single source of truth a role-gating logikára; ha bővül a policy (pl. role hierarchia), egy helyen változik.
+    - **Implementálva**: új `hooks/useOrgRole.js` — explicit `organizationId` paraméter (nincs implicit `activeOrganizationId` default, mert 3 szemantikai variánst kellett fenntartani: active-org / workflow-owner-org / publication-org). `EMPTY_ROLE` frozen-objektum fallback (null/null org-ra), visszatér `{ role, isOwner, isAdmin, isOrgAdmin, isMember }`. Migrálva: `DashboardLayout.jsx` (activeOrg), `WorkflowLibraryPanel.jsx` (activeOrg), `WorkflowDesignerPage.jsx` (2 hívás: owner-org + active-office-org), `WorkflowNewRoute.jsx` (active-office-org), `EditorialOfficeSettingsModal.jsx` (office-org), `publications/GeneralTab.jsx` (publication-org). Scope-on kívül maradt: `OrganizationSettingsModal` (közvetlen collection fetch, nem `orgMemberships` snapshot) és `MaestroSettingsModal` (multi-org aggregáció) — eltérő szemantika, hook nem illik.
 
-- [ ] 91. **`databases` context-use migration** (DataContext singleton):
+- [x] 91. **`databases` context-use migration** (DataContext singleton, 1. ütem): (2026-04-21)
     - A `DataContext` már exportálja a `databases` / `storage` példányt a context value-ban (harden pass #82 fallout). A korábbi 4+ komponens még saját `new Databases(getClient())` példányt képez.
     - Érintett: sweep `grep -rn "new Databases(getClient" packages/maestro-dashboard/src` — várható call-site-ok: `WorkflowDesignerPage.jsx`, `features/workflowDesigner/api.js`, `organization/*Tab.jsx`, egyéb helyek.
     - Javasolt: minden call-site váltson `const { databases } = useData()`-ra (provider-on belül), a `features/workflowDesigner/api.js` típusú modulok kapjanak `databases` paramétert.
+    - **Implementálva (1. ütem — `new Databases(getClient())` minta)**: `hooks/useContributorGroups.js` (databasesRef → `useData()`), `components/organization/CreateEditorialOfficeModal.jsx` (useMemo → `useData()`), `components/publications/GeneralTab.jsx` (archivált workflow fallback → `useData()`). Szándékosan nem érintett: `features/workflowDesigner/WorkflowDesignerRedirect.jsx:39` — a komponens **DataProvider-en kívül mount-ol** (az `App.jsx` legacy redirect route-jai nem bugyolálják `DataProvider`-be, mert csak egy `navigate()` háttérfetch-et csinál, nem hoz létre full designer állapotot). Külön task (#92) tárgyalja a második ütemet (`new Databases(client)` variáns sweepje) és a WorkflowDesignerRedirect szigetelését.
     - **Előny**: egyetlen Appwrite Databases instance per DataProvider — lépéseltartalékos konfiguráció-váltásnál (pl. endpoint rotáció) kiszámíthatóbb, és a teszteléshez mock-olható.
+
+#### L. Harden follow-upok — 2. ütem (2026-04-21)
+
+> Forrás: a K. szekció (#89–#91) implementáció közben feltárt tangenciális findingok. Mindegyik self-contained task, a K-tól függetlenül ütemezhető.
+
+- [ ] 92. **`new Databases(client)` sweep (második ütem)**:
+    - A #91 eredeti grep (`new Databases(getClient`) kihagyta azokat a call-site-okat, ahol a komponens előbb `getClient()`-ből kikéri a `client`-et, majd `new Databases(client)` konstruál (ugyanaz a probléma, más írásmód).
+    - **Provider-scope definíció** (App.jsx alapján): csak a `/` (DashboardLayoutWithProviders) és `/workflows/*` (WorkflowDesignerWithProviders) route-fák vannak DataProvider-en belül. A `/settings/*` és `/onboarding` AuthSplitLayout alatt renderel, DataProvider nélkül. A modal-ok aszerint „benne" vagy „kívül", hogy a megnyitó komponens melyik fán él.
+    - Feltárt call-site-ok (2026-04-21 utáni újravizsgálat):
+      - `routes/settings/GroupsRoute.jsx:37` — **DataProvider-en kívül** (AuthSplitLayout → `/settings/groups`), saját client-singleton kell.
+      - `components/organization/OrganizationSettingsModal.jsx:71` — **DataProvider-en belül**: kizárólag `DashboardLayout.jsx:170` és `BreadcrumbHeader.jsx:151`-ből nyílik, mindkettő DashboardLayoutWithProviders alatt él. Cserélhető `useData().databases`-re.
+      - `components/organization/EditorialOfficeSettingsModal.jsx:68` — **DataProvider-en belül** (a Harden pass simplify lépésében már megcsinálta).
+      - `components/organization/CreateEditorialOfficeModal.jsx:86` — **DataProvider-en belül** (#91 már megcsinálta): parent `OrganizationSettingsModal` a DashboardLayout alatt él.
+      - `features/workflowDesigner/WorkflowDesignerPage.jsx:219, 558` — DataProvider-en belül, cserélhető `useData().databases`-re.
+      - `contexts/AuthContext.jsx:58` — modul-szintű singleton (provider előtt fut) — szándékos, NEM módosítandó.
+      - `features/workflowDesigner/WorkflowDesignerRedirect.jsx:39` (getClient-változat) — DataProvider-en kívül (legacy URL redirect, App.jsx megjegyzi).
+    - Javasolt:
+      - `WorkflowDesignerPage.jsx` 2 helyen + `OrganizationSettingsModal.jsx` → `useData()` (gyors nyereség).
+      - `GroupsRoute.jsx` + `WorkflowDesignerRedirect.jsx` maradhat saját client-singleton, vagy egy könnyű `useAppwriteDatabases()` hook az `AuthProvider` szintjén (ott már úgyis él egy client) — ez utóbbi a #93-hoz csatolva.
+    - **Előny**: teljes lefedettség a #91 intent-jére; konzisztens Appwrite-példány-kezelés minden hívónál.
+
+- [ ] 93. **`WorkflowDesignerRedirect` stale-client vizsgálat**:
+    - A komponens `App.jsx`-ben **DataProvider-en kívül** van routelve (a `_docs`-ban jelzett „legacy URL redirectek" kategória). Saját `new Databases(getClient())` példányt képez a `features/workflowDesigner/WorkflowDesignerRedirect.jsx:39`-ben.
+    - Kérdés: a dual-proxy endpoint rotáció (`EndpointManager` fallback → primary visszakapcsolás) során a `getClient()` által visszaadott client friss-e minden hívásnál, vagy lehet stale `client` a `Databases` példányban? A plugin oldalon az `EndpointManager` cserél — a dashboard oldalán (custom domain) ez nem releváns, de érdemes explicit dokumentálni.
+    - Javasolt: vagy (a) áthelyezni a redirect logikát oda, ahol `DataProvider` van (és az exponált singletont használni); vagy (b) egy mini kommentet írni, hogy miért OK ez az izoláció itt; vagy (c) közös `useAppwriteDatabases()` hook az `AuthProvider` szintjén, ami minden route-on rendelkezésre áll.
+
+- [ ] 94. **`UsersTab.jsx:131` copy-link dialog → `openCopyDialog` util**:
+    - A `window.prompt('Másold ki a meghívó linket:', link)` hívás azonos UX-problémákkal küzd (blokkoló, stílusozhatatlan, screen reader), de **nem input** — read-only clipboard fallback egy szerkeszthető szövegmezőben.
+    - Javasolt: `openCopyDialog({ title, value, successToast })` util — egy egyszerű modal, amely megmutatja az értéket olvasásra, egy „Másolás a vágólapra" gomb, ha sikerült → `showToast('Másolva', 'success')`; a prompt fallback a régi UX-et őrzi, ha a clipboard API nem elérhető.
+    - **Előny**: konzisztens modal-alapú UI a #89 migrációval; mobile-on is használható; screen reader-friendly.
+
+- [ ] 95. **`DataContext.jsx:605` value object memoization**:
+    - A `DataContext` provider `value` objektuma (`<DataContext.Provider value={{ … }}>`) nem `useMemo`-ba van csomagolva. Minden re-render új objektumot ad, ami a context-consumer-eket ok nélkül triggerelheti. Harden pass #82-#91 közben 2+ új mező került be (`databases`, `storage`), ami a csak ezeket olvasó komponenseknél (pl. `useContributorGroups`, `CreateEditorialOfficeModal`) felesleges re-render-t okozhat.
+    - Javasolt: `useMemo(() => ({ …all fields… }), [deps])` — minden state/ref/callback dependency listázva.
+    - Megfontolás: ha a context value sok funkciót és state-et tartalmaz, a memo deps-lista is nagyra nő — érdemes lehet a `value`-t több provider-re bontani (data vs. helpers), vagy mezőcsoportonkénti memo-ra.
+    - **Előny**: csökkentett re-render zaj a context-consumer-eknél; a harden pass #82–#91 után a providerben több mező van, nagyobb lett a surface area.
+
+- [ ] 96. **`CreateEditorialOfficeModal` workflows prefetch → DataContext**:
+    - A modal a szerkesztőség létrehozáskor megkérdezi az org-szintű workflow-kat (klónozható kiindulópontként). Ez egy önálló `listDocuments` hívás, pedig a `DataContext.workflows` már tartalmazza őket (scope-szűrt).
+    - Javasolt: a modal olvassa a `useData().workflows`-ből, szűrve `visibility === 'organization'`-ra — nincs duplikált fetch, nincs külön Realtime-szinkron.
+    - **Megjegyzés**: a `CreateEditorialOfficeModal` minden jelenlegi nyitási útja DataProvider-en belül van (`DashboardLayout` és `OrganizationSettingsModal/GeneralTab` is a DashboardLayoutWithProviders fa alatt él — ld. #92), így a `useData().workflows` olvasás biztonságos. Ha egyszer megjelenik settings-route-on (DataProvider nélkül) nyíló útvonal, a hozzáférést akkor kell újragondolni (összefügg #93-mal: közös `useAppwriteDatabases()` hook az `AuthProvider` szintjén, amelyhez a workflow cache is csatolható).
+    - **Előny**: nincs redundáns fetch, nincs késleltetés a modal nyitáskor; egy Realtime forrás az egész appban.
 
 ### Manuális smoke test checklist
 
