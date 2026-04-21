@@ -15,7 +15,7 @@
  *   />
  */
 
-import React, { useState, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useRef, useMemo, useCallback, useEffect } from 'react';
 import usePopoverClose from '../hooks/usePopoverClose.js';
 
 /**
@@ -55,6 +55,16 @@ export default function BreadcrumbDropdown({
     const close = useCallback(() => setIsOpen(false), []);
     usePopoverClose(containerRef, isOpen, close);
 
+    // Ha `disabled` menet közben billen true-ra (pl. scope-váltás közben a menü
+    // nyitva van), a menüt explicit zárjuk — különben a `disabled` vissza-flip-jén
+    // a menü stale-open állapotban újra megjelenne user-akció nélkül.
+    useEffect(() => {
+        if (disabled) setIsOpen(false);
+    }, [disabled]);
+
+    // Disabled csak az interakciókat blokkolja (handleToggle korai visszatérés,
+    // menü nem renderelődik) — a vizuális állapot (aktív név, suffix) megmarad,
+    // hogy a user tudja melyik scope-on van. A `disabledTitle` tooltip magyarázza a blokkolás okát.
     const activeName = useMemo(
         () => items.find(i => i.id === activeId)?.name,
         [items, activeId]
@@ -95,9 +105,10 @@ export default function BreadcrumbDropdown({
         <div className="bc-dropdown" ref={containerRef}>
             <button
                 type="button"
-                className={`bc-dropdown-trigger ${isOpen ? 'open' : ''} ${isStatic || isDirectSettings ? 'static' : ''} ${className}`}
+                className={`bc-dropdown-trigger ${isOpen ? 'open' : ''} ${isStatic || isDirectSettings ? 'static' : ''} ${disabled ? 'disabled' : ''} ${className}`}
                 onClick={handleToggle}
-                disabled={disabled}
+                aria-disabled={disabled || undefined}
+                tabIndex={disabled ? -1 : undefined}
                 title={disabled ? disabledTitle : (isDirectSettings ? settingsLabel : undefined)}
                 aria-haspopup={isDirectSettings ? 'dialog' : (!isStatic ? 'listbox' : undefined)}
                 aria-expanded={isOpen || undefined}
@@ -115,14 +126,14 @@ export default function BreadcrumbDropdown({
                         {labelSuffix}
                     </span>
                 )}
-                {!isStatic && !isDirectSettings && (
+                {!isStatic && !isDirectSettings && !disabled && (
                     <span className="bc-dropdown-chevron" aria-hidden="true">
                         {isOpen ? '▴' : '▾'}
                     </span>
                 )}
             </button>
 
-            {isOpen && (
+            {isOpen && !disabled && (
                 <div className="bc-dropdown-menu" role="listbox">
                     {onSettings && (
                         <>

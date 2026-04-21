@@ -107,7 +107,7 @@
     white-space: nowrap;
 }
 
-.bc-dropdown-trigger:hover:not(:disabled):not(.static) {
+.bc-dropdown-trigger:hover:not(.disabled):not(.static) {
     background: var(--bg-elevated);
     color: var(--text-primary);
 }
@@ -122,7 +122,10 @@
     cursor: default;
 }
 
-.bc-dropdown-trigger:disabled {
+/* aria-disabled + `.disabled` class → a native `disabled` attribútum helyett, mert
+   a disabled gombok nem váltanak hover eseményt Chrome/Safariban, így a `title`
+   tooltip sem jelenik meg. A handleToggle korai visszatéréssel blokkolja a klikket. */
+.bc-dropdown-trigger.disabled {
     opacity: 0.5;
     cursor: not-allowed;
 }

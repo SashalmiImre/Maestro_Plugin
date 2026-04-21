@@ -140,6 +140,9 @@ export default function WorkflowLibraryPanel({
     // a lekérést. A bootstrap idempotens és server-side owner-gated — nem-owner
     // user-nél a hiba felszínre kerül a hívónál.
     const schemaHealedRef = useRef(false);
+    // Per-org denial cache: ha egy orgban a user nem owner, itt rögzítjük azt az orgId-t.
+    // Org-váltáskor (ahol owner lehet) ne blokkoljon a cache — ezért Set, nem boolean.
+    const bootstrapDeniedOrgsRef = useRef(new Set());
     const runArchivedQuery = useCallback(async () => {
         const client = getClient();
         const databases = new Databases(client);
@@ -155,6 +158,12 @@ export default function WorkflowLibraryPanel({
                     ]),
                     Query.and([
                         Query.equal('visibility', 'editorial_office'),
+                        Query.equal('editorialOfficeId', activeEditorialOfficeId)
+                    ]),
+                    // Legacy fallback: régi workflows `visibility` nélkül, a DataContext aktív
+                    // ágával szimmetrikusan — az archivált nézet is mutassa őket az office-on.
+                    Query.and([
+                        Query.isNull('visibility'),
                         Query.equal('editorialOfficeId', activeEditorialOfficeId)
                     ])
                 ]),
@@ -177,14 +186,47 @@ export default function WorkflowLibraryPanel({
                 const msg = err?.message || '';
                 const isSchemaMiss = msg.includes('archivedAt') &&
                     (msg.includes('not found in schema') || msg.includes('Attribute not found'));
-                if (isSchemaMiss && !schemaHealedRef.current) {
-                    schemaHealedRef.current = true;
-                    console.info('[WorkflowLibraryPanel] archivedAt schema hiány — bootstrap futtatás…');
-                    await bootstrapWorkflowSchema();
-                    result = await runArchivedQuery();
-                } else {
-                    throw err;
+                if (!isSchemaMiss || schemaHealedRef.current) throw err;
+
+                // Ez az org már kapott owner-denial-t → ne spammeljük a CF-et. Org-váltás után
+                // (ahol a user owner lehet) a cache nem blokkol, mert más orgId.
+                if (bootstrapDeniedOrgsRef.current.has(activeOrganizationId)) {
+                    setArchivedError('Az archiválási funkció még nincs aktiválva ebben a környezetben. Kérd meg a szervezet owner-ét, hogy futtassa a workflow schema bootstrap-ot.');
+                    return;
                 }
+
+                console.info('[WorkflowLibraryPanel] archivedAt schema hiány — bootstrap futtatás…');
+                try {
+                    await bootstrapWorkflowSchema();
+                } catch (bootstrapErr) {
+                    // `err.code === 'insufficient_role'` → non-owner, cache-eljük az aktív orgra
+                    // hogy a tab újranyitás ne hívja újra a CF-et, de másik orgban (ahol owner lehet) érvényes maradjon.
+                    if (bootstrapErr?.code === 'insufficient_role') {
+                        bootstrapDeniedOrgsRef.current.add(activeOrganizationId);
+                        setArchivedError('Az archiválási funkció még nincs aktiválva ebben a környezetben. Kérd meg a szervezet owner-ét, hogy futtassa a workflow schema bootstrap-ot.');
+                    } else {
+                        setArchivedError('Az archivált workflow-k lekérése nem elérhető — a workflows collection schema hiányos (archivedAt). Owner-ként futtasd a bootstrap_workflow_schema CF action-t.');
+                    }
+                    return;
+                }
+
+                // Bootstrap sikerült → query retry. Ha az Appwrite attribute propagation
+                // még nem végzett, célzott üzenet: a user pár másodperc múlva újrapróbálkozhat.
+                try {
+                    result = await runArchivedQuery();
+                } catch (retryErr) {
+                    const retryMsg = retryErr?.message || '';
+                    const stillMissing = retryMsg.includes('archivedAt') &&
+                        (retryMsg.includes('not found in schema') || retryMsg.includes('Attribute not found'));
+                    if (stillMissing) {
+                        // Ref false marad → következő tab-váltás újrapróbálja (bootstrap már kész, csak query retry).
+                        setArchivedError('A schema bootstrap sikerült, de az attribútum még propagál — nyisd meg újra az archivált fület pár másodperc múlva.');
+                        return;
+                    }
+                    throw retryErr;
+                }
+                // Csak a teljes heal (bootstrap + első sikeres query) után billen true-ra.
+                schemaHealedRef.current = true;
             }
             setArchivedWorkflows(result.documents);
         } catch (err) {

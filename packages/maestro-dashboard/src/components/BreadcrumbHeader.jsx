@@ -97,6 +97,11 @@ export default function BreadcrumbHeader({
         && officeItems[0]?.id === activeEditorialOfficeId
         && officeItems[0]?.name === DEFAULT_OFFICE_NAME;
 
+    // Setup pending: 0 office VAGY csak a legacy „Általános" default + nincs kiadvány.
+    // A dropdown ilyenkor disabled, a user a közép empty-state CTA-ján keresztül indít.
+    const isOfficeSetupPending = officeItems.length === 0
+        || (isDefaultOnlyOffice && pubItems.length === 0);
+
     // User avatar menü
     const userMenuItems = useMemo(() => [
         {
@@ -198,6 +203,8 @@ export default function BreadcrumbHeader({
                     onSettings={isActiveOfficeInScope ? handleEditorialOfficeSettings : undefined}
                     moreItemsLabel="További szerkesztőségek"
                     labelSuffix={isDefaultOnlyOffice ? 'alapértelmezett' : undefined}
+                    disabled={isOfficeSetupPending}
+                    disabledTitle="Először hozz létre egy szerkesztőséget a Szervezet beállításokban"
                 />
 
                 <span className="breadcrumb-separator" aria-hidden="true">/</span>

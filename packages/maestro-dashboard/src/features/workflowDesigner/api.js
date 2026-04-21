@@ -431,17 +431,24 @@ export async function deleteWorkflow(editorialOfficeId, workflowId) {
  * a `workflows` collection-ön. Owner only. Egyszeri adminisztratív művelet.
  *
  * @returns {Promise<{ success: boolean, created: string[], skipped: string[], note?: string }>}
- * @throws {Error} Ha a CF hívás sikertelen
+ * @throws {Error} Ha a CF hívás sikertelen. A dobott `err.code` a CF `reason`-jét
+ *   tükrözi — `'insufficient_role'` non-owner esetén, egyéb CF reason egyébként.
+ *   A hívók a `err.code`-ra branch-elhetnek a lokalizált üzenet-parszolás helyett.
  */
 export async function bootstrapWorkflowSchema() {
     const response = await callCF({ action: 'bootstrap_workflow_schema' });
 
     if (!response.success) {
         const reason = response.reason || 'unknown_error';
+        // Strukturált error code — a hívó lokalizált üzenet helyett `err.code`-ra branch-elhet.
         if (reason === 'insufficient_role') {
-            throw new Error('Csak owner jogosultságú felhasználó futtathatja.');
+            const err = new Error('Csak owner jogosultságú felhasználó futtathatja.');
+            err.code = 'insufficient_role';
+            throw err;
         }
-        throw new Error(`Schema bootstrap hiba: ${reason}`);
+        const err = new Error(`Schema bootstrap hiba: ${reason}`);
+        err.code = reason;
+        throw err;
     }
 
     return response;

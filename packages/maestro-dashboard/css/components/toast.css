@@ -4,7 +4,9 @@
     position: fixed;
     bottom: 20px;
     right: 20px;
-    z-index: 1000;
+    /* A Modal stack BASE 1000 + index*10 — a toast-nak ennek fölé kell esnie,
+       különben a modalból kiváltott success/error üzenet az overlay mögé kerül. */
+    z-index: 10000;
     display: flex;
     flex-direction: column;
     gap: var(--space-2);
