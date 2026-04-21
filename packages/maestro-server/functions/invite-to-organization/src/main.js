@@ -149,6 +149,7 @@ const VALID_ACTIONS = new Set([
     'create_workflow', 'update_workflow',
     'update_workflow_metadata',
     'delete_workflow', 'duplicate_workflow',
+    'archive_workflow', 'restore_workflow',
     'update_organization',
     'create_editorial_office', 'update_editorial_office',
     'delete_organization', 'delete_editorial_office',
