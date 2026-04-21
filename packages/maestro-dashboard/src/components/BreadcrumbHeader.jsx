@@ -28,6 +28,10 @@ import WorkflowLibraryPanel from './workflows/WorkflowLibraryPanel.jsx';
 // jelzi, hogy a user tudja: valódi (átnevezhető) név, nem placeholder.
 const DEFAULT_OFFICE_NAME = 'Általános';
 
+// Setup-pending scope ("nincs igazi szerkesztőség" ág) disabled tooltipje.
+// Az office dropdown és a workflow chip ugyanerre a guard-ra hivatkozik.
+const SETUP_PENDING_TOOLTIP = 'Először hozz létre egy szerkesztőséget a Szervezet beállításokban';
+
 /**
  * @param {Object} props
  * @param {Function} props.onPublicationSelect — (publicationId) => void
@@ -162,8 +166,13 @@ export default function BreadcrumbHeader({
         });
     }
 
+    // Setup-pending scope-ban (0 office VAGY legacy default „Általános" + 0 pub)
+    // a workflow-könyvtár megnyitása zavaró UX: a user épp az első szerkesztőség
+    // létrehozását prekonfigurálja (empty-state CTA).
+    const isWorkflowDisabled = !activeEditorialOfficeId || isOfficeSetupPending;
+
     function handleWorkflowLibrary() {
-        if (!activeEditorialOfficeId) return;
+        if (isWorkflowDisabled) return;
         openModal(<WorkflowLibraryPanel context="breadcrumb" />, {
             size: 'xl',
             title: 'Workflow könyvtár'
@@ -200,7 +209,7 @@ export default function BreadcrumbHeader({
                     moreItemsLabel="További szerkesztőségek"
                     labelSuffix={isDefaultOnlyOffice && !isOfficeSetupPending ? 'alapértelmezett' : undefined}
                     disabled={isOfficeSetupPending}
-                    disabledTitle="Először hozz létre egy szerkesztőséget a Szervezet beállításokban"
+                    disabledTitle={SETUP_PENDING_TOOLTIP}
                 />
 
                 <span className="breadcrumb-separator" aria-hidden="true">/</span>
@@ -223,10 +232,10 @@ export default function BreadcrumbHeader({
                     type="button"
                     className="breadcrumb-chip"
                     onClick={handleWorkflowLibrary}
-                    disabled={!activeEditorialOfficeId}
-                    title={activeEditorialOfficeId
-                        ? 'Workflow könyvtár megnyitása'
-                        : 'Először válassz szerkesztőséget'}
+                    disabled={isWorkflowDisabled}
+                    title={isWorkflowDisabled
+                        ? (isOfficeSetupPending ? SETUP_PENDING_TOOLTIP : 'Először válassz szerkesztőséget')
+                        : 'Workflow könyvtár megnyitása'}
                     aria-label="Workflow könyvtár"
                 >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">

@@ -361,15 +361,25 @@ tags: [feladatok]
         - Legacy `archivedAt` schema auto-heal eltávolítása → iter 1-ben tudatos döntés (admin op nem piggyback navigáción); user-facing üzenet instruálja az owner-t.
         - Loading state a Panel content-re fetch közben → minor UX polish, nem a task része.
 
-- [ ] 99. **Eltérő screen-ek szerkesztőség nélküli szervezeteknél**
-      A Ringier-nél és a Marquard-nál is más, más kezdőképernyő látható, pedig egyiknek sincs szerkesztősége. Ez adódhat abból, hogy a Ringier egy frissen létrehozott kiadó a Marquardnak viszont már volt egyszer egy szerkesztősége ami törölve lett, de az viszont szerintem hibás működés, hogy ha nincs szerkesztőség, akkor a workflow gomb kattintható. A Ringier-nél ez disabled.
-      ![[Screenshot 2026-04-21 at 21.14.28.png|553]]
-      ![[Screenshot 2026-04-21 at 21.14.41.png]]
+- [x] 99. **Eltérő screen-ek szerkesztőség nélküli szervezeteknél**: (2026-04-21)
+      Bug: a Ringier-nél (0 office) a workflow chip disabled, a Marquard-nál (1 legacy default „Általános" + 0 publikáció) viszont kattintható — pedig a sibling „Szerkesztőség" dropdown mindkét esetben `isOfficeSetupPending` alapján disabled. A szöveges különbség (0 vs 1 office) szándékos.
+      - **Gyökérok**: [BreadcrumbHeader.jsx:226](packages/maestro-dashboard/src/components/BreadcrumbHeader.jsx:226) a workflow chip csak `!activeEditorialOfficeId`-t nézte, míg a `Szerkesztőség` dropdown `isOfficeSetupPending`-et (= `officeItems.length === 0 || (isDefaultOnlyOffice && pubItems.length === 0)`). Legacy default office esetén `activeEditorialOfficeId` truthy, de a workflow-könyvtár megnyitása UX-ileg félrevezető, mert a user az empty-state CTA-n a valódi szerkesztőség-létrehozást készül el.
+      - **Fix**: új `isWorkflowDisabled = !activeEditorialOfficeId || isOfficeSetupPending` — a chip `disabled` és a `handleWorkflowLibrary` guard erre hivatkozik. Tooltip három állapotra (setup-pending / nincs office kiválasztva / megnyitás). Az eddig két helyen duplikált `'Először hozz létre egy szerkesztőséget…'` szöveg `SETUP_PENDING_TOOLTIP` modul-szintű const-ként kiemelve (DEFAULT_OFFICE_NAME mintájára).
+      - **Harden** (3-way review, 1 iteráció + Iter 0 simplify): codex ✅ CLEAN, adversarial ✅ APPROVE, Claude review ✅ CLEAN a scope-ra. Simplify pass: tooltip const extract + WHY-only komment trim (a WHAT-narráló mondat törölve).
+      - **Visszatartva** (out-of-scope, pre-existing):
+        - `!activeEditorialOfficeId` nem validálja, hogy az ID a scoped `officeItems`-ben van-e (stale localStorage race window 1 frame-ig); pre-diff is így volt. Strict javítás `isActiveOfficeInScope`-pal később külön task, ha a race-t problémának találjuk.
+        - Chrome `<button disabled>`-on nem rendereli a `title` tooltip-et; Safari/Firefox igen. `aria-label` megmaradt screen reader-nek. UX design-döntés, külön iterációban.
 
 #### N. UI review
 
+> **Workflow minden pontnál:**
+> 1. `/roast` elemzés az adott modulra (kockázatok, overengineering, edge case-ek)
+> 2. Kérdések tisztázása
+> 3. `/harden` futtatás
+> 4. ✅ Kipipálás
+ 
 - [ ] N-01. **A Workflow Library Panel modernizálása**
-      A @Maestro Web Dashboard/src/components/workflows/WorkflowLibraryPanel.jsx -et szeretném tovább modernizálni. Elsődleges szempont a könnyű használhatóság lenne, ennek felméréséhez használd a Claude Design skilleket (pl. /design-critique) acél, egy kítűnő UX élmény. A láthatósági scope kezelésére is készíthetünk egy speciális UI elemet. A legegyszerűbb megoldás egy olyan gombcsoport lenne (a gombcsoportnak ránézésre egy darab UI elemnek kellene lennie, az én fejemben egy olyan elem van ami úgy néz ki mint egy nagyobb gomb, ami a több elemre van tagolva), aminek az egyes gombjai kétállásúak lennének. Ha benyomom bekapcsol, ha újra benyomom kikapcsol. Így lehetne a scope szűrőt állítani. Ha minden gomb be van nyomva, akkor az felelne meg a mostani Mind nyomógombnak. Természetesen illeszkedjen a mostani design-hez, és tegyük el egy újrafelhasználható elemként, még máshol is használhatjuk a jövőben.
+      A @Maestro Web Dashboard/src/components/workflows/WorkflowLibraryPanel.jsx -et szeretném tovább modernizálni. Elsődleges szempont a könnyű használhatóság lenne, ennek felméréséhez használd a Claude Design skilleket (pl. /design-critique) acél, egy kitűnő UX élmény. A láthatósági scope kezelésére is készíthetünk egy speciális UI elemet. A legegyszerűbb megoldás egy olyan gombcsoport lenne (a gombcsoportnak ránézésre egy darab UI elemnek kellene lennie, az én fejemben egy olyan elem van ami úgy néz ki mint egy nagyobb gomb, ami a több elemre van tagolva), aminek az egyes gombjai kétállásúak lennének. Ha benyomom bekapcsol, ha újra benyomom kikapcsol. Így lehetne a scope szűrőt állítani. Ha minden gomb be van nyomva, akkor az felelne meg a mostani Mind nyomógombnak. Természetesen illeszkedjen a mostani design-hez, és tegyük el egy újrafelhasználható elemként, még máshol is használhatjuk a jövőben.
       Az egész dashboardon be kellene állítani egy egységes badge kinézetet, nekem az @Maestro Web Dashboard/src/components/ArticleRow.jsx -ben használt LockLabel megfelelő lenne. A @Maestro Web Dashboard/src/components/workflows/WorkflowLibraryPanel.jsx-ben most használt badge-ek nekem inkább egy gombhoz hasonlítanak.
       Az archivált tab-on lévő workflow-knál érdemes lenne azt is feltüntetni, hogy mikor kerülnek törlésre
       Mind a két tabon a workflow-kat lehessen nézni ikonos nézetben és soros nézetben.
