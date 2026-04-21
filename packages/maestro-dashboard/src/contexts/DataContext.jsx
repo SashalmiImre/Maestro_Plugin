@@ -46,6 +46,11 @@ export function DataProvider({ children }) {
     const [deadlines, setDeadlines] = useState([]);
     const [validations, setValidations] = useState([]);
     const [workflows, setWorkflows] = useState([]);
+    // Archivált workflow-k külön lista — a WorkflowLibraryPanel „Archivált" fülének
+    // forrása. Scope-váltáskor előre letöltjük, hogy a tab-címke `(N)` számláló
+    // azonnal látsszon, ne csak tab-kattintáskor. Realtime karbantartott.
+    const [archivedWorkflows, setArchivedWorkflows] = useState([]);
+    const [archivedWorkflowsError, setArchivedWorkflowsError] = useState('');
     const [activePublicationId, setActivePublicationIdState] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
 
@@ -53,6 +58,23 @@ export function DataProvider({ children }) {
     const activePublicationIdRef = useRef(null);
     // Az aktuális kiadvány article $id-jainak Set-je — validáció Realtime szűréshez
     const articleIdsRef = useRef(new Set());
+    // Workflow legutóbb látott $updatedAt-ja `id` szerint (union mindkét listából).
+    // Out-of-order Realtime események esetén (pl. stale archive egy newer restore
+    // UTÁN) védi a cross-list upsert-et: az `isStaleUpdate` önmagában csak a target
+    // listában véd, de ha a newer verzió a MÁSIK listában ül, a target listbe
+    // stale payload INSERT-je duplikátumot hozna létre. A globális ref alapján
+    // eldobjuk a globálisan elavult eseményt még mielőtt listákat mozgatnánk.
+    // Scope-váltáskor NEM ürítjük: a $updatedAt per-doc monoton, egy visszatérő
+    // scope ugyanazt a baseline-t látja; a `fetchWorkflow` / `fetchArchivedWorkflows`
+    // `seedWorkflowVersions` (>= semantika) az új scope doc-jaira felülírja a régit.
+    // A `seedWorkflowVersions` `union` jellege miatt a két fetch race-mentesen
+    // képzi a teljes baseline-t — egymás seedjét nem törlik.
+    const workflowLatestUpdatedAtRef = useRef(new Map());
+    // Archivált fetch generáció-számláló — A→B→A gyors váltásnál az első A-hívás
+    // késlekedő válasza ne írja felül a második A-hívás eredményét. Minden call
+    // bumpolja; closure-ben capture-öljük a saját gen-t, await után ha már nem
+    // egyezik az aktuális gen-nel → eldobjuk a választ.
+    const archivedFetchGenRef = useRef(0);
 
     // Scope refek — a create metódusok olvassák, hogy callback closure-ök nélkül mindig
     // a legfrissebb aktív organization/office ID-ra injektáljanak scope mezőket.
@@ -297,6 +319,7 @@ export function DataProvider({ children }) {
             });
 
             setWorkflows(result.documents);
+            seedWorkflowVersions(workflowLatestUpdatedAtRef.current, result.documents);
         } catch (err) {
             console.error('[DataContext] Workflow fetch hiba:', err);
         }
@@ -306,6 +329,78 @@ export function DataProvider({ children }) {
     useEffect(() => {
         fetchWorkflow();
     }, [fetchWorkflow, activeEditorialOfficeId, activeOrganizationId]);
+
+    // Archivált workflow-k eager fetch — scope-váltáskor előre letölti, hogy a
+    // WorkflowLibraryPanel „Archivált (N)" fül címke azonnal látható legyen.
+    // Schema-miss (legacy env, `archivedAt` attribútum hiányzik) nem triggerel
+    // bootstrap-ot: a schema migráció admin művelet, amit a dashboard-navigáció
+    // nem indíthat implicit módon (adversarial flag). A user-facing hibaüzenet
+    // az Archivált fülön megjelenik — owner-ként manuálisan fut a CF action.
+    const fetchArchivedWorkflows = useCallback(async () => {
+        const gen = ++archivedFetchGenRef.current;
+        const editorialOfficeId = activeEditorialOfficeIdRef.current;
+        const organizationId = activeOrganizationIdRef.current;
+        if (!editorialOfficeId || !organizationId) {
+            setArchivedWorkflows([]);
+            setArchivedWorkflowsError('');
+            return;
+        }
+
+        // Stale lista törlése scope-váltáskor — ha a fetch hibával zárul, ne
+        // maradjon az előző scope archivált listája a UI-on.
+        setArchivedWorkflows([]);
+        setArchivedWorkflowsError('');
+
+        // Scope-race + generáció-védelem: A→B→A gyors scope-váltásnál (ugyanaz a
+        // scope-key, de új fetch-generáció) a régebbi fetch eredménye ne írja
+        // felül az újét. A generáció-check a ref-egyezést is redundánsan biztosítja.
+        const isStale = () =>
+            archivedFetchGenRef.current !== gen ||
+            activeEditorialOfficeIdRef.current !== editorialOfficeId ||
+            activeOrganizationIdRef.current !== organizationId;
+
+        try {
+            const result = await databases.listDocuments({
+                databaseId: DATABASE_ID,
+                collectionId: COLLECTIONS.WORKFLOWS,
+                queries: [
+                    ...buildWorkflowVisibilityQueries({ organizationId, editorialOfficeId, archived: true }),
+                    Query.orderDesc('archivedAt'),
+                    Query.limit(100)
+                ]
+            });
+            if (isStale()) return;
+            // Fetch-vs-Realtime stale-védelem: ha mid-flight Realtime közben egy
+            // archivált workflow-t restore-oltak (versionsMap[$id] = T_restore),
+            // a REST snapshot régebbi $updatedAt-tal ne írja vissza az archivált
+            // tabra. A REST-absence NEM dönthető el mid-flight addition-nek vs.
+            // visibility-shrinkage-nek (trust-boundary) — ezért a REST snapshot
+            // az authoritatív a scope-ra, mid-flight Realtime additions esetleg
+            // elveszhetnek a következő eventig (alacsony valószínűségű UX cost,
+            // cserébe nem leakelünk out-of-scope prev item-et).
+            const versionsMap = workflowLatestUpdatedAtRef.current;
+            setArchivedWorkflows(result.documents.filter(d => {
+                const lastSeen = versionsMap.get(d.$id);
+                return !lastSeen || !d.$updatedAt || d.$updatedAt >= lastSeen;
+            }));
+            seedWorkflowVersions(versionsMap, result.documents);
+        } catch (err) {
+            if (isStale()) return;
+            const msg = err?.message || '';
+            const isSchemaMiss = msg.includes('archivedAt') &&
+                (msg.includes('not found in schema') || msg.includes('Attribute not found'));
+            if (isSchemaMiss) {
+                setArchivedWorkflowsError('Az archiválási funkció még nincs aktiválva ebben a környezetben. Kérd meg a szervezet owner-ét, hogy futtassa a workflow schema bootstrap-ot.');
+            } else {
+                console.error('[DataContext] Archivált workflow fetch hiba:', err);
+                setArchivedWorkflowsError('Archivált workflow-k lekérése sikertelen.');
+            }
+        }
+    }, [databases]);
+
+    useEffect(() => {
+        fetchArchivedWorkflows();
+    }, [fetchArchivedWorkflows, activeEditorialOfficeId, activeOrganizationId]);
 
     // Opt-in, nem cache-elt lekérdezés a szervezet workflow-jaira (minden office,
     // minden visibility, archivált is) — megkerüli a `workflows[]` scope-szűrést,
@@ -614,7 +709,7 @@ export function DataProvider({ children }) {
                         applyWorkflowEvent(eventType, payload, {
                             organizationId: activeOrganizationIdRef.current,
                             editorialOfficeId: activeEditorialOfficeIdRef.current
-                        }, setWorkflows);
+                        }, setWorkflows, setArchivedWorkflows, workflowLatestUpdatedAtRef.current);
                         break;
                 }
             } catch (error) {
@@ -635,7 +730,7 @@ export function DataProvider({ children }) {
     // átad (state + callback + stabil singleton).
     const value = useMemo(() => ({
         publications, articles, layouts, deadlines, validations,
-        workflow, workflows,
+        workflow, workflows, archivedWorkflows, archivedWorkflowsError,
         activePublicationId, isLoading,
         // Appwrite szolgáltatások — a fogyasztók ezt vegyék át, ne képezzenek
         // saját `new Databases(getClient())` instance-t (singleton per Provider).
@@ -650,7 +745,7 @@ export function DataProvider({ children }) {
         updateArticle
     }), [
         publications, articles, layouts, deadlines, validations,
-        workflow, workflows,
+        workflow, workflows, archivedWorkflows, archivedWorkflowsError,
         activePublicationId, isLoading,
         databases, storage,
         fetchPublications, switchPublication, fetchWorkflow,
@@ -794,26 +889,78 @@ function applyDeadlineEvent(eventType, payload, pubIdRef, setDeadlines) {
  * Workflow Realtime handler (#80 — 3-way visibility + archivedAt szűrés).
  * A `workflow` useMemo (a származtatott compiled) automatikusan recompute-ol
  * az aktív publikáció `workflowId`-ja alapján, amint a `setWorkflows` frissít.
+ *
+ * #98: archive/restore átmenet a `workflows` ↔ `archivedWorkflows` listák között
+ * mozgat — a listákat mindkét irányban karbantartja, hogy a WorkflowLibraryPanel
+ * Aktív/Archivált számláló azonnal tükrözze a változást.
  */
-function applyWorkflowEvent(eventType, payload, scope, setWorkflows) {
+function removeById(setter, id) {
+    setter(prev => {
+        const idx = prev.findIndex(w => w.$id === id);
+        return idx >= 0 ? prev.filter(w => w.$id !== id) : prev;
+    });
+}
+
+// Kezdeti fetch eredményével feltöltjük a verzió-ref-et — induló stale események
+// elvetéséhez szükséges baseline (máskülönben egy older event upsert-elne first ciklusban).
+// Csak `$updatedAt` truthy-ra settelünk: ha valamiért hiányozna a doc-on (nem várt),
+// egy későbbi stale-check `undefined < string` összehasonlítása nem védene.
+function seedWorkflowVersions(versionsMap, docs) {
+    for (const d of docs) {
+        if (!d.$updatedAt) continue;
+        const cur = versionsMap.get(d.$id);
+        if (!cur || d.$updatedAt >= cur) {
+            versionsMap.set(d.$id, d.$updatedAt);
+        }
+    }
+}
+
+function applyWorkflowEvent(eventType, payload, scope, setWorkflows, setArchivedWorkflows, versionsMap) {
     if (eventType === 'delete') {
-        setWorkflows(prev => {
-            const idx = prev.findIndex(w => w.$id === payload.$id);
-            return idx >= 0 ? prev.filter(w => w.$id !== payload.$id) : prev;
-        });
+        // 7-napos purge vagy manuális törlés — mindkét listából szűrünk (idempotens).
+        // versionsMap entry törlése: a doc többé nem él, a baseline-t nem tartjuk.
+        versionsMap.delete(payload.$id);
+        removeById(setWorkflows, payload.$id);
+        removeById(setArchivedWorkflows, payload.$id);
+        return;
+    }
+
+    // Globális stale-védelem: out-of-order Realtime kézbesítés esetén (stale archive
+    // event a newer restore UTÁN, vagy fordítva) a per-lista `isStaleUpdate` csak a
+    // target listát védi; ha a newer verzió a másik listában ül, az upsert duplikátumot
+    // hozna létre. Ezért a ref a legutóbbi látott $updatedAt-ot tartja union-szinten,
+    // és globálisan elavult eseményt elvetjük, mielőtt bármit is mozgatnánk.
+    const lastSeen = versionsMap.get(payload.$id);
+    if (lastSeen && payload.$updatedAt && payload.$updatedAt < lastSeen) return;
+    if (payload.$updatedAt) versionsMap.set(payload.$id, payload.$updatedAt);
+
+    if (!isWorkflowInScope(payload, scope)) {
+        // Scope-on kívülre csúszott (pl. visibility shrinkage más officere).
+        removeById(setWorkflows, payload.$id);
+        removeById(setArchivedWorkflows, payload.$id);
         return;
     }
 
     const isArchived = typeof payload.archivedAt === 'string' && payload.archivedAt.length > 0;
-    if (isArchived || !isWorkflowInScope(payload, scope)) {
-        // No-op rebuild elkerülése: ha amúgy sincs a listában, ne képezzünk új array-t.
-        setWorkflows(prev => {
+
+    if (isArchived) {
+        // Archivált → aktív-listából törlés + upsert az archiváltba (archivedAt DESC).
+        removeById(setWorkflows, payload.$id);
+        setArchivedWorkflows(prev => {
             const idx = prev.findIndex(w => w.$id === payload.$id);
-            return idx >= 0 ? prev.filter(w => w.$id !== payload.$id) : prev;
+            if (idx >= 0) {
+                if (isStaleUpdate(prev[idx], payload)) return prev;
+                const next = [...prev];
+                next[idx] = payload;
+                return next.sort((a, b) => (b.archivedAt || '').localeCompare(a.archivedAt || ''));
+            }
+            return [...prev, payload].sort((a, b) => (b.archivedAt || '').localeCompare(a.archivedAt || ''));
         });
         return;
     }
 
+    // Aktív → archivált-listából törlés (restore) + upsert az aktívba (name ASC).
+    removeById(setArchivedWorkflows, payload.$id);
     setWorkflows(prev => {
         const idx = prev.findIndex(w => w.$id === payload.$id);
         if (idx >= 0) {

@@ -7,7 +7,7 @@
  *     workflow-t `onSelect` callback adja vissza a hívónak.
  *
  * Aktív lista: `DataContext.workflows` (Realtime, 3-way visibility).
- * Archivált lista: tab-váltáskor külön fetch, nem függ a Realtime bus-tól.
+ * Archivált lista: `DataContext.archivedWorkflows` (Realtime, eager fetch scope-ra).
  *
  * Jogosultság-gate-ek a CF-ben enforce-olva (#81, fail-closed); itt csak UI-t
  * szűrünk, hogy biztosan elutasított hívást ne küldjünk:
@@ -16,9 +16,8 @@
  *   - Duplikálás + új létrehozás: org owner/admin.
  */
 
-import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Query } from 'appwrite';
 import { useData } from '../../contexts/DataContext.jsx';
 import { useAuth } from '../../contexts/AuthContext.jsx';
 import { useScope } from '../../contexts/ScopeContext.jsx';
@@ -33,17 +32,12 @@ import {
     WORKFLOW_VISIBILITY_RANK,
     WORKFLOW_VISIBILITY_LABELS
 } from '@shared/constants.js';
-import { DATABASE_ID, COLLECTIONS } from '../../config.js';
-import {
-    buildWorkflowVisibilityQueries,
-    getWorkflowVisibility
-} from '../../utils/workflowVisibility.js';
+import { getWorkflowVisibility } from '../../utils/workflowVisibility.js';
 import {
     archiveWorkflow,
     restoreWorkflow,
     updateWorkflowMetadata,
-    duplicateWorkflow,
-    bootstrapWorkflowSchema
+    duplicateWorkflow
 } from '../../features/workflowDesigner/api.js';
 import { openCreateWorkflowModal } from './CreateWorkflowModal.jsx';
 import { workflowPath } from '../../routes/paths.js';
@@ -91,7 +85,7 @@ export default function WorkflowLibraryPanel({
     onSelect
 }) {
     const navigate = useNavigate();
-    const { workflows, getMemberName, databases } = useData();
+    const { workflows, archivedWorkflows, archivedWorkflowsError, getMemberName } = useData();
     const { user } = useAuth();
     const { activeOrganizationId, activeEditorialOfficeId } = useScope();
     const { openModal, closeModal } = useModal();
@@ -102,9 +96,6 @@ export default function WorkflowLibraryPanel({
     const [searchQuery, setSearchQuery] = useState('');
     const [scopeFilter, setScopeFilter] = useState(SCOPE_FILTER.ALL);
     const [tab, setTab] = useState('active');
-    const [archivedWorkflows, setArchivedWorkflows] = useState([]);
-    const [archivedLoading, setArchivedLoading] = useState(false);
-    const [archivedError, setArchivedError] = useState('');
     const [actionPending, setActionPending] = useState(null);
     const [openKebabId, setOpenKebabId] = useState(null);
 
@@ -113,99 +104,6 @@ export default function WorkflowLibraryPanel({
 
     // ── Caller jogosultság ───
     const { isOrgAdmin } = useOrgRole(activeOrganizationId);
-
-    // ── Archivált fetch ───
-    // Auto-heal: ha a `archivedAt` attribútum nincs még a collection schema-ban
-    // (régebbi Appwrite instance, nem futott a bootstrap_workflow_schema action),
-    // akkor csendben meghívjuk a schema bootstrap CF action-t és újrapróbáljuk
-    // a lekérést. A bootstrap idempotens és server-side owner-gated — nem-owner
-    // user-nél a hiba felszínre kerül a hívónál.
-    const schemaHealedRef = useRef(false);
-    // Per-org denial cache: ha egy orgban a user nem owner, itt rögzítjük azt az orgId-t.
-    // Org-váltáskor (ahol owner lehet) ne blokkoljon a cache — ezért Set, nem boolean.
-    const bootstrapDeniedOrgsRef = useRef(new Set());
-    const runArchivedQuery = useCallback(async () => {
-        return databases.listDocuments({
-            databaseId: DATABASE_ID,
-            collectionId: COLLECTIONS.WORKFLOWS,
-            queries: [
-                ...buildWorkflowVisibilityQueries({
-                    organizationId: activeOrganizationId,
-                    editorialOfficeId: activeEditorialOfficeId,
-                    archived: true
-                }),
-                Query.orderDesc('archivedAt'),
-                Query.limit(100)
-            ]
-        });
-    }, [databases, activeEditorialOfficeId, activeOrganizationId]);
-
-    const fetchArchived = useCallback(async () => {
-        if (!activeEditorialOfficeId || !activeOrganizationId) return;
-        setArchivedLoading(true);
-        setArchivedError('');
-        try {
-            let result;
-            try {
-                result = await runArchivedQuery();
-            } catch (err) {
-                const msg = err?.message || '';
-                const isSchemaMiss = msg.includes('archivedAt') &&
-                    (msg.includes('not found in schema') || msg.includes('Attribute not found'));
-                if (!isSchemaMiss || schemaHealedRef.current) throw err;
-
-                // Ez az org már kapott owner-denial-t → ne spammeljük a CF-et. Org-váltás után
-                // (ahol a user owner lehet) a cache nem blokkol, mert más orgId.
-                if (bootstrapDeniedOrgsRef.current.has(activeOrganizationId)) {
-                    setArchivedError('Az archiválási funkció még nincs aktiválva ebben a környezetben. Kérd meg a szervezet owner-ét, hogy futtassa a workflow schema bootstrap-ot.');
-                    return;
-                }
-
-                console.info('[WorkflowLibraryPanel] archivedAt schema hiány — bootstrap futtatás…');
-                try {
-                    await bootstrapWorkflowSchema();
-                } catch (bootstrapErr) {
-                    // `err.code === 'insufficient_role'` → non-owner, cache-eljük az aktív orgra
-                    // hogy a tab újranyitás ne hívja újra a CF-et, de másik orgban (ahol owner lehet) érvényes maradjon.
-                    if (bootstrapErr?.code === 'insufficient_role') {
-                        bootstrapDeniedOrgsRef.current.add(activeOrganizationId);
-                        setArchivedError('Az archiválási funkció még nincs aktiválva ebben a környezetben. Kérd meg a szervezet owner-ét, hogy futtassa a workflow schema bootstrap-ot.');
-                    } else {
-                        setArchivedError('Az archivált workflow-k lekérése nem elérhető — a workflows collection schema hiányos (archivedAt). Owner-ként futtasd a bootstrap_workflow_schema CF action-t.');
-                    }
-                    return;
-                }
-
-                // Bootstrap sikerült → query retry. Ha az Appwrite attribute propagation
-                // még nem végzett, célzott üzenet: a user pár másodperc múlva újrapróbálkozhat.
-                try {
-                    result = await runArchivedQuery();
-                } catch (retryErr) {
-                    const retryMsg = retryErr?.message || '';
-                    const stillMissing = retryMsg.includes('archivedAt') &&
-                        (retryMsg.includes('not found in schema') || retryMsg.includes('Attribute not found'));
-                    if (stillMissing) {
-                        // Ref false marad → következő tab-váltás újrapróbálja (bootstrap már kész, csak query retry).
-                        setArchivedError('A schema bootstrap sikerült, de az attribútum még propagál — nyisd meg újra az archivált fület pár másodperc múlva.');
-                        return;
-                    }
-                    throw retryErr;
-                }
-                // Csak a teljes heal (bootstrap + első sikeres query) után billen true-ra.
-                schemaHealedRef.current = true;
-            }
-            setArchivedWorkflows(result.documents);
-        } catch (err) {
-            console.error('[WorkflowLibraryPanel] Archivált lekérés hiba:', err);
-            setArchivedError(err?.message || 'Archivált workflow-k lekérése sikertelen.');
-        } finally {
-            setArchivedLoading(false);
-        }
-    }, [activeEditorialOfficeId, activeOrganizationId, runArchivedQuery]);
-
-    useEffect(() => {
-        if (tab === 'archived') fetchArchived();
-    }, [tab, fetchArchived]);
 
     // ── Szűrt + rendezett lista ───
     const visibleWorkflows = useMemo(() => {
@@ -407,7 +305,8 @@ export default function WorkflowLibraryPanel({
         try {
             await restoreWorkflow(workflow.editorialOfficeId, workflow.$id);
             showToast('Workflow visszaállítva.', 'success');
-            await fetchArchived();
+            // A listák frissülése a DataContext Realtime workflow handler-jén keresztül
+            // történik (archivált → aktív átvándorlás).
         } catch (err) {
             showToast(err?.message || 'Visszaállítás sikertelen.', 'error');
         } finally {
@@ -465,17 +364,15 @@ export default function WorkflowLibraryPanel({
                     className={`tab${tab === 'archived' ? ' active' : ''}`}
                     onClick={() => setTab('archived')}
                 >
-                    Archivált{tab === 'archived' || archivedCount > 0 ? ` (${archivedCount})` : ''}
+                    Archivált ({archivedCount})
                 </button>
             </div>
 
-            {tab === 'archived' && archivedError && (
-                <div className="form-error-global">{archivedError}</div>
+            {tab === 'archived' && archivedWorkflowsError && (
+                <div className="form-error-global">{archivedWorkflowsError}</div>
             )}
 
-            {tab === 'archived' && archivedLoading ? (
-                <div className="form-empty-state">Betöltés…</div>
-            ) : visibleWorkflows.length === 0 ? (
+            {visibleWorkflows.length === 0 ? (
                 <div className="form-empty-state">
                     {searchQuery || scopeFilter !== SCOPE_FILTER.ALL
                         ? 'Nincs találat a szűrőknek.'

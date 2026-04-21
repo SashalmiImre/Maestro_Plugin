@@ -92,14 +92,21 @@ export default function DashboardLayout() {
         return () => { cancelled = true; };
     }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-    // Scope váltás (szervezet / szerkesztőség) → kiadványok és workflow újralekérése
-    const prevOfficeIdRef = useRef(activeEditorialOfficeId);
+    // Scope váltás → újralekérés. Üres scope-ra (office nélküli új szervezet)
+    // is le kell futnia: a `fetchPublications` / `fetchWorkflow` null office-ra
+    // clearelik a saját listájukat, a `switchPublication(null)` pedig az
+    // articles/layouts/deadlines/validations state-et. Korai return esetén a
+    // régi scope publications-je bennragadna → `isOnboarding` sose igaz.
+    //
+    // Szervezet+office tuple kulcsként — két no-office szervezet közötti váltást
+    // is trigerel (pl. Ringier→újabb no-office org), mert az `officeId === null`
+    // önmagában nem változna, de az `orgId` igen.
+    const prevScopeKeyRef = useRef(`${activeOrganizationId || ''}:${activeEditorialOfficeId || ''}`);
     useEffect(() => {
         if (!isInitialized) return;
-        if (activeEditorialOfficeId === prevOfficeIdRef.current) return;
-        prevOfficeIdRef.current = activeEditorialOfficeId;
-
-        if (!activeEditorialOfficeId) return;
+        const scopeKey = `${activeOrganizationId || ''}:${activeEditorialOfficeId || ''}`;
+        if (scopeKey === prevScopeKeyRef.current) return;
+        prevScopeKeyRef.current = scopeKey;
 
         let cancelled = false;
 
@@ -112,7 +119,6 @@ export default function DashboardLayout() {
                 if (pubs.length > 0) {
                     await switchPublication(pubs[0].$id);
                 } else {
-                    // Nincs kiadvány az új scope-ban — korábbi adat törlése
                     await switchPublication(null);
                 }
             } catch {
@@ -121,7 +127,7 @@ export default function DashboardLayout() {
         })();
 
         return () => { cancelled = true; };
-    }, [activeEditorialOfficeId, isInitialized]); // eslint-disable-line react-hooks/exhaustive-deps
+    }, [activeOrganizationId, activeEditorialOfficeId, isInitialized]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // Üres office → új kiadvány auto-select. Ha a DataContext Realtime handlere
     // (scope-szűrt publications subscribe) új kiadványt ad a `publications`-höz,

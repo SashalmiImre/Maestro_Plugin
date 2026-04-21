@@ -309,6 +309,18 @@ tags: [feladatok]
     - **Fogyasztók (migráció kész)**: `GroupsRoute.jsx` (#101), `WorkflowDesignerRedirect.jsx` (#93 követő).
     - **Szándékosan NEM érintett**: `DataProvider.servicesRef` — a Provider saját lifecycle-je a scope-reset miatt megmarad. Funkcionálisan ekvivalens (mindkettő ugyanarra a modul-szintű `client`-re épül), csak a Provider izoláció marad egyértelmű. `AuthContext.jsx` modul-szintű `const databases/functions` — szándékos, a public export ezekre mutat.
 
+- [ ] 103. **`fetchWorkflow` scope-race guard szimmetria** (2026-04-21, #98 follow-up):
+    - A `DataContext.fetchArchivedWorkflows` a #98 harden során kapott `isScopeStale()` closure-guardot + `archivedFetchGenRef` gen-countert (A→B→A race védelem). A `fetchWorkflow` ugyanakkor még mindig „first-fetch wins" jellegű: rapid scope-váltásnál (A → B) az A response, ha késik, felülírhatja B `workflows` state-jét.
+    - **Kockázat (pre-existing)**: kis valószínűségű (dupla-fetch védelem + request-in-flight kooperál), de elvi szintjén a #98-cal szimmetrikus bug maradt meg az aktív workflows listán.
+    - **Javasolt fix**: ugyanaz a minta mint a #98-nál — zárjuk be a `fetchWorkflow` belsejében az `activeEditorialOfficeIdRef.current` + `activeOrganizationIdRef.current` pillanatot closure-ba, + opcionális `fetchWorkflowGenRef`-ot, és post-await `isStale()` check `setWorkflows`/`seedWorkflowVersions` hívás előtt.
+    - **Mikor indokolt**: ha race-problémát figyelünk meg (stale workflows list marad egy scope-váltás után), vagy ha az aktív lista is kap hasonló Realtime dual-list felelősséget (pl. visibility-szűrés dinamikus változása).
+
+- [ ] 104. **`Archivált` tab content loading state** (2026-04-21, #98 follow-up, minor UX):
+    - A #98 megoldás eagerly fetcheli az archivált workflow-kat scope-váltáskor. Fetch közben az `archivedWorkflows` üres tömb, tehát a Panel tab-content a `Nincs archivált workflow.` empty state-et mutatja a `Betöltés…` helyett (amit a korábbi lazy fetch mutatott).
+    - **Impact**: csak az első scope-váltásnál + lassú hálózatnál látszik, <1 másodperc tipikusan. A tab-címke szám (fő feladat) korrektül megjelenik.
+    - **Javasolt fix**: `archivedWorkflowsLoading` boolean state a DataContext-be, `fetchArchivedWorkflows` start-nél `true`, try/catch finally-ben `false`. A Panel content-je: `if (archivedWorkflowsLoading) → 'Betöltés…'` az empty-state előtt.
+    - **Mikor indokolt**: ha explicit user feedback érkezik vagy ha a #97-99 scope-nélküli képernyő javításokkal együtt felülvizsgáljuk az üres-állapot UX-et.
+
 #### M. Felhasználói észrevétel
 
 > **Workflow minden pontnál:**
@@ -317,17 +329,54 @@ tags: [feladatok]
 > 3. `/harden` futtatás
 > 4. ✅ Kipipálás
  
-- [ ] 97.  **Szervezetváltás**
-      Létrehoztam egy új szervezetet Ringier néven, és ha szervezetet váltok egy olyan szervezetre aminek már van szerkesztősége és kiadványa, akkor nem vált vissza a splash screen. Érdekes módon, ha olyan szervezetek közt váltok amiknek nincs se szerkesztősége így kiadványa sem, akkor működik a váltás. Ha szeretnéd a problémát Chrome MCP-vel megvizsgálni, akkor az alábbi szervezetek közti váltásra fókuszálj kérlek:
-      Ringier -> Central Médiacsoport: Működik
-      Central Médiacsoport -> Ringier: Nem működik
-      Ringier -> Marquard: Működik
-      Marquard -> Ringier: Nem működik
-      Marquard -> Central Médiacsoport: Működik
-      Central Médiacsoport -> Marquard: Működik
+- [x] 97. **Szervezetváltás**: (2026-04-21)
+      Bug: office nélküli új szervezetre (pl. Ringier) váltáskor a régi scope `publications` state-je bennragadt — az `ArticleTable` nem tűnt el és az onboarding splash sosem jelent meg.
+      - **Gyökérok**: [DashboardLayout.jsx:102](packages/maestro-dashboard/src/routes/dashboard/DashboardLayout.jsx:102) scope-váltás effect `if (!activeEditorialOfficeId) return;` korai visszatérése. A `ScopeContext` stale-ID validáció `setActiveOffice(null)`-ra állít, ha az új szervezetnek nincs szerkesztősége — a guard ezen az ágon blokkolja a `fetchPublications` / `switchPublication(null)` clear-elést, így a `publications.length > 0` miatt az `isOnboarding` feltétel (`publications.length === 0`) sose teljesül.
+      - **Fix**: a guard-return eltávolítva. A `fetchPublications()` null office-ra `setPublications([])`-t ad (DataContext.jsx:87-89), `fetchWorkflow()` null scope-ra `setWorkflows([])`-t ad (DataContext.jsx:283-286), `switchPublication(null)` clearel articles/layouts/deadlines/validations-t. Mind null-tolerant, ezért a belső feltételes guard is redundáns volt.
+      - **Harden**: 3-way review (codex / codex adversarial / Claude agent) egyaránt CLEAN egy iterációban. Minden megmaradt megfigyelés pre-existing (pl. `fetchWorkflow` dupla-fetch a DataContext scope-effect és a DashboardLayout effect között) vagy premature future-proofing — a fix scope-ján kívül.
 
-- [ ] 98. **Archivált workflow-k száma**
-      Amikor megnyitjuk a @Maestro Web Dashboard/src/components/workflows/WorkflowLibraryPanel.jsx-et, akkor az Archív tabon nem látszik, hogy mennyi archivált workflow van csak akkor, hogy ha rákattintunk és elindul a fetch.
+- [x] 98. **Archivált workflow-k száma**: (2026-04-21)
+      Bug: `WorkflowLibraryPanel` megnyitáskor az Archivált tab-címke csak `Archivált` (vagy `Archivált (N)` ha N>0) — de az N csak a tab-ra kattintás utáni lazy fetch után töltődött be, nem azonnal.
+      - **Gyökérok**: [WorkflowLibraryPanel.jsx:206-208](packages/maestro-dashboard/src/components/workflows/WorkflowLibraryPanel.jsx:206) a `fetchArchived` csak `tab === 'archived'`-re futott; a tab-label `Archivált{tab === 'archived' || archivedCount > 0 ? ` (${archivedCount})` : ''}` conditional feltétele miatt modal-nyitáskor nem látszott szám.
+      - **Fix**: archivált workflow-k state központosítva a `DataContext`-be (scope-eager fetch + Realtime dual-list handler). A Panel csak consumer — nincs saját fetch/schema-heal/loading state.
+        - [DataContext.jsx:50-54](packages/maestro-dashboard/src/contexts/DataContext.jsx:50) új `archivedWorkflows` + `archivedWorkflowsError` state.
+        - [DataContext.jsx:61-74](packages/maestro-dashboard/src/contexts/DataContext.jsx:61) `workflowLatestUpdatedAtRef` (Map `$id → $updatedAt`) — globális version-ref, out-of-order Realtime események stale cross-list upsert-jét blokkolja.
+        - [DataContext.jsx:76-80](packages/maestro-dashboard/src/contexts/DataContext.jsx:76) `archivedFetchGenRef` — A→B→A scope-váltás gen-guard a REST response race-re.
+        - [DataContext.jsx:337-398](packages/maestro-dashboard/src/contexts/DataContext.jsx:337) `fetchArchivedWorkflows` callback: scope-race + gen guard, filter-only (nem-merge) a REST snapshot-ra, stale cross-list visibility-leak védelem.
+        - [DataContext.jsx:946-1007](packages/maestro-dashboard/src/contexts/DataContext.jsx:946) `applyWorkflowEvent` refactor: 6-arg signature (`setWorkflows`, `setArchivedWorkflows`, `versionsMap`), delete törli a versionsMap entry-t, globális stale-check minden event-re, archive↔restore átmenet mindkét listán karbantartott.
+        - [WorkflowLibraryPanel.jsx:88](packages/maestro-dashboard/src/components/workflows/WorkflowLibraryPanel.jsx:88) `archivedWorkflows` + `archivedWorkflowsError` destructured from `useData()`; local state/fetch/schema-heal removed.
+      - **Harden (3-way review, 4+ iteráció)**:
+        - Iter 0 simplify + Maestro audit: magyar WHY-kommentek, import sorrend, nincs BC shim.
+        - Iter 1: adversarial MEDIUM (auto-bootstrap on navigation unsafe) → bootstrap eltávolítva a fetch path-ból, user-friendly hibaüzenet helyette; Claude MEDIUM stale-list (fetch hibánál előző scope data) → clear at fetch start.
+        - Iter 2: all 3 reviewers flagged scope-race → `isScopeStale()` closure guard post-await.
+        - Iter 3: codex P2 cross-list duplicate out-of-order event → `workflowLatestUpdatedAtRef` globális version-check.
+        - Iter 4: Claude MEDIUM scope-clear baseline-silence + seedWorkflowVersions undefined guard + komment typos → javítva; adversarial HIGH no-office-to-no-office scope → DashboardLayout `prevScopeKeyRef` (orgId:officeId tuple).
+        - Iter 5: mindhárom reviewer flagged `.clear()` races with `fetchWorkflow` seed → `.clear()` eltávolítva (monoton $updatedAt + union `>=` seed elegendő); codex P2 A→B→A race → `archivedFetchGenRef` gen-counter.
+        - Iter 6: codex P2 fetch-vs-Realtime race → filter+merge pattern hozzáadva.
+        - Iter 7: adversarial HIGH merge preserves out-of-scope items (trust-boundary leak) → merge eltávolítva, filter-only (trade-off: rare mid-flight archive esemény elveszhet, cserébe nincs out-of-scope leak).
+      - **Visszatartva** (out-of-scope, pre-existing, vagy tudatos döntés):
+        - `fetchWorkflow` scope-race guard hiánya → pre-existing, szimmetrikus fix külön task.
+        - `Archivált (0)` unconditioner megjelenítése → task-szándék (mindig látszik a szám).
+        - `restoreWorkflow` Realtime-függősége (nincs optimistic local update) → konzisztens az `archiveWorkflow` pattern-nel, Realtime bus megbízható ([dashboard-realtime-bus.md](~/.claude/projects/-Users-imre-sashalmi-Documents-Maestro-Plugin/memory/dashboard-realtime-bus.md)).
+        - Legacy `archivedAt` schema auto-heal eltávolítása → iter 1-ben tudatos döntés (admin op nem piggyback navigáción); user-facing üzenet instruálja az owner-t.
+        - Loading state a Panel content-re fetch közben → minor UX polish, nem a task része.
+
+- [ ] 99. **Eltérő screen-ek szerkesztőség nélküli szervezeteknél**
+      A Ringier-nél és a Marquard-nál is más, más kezdőképernyő látható, pedig egyiknek sincs szerkesztősége. Ez adódhat abból, hogy a Ringier egy frissen létrehozott kiadó a Marquardnak viszont már volt egyszer egy szerkesztősége ami törölve lett, de az viszont szerintem hibás működés, hogy ha nincs szerkesztőség, akkor a workflow gomb kattintható. A Ringier-nél ez disabled.
+      ![[Screenshot 2026-04-21 at 21.14.28.png|553]]
+      ![[Screenshot 2026-04-21 at 21.14.41.png]]
+
+#### N. UI review
+
+- [ ] N-01. **A Workflow Library Panel modernizálása**
+      A @Maestro Web Dashboard/src/components/workflows/WorkflowLibraryPanel.jsx -et szeretném tovább modernizálni. Elsődleges szempont a könnyű használhatóság lenne, ennek felméréséhez használd a Claude Design skilleket (pl. /design-critique) acél, egy kítűnő UX élmény. A láthatósági scope kezelésére is készíthetünk egy speciális UI elemet. A legegyszerűbb megoldás egy olyan gombcsoport lenne (a gombcsoportnak ránézésre egy darab UI elemnek kellene lennie, az én fejemben egy olyan elem van ami úgy néz ki mint egy nagyobb gomb, ami a több elemre van tagolva), aminek az egyes gombjai kétállásúak lennének. Ha benyomom bekapcsol, ha újra benyomom kikapcsol. Így lehetne a scope szűrőt állítani. Ha minden gomb be van nyomva, akkor az felelne meg a mostani Mind nyomógombnak. Természetesen illeszkedjen a mostani design-hez, és tegyük el egy újrafelhasználható elemként, még máshol is használhatjuk a jövőben.
+      Az egész dashboardon be kellene állítani egy egységes badge kinézetet, nekem az @Maestro Web Dashboard/src/components/ArticleRow.jsx -ben használt LockLabel megfelelő lenne. A @Maestro Web Dashboard/src/components/workflows/WorkflowLibraryPanel.jsx-ben most használt badge-ek nekem inkább egy gombhoz hasonlítanak.
+      Az archivált tab-on lévő workflow-knál érdemes lenne azt is feltüntetni, hogy mikor kerülnek törlésre
+      Mind a két tabon a workflow-kat lehessen nézni ikonos nézetben és soros nézetben.
+      A tabok váltásánál nincs meg az a modal animáció ami a méretezeésnél működik már a beállítások panelen, ezt szeretném ha mindig megvalósulna.
+      Ha bármi olyan változik ami érinti a @Maestro Web Dashboard/design-system.md-t, akkor azokkal frissítsük!
+
+
 
 ### Manuális smoke test checklist
 
