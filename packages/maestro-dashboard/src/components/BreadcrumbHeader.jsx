@@ -3,10 +3,8 @@
  *
  * Breadcrumb fejléc: Maestro logó → Szervezet → Szerkesztőség → Publikáció.
  * Minden dropdown tetején „Beállítások", alatta ABC rendezett opciók.
- * Jobb oldalon: nézet váltó (táblázat/elrendezés), szűrő gomb, UserAvatar.
- *
- * A „Beállítások" menüpontok egyelőre a meglévő route-okra navigálnak;
- * a modal-alapú beállítások a Fázis 4-ben érkeznek.
+ * Jobb oldalon: workflow-chip (#82 — `WorkflowLibraryPanel`), nézet váltó
+ * (táblázat/elrendezés), szűrő gomb, cikk-szám és UserAvatar.
  */
 
 import React, { useMemo } from 'react';
@@ -26,10 +24,8 @@ import MaestroSettingsModal from './organization/MaestroSettingsModal.jsx';
 import WorkflowLibraryPanel from './workflows/WorkflowLibraryPanel.jsx';
 
 // Legacy marker: a `bootstrap_organization` CF 2026-04-20 előtt auto-létrehozott
-// egy „Általános" nevű első szerkesztőséget. Ha a user nem nevezte át, a
-// breadcrumb-ban halvány „alapértelmezett" jelzéssel tudatjuk, hogy ez valódi
-// (átnevezhető) név, nem placeholder. Új orgok már office nélkül jönnek létre,
-// de a legacy rekordok miatt a jelzés továbbra is él.
+// egy „Általános" nevű office-t. A breadcrumb ezt „alapértelmezett" suffix-szel
+// jelzi, hogy a user tudja: valódi (átnevezhető) név, nem placeholder.
 const DEFAULT_OFFICE_NAME = 'Általános';
 
 /**

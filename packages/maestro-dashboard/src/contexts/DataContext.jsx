@@ -1,8 +1,20 @@
 /**
  * Maestro Dashboard — Data Context
  *
- * Központi adat állapot: kiadványok, cikkek, határidők, validációk.
- * Appwrite REST lekérés + Realtime szinkronizáció.
+ * Központi adat állapot: kiadványok, cikkek, layoutok, határidők, validációk,
+ * workflow-k (3-way visibility + derived compiled). Appwrite REST lekérés +
+ * megosztott Realtime bus (`contexts/realtimeBus.js`) — minden fogyasztó
+ * ezen keresztül iratkozik fel.
+ *
+ * A `$updatedAt` elavulás-védelem (`isStaleUpdate`) és a workflow Realtime
+ * ág (`applyWorkflowEvent`) modul-scope helperekből dolgozik — a handler
+ * branch-ek így 1:1-ben követik a többi ág (article/layout/deadline/validation)
+ * struktúráját, és a 3-way visibility logikát a közös
+ * `utils/workflowVisibility.js` helper szolgáltatja.
+ *
+ * A Provider-szintű `databases` / `storage` példányokat a context value
+ * exportálja — a fogyasztók ezt vegyék át, NE képezzenek saját
+ * `new Databases(getClient())` instance-t.
  */
 
 import React, { createContext, useContext, useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
@@ -11,10 +23,13 @@ import { getClient } from './AuthContext.jsx';
 import { subscribeRealtime, collectionChannel } from './realtimeBus.js';
 import { useScope } from './ScopeContext.jsx';
 import {
-    DATABASE_ID, COLLECTIONS, BUCKETS,
+    DATABASE_ID, COLLECTIONS,
     PAGE_SIZE, TEAM_CACHE_DURATION_MS
 } from '../config.js';
-import { WORKFLOW_VISIBILITY, WORKFLOW_VISIBILITY_DEFAULT } from '@shared/constants.js';
+import {
+    buildWorkflowVisibilityQueries,
+    isWorkflowInScope
+} from '../utils/workflowVisibility.js';
 
 const DataContext = createContext(null);
 
@@ -258,10 +273,10 @@ export function DataProvider({ children }) {
     // nincs workflowId, az első (név szerint rendezett) workflow a fallback. Ezt a
     // filterek / jogosultsági hookok / Workflow Designer használják.
 
-    // 3-way visibility fetch (#80): az aktív officeId ÉS az aktív orgId szerint
-    // egyaránt szűr, plusz a `public` workflow-kat minden authentikált user látja.
-    // Az `archivedAt IS NULL` szűrés kizárja a soft-delete-elteket — azok a
-    // `WorkflowLibraryPanel` külön „Archívum" nézetében tölthetők be.
+    // 3-way visibility fetch (#80): a közös `buildWorkflowVisibilityQueries`
+    // helper építi a Query.or ágat — `WorkflowLibraryPanel.runArchivedQuery`
+    // ugyanezt a helpert használja `archived: true`-val. Az `archivedAt IS NULL`
+    // szűrés itt az aktív nézetet tartja — a soft-delete-ek a Library külön fülén.
     const fetchWorkflow = useCallback(async () => {
         const editorialOfficeId = activeEditorialOfficeIdRef.current;
         const organizationId = activeOrganizationIdRef.current;
@@ -275,23 +290,7 @@ export function DataProvider({ children }) {
                 databaseId: DATABASE_ID,
                 collectionId: COLLECTIONS.WORKFLOWS,
                 queries: [
-                    Query.or([
-                        Query.equal('visibility', WORKFLOW_VISIBILITY.PUBLIC),
-                        Query.and([
-                            Query.equal('visibility', WORKFLOW_VISIBILITY.ORGANIZATION),
-                            Query.equal('organizationId', organizationId)
-                        ]),
-                        Query.and([
-                            Query.equal('visibility', WORKFLOW_VISIBILITY.EDITORIAL_OFFICE),
-                            Query.equal('editorialOfficeId', editorialOfficeId)
-                        ]),
-                        // Legacy fallback: null visibility → editorial_office
-                        Query.and([
-                            Query.isNull('visibility'),
-                            Query.equal('editorialOfficeId', editorialOfficeId)
-                        ])
-                    ]),
-                    Query.isNull('archivedAt'),
+                    ...buildWorkflowVisibilityQueries({ organizationId, editorialOfficeId }),
                     Query.orderAsc('name'),
                     Query.limit(100)
                 ]
@@ -585,54 +584,12 @@ export function DataProvider({ children }) {
                     case 'system_validations':
                         applySystemValidationEvent(eventType, payload, articleIdsRef, setValidations);
                         break;
-                    case 'workflows': {
-                        // #80 — 3-way visibility + archivedAt szűrés. A származtatott
-                        // `workflow` useMemo automatikusan recompute-ol az aktív
-                        // publikáció workflowId-ja alapján.
-                        if (eventType === 'delete') {
-                            setWorkflows((prev) => {
-                                const idx = prev.findIndex((w) => w.$id === payload.$id);
-                                return idx >= 0 ? prev.filter((w) => w.$id !== payload.$id) : prev;
-                            });
-                            break;
-                        }
-                        const activeOfficeId = activeEditorialOfficeIdRef.current;
-                        const activeOrgId = activeOrganizationIdRef.current;
-                        const visibility = payload.visibility || WORKFLOW_VISIBILITY_DEFAULT;
-                        const isVisible =
-                            (visibility === WORKFLOW_VISIBILITY.PUBLIC) ||
-                            (visibility === WORKFLOW_VISIBILITY.ORGANIZATION && payload.organizationId === activeOrgId) ||
-                            (visibility === WORKFLOW_VISIBILITY.EDITORIAL_OFFICE && payload.editorialOfficeId === activeOfficeId);
-                        // Archivált workflow-kat kivesszük a fő listából
-                        const isArchived = typeof payload.archivedAt === 'string' && payload.archivedAt.length > 0;
-                        if (!isVisible || isArchived) {
-                            // No-op rebuild elkerülése: ha nincs is a listában, ne generáljunk új array-t
-                            setWorkflows((prev) => {
-                                const idx = prev.findIndex((w) => w.$id === payload.$id);
-                                return idx >= 0 ? prev.filter((w) => w.$id !== payload.$id) : prev;
-                            });
-                            break;
-                        }
-                        setWorkflows((prev) => {
-                            const idx = prev.findIndex((w) => w.$id === payload.$id);
-                            if (idx >= 0) {
-                                // Elavulás-védelem: echo own write / out-of-order WS esetén a frissebb helyi doc-ot ne írjuk felül
-                                const local = prev[idx];
-                                if (local.$updatedAt && payload.$updatedAt &&
-                                    new Date(local.$updatedAt) > new Date(payload.$updatedAt)) {
-                                    return prev;
-                                }
-                                const next = [...prev];
-                                next[idx] = payload;
-                                next.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-                                return next;
-                            }
-                            const next = [...prev, payload];
-                            next.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
-                            return next;
-                        });
+                    case 'workflows':
+                        applyWorkflowEvent(eventType, payload, {
+                            organizationId: activeOrganizationIdRef.current,
+                            editorialOfficeId: activeEditorialOfficeIdRef.current
+                        }, setWorkflows);
                         break;
-                    }
                 }
             } catch (error) {
                 console.error('Realtime event handler error', {
@@ -648,7 +605,10 @@ export function DataProvider({ children }) {
     const value = {
         publications, articles, layouts, deadlines, validations,
         workflow, workflows,
-        activePublicationId, isLoading, storage,
+        activePublicationId, isLoading,
+        // Appwrite szolgáltatások — a fogyasztók ezt vegyék át, ne képezzenek
+        // saját `new Databases(getClient())` instance-t (singleton per Provider).
+        databases, storage,
         fetchPublications, switchPublication, fetchWorkflow,
         fetchAllGroupMembers, getMemberName,
         // Write-through API
@@ -666,6 +626,18 @@ export function DataProvider({ children }) {
 }
 
 // ─── Realtime segédfüggvények ──────────────────────────────────────────────
+
+/**
+ * Elavulás-védelem a Realtime payload-ra: csak SZIGORÚAN régebbi timestamp-et
+ * dobunk el, hogy gyors egymás utáni (ms-on belüli) írások esetén ne nyeljük
+ * el a második eltérő payload-ot. Appwrite `$updatedAt` ms-pontos — a doc-szintű
+ * serializálás nem garantálja, hogy két érvényes, különböző payload sose kapja
+ * ugyanazt a timestamp-et (pl. DeadlinesTab blur burst).
+ */
+function isStaleUpdate(local, payload) {
+    if (!local?.$updatedAt || !payload?.$updatedAt) return false;
+    return new Date(local.$updatedAt) > new Date(payload.$updatedAt);
+}
 
 function getEventType(events) {
     for (const e of events) {
@@ -698,12 +670,7 @@ function applyArticleEvent(eventType, payload, pubIdRef, setArticles) {
         setArticles(prev => {
             const idx = prev.findIndex(a => a.$id === payload.$id);
             if (idx >= 0) {
-                // Elavulás-védelem
-                const local = prev[idx];
-                if (local.$updatedAt && payload.$updatedAt &&
-                    new Date(local.$updatedAt) > new Date(payload.$updatedAt)) {
-                    return prev;
-                }
+                if (isStaleUpdate(prev[idx], payload)) return prev;
                 const next = [...prev];
                 next[idx] = payload;
                 return next;
@@ -729,13 +696,7 @@ function applyPublicationEvent(eventType, payload, activeOfficeId, setPublicatio
             return idx >= 0 ? prev.filter(p => p.$id !== payload.$id) : prev;
         }
         if (idx >= 0) {
-            // Elavulás-védelem: ha a helyi példány frissebb, ne írjuk felül
-            // (pl. a write-through response után érkező régebbi realtime event).
-            const local = prev[idx];
-            if (local.$updatedAt && payload.$updatedAt &&
-                new Date(local.$updatedAt) > new Date(payload.$updatedAt)) {
-                return prev;
-            }
+            if (isStaleUpdate(prev[idx], payload)) return prev;
             const next = [...prev];
             next[idx] = payload;
             return next;
@@ -753,11 +714,7 @@ function applyLayoutEvent(eventType, payload, pubIdRef, setLayouts) {
         setLayouts(prev => {
             const idx = prev.findIndex(l => l.$id === payload.$id);
             if (idx >= 0) {
-                const local = prev[idx];
-                if (local.$updatedAt && payload.$updatedAt &&
-                    new Date(local.$updatedAt) > new Date(payload.$updatedAt)) {
-                    return prev;
-                }
+                if (isStaleUpdate(prev[idx], payload)) return prev;
                 const next = [...prev];
                 next[idx] = payload;
                 // Az `order` mező változhatott — re-sort, különben rossz sorrendben jelenik meg
@@ -777,13 +734,9 @@ function applyDeadlineEvent(eventType, payload, pubIdRef, setDeadlines) {
         setDeadlines(prev => {
             const idx = prev.findIndex(d => d.$id === payload.$id);
             if (idx >= 0) {
-                // Elavulás-védelem: a DeadlinesTab blur-onként külön hívja az updateDeadline-t,
-                // így egy késleltetett régebbi realtime event könnyen felülírná a frissebb mezőt.
-                const local = prev[idx];
-                if (local.$updatedAt && payload.$updatedAt &&
-                    new Date(local.$updatedAt) > new Date(payload.$updatedAt)) {
-                    return prev;
-                }
+                // A DeadlinesTab blur-onként külön hívja az updateDeadline-t →
+                // könnyen érkezik out-of-order régebbi payload, amit az isStaleUpdate elnyel.
+                if (isStaleUpdate(prev[idx], payload)) return prev;
                 const next = [...prev];
                 next[idx] = payload;
                 return next;
@@ -791,6 +744,42 @@ function applyDeadlineEvent(eventType, payload, pubIdRef, setDeadlines) {
             return [...prev, payload];
         });
     }
+}
+
+/**
+ * Workflow Realtime handler (#80 — 3-way visibility + archivedAt szűrés).
+ * A `workflow` useMemo (a származtatott compiled) automatikusan recompute-ol
+ * az aktív publikáció `workflowId`-ja alapján, amint a `setWorkflows` frissít.
+ */
+function applyWorkflowEvent(eventType, payload, scope, setWorkflows) {
+    if (eventType === 'delete') {
+        setWorkflows(prev => {
+            const idx = prev.findIndex(w => w.$id === payload.$id);
+            return idx >= 0 ? prev.filter(w => w.$id !== payload.$id) : prev;
+        });
+        return;
+    }
+
+    const isArchived = typeof payload.archivedAt === 'string' && payload.archivedAt.length > 0;
+    if (isArchived || !isWorkflowInScope(payload, scope)) {
+        // No-op rebuild elkerülése: ha amúgy sincs a listában, ne képezzünk új array-t.
+        setWorkflows(prev => {
+            const idx = prev.findIndex(w => w.$id === payload.$id);
+            return idx >= 0 ? prev.filter(w => w.$id !== payload.$id) : prev;
+        });
+        return;
+    }
+
+    setWorkflows(prev => {
+        const idx = prev.findIndex(w => w.$id === payload.$id);
+        if (idx >= 0) {
+            if (isStaleUpdate(prev[idx], payload)) return prev;
+            const next = [...prev];
+            next[idx] = payload;
+            return next.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        }
+        return [...prev, payload].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+    });
 }
 
 function applyValidationEvent(eventType, payload, articleIdsRef, setValidations) {

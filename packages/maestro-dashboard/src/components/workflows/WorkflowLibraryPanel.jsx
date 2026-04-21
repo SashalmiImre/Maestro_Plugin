@@ -1,41 +1,24 @@
 /**
  * Maestro Dashboard — WorkflowLibraryPanel
  *
- * Közös workflow könyvtár panel. A #82 lépés a workflow tervezés és a
- * szerkesztőségi beállítások szétválasztását célozza — a workflow-k
- * központi böngészője ebben a modal komponensben él, és két kontextusban
- * használható:
+ * Közös workflow könyvtár panel (#82). Két kontextusban használható:
+ *   - `context="breadcrumb"` — dashboard fejléc → Designer oldal navigáció.
+ *   - `context="publication-assignment"` — kiadvány General fül, a kiválasztott
+ *     workflow-t `onSelect` callback adja vissza a hívónak.
  *
- *   - `context="breadcrumb"` — a dashboard fejlécéből, a kiválasztott
- *     workflow megnyitja a Designer oldalt (`onClose` + navigate).
- *   - `context="publication-assignment"` — a kiadvány General fül
- *     workflow mezőjéhez, a kiválasztott workflow-t `onSelect` callback
- *     adja vissza a hívónak (pl. `updatePublication`-höz).
+ * Aktív lista: `DataContext.workflows` (Realtime, 3-way visibility).
+ * Archivált lista: tab-váltáskor külön fetch, nem függ a Realtime bus-tól.
  *
- * A panel scope-szűrt `workflows` listát kap a `DataContext`-ből (Realtime
- * kész; 3-way visibility: public / organization / editorial_office).
- * Az archivált nézet külön manuális fetch-ből táplálkozik (tab-váltáskor
- * frissül, nem függ a Realtime bus-tól).
- *
- * Jogosultságok (#81 CF-ben enforce-olva — itt UI-ra tükrözött gate-ek):
- *   - Rename / description / archive: `createdBy === caller` VAGY org
- *     owner/admin.
+ * Jogosultság-gate-ek a CF-ben enforce-olva (#81, fail-closed); itt csak UI-t
+ * szűrünk, hogy biztosan elutasított hívást ne küldjünk:
+ *   - Rename / description / archive: `createdBy === caller` VAGY org owner/admin.
  *   - Visibility váltás: csak `createdBy === caller` (tulajdonos).
- *   - Duplikálás: org owner/admin (analóg a `create_workflow` CF gate-tel —
- *     a duplikátum új workflow a target office-ban, ezért ugyanaz a szabály).
- *     A forrás olvashatósága külön ellenőrzés a CF-ben, de a UI szintjén
- *     a gomb csak admin-nak jelenik meg, hogy ne fogadjunk biztosan elutasított
- *     hívást.
- *   - Új létrehozás: org owner/admin.
- *
- * A kebab menü csak a ténylegesen elérhető akciókat mutatja — a CF
- * amúgy is fail-closed, de nem akarunk visszautasított hívásokat.
+ *   - Duplikálás + új létrehozás: org owner/admin.
  */
 
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Databases, Query } from 'appwrite';
-import { getClient } from '../../contexts/AuthContext.jsx';
+import { Query } from 'appwrite';
 import { useData } from '../../contexts/DataContext.jsx';
 import { useAuth } from '../../contexts/AuthContext.jsx';
 import { useScope } from '../../contexts/ScopeContext.jsx';
@@ -45,11 +28,14 @@ import { useConfirm } from '../ConfirmDialog.jsx';
 import usePopoverClose from '../../hooks/usePopoverClose.js';
 import {
     WORKFLOW_VISIBILITY,
-    WORKFLOW_VISIBILITY_DEFAULT,
     WORKFLOW_VISIBILITY_RANK,
     WORKFLOW_VISIBILITY_LABELS
 } from '@shared/constants.js';
 import { DATABASE_ID, COLLECTIONS } from '../../config.js';
+import {
+    buildWorkflowVisibilityQueries,
+    getWorkflowVisibility
+} from '../../utils/workflowVisibility.js';
 import {
     archiveWorkflow,
     restoreWorkflow,
@@ -103,7 +89,7 @@ export default function WorkflowLibraryPanel({
     onSelect
 }) {
     const navigate = useNavigate();
-    const { workflows, getMemberName } = useData();
+    const { workflows, getMemberName, databases } = useData();
     const { user, orgMemberships } = useAuth();
     const { activeOrganizationId, activeEditorialOfficeId } = useScope();
     const { openModal, closeModal } = useModal();
@@ -143,31 +129,16 @@ export default function WorkflowLibraryPanel({
     // Per-org denial cache: ha egy orgban a user nem owner, itt rögzítjük azt az orgId-t.
     // Org-váltáskor (ahol owner lehet) ne blokkoljon a cache — ezért Set, nem boolean.
     const bootstrapDeniedOrgsRef = useRef(new Set());
-    // Databases instance mount-time-on, ne per-call (getClient() singleton)
-    const databases = useMemo(() => new Databases(getClient()), []);
     const runArchivedQuery = useCallback(async () => {
         return databases.listDocuments({
             databaseId: DATABASE_ID,
             collectionId: COLLECTIONS.WORKFLOWS,
             queries: [
-                Query.or([
-                    Query.equal('visibility', WORKFLOW_VISIBILITY.PUBLIC),
-                    Query.and([
-                        Query.equal('visibility', WORKFLOW_VISIBILITY.ORGANIZATION),
-                        Query.equal('organizationId', activeOrganizationId)
-                    ]),
-                    Query.and([
-                        Query.equal('visibility', WORKFLOW_VISIBILITY.EDITORIAL_OFFICE),
-                        Query.equal('editorialOfficeId', activeEditorialOfficeId)
-                    ]),
-                    // Legacy fallback: régi workflows `visibility` nélkül, a DataContext aktív
-                    // ágával szimmetrikusan — az archivált nézet is mutassa őket az office-on.
-                    Query.and([
-                        Query.isNull('visibility'),
-                        Query.equal('editorialOfficeId', activeEditorialOfficeId)
-                    ])
-                ]),
-                Query.isNotNull('archivedAt'),
+                ...buildWorkflowVisibilityQueries({
+                    organizationId: activeOrganizationId,
+                    editorialOfficeId: activeEditorialOfficeId,
+                    archived: true
+                }),
                 Query.orderDesc('archivedAt'),
                 Query.limit(100)
             ]
@@ -248,7 +219,7 @@ export default function WorkflowLibraryPanel({
 
         return [...(source || [])]
             .filter((wf) => {
-                const visibility = wf.visibility || WORKFLOW_VISIBILITY_DEFAULT;
+                const visibility = getWorkflowVisibility(wf);
                 if (scopeFilter === SCOPE_FILTER.OFFICE && visibility !== WORKFLOW_VISIBILITY.EDITORIAL_OFFICE) return false;
                 if (scopeFilter === SCOPE_FILTER.ORGANIZATION && visibility !== WORKFLOW_VISIBILITY.ORGANIZATION) return false;
                 if (scopeFilter === SCOPE_FILTER.PUBLIC && visibility !== WORKFLOW_VISIBILITY.PUBLIC) return false;
@@ -333,8 +304,9 @@ export default function WorkflowLibraryPanel({
     }
 
     async function handleChangeVisibility(workflow, nextVisibility) {
-        if (nextVisibility === (workflow.visibility || WORKFLOW_VISIBILITY_DEFAULT)) return;
-        const currentRank = WORKFLOW_VISIBILITY_RANK[workflow.visibility || WORKFLOW_VISIBILITY_DEFAULT] ?? 1;
+        const currentVisibility = getWorkflowVisibility(workflow);
+        if (nextVisibility === currentVisibility) return;
+        const currentRank = WORKFLOW_VISIBILITY_RANK[currentVisibility] ?? 1;
         const nextRank = WORKFLOW_VISIBILITY_RANK[nextVisibility] ?? 1;
         const isShrinkage = nextRank < currentRank;
 
@@ -503,7 +475,7 @@ export default function WorkflowLibraryPanel({
             ) : (
                 <ul className="workflow-library-list">
                     {visibleWorkflows.map((workflow) => {
-                        const visibility = workflow.visibility || WORKFLOW_VISIBILITY_DEFAULT;
+                        const visibility = getWorkflowVisibility(workflow);
                         const isOwner = workflow.createdBy === user?.$id;
                         const isOwnOffice = workflow.editorialOfficeId === activeEditorialOfficeId;
                         const canManage = isOwner || isOrgAdmin;

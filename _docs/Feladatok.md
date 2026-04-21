@@ -228,6 +228,37 @@ tags: [feladatok]
     - A 80–84. feladat design intent-je szerint a `public`/`organization` scope-ú workflow-kat read-only módban minden tag megnyithatja, és a `Duplikál & Szerkeszt` CTA az egyetlen útja annak, hogy egy non-admin szerkesztő saját scope-ba forkolja a workflow-t. A jelenlegi CF-gate ezt non-admin-nak eljárásilag blokkolja.
     - **Eldöntendő**: (a) a CF policy lazítása — tetszőleges org member duplikálhat a saját active office-ába (UI gate visszavonásával); VAGY (b) a CTA owner/admin-only jelöléssel kiegészítve, non-admin-nak explicit „kérd owner-től" üzenet. Az (a) konzisztens a read-only UX intent-jével, a (b) szigorúbb kontrollt tart.
 
+#### K. Harden follow-upok (2026-04-21)
+
+> Forrás: Dashboard harden pass a `DataContext.jsx` / `WorkflowLibraryPanel.jsx` / `BreadcrumbHeader.jsx` hármason (2026-04-21). A scope-on kívülre eső, de a review során azonosított refaktor-lehetőségek.
+
+- [ ] 89. **`window.prompt` → Modal migráció** (dashboard polish):
+    - Több helyen natív `window.prompt()` dialógus fut (pl. workflow átnevezés, description edit). Ezek blokkoló, stílusozhatatlan, screen reader-re nem optimalizált és mobile-on rossz UX-et adnak.
+    - Javasolt: a meglévő `Modal` + `ConfirmDialog` mintára egy `openPrompt(title, initialValue, { validate, placeholder, maxLength })` Promise-alapú util a `ModalContext`-ben, és az összes `window.prompt` hívó lecserélése.
+    - Érintett: `WorkflowLibraryPanel.jsx` (rename, description edit), egyéb sweep-elendő call-site-ok.
+    - **Előny**: egységes UI-stílus, validáció, autofókusz, Esc-záró, label + placeholder támogatás.
+
+- [ ] 90. **`useOrgRole(orgId)` hook kiemelés** (redundancia takarítás):
+    - A dashboard legalább 9 komponensben ismétli ugyanazt a callerOrgRole pattern-t:
+      ```js
+      const callerOrgRole = useMemo(() => {
+          const membership = (orgMemberships || []).find(
+              (m) => m.organizationId === activeOrganizationId && m.userId === user.$id
+          );
+          return membership?.role || null;
+      }, [orgMemberships, user?.$id, activeOrganizationId]);
+      const isOrgAdmin = callerOrgRole === 'owner' || callerOrgRole === 'admin';
+      ```
+    - Érintett fájlok (harden review): `WorkflowLibraryPanel.jsx`, `CreateWorkflowModal.jsx`, `WorkflowDesignerPage.jsx`, `WorkflowNewRoute.jsx`, `organization/UsersTab.jsx`, `organization/GeneralTab.jsx`, `publications/GeneralTab.jsx`, `EditorialOfficeGroupsTab.jsx`, `EditorialOfficeGeneralTab.jsx` (teljes sweep a `findOrgMembership` mintáért).
+    - Javasolt API: `src/hooks/useOrgRole.js` → `{ role, isOwner, isAdmin, isOrgAdmin, isMember }` scope-szűrt, `activeOrganizationId` default-ra bontva.
+    - **Előny**: single source of truth a role-gating logikára; ha bővül a policy (pl. role hierarchia), egy helyen változik.
+
+- [ ] 91. **`databases` context-use migration** (DataContext singleton):
+    - A `DataContext` már exportálja a `databases` / `storage` példányt a context value-ban (harden pass #82 fallout). A korábbi 4+ komponens még saját `new Databases(getClient())` példányt képez.
+    - Érintett: sweep `grep -rn "new Databases(getClient" packages/maestro-dashboard/src` — várható call-site-ok: `WorkflowDesignerPage.jsx`, `features/workflowDesigner/api.js`, `organization/*Tab.jsx`, egyéb helyek.
+    - Javasolt: minden call-site váltson `const { databases } = useData()`-ra (provider-on belül), a `features/workflowDesigner/api.js` típusú modulok kapjanak `databases` paramétert.
+    - **Előny**: egyetlen Appwrite Databases instance per DataProvider — lépéseltartalékos konfiguráció-váltásnál (pl. endpoint rotáció) kiszámíthatóbb, és a teszteléshez mock-olható.
+
 ### Manuális smoke test checklist
 
 > Valós InDesign környezetben végigkattintani — a kód review nem helyettesíti.
