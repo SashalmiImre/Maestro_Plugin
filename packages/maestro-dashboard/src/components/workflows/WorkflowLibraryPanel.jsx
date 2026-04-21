@@ -143,21 +143,21 @@ export default function WorkflowLibraryPanel({
     // Per-org denial cache: ha egy orgban a user nem owner, itt rögzítjük azt az orgId-t.
     // Org-váltáskor (ahol owner lehet) ne blokkoljon a cache — ezért Set, nem boolean.
     const bootstrapDeniedOrgsRef = useRef(new Set());
+    // Databases instance mount-time-on, ne per-call (getClient() singleton)
+    const databases = useMemo(() => new Databases(getClient()), []);
     const runArchivedQuery = useCallback(async () => {
-        const client = getClient();
-        const databases = new Databases(client);
         return databases.listDocuments({
             databaseId: DATABASE_ID,
             collectionId: COLLECTIONS.WORKFLOWS,
             queries: [
                 Query.or([
-                    Query.equal('visibility', 'public'),
+                    Query.equal('visibility', WORKFLOW_VISIBILITY.PUBLIC),
                     Query.and([
-                        Query.equal('visibility', 'organization'),
+                        Query.equal('visibility', WORKFLOW_VISIBILITY.ORGANIZATION),
                         Query.equal('organizationId', activeOrganizationId)
                     ]),
                     Query.and([
-                        Query.equal('visibility', 'editorial_office'),
+                        Query.equal('visibility', WORKFLOW_VISIBILITY.EDITORIAL_OFFICE),
                         Query.equal('editorialOfficeId', activeEditorialOfficeId)
                     ]),
                     // Legacy fallback: régi workflows `visibility` nélkül, a DataContext aktív
@@ -172,7 +172,7 @@ export default function WorkflowLibraryPanel({
                 Query.limit(100)
             ]
         });
-    }, [activeEditorialOfficeId, activeOrganizationId]);
+    }, [databases, activeEditorialOfficeId, activeOrganizationId]);
 
     const fetchArchived = useCallback(async () => {
         if (!activeEditorialOfficeId || !activeOrganizationId) return;

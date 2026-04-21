@@ -61,8 +61,9 @@ export function DataProvider({ children }) {
     }
     const { databases, storage } = servicesRef.current;
 
-    // Csapattag cache
-    const memberCacheRef = useRef({ map: new Map(), time: 0 });
+    // Csapattag cache — officeId-hez kötött, hogy scope váltáskor ne térítsen vissza
+    // az előző szerkesztőség tagjaival (stale cross-office név).
+    const memberCacheRef = useRef({ map: new Map(), officeId: null, time: 0 });
 
     // ─── Kiadványok lekérése ────────────────────────────────────────────────
 
@@ -151,11 +152,10 @@ export function DataProvider({ children }) {
             setLayouts(layoutsResult.documents);
             setDeadlines(deadlinesResult.documents);
 
-            // articleIdsRef szinkronizálása — Realtime szűréshez
-            articleIdsRef.current = new Set(articlesResult.documents.map(a => a.$id));
-
             // 2. fázis: validációk articleId alapján (plugin DataContext mintájára)
             const articleIds = articlesResult.documents.map(a => a.$id);
+            // articleIdsRef szinkronizálása — Realtime szűréshez
+            articleIdsRef.current = new Set(articleIds);
             let allValidations = [];
 
             try {
@@ -209,14 +209,14 @@ export function DataProvider({ children }) {
     // ─── Csoporttag feloldás ────────────────────────────────────────────────
 
     const fetchAllGroupMembers = useCallback(async () => {
+        const editorialOfficeId = activeEditorialOfficeIdRef.current;
+        if (!editorialOfficeId) return new Map();
+
         const cache = memberCacheRef.current;
         const now = Date.now();
-        if (cache.map.size > 0 && (now - cache.time) < TEAM_CACHE_DURATION_MS) {
+        if (cache.officeId === editorialOfficeId && cache.map.size > 0 && (now - cache.time) < TEAM_CACHE_DURATION_MS) {
             return cache.map;
         }
-
-        const editorialOfficeId = localStorage.getItem('maestro.activeEditorialOfficeId');
-        if (!editorialOfficeId) return new Map();
 
         try {
             const result = await databases.listDocuments({
@@ -235,7 +235,7 @@ export function DataProvider({ children }) {
                 }
             }
 
-            memberCacheRef.current = { map, time: now };
+            memberCacheRef.current = { map, officeId: editorialOfficeId, time: now };
             return map;
         } catch {
             return new Map();
@@ -243,7 +243,10 @@ export function DataProvider({ children }) {
     }, [databases]);
 
     const getMemberName = useCallback((userId) => {
-        return memberCacheRef.current.map.get(userId) || null;
+        // Office-váltás után a cache frissítéséig a régi office nevei stale-ek — officeId guard
+        const cache = memberCacheRef.current;
+        if (cache.officeId !== activeEditorialOfficeIdRef.current) return null;
+        return cache.map.get(userId) || null;
     }, []);
 
     // ─── Workflow lekérés ────────────────────────────────────────────────────
@@ -586,13 +589,15 @@ export function DataProvider({ children }) {
                         // #80 — 3-way visibility + archivedAt szűrés. A származtatott
                         // `workflow` useMemo automatikusan recompute-ol az aktív
                         // publikáció workflowId-ja alapján.
-                        const activeOfficeId = activeEditorialOfficeIdRef.current;
-                        const activeOrgId = activeOrganizationIdRef.current;
                         if (eventType === 'delete') {
-                            setWorkflows((prev) => prev.filter((w) => w.$id !== payload.$id));
+                            setWorkflows((prev) => {
+                                const idx = prev.findIndex((w) => w.$id === payload.$id);
+                                return idx >= 0 ? prev.filter((w) => w.$id !== payload.$id) : prev;
+                            });
                             break;
                         }
-                        // Scope vizibilitás check (3-way, legacy null → editorial_office)
+                        const activeOfficeId = activeEditorialOfficeIdRef.current;
+                        const activeOrgId = activeOrganizationIdRef.current;
                         const visibility = payload.visibility || WORKFLOW_VISIBILITY_DEFAULT;
                         const isVisible =
                             (visibility === WORKFLOW_VISIBILITY.PUBLIC) ||
@@ -601,18 +606,28 @@ export function DataProvider({ children }) {
                         // Archivált workflow-kat kivesszük a fő listából
                         const isArchived = typeof payload.archivedAt === 'string' && payload.archivedAt.length > 0;
                         if (!isVisible || isArchived) {
-                            setWorkflows((prev) => prev.filter((w) => w.$id !== payload.$id));
+                            // No-op rebuild elkerülése: ha nincs is a listában, ne generáljunk új array-t
+                            setWorkflows((prev) => {
+                                const idx = prev.findIndex((w) => w.$id === payload.$id);
+                                return idx >= 0 ? prev.filter((w) => w.$id !== payload.$id) : prev;
+                            });
                             break;
                         }
                         setWorkflows((prev) => {
                             const idx = prev.findIndex((w) => w.$id === payload.$id);
-                            let next;
                             if (idx >= 0) {
-                                next = [...prev];
+                                // Elavulás-védelem: echo own write / out-of-order WS esetén a frissebb helyi doc-ot ne írjuk felül
+                                const local = prev[idx];
+                                if (local.$updatedAt && payload.$updatedAt &&
+                                    new Date(local.$updatedAt) > new Date(payload.$updatedAt)) {
+                                    return prev;
+                                }
+                                const next = [...prev];
                                 next[idx] = payload;
-                            } else {
-                                next = [...prev, payload];
+                                next.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+                                return next;
                             }
+                            const next = [...prev, payload];
                             next.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
                             return next;
                         });
@@ -745,7 +760,8 @@ function applyLayoutEvent(eventType, payload, pubIdRef, setLayouts) {
                 }
                 const next = [...prev];
                 next[idx] = payload;
-                return next;
+                // Az `order` mező változhatott — re-sort, különben rossz sorrendben jelenik meg
+                return next.sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
             }
             return [...prev, payload].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
         });
