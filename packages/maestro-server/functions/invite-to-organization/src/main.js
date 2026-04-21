@@ -3634,23 +3634,19 @@ module.exports = async function ({ req, res, log, error }) {
             }
 
             // 1. Office lookup → organizationId
-            let office;
+            let officeDoc;
             try {
-                office = await databases.listDocuments(
+                officeDoc = await databases.getDocument(
                     databaseId,
                     officesCollectionId,
-                    [
-                        sdk.Query.equal('$id', editorialOfficeId),
-                        sdk.Query.limit(1)
-                    ]
+                    editorialOfficeId
                 );
             } catch (err) {
-                return fail(res, 404, 'office_not_found');
+                if (err?.code === 404) return fail(res, 404, 'office_not_found');
+                error(`[ArchiveWorkflow] office lookup threw: ${err.message} (code=${err.code}, type=${err.type})`);
+                return fail(res, 500, 'office_fetch_failed');
             }
-            if (office.documents.length === 0) {
-                return fail(res, 404, 'office_not_found');
-            }
-            const orgId = office.documents[0].organizationId;
+            const orgId = officeDoc.organizationId;
 
             // 2. Caller org membership lookup (role meghatározáshoz)
             const callerMembership = await databases.listDocuments(
