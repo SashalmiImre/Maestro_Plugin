@@ -1,0 +1,59 @@
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* SegmentedToggle — többszörös kijelölésű, tagolt gombcsoport               */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Vizuálisan egy darab „nagy gomb", aminek a szegmensei külön toggle-k.
+ * Használók:
+ *   - WorkflowLibraryPanel scope filter (Szerkesztőség / Szervezet / Publikus)
+ *
+ * Új előfordulásnál csak a React komponenst importáld (`SegmentedToggle.jsx`)
+ * — ez a CSS reusable.
+ */
+
+.segmented-toggle {
+    display: inline-flex;
+    align-items: stretch;
+    border: 1px solid var(--outline-variant);
+    border-radius: var(--radius-md);
+    background: var(--bg-base);
+    overflow: hidden;
+}
+
+.segmented-toggle-btn {
+    padding: 6px 14px;
+    font-size: 12px;
+    font-family: inherit;
+    color: var(--text-secondary);
+    background: transparent;
+    border: none;
+    border-right: 1px solid var(--outline-variant);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    white-space: nowrap;
+}
+
+.segmented-toggle-btn:last-child {
+    border-right: none;
+}
+
+.segmented-toggle-btn:hover:not(.is-active) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.segmented-toggle-btn.is-active {
+    background: var(--accent-solid);
+    color: #fff;
+}
+
+.segmented-toggle-btn.is-active:hover {
+    filter: brightness(1.05);
+}
+
+.segmented-toggle-btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+    position: relative;
+    z-index: 1;
+}

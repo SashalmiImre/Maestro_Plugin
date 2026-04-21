@@ -378,7 +378,7 @@ tags: [feladatok]
 > 3. `/harden` futtatás
 > 4. ✅ Kipipálás
  
-- [ ] N-01. **A Workflow Library Panel modernizálása**
+- [x] N-01. **A Workflow Library Panel modernizálása**
       A @Maestro Web Dashboard/src/components/workflows/WorkflowLibraryPanel.jsx -et szeretném tovább modernizálni. Elsődleges szempont a könnyű használhatóság lenne, ennek felméréséhez használd a Claude Design skilleket (pl. /design-critique) acél, egy kitűnő UX élmény. A láthatósági scope kezelésére is készíthetünk egy speciális UI elemet. A legegyszerűbb megoldás egy olyan gombcsoport lenne (a gombcsoportnak ránézésre egy darab UI elemnek kellene lennie, az én fejemben egy olyan elem van ami úgy néz ki mint egy nagyobb gomb, ami a több elemre van tagolva), aminek az egyes gombjai kétállásúak lennének. Ha benyomom bekapcsol, ha újra benyomom kikapcsol. Így lehetne a scope szűrőt állítani. Ha minden gomb be van nyomva, akkor az felelne meg a mostani Mind nyomógombnak. Természetesen illeszkedjen a mostani design-hez, és tegyük el egy újrafelhasználható elemként, még máshol is használhatjuk a jövőben.
       Az egész dashboardon be kellene állítani egy egységes badge kinézetet, nekem az @Maestro Web Dashboard/src/components/ArticleRow.jsx -ben használt LockLabel megfelelő lenne. A @Maestro Web Dashboard/src/components/workflows/WorkflowLibraryPanel.jsx-ben most használt badge-ek nekem inkább egy gombhoz hasonlítanak.
       Az archivált tab-on lévő workflow-knál érdemes lenne azt is feltüntetni, hogy mikor kerülnek törlésre

@@ -14,6 +14,13 @@
  *   - Rename / description / archive: `createdBy === caller` VAGY org owner/admin.
  *   - Visibility váltás: csak `createdBy === caller` (tulajdonos).
  *   - Duplikálás + új létrehozás: org owner/admin.
+ *
+ * UX:
+ *   - Scope szűrő `SegmentedToggle`-lal: többszörös kijelölés (union), legalább
+ *     1 kategória mindig aktív. A „Szerkesztőség" kategória szigorú: csak a
+ *     saját office-ban létrehozott, office-visibility workflow-k férnek át.
+ *   - Nézet-váltó (lista / rács), localStorage-ben perzisztált.
+ *   - Tab + szűrő váltásnál a lista magassága `AnimatedAutoHeight`-tal animál.
  */
 
 import React, { useState, useMemo, useRef } from 'react';
@@ -30,17 +37,20 @@ import { useOrgRole } from '../../hooks/useOrgRole.js';
 import {
     WORKFLOW_VISIBILITY,
     WORKFLOW_VISIBILITY_RANK,
-    WORKFLOW_VISIBILITY_LABELS
+    WORKFLOW_VISIBILITY_LABELS,
+    WORKFLOW_ARCHIVE_RETENTION_DAYS
 } from '@shared/constants.js';
 import { getWorkflowVisibility } from '../../utils/workflowVisibility.js';
+import { workflowPath } from '../../routes/paths.js';
 import {
     archiveWorkflow,
     restoreWorkflow,
     updateWorkflowMetadata,
     duplicateWorkflow
 } from '../../features/workflowDesigner/api.js';
+import SegmentedToggle from '../SegmentedToggle.jsx';
+import AnimatedAutoHeight from '../AnimatedAutoHeight.jsx';
 import { openCreateWorkflowModal } from './CreateWorkflowModal.jsx';
-import { workflowPath } from '../../routes/paths.js';
 
 const VISIBILITY_DESCRIPTIONS = {
     [WORKFLOW_VISIBILITY.PUBLIC]: 'Az Appwrite instance bármely authentikált tagja látja.',
@@ -48,19 +58,30 @@ const VISIBILITY_DESCRIPTIONS = {
     [WORKFLOW_VISIBILITY.EDITORIAL_OFFICE]: 'Csak ennek a szerkesztőségnek a tagjai láthatják.'
 };
 
-const SCOPE_FILTER = {
-    ALL: 'all',
-    OFFICE: 'office',
-    ORGANIZATION: 'organization',
-    PUBLIC: 'public'
-};
+const SCOPE_FILTER_OPTIONS = [
+    {
+        value: WORKFLOW_VISIBILITY.EDITORIAL_OFFICE,
+        label: 'Szerkesztőség',
+        title: 'Csak a saját szerkesztőséged office-szintű workflow-i.'
+    },
+    {
+        value: WORKFLOW_VISIBILITY.ORGANIZATION,
+        label: 'Szervezet',
+        title: 'A szervezet bármely szerkesztőségének látható workflow-i.'
+    },
+    {
+        value: WORKFLOW_VISIBILITY.PUBLIC,
+        label: 'Publikus',
+        title: 'Az Appwrite instance bármely tagjának látható workflow-i.'
+    }
+];
 
-const SCOPE_FILTER_LABELS = {
-    [SCOPE_FILTER.ALL]: 'Mind',
-    [SCOPE_FILTER.OFFICE]: 'Szerkesztőség',
-    [SCOPE_FILTER.ORGANIZATION]: 'Szervezet',
-    [SCOPE_FILTER.PUBLIC]: 'Publikus'
-};
+const VIEW_MODE_STORAGE_KEY = 'maestro.dashboard.workflowLibrary.viewMode';
+const VIEW_MODE_LIST = 'list';
+const VIEW_MODE_GRID = 'grid';
+
+const SCOPE_FILTER_STORAGE_KEY = 'maestro.dashboard.workflowLibrary.scopeFilter';
+const DEFAULT_SCOPE_FILTER = [WORKFLOW_VISIBILITY.EDITORIAL_OFFICE];
 
 function formatDate(iso) {
     if (!iso) return '';
@@ -71,6 +92,47 @@ function formatDate(iso) {
     } catch {
         return '';
     }
+}
+
+/**
+ * @param {string} archivedAtIso
+ * @returns {{ iso: string, daysRemaining: number }|null}
+ */
+function computeDeletionEta(archivedAtIso) {
+    if (!archivedAtIso) return null;
+    const archivedAt = new Date(archivedAtIso).getTime();
+    if (!Number.isFinite(archivedAt)) return null;
+    const deletionMs = archivedAt + WORKFLOW_ARCHIVE_RETENTION_DAYS * 24 * 60 * 60 * 1000;
+    const daysRemaining = Math.max(0, Math.ceil((deletionMs - Date.now()) / (24 * 60 * 60 * 1000)));
+    return { iso: new Date(deletionMs).toISOString(), daysRemaining };
+}
+
+function loadInitialViewMode() {
+    try {
+        const stored = localStorage.getItem(VIEW_MODE_STORAGE_KEY);
+        if (stored === VIEW_MODE_GRID || stored === VIEW_MODE_LIST) return stored;
+    } catch {
+        /* localStorage blocked → default */
+    }
+    return VIEW_MODE_LIST;
+}
+
+function loadInitialScopeFilter() {
+    try {
+        const raw = localStorage.getItem(SCOPE_FILTER_STORAGE_KEY);
+        if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) {
+                const validValues = parsed.filter((v) =>
+                    Object.values(WORKFLOW_VISIBILITY).includes(v)
+                );
+                if (validValues.length > 0) return new Set(validValues);
+            }
+        }
+    } catch {
+        /* korrupt érték / localStorage blokkolt → default */
+    }
+    return new Set(DEFAULT_SCOPE_FILTER);
 }
 
 /**
@@ -94,16 +156,35 @@ export default function WorkflowLibraryPanel({
     const prompt = usePrompt();
 
     const [searchQuery, setSearchQuery] = useState('');
-    const [scopeFilter, setScopeFilter] = useState(SCOPE_FILTER.ALL);
+    const [scopeFilter, setScopeFilter] = useState(loadInitialScopeFilter);
     const [tab, setTab] = useState('active');
     const [actionPending, setActionPending] = useState(null);
     const [openKebabId, setOpenKebabId] = useState(null);
+    const [viewMode, setViewMode] = useState(loadInitialViewMode);
 
     const kebabRef = useRef(null);
     usePopoverClose(kebabRef, !!openKebabId, () => setOpenKebabId(null));
 
     // ── Caller jogosultság ───
     const { isOrgAdmin } = useOrgRole(activeOrganizationId);
+
+    function updateViewMode(next) {
+        setViewMode(next);
+        try {
+            localStorage.setItem(VIEW_MODE_STORAGE_KEY, next);
+        } catch {
+            /* nem kritikus — a session-re érvényes marad */
+        }
+    }
+
+    function updateScopeFilter(next) {
+        setScopeFilter(next);
+        try {
+            localStorage.setItem(SCOPE_FILTER_STORAGE_KEY, JSON.stringify(Array.from(next)));
+        } catch {
+            /* nem kritikus — a session-re érvényes marad */
+        }
+    }
 
     // ── Szűrt + rendezett lista ───
     const visibleWorkflows = useMemo(() => {
@@ -113,16 +194,24 @@ export default function WorkflowLibraryPanel({
         return [...(source || [])]
             .filter((wf) => {
                 const visibility = getWorkflowVisibility(wf);
-                if (scopeFilter === SCOPE_FILTER.OFFICE && visibility !== WORKFLOW_VISIBILITY.EDITORIAL_OFFICE) return false;
-                if (scopeFilter === SCOPE_FILTER.ORGANIZATION && visibility !== WORKFLOW_VISIBILITY.ORGANIZATION) return false;
-                if (scopeFilter === SCOPE_FILTER.PUBLIC && visibility !== WORKFLOW_VISIBILITY.PUBLIC) return false;
+                if (!scopeFilter.has(visibility)) return false;
+                // A „Szerkesztőség" kategória szigorú: csak a saját office-ban
+                // létrehozott workflow-kat mutatja — idegen office-szintű
+                // workflow-k (amiket a user org-adminként esetleg lát) itt nem
+                // jelennek meg. A duplikáláshoz a kebab menü külön útvonal.
+                if (
+                    visibility === WORKFLOW_VISIBILITY.EDITORIAL_OFFICE
+                    && wf.editorialOfficeId !== activeEditorialOfficeId
+                ) {
+                    return false;
+                }
                 if (!lowerQuery) return true;
                 const nameMatch = (wf.name || '').toLowerCase().includes(lowerQuery);
                 const descMatch = (wf.description || '').toLowerCase().includes(lowerQuery);
                 return nameMatch || descMatch;
             })
             .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'hu'));
-    }, [tab, workflows, archivedWorkflows, scopeFilter, searchQuery]);
+    }, [tab, workflows, archivedWorkflows, scopeFilter, searchQuery, activeEditorialOfficeId]);
 
     // ── Akciók ───
     function handleSelect(workflow) {
@@ -275,12 +364,14 @@ export default function WorkflowLibraryPanel({
             message: (
                 <>
                     <p>
-                        A(z) <strong>„{workflow.name}"</strong> workflow archiválódik és 7 napig
-                        visszaállítható az „Archivált" fülből.
+                        A(z) <strong>„{workflow.name}"</strong> workflow archiválódik és{' '}
+                        {WORKFLOW_ARCHIVE_RETENTION_DAYS} napig visszaállítható az „Archivált"
+                        fülből.
                     </p>
                     <p style={{ fontSize: 12, color: 'var(--text-muted)' }}>
                         A futó (aktivált) kiadványok saját snapshot-juk alapján továbbra is
-                        működnek. 7 nap után a rendszer véglegesen törli.
+                        működnek. {WORKFLOW_ARCHIVE_RETENTION_DAYS} nap után a rendszer véglegesen
+                        törli.
                     </p>
                 </>
             ),
@@ -326,6 +417,7 @@ export default function WorkflowLibraryPanel({
 
     const activeCount = workflows?.length || 0;
     const archivedCount = archivedWorkflows?.length || 0;
+    const listClassName = `workflow-library-list${viewMode === VIEW_MODE_GRID ? ' workflow-library-list--grid' : ''}`;
 
     return (
         <div className="workflow-library">
@@ -337,17 +429,33 @@ export default function WorkflowLibraryPanel({
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                 />
-                <div className="workflow-library-chips" role="group" aria-label="Szűrés láthatóság szerint">
-                    {Object.values(SCOPE_FILTER).map((key) => (
+                <div className="workflow-library-toolbar-row">
+                    <SegmentedToggle
+                        options={SCOPE_FILTER_OPTIONS}
+                        selected={scopeFilter}
+                        onChange={updateScopeFilter}
+                        ariaLabel="Szűrés láthatóság szerint"
+                    />
+                    <div className="view-toggle workflow-library-view-toggle" role="group" aria-label="Nézet váltás">
                         <button
-                            key={key}
                             type="button"
-                            className={`workflow-library-chip${scopeFilter === key ? ' is-active' : ''}`}
-                            onClick={() => setScopeFilter(key)}
+                            className={`view-btn${viewMode === VIEW_MODE_LIST ? ' active' : ''}`}
+                            onClick={() => updateViewMode(VIEW_MODE_LIST)}
+                            aria-pressed={viewMode === VIEW_MODE_LIST}
+                            title="Soros nézet"
                         >
-                            {SCOPE_FILTER_LABELS[key]}
+                            ☰
                         </button>
-                    ))}
+                        <button
+                            type="button"
+                            className={`view-btn${viewMode === VIEW_MODE_GRID ? ' active' : ''}`}
+                            onClick={() => updateViewMode(VIEW_MODE_GRID)}
+                            aria-pressed={viewMode === VIEW_MODE_GRID}
+                            title="Rácsos nézet"
+                        >
+                            ▦
+                        </button>
+                    </div>
                 </div>
             </div>
 
@@ -372,206 +480,215 @@ export default function WorkflowLibraryPanel({
                 <div className="form-error-global">{archivedWorkflowsError}</div>
             )}
 
-            {visibleWorkflows.length === 0 ? (
-                <div className="form-empty-state">
-                    {searchQuery || scopeFilter !== SCOPE_FILTER.ALL
-                        ? 'Nincs találat a szűrőknek.'
-                        : tab === 'archived'
-                            ? 'Nincs archivált workflow.'
-                            : 'Nincs elérhető workflow.'}
-                </div>
-            ) : (
-                <ul className="workflow-library-list">
-                    {visibleWorkflows.map((workflow) => {
-                        const visibility = getWorkflowVisibility(workflow);
-                        const isOwner = workflow.createdBy === user?.$id;
-                        const isOwnOffice = workflow.editorialOfficeId === activeEditorialOfficeId;
-                        const canManage = isOwner || isOrgAdmin;
-                        const canChangeVisibility = isOwner;
-                        const isCurrent = workflow.$id === currentWorkflowId;
-                        const isActionPendingForThis = actionPending && actionPending.endsWith(`:${workflow.$id}`);
+            <AnimatedAutoHeight>
+                {visibleWorkflows.length === 0 ? (
+                    <div className="form-empty-state">
+                        {searchQuery || scopeFilter.size < SCOPE_FILTER_OPTIONS.length
+                            ? 'Nincs találat a szűrőknek.'
+                            : tab === 'archived'
+                                ? 'Nincs archivált workflow.'
+                                : 'Nincs elérhető workflow.'}
+                    </div>
+                ) : (
+                    <ul className={listClassName}>
+                        {visibleWorkflows.map((workflow) => {
+                            const visibility = getWorkflowVisibility(workflow);
+                            const isOwner = workflow.createdBy === user?.$id;
+                            const isOwnOffice = workflow.editorialOfficeId === activeEditorialOfficeId;
+                            const canManage = isOwner || isOrgAdmin;
+                            const canChangeVisibility = isOwner;
+                            const isCurrent = workflow.$id === currentWorkflowId;
+                            const isActionPendingForThis = actionPending && actionPending.endsWith(`:${workflow.$id}`);
+                            const deletionEta = tab === 'archived' ? computeDeletionEta(workflow.archivedAt) : null;
 
-                        return (
-                            <li
-                                key={workflow.$id}
-                                className={`workflow-library-card${isCurrent ? ' is-current' : ''}`}
-                            >
-                                <div className="workflow-library-card-main">
-                                    <div className="workflow-library-card-header">
-                                        <h4 className="workflow-library-card-name">
-                                            {workflow.name}
-                                            {isCurrent && <span className="workflow-library-badge is-current">Aktuális</span>}
-                                        </h4>
-                                        <span
-                                            className={`workflow-library-chip-visibility is-${visibility}`}
-                                            title={VISIBILITY_DESCRIPTIONS[visibility]}
-                                        >
-                                            {WORKFLOW_VISIBILITY_LABELS[visibility]}
-                                        </span>
-                                        {!isOwnOffice && (
+                            return (
+                                <li
+                                    key={workflow.$id}
+                                    className={`workflow-library-card${isCurrent ? ' is-current' : ''}`}
+                                >
+                                    <div className="workflow-library-card-main">
+                                        <div className="workflow-library-card-header">
+                                            <h4 className="workflow-library-card-name">
+                                                {workflow.name}
+                                                {isCurrent && <span className="badge badge--current">Aktuális</span>}
+                                            </h4>
                                             <span
-                                                className="workflow-library-badge is-foreign"
-                                                title="Másik szerkesztőségből származik — szerkesztéshez duplikáld."
+                                                className={`badge badge--${visibility}`}
+                                                title={VISIBILITY_DESCRIPTIONS[visibility]}
                                             >
-                                                Idegen
+                                                {WORKFLOW_VISIBILITY_LABELS[visibility]}
                                             </span>
-                                        )}
-                                        {isOwner && (
-                                            <span className="workflow-library-badge is-own" title="Te vagy a tulajdonos.">
-                                                Saját
-                                            </span>
-                                        )}
-                                    </div>
-
-                                    {workflow.description && (
-                                        <p className="workflow-library-card-desc">{workflow.description}</p>
-                                    )}
-
-                                    <div className="workflow-library-card-meta">
-                                        {workflow.createdBy && (
-                                            <span>{getMemberName(workflow.createdBy) || 'Ismeretlen'}</span>
-                                        )}
-                                        {workflow.$createdAt && (
-                                            <span>{formatDate(workflow.$createdAt)}</span>
-                                        )}
-                                        {tab === 'archived' && workflow.archivedAt && (
-                                            <span className="workflow-library-archived-at">
-                                                Archiválva: {formatDate(workflow.archivedAt)}
-                                            </span>
-                                        )}
-                                    </div>
-                                </div>
-
-                                <div className="workflow-library-card-actions">
-                                    {tab === 'active' && (
-                                        <>
-                                            <button
-                                                type="button"
-                                                className="btn-primary"
-                                                disabled={!!actionPending}
-                                                onClick={() => handleSelect(workflow)}
-                                            >
-                                                {context === 'publication-assignment' ? 'Kiválaszt' : 'Megnyit'}
-                                            </button>
-                                            {!isOwnOffice && isOrgAdmin && (
-                                                <button
-                                                    type="button"
-                                                    className="btn-secondary"
-                                                    disabled={!!actionPending}
-                                                    onClick={() => handleDuplicate(workflow)}
-                                                    title="Másolat készítése a saját szerkesztőségedbe"
+                                            {!isOwnOffice && (
+                                                <span
+                                                    className="badge badge--foreign"
+                                                    title="Másik szerkesztőségből származik — szerkesztéshez duplikáld."
                                                 >
-                                                    {isActionPendingForThis && actionPending.startsWith('duplicate')
-                                                        ? '…'
-                                                        : 'Duplikál & szerkeszt'}
-                                                </button>
+                                                    Idegen
+                                                </span>
                                             )}
-                                        </>
-                                    )}
-                                    {tab === 'archived' && canManage && (
-                                        <button
-                                            type="button"
-                                            className="btn-secondary"
-                                            disabled={!!actionPending}
-                                            onClick={() => handleRestore(workflow)}
-                                        >
-                                            {isActionPendingForThis && actionPending.startsWith('restore')
-                                                ? '…'
-                                                : 'Visszaállít'}
-                                        </button>
-                                    )}
-
-                                    {tab === 'active' && (canManage || isOwnOffice) && (
-                                        <div
-                                            ref={openKebabId === workflow.$id ? kebabRef : null}
-                                            className="workflow-library-kebab"
-                                        >
-                                            <button
-                                                type="button"
-                                                className="workflow-library-kebab-btn"
-                                                onClick={() => setOpenKebabId((prev) => (prev === workflow.$id ? null : workflow.$id))}
-                                                disabled={!!actionPending}
-                                                aria-haspopup="menu"
-                                                aria-expanded={openKebabId === workflow.$id}
-                                                title="További műveletek"
-                                            >
-                                                ⋯
-                                            </button>
-                                            {openKebabId === workflow.$id && (
-                                                <ul role="menu" className="workflow-library-kebab-menu">
-                                                    {isOwnOffice && isOrgAdmin && (
-                                                        <li>
-                                                            <button
-                                                                type="button"
-                                                                role="menuitem"
-                                                                onClick={() => { setOpenKebabId(null); handleDuplicate(workflow); }}
-                                                            >
-                                                                Duplikálás
-                                                            </button>
-                                                        </li>
-                                                    )}
-                                                    {canManage && (
-                                                        <>
-                                                            <li>
-                                                                <button
-                                                                    type="button"
-                                                                    role="menuitem"
-                                                                    onClick={() => { setOpenKebabId(null); handleRename(workflow); }}
-                                                                >
-                                                                    Átnevezés
-                                                                </button>
-                                                            </li>
-                                                            <li>
-                                                                <button
-                                                                    type="button"
-                                                                    role="menuitem"
-                                                                    onClick={() => { setOpenKebabId(null); handleEditDescription(workflow); }}
-                                                                >
-                                                                    Leírás…
-                                                                </button>
-                                                            </li>
-                                                        </>
-                                                    )}
-                                                    {canChangeVisibility && (
-                                                        <li className="workflow-library-kebab-submenu">
-                                                            <span className="workflow-library-kebab-label">Láthatóság</span>
-                                                            <div className="workflow-library-kebab-visibility">
-                                                                {Object.values(WORKFLOW_VISIBILITY).map((v) => (
-                                                                    <button
-                                                                        key={v}
-                                                                        type="button"
-                                                                        className={v === visibility ? 'is-active' : ''}
-                                                                        onClick={() => { setOpenKebabId(null); handleChangeVisibility(workflow, v); }}
-                                                                        title={VISIBILITY_DESCRIPTIONS[v]}
-                                                                    >
-                                                                        {WORKFLOW_VISIBILITY_LABELS[v]}
-                                                                    </button>
-                                                                ))}
-                                                            </div>
-                                                        </li>
-                                                    )}
-                                                    {canManage && (
-                                                        <li>
-                                                            <button
-                                                                type="button"
-                                                                role="menuitem"
-                                                                className="is-danger"
-                                                                onClick={() => { setOpenKebabId(null); handleArchive(workflow); }}
-                                                            >
-                                                                Archivál
-                                                            </button>
-                                                        </li>
-                                                    )}
-                                                </ul>
+                                            {isOwner && (
+                                                <span className="badge badge--own" title="Te vagy a tulajdonos.">
+                                                    Saját
+                                                </span>
                                             )}
                                         </div>
-                                    )}
-                                </div>
-                            </li>
-                        );
-                    })}
-                </ul>
-            )}
+
+                                        {workflow.description && (
+                                            <p className="workflow-library-card-desc">{workflow.description}</p>
+                                        )}
+
+                                        <div className="workflow-library-card-meta">
+                                            {workflow.createdBy && (
+                                                <span>{getMemberName(workflow.createdBy) || 'Ismeretlen'}</span>
+                                            )}
+                                            {workflow.$createdAt && (
+                                                <span>{formatDate(workflow.$createdAt)}</span>
+                                            )}
+                                            {tab === 'archived' && workflow.archivedAt && (
+                                                <span>Archiválva: {formatDate(workflow.archivedAt)}</span>
+                                            )}
+                                            {deletionEta && (
+                                                <span
+                                                    className="badge badge--warning"
+                                                    title={`Törlés várható: ${formatDate(deletionEta.iso)}`}
+                                                >
+                                                    Törlés {deletionEta.daysRemaining} nap múlva
+                                                </span>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    <div className="workflow-library-card-actions">
+                                        {tab === 'active' && (
+                                            <>
+                                                <button
+                                                    type="button"
+                                                    className="btn-primary"
+                                                    disabled={!!actionPending}
+                                                    onClick={() => handleSelect(workflow)}
+                                                >
+                                                    {context === 'publication-assignment' ? 'Kiválaszt' : 'Megnyit'}
+                                                </button>
+                                                {!isOwnOffice && isOrgAdmin && (
+                                                    <button
+                                                        type="button"
+                                                        className="btn-secondary"
+                                                        disabled={!!actionPending}
+                                                        onClick={() => handleDuplicate(workflow)}
+                                                        title="Másolat készítése a saját szerkesztőségedbe"
+                                                    >
+                                                        {isActionPendingForThis && actionPending.startsWith('duplicate')
+                                                            ? '…'
+                                                            : 'Duplikál & szerkeszt'}
+                                                    </button>
+                                                )}
+                                            </>
+                                        )}
+                                        {tab === 'archived' && canManage && (
+                                            <button
+                                                type="button"
+                                                className="btn-secondary"
+                                                disabled={!!actionPending}
+                                                onClick={() => handleRestore(workflow)}
+                                            >
+                                                {isActionPendingForThis && actionPending.startsWith('restore')
+                                                    ? '…'
+                                                    : 'Visszaállít'}
+                                            </button>
+                                        )}
+
+                                        {tab === 'active' && (canManage || isOwnOffice) && (
+                                            <div
+                                                ref={openKebabId === workflow.$id ? kebabRef : null}
+                                                className="workflow-library-kebab"
+                                            >
+                                                <button
+                                                    type="button"
+                                                    className="workflow-library-kebab-btn"
+                                                    onClick={() => setOpenKebabId((prev) => (prev === workflow.$id ? null : workflow.$id))}
+                                                    disabled={!!actionPending}
+                                                    aria-haspopup="menu"
+                                                    aria-expanded={openKebabId === workflow.$id}
+                                                    title="További műveletek"
+                                                >
+                                                    ⋯
+                                                </button>
+                                                {openKebabId === workflow.$id && (
+                                                    <ul role="menu" className="workflow-library-kebab-menu">
+                                                        {isOwnOffice && isOrgAdmin && (
+                                                            <li>
+                                                                <button
+                                                                    type="button"
+                                                                    role="menuitem"
+                                                                    onClick={() => { setOpenKebabId(null); handleDuplicate(workflow); }}
+                                                                >
+                                                                    Duplikálás
+                                                                </button>
+                                                            </li>
+                                                        )}
+                                                        {canManage && (
+                                                            <>
+                                                                <li>
+                                                                    <button
+                                                                        type="button"
+                                                                        role="menuitem"
+                                                                        onClick={() => { setOpenKebabId(null); handleRename(workflow); }}
+                                                                    >
+                                                                        Átnevezés
+                                                                    </button>
+                                                                </li>
+                                                                <li>
+                                                                    <button
+                                                                        type="button"
+                                                                        role="menuitem"
+                                                                        onClick={() => { setOpenKebabId(null); handleEditDescription(workflow); }}
+                                                                    >
+                                                                        Leírás…
+                                                                    </button>
+                                                                </li>
+                                                            </>
+                                                        )}
+                                                        {canChangeVisibility && (
+                                                            <li className="workflow-library-kebab-submenu">
+                                                                <span className="workflow-library-kebab-label">Láthatóság</span>
+                                                                <div className="workflow-library-kebab-visibility">
+                                                                    {Object.values(WORKFLOW_VISIBILITY).map((v) => (
+                                                                        <button
+                                                                            key={v}
+                                                                            type="button"
+                                                                            className={v === visibility ? 'is-active' : ''}
+                                                                            onClick={() => { setOpenKebabId(null); handleChangeVisibility(workflow, v); }}
+                                                                            title={VISIBILITY_DESCRIPTIONS[v]}
+                                                                        >
+                                                                            {WORKFLOW_VISIBILITY_LABELS[v]}
+                                                                        </button>
+                                                                    ))}
+                                                                </div>
+                                                            </li>
+                                                        )}
+                                                        {canManage && (
+                                                            <li>
+                                                                <button
+                                                                    type="button"
+                                                                    role="menuitem"
+                                                                    className="is-danger"
+                                                                    onClick={() => { setOpenKebabId(null); handleArchive(workflow); }}
+                                                                >
+                                                                    Archivál
+                                                                </button>
+                                                            </li>
+                                                        )}
+                                                    </ul>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                )}
+            </AnimatedAutoHeight>
 
             <div className="workflow-library-footer">
                 {isOrgAdmin && tab === 'active' && (

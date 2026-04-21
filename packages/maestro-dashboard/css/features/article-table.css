@@ -113,37 +113,8 @@
     color: var(--c-error);
 }
 
-/* Lock label badge-ek — Stitch stílus */
-.lock-label {
-    display: inline-flex;
-    align-items: center;
-    padding: 2px 8px;
-    border-radius: var(--radius-sm);
-    font-size: 10px;
-    font-weight: 700;
-    letter-spacing: 0.06em;
-    border: 1px solid;
-    white-space: nowrap;
-    text-transform: uppercase;
-}
-
-.lock-label--me {
-    background: var(--badge-me-bg);
-    color: var(--badge-me-text);
-    border-color: var(--badge-me-border);
-}
-
-.lock-label--maestro {
-    background: var(--badge-sys-bg);
-    color: var(--badge-sys-text);
-    border-color: var(--badge-sys-border);
-}
-
-.lock-label--other {
-    background: var(--badge-other-bg);
-    color: var(--badge-other-text);
-    border-color: var(--badge-other-border);
-}
+/* Lock label — a közös `.badge` + `.badge--{me|sys|other}` osztályokat
+ * használja (`css/components/badge.css`). A CSS-t NE itt duplikáld. */
 
 /* Státusz pont (tábla cella) — Stitch glow-effekt */
 .state-dot {

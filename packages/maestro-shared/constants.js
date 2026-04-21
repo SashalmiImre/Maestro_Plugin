@@ -77,3 +77,15 @@ export const WORKFLOW_VISIBILITY_LABELS = {
     [WORKFLOW_VISIBILITY.ORGANIZATION]: 'Szervezet',
     [WORKFLOW_VISIBILITY.EDITORIAL_OFFICE]: 'Szerkesztőség'
 };
+
+/**
+ * Archivált workflow megőrzési idő napban. A `cleanup-archived-workflows`
+ * cron CF ennyi napnál régebbi soft-delete-elt workflow-t hard-delete-el,
+ * a dashboard UI ugyanezzel számolja ki a törlés várható dátumát
+ * (`archivedAt + WORKFLOW_ARCHIVE_RETENTION_DAYS`).
+ *
+ * A CF CommonJS runtime miatt nem importálja ezt a fájlt — ugyanazt az
+ * értéket hardkódolja a saját `DEFAULT_RETENTION_DAYS` konstansa. Ha ez
+ * változik, a CF-et is frissíteni kell (deploy checklist).
+ */
+export const WORKFLOW_ARCHIVE_RETENTION_DAYS = 7;

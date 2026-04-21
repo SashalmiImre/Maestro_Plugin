@@ -83,7 +83,7 @@ function LockLabel({ article, currentUser, getMemberName }) {
     let variant;
     if (article.lockType === LOCK_TYPE.SYSTEM) {
         label = 'MAESTRO';
-        variant = 'maestro';
+        variant = 'sys';
     } else if (article.lockOwnerId === currentUser?.$id) {
         label = 'ÉN';
         variant = 'me';
@@ -93,7 +93,7 @@ function LockLabel({ article, currentUser, getMemberName }) {
         variant = 'other';
     }
 
-    return <span className={`lock-label lock-label--${variant}`}>{label}</span>;
+    return <span className={`badge badge--${variant}`}>{label}</span>;
 }
 
 function StateIndicator({ article }) {

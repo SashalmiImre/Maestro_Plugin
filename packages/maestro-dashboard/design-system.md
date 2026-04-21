@@ -57,12 +57,39 @@ A runtime értékek a [css/tokens.css](css/tokens.css) `:root` blokkjában élne
 | `--tertiary` | `#ddb7ff` |
 | `--tertiary-container` | `#b76dff` |
 
-### Badge variánsok (lock)
-| Variáns | Háttér | Szöveg | Keret |
-|---|---|---|---|
-| **me** (saját lock) | `--badge-me-bg` | `--badge-me-text` | `--badge-me-border` |
-| **sys** (system lock) | `--badge-sys-bg` | `--badge-sys-text` | `--badge-sys-border` |
-| **other** (másik user) | `--badge-other-bg` | `--badge-other-text` | `--badge-other-border` |
+### Badge variánsok
+A közös `.badge` osztály (`css/components/badge.css`) az egész dashboard jelzői számára:
+uppercase, letter-spacing `0.06em`, `--radius-sm`, padding `2px 8px`, font-size 10px, font-weight 700.
+
+| Variáns | Használat | Háttér / szöveg |
+|---|---|---|
+| **me** | Saját lock (ArticleRow) | `--badge-me-bg / text / border` |
+| **sys** | System lock (ArticleRow) | `--badge-sys-bg / text / border` |
+| **other** | Másik user lockja (ArticleRow) | `--badge-other-bg / text / border` |
+| **current** | „Aktuális" jelzés (WorkflowLibrary) | `--accent-solid` 18% / `--accent` |
+| **own** | „Saját" tulajdonos (WorkflowLibrary) | `--accent-solid` 12% / `--accent` |
+| **foreign** | „Idegen" szerkesztőség (WorkflowLibrary) | `shadow-tint` 30% / `--text-muted` |
+| **public** | Workflow láthatóság — publikus | lila 15% / `#a98bff` |
+| **organization** | Workflow láthatóság — szervezet | kék 15% / `#6fb8e8` |
+| **editorial_office** | Workflow láthatóság — szerkesztőség | `shadow-tint` 30% / `--text-secondary` |
+| **warning** | Archivált törlési visszaszámláló | `--c-warning` 15% / `--c-warning` |
+
+> **Szabály**: új "badge-szerű" pill-t ne egyedi CSS-sel csinálj — adj hozzá `.badge--<név>` variánst a közös fájlhoz.
+
+### SegmentedToggle
+Reusable, többszörös kijelölésű gombcsoport (`src/components/SegmentedToggle.jsx`, `css/components/segmented-toggle.css`). Egyetlen vizuális „összetett gomb", amit szegmensekre tagolnak a toggle-k; ha minden opció aktív, az a teljes halmazt szűri (az implicit „Mind" állapot). `minSelected` (default 1) megakadályozza az üres kiválasztást — az utolsó aktív gomb lenyomása no-op.
+
+```jsx
+<SegmentedToggle
+  options={[{ value, label, title? }]}
+  selected={new Set([...])}
+  onChange={(nextSet) => ...}
+  minSelected={1}
+  ariaLabel="Szűrés láthatóság szerint"
+/>
+```
+
+Használat: WorkflowLibraryPanel scope szűrő (Szerkesztőség / Szervezet / Publikus).
 
 ## Tipográfia
 

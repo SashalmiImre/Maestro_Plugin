@@ -1,0 +1,95 @@
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* Badge — egységes jelző pill az egész dashboardon                          */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * Egy közös forma, per-variáns színek. Használók:
+ *   - LockLabel (ArticleRow) — me / sys / other
+ *   - WorkflowLibraryPanel — own / foreign / current + visibility (public /
+ *     organization / editorial_office)
+ *
+ * Új badge variáns hozzáadása: csak egy `.badge--<név>` szabályt adj hozzá,
+ * a forma paramétereket ez az oszt. biztosítja.
+ */
+
+.badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    line-height: 1.3;
+    border: 1px solid transparent;
+    white-space: nowrap;
+    text-transform: uppercase;
+}
+
+/* ─── Lock variánsok ─── */
+
+.badge--me {
+    background: var(--badge-me-bg);
+    color: var(--badge-me-text);
+    border-color: var(--badge-me-border);
+}
+
+.badge--sys {
+    background: var(--badge-sys-bg);
+    color: var(--badge-sys-text);
+    border-color: var(--badge-sys-border);
+}
+
+.badge--other {
+    background: var(--badge-other-bg);
+    color: var(--badge-other-text);
+    border-color: var(--badge-other-border);
+}
+
+/* ─── Workflow library általános variánsok ─── */
+
+.badge--current {
+    background: rgb(from var(--accent-solid) r g b / 0.18);
+    color: var(--accent);
+    border-color: rgb(from var(--accent-solid) r g b / 0.35);
+}
+
+.badge--own {
+    background: rgb(from var(--accent-solid) r g b / 0.12);
+    color: var(--accent);
+    border-color: rgb(from var(--accent-solid) r g b / 0.25);
+}
+
+.badge--foreign {
+    background: rgba(var(--shadow-tint), 0.3);
+    color: var(--text-muted);
+    border-color: var(--outline-variant);
+}
+
+/* ─── Workflow láthatóság variánsok ─── */
+
+.badge--public {
+    background: rgba(124, 89, 235, 0.15);
+    color: #a98bff;
+    border-color: rgba(124, 89, 235, 0.35);
+}
+
+.badge--organization {
+    background: rgba(0, 130, 200, 0.15);
+    color: #6fb8e8;
+    border-color: rgba(0, 130, 200, 0.35);
+}
+
+.badge--editorial_office {
+    background: rgba(var(--shadow-tint), 0.3);
+    color: var(--text-secondary);
+    border-color: var(--outline-variant);
+}
+
+/* ─── Warning variáns (archivált törlési dátum) ─── */
+
+.badge--warning {
+    background: rgb(from var(--c-warning) r g b / 0.15);
+    color: var(--c-warning);
+    border-color: rgb(from var(--c-warning) r g b / 0.35);
+}

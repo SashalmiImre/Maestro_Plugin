@@ -31,6 +31,8 @@
 @import './components/toast.css';
 @import './components/modal.css';
 @import './components/danger.css';
+@import './components/badge.css';
+@import './components/segmented-toggle.css';
 
 /* ─── Features ─────────────────────────────────────────────────────────────── */
 @import './features/article-table.css';
