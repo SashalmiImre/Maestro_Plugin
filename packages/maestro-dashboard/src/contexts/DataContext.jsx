@@ -51,6 +51,13 @@ export function DataProvider({ children }) {
     // azonnal látsszon, ne csak tab-kattintáskor. Realtime karbantartott.
     const [archivedWorkflows, setArchivedWorkflows] = useState([]);
     const [archivedWorkflowsError, setArchivedWorkflowsError] = useState('');
+    // Loading flag-ek mindkét workflow-listára (L-104): scope-váltáskor az eager
+    // fetch ablaka alatt a WorkflowLibraryPanel a fetch-et jelzi az üres-állapot
+    // helyett („Nincs workflow." flicker elkerülése). Initial `true`: mount-kor
+    // még nem tudjuk, van-e scope — az első `useEffect` fetch vagy scope-null
+    // guard állítja `false`-ra.
+    const [workflowsLoading, setWorkflowsLoading] = useState(true);
+    const [archivedWorkflowsLoading, setArchivedWorkflowsLoading] = useState(true);
     const [activePublicationId, setActivePublicationIdState] = useState(null);
     const [isLoading, setIsLoading] = useState(false);
 
@@ -75,6 +82,12 @@ export function DataProvider({ children }) {
     // bumpolja; closure-ben capture-öljük a saját gen-t, await után ha már nem
     // egyezik az aktuális gen-nel → eldobjuk a választ.
     const archivedFetchGenRef = useRef(0);
+    // Aktív workflow fetch generáció-számláló — CSAK a `workflowsLoading` flag
+    // A→B→A race védelmére (a régebbi fetch finally-je ne oltsa ki a frissebb
+    // fetch loading-ját). A `setWorkflows` list-override maga NEM gen-védett:
+    // az L-103 task (pre-existing race, kis valószínűségű) halasztva — ha egyszer
+    // elővesszük, ugyanezt a gen-refet post-await ellenőrzéssel bővíteni kell.
+    const fetchWorkflowGenRef = useRef(0);
 
     // Scope refek — a create metódusok olvassák, hogy callback closure-ök nélkül mindig
     // a legfrissebb aktív organization/office ID-ra injektáljanak scope mezőket.
@@ -299,14 +312,27 @@ export function DataProvider({ children }) {
     // helper építi a Query.or ágat — `WorkflowLibraryPanel.runArchivedQuery`
     // ugyanezt a helpert használja `archived: true`-val. Az `archivedAt IS NULL`
     // szűrés itt az aktív nézetet tartja — a soft-delete-ek a Library külön fülén.
+    //
+    // L-103 halasztva (2026-04-22): a `fetchArchivedWorkflows` kapott
+    // `isScopeStale()` + `archivedFetchGenRef` race-védelmet a #98 harden során,
+    // itt a `setWorkflows` list-override még „first-fetch wins" — A→B rapid
+    // scope-váltásnál egy késlekedő A-response felülírhatja a B `workflows`
+    // state-jét. Pre-existing alacsony kockázat, nincs user-riport. Ha egyszer
+    // elővesszük: a lenti `fetchWorkflowGenRef`-et post-await ellenőrzéssel
+    // bővíteni kell (`gen !== fetchWorkflowGenRef.current → return` a
+    // `setWorkflows` ELŐTT), a #98 scope-key + gen-kombót NE másoljuk (redundáns).
+    // A gen-ref a loading flag A→B→A race miatt MÁR bevezetett (L-104).
     const fetchWorkflow = useCallback(async () => {
+        const gen = ++fetchWorkflowGenRef.current;
         const editorialOfficeId = activeEditorialOfficeIdRef.current;
         const organizationId = activeOrganizationIdRef.current;
         if (!editorialOfficeId || !organizationId) {
             setWorkflows([]);
+            setWorkflowsLoading(false);
             return;
         }
 
+        setWorkflowsLoading(true);
         try {
             const result = await databases.listDocuments({
                 databaseId: DATABASE_ID,
@@ -322,6 +348,13 @@ export function DataProvider({ children }) {
             seedWorkflowVersions(workflowLatestUpdatedAtRef.current, result.documents);
         } catch (err) {
             console.error('[DataContext] Workflow fetch hiba:', err);
+        } finally {
+            // Stale-guard: A→B→A váltásnál egy régebbi fetch finally-je ne
+            // oltsa ki a frissebb fetch által `true`-ra állított loading-ot.
+            // A `setWorkflows` list-override MAGA nem gen-védett (L-103 halasztva).
+            if (fetchWorkflowGenRef.current === gen) {
+                setWorkflowsLoading(false);
+            }
         }
     }, [databases]);
 
@@ -343,13 +376,17 @@ export function DataProvider({ children }) {
         if (!editorialOfficeId || !organizationId) {
             setArchivedWorkflows([]);
             setArchivedWorkflowsError('');
+            setArchivedWorkflowsLoading(false);
             return;
         }
 
         // Stale lista törlése scope-váltáskor — ha a fetch hibával zárul, ne
-        // maradjon az előző scope archivált listája a UI-on.
+        // maradjon az előző scope archivált listája a UI-on. A loading flag
+        // eközben elfedi a Panel-en az üres-állapotot, így nincs
+        // `Nincs archivált workflow.` flicker.
         setArchivedWorkflows([]);
         setArchivedWorkflowsError('');
+        setArchivedWorkflowsLoading(true);
 
         // Scope-race + generáció-védelem: A→B→A gyors scope-váltásnál (ugyanaz a
         // scope-key, de új fetch-generáció) a régebbi fetch eredménye ne írja
@@ -394,6 +431,12 @@ export function DataProvider({ children }) {
             } else {
                 console.error('[DataContext] Archivált workflow fetch hiba:', err);
                 setArchivedWorkflowsError('Archivált workflow-k lekérése sikertelen.');
+            }
+        } finally {
+            // Stale-guard: ha A→B→A közben egy frissebb fetch már `true`-ra
+            // állította a loading-ot, a régebbi fetch finally-je ne oltsa ki.
+            if (archivedFetchGenRef.current === gen) {
+                setArchivedWorkflowsLoading(false);
             }
         }
     }, [databases]);
@@ -730,7 +773,8 @@ export function DataProvider({ children }) {
     // átad (state + callback + stabil singleton).
     const value = useMemo(() => ({
         publications, articles, layouts, deadlines, validations,
-        workflow, workflows, archivedWorkflows, archivedWorkflowsError,
+        workflow, workflows, workflowsLoading,
+        archivedWorkflows, archivedWorkflowsError, archivedWorkflowsLoading,
         activePublicationId, isLoading,
         // Appwrite szolgáltatások — a fogyasztók ezt vegyék át, ne képezzenek
         // saját `new Databases(getClient())` instance-t (singleton per Provider).
@@ -745,7 +789,8 @@ export function DataProvider({ children }) {
         updateArticle
     }), [
         publications, articles, layouts, deadlines, validations,
-        workflow, workflows, archivedWorkflows, archivedWorkflowsError,
+        workflow, workflows, workflowsLoading,
+        archivedWorkflows, archivedWorkflowsError, archivedWorkflowsLoading,
         activePublicationId, isLoading,
         databases, storage,
         fetchPublications, switchPublication, fetchWorkflow,

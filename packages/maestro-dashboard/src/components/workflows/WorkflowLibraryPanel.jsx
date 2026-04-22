@@ -147,7 +147,11 @@ export default function WorkflowLibraryPanel({
     onSelect
 }) {
     const navigate = useNavigate();
-    const { workflows, archivedWorkflows, archivedWorkflowsError, getMemberName } = useData();
+    const {
+        workflows, workflowsLoading,
+        archivedWorkflows, archivedWorkflowsError, archivedWorkflowsLoading,
+        getMemberName
+    } = useData();
     const { user } = useAuth();
     const { activeOrganizationId, activeEditorialOfficeId } = useScope();
     const { openModal, closeModal } = useModal();
@@ -483,11 +487,15 @@ export default function WorkflowLibraryPanel({
             <AnimatedAutoHeight>
                 {visibleWorkflows.length === 0 ? (
                     <div className="form-empty-state">
-                        {searchQuery || scopeFilter.size < SCOPE_FILTER_OPTIONS.length
-                            ? 'Nincs találat a szűrőknek.'
-                            : tab === 'archived'
-                                ? 'Nincs archivált workflow.'
-                                : 'Nincs elérhető workflow.'}
+                        {/* Loading → empty state: fetch-ablak alatt ne „Nincs
+                            workflow." flicker-t mutassunk az eager fetch alatt. */}
+                        {(tab === 'archived' ? archivedWorkflowsLoading : workflowsLoading)
+                            ? 'Betöltés…'
+                            : searchQuery || scopeFilter.size < SCOPE_FILTER_OPTIONS.length
+                                ? 'Nincs találat a szűrőknek.'
+                                : tab === 'archived'
+                                    ? 'Nincs archivált workflow.'
+                                    : 'Nincs elérhető workflow.'}
                     </div>
                 ) : (
                     <ul className={listClassName}>
