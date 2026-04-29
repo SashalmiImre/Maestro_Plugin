@@ -24,6 +24,18 @@ tags: [moc]
 - [[Munkafolyamat]] — Állapotgép, jogosultságok, validáció
 - [[Fejlesztési szabályok]] — Kódstílus, elnevezés, hozzájárulás
 
+## Tudástár modulok
+
+- [[Komponensek/index|Komponensek]] — atomic notes a domain-fogalmakhoz
+- [[Döntések/index|Döntések (ADR)]] — architektúra-szintű döntések
+- [[Naplók/index|Naplók]] — daily notes
+- [[Csomagok/index|Csomagok]] — package overview-k
+- [[Hibaelhárítás]] — ismert problémák és workaround-ok
+
+## Archívum
+
+- [[archive/README|Archívum áttekintő]] — `_docs/archive/`: korábbi WORKFLOW_*.md verziók (történeti referencia)
+
 ## Referencia
 
 - [[Szószedet]] — Fogalmak és rövidítések
