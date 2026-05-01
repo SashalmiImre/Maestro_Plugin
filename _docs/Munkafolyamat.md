@@ -47,3 +47,15 @@ UI gomb `disabled` → handler toast → engine guard.
 - **StateComplianceValidator** — Állapotátmenet-validáció koordinátor
 - **WorkflowEngine** — `executeTransition()`, `lockDocument()`, `unlockDocument()`
 - **registerTask** minta — aszinkron koordináció documentClosed-nél
+
+## Manuális smoke teszt checklist
+
+> Valós InDesign környezetben végigkattintani — a kód review nem helyettesíti. Periodikusan, release előtt vagy nagyobb refaktor után érdemes futtatni.
+
+- **Happy path** — bejelentkezés → kiadvány kiválasztás → cikk felvétel → megnyitás → szerkesztés → mentés → állapotváltás → bezárás
+- **Sleep/wake recovery** — laptop fedél le → 2+ perc → fedél fel → UI konzisztens, Realtime él, adatok frissek
+- **Dual-proxy failover** — primary leállítás → fallback átkapcsolás → primary visszajön → automatikus visszakapcsolás
+- **Offline → online** — WiFi ki → offline overlay → WiFi be → recovery → nincs dupla fetch, nincs UI ugrás
+- **Jogosultsági edge case-ek** — vezető csoport bypass, scope váltás közben állapotváltás, workflow hot-reload UI frissülés
+
+Részletek: [[Döntések/0001-dual-proxy-failover]], [[Komponensek/RecoveryManager]], [[Komponensek/EndpointManager]].
