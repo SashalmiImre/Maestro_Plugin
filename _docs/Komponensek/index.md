@@ -25,6 +25,12 @@ Egy fájl = egy domain fogalom. Mély, lefelé linkel a kódra (`fájl:sor`), ol
 - [[StateComplianceValidator]]
 - [[LockManager]]
 - [[DocumentMonitor]]
+- [[WorkflowLibrary]] — Dashboard
+- [[WorkflowExtension]] — Proposed
+- [[WorkflowStateColors]]
+
+## Hookok
+- [[useOrgRole]] — Dashboard
 
 ## Útvonal
 - [[CanonicalPath]]
