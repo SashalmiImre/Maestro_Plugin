@@ -29,17 +29,27 @@ Központi adatállapot kezelő (publications, articles, validations, layouts, de
 - **Forrás**: `packages/maestro-dashboard/src/contexts/DataContext.jsx`
 
 ### Felület (API)
-- **Read**: `publications`, `articles`, `layouts`, `deadlines`, `validations`, `workflows` (office összes), `workflow` (aktív, derived `useMemo` snapshot-fallback-kel), `activePublicationId`, `isLoading`
+- **Read**: `publications`, `articles`, `layouts`, `deadlines`, `validations`, `workflows` (scope-szűrt aktív lista), `archivedWorkflows`, `archivedWorkflowsError`, `workflowsLoading`, `archivedWorkflowsLoading`, `workflow` (aktív, derived `useMemo` snapshot-fallback-kel), `activePublicationId`, `isLoading`
+- **Singleton-ok (context value-n át)**: `databases`, `storage` — egyetlen Appwrite példány a Provider-ben (`new Databases(getClient())` ad-hoc TILOS, ld. [[Fejlesztési szabályok]])
 - **Pub váltás**: `switchPublication(id)` — paralel fetch + state-nullázás
-- **Fetch**: `fetchPublications()` (paginált, scope-szűrt), `fetchWorkflow()` (org+office visibility), `fetchAllOrgWorkflows()` (admin, klón forrás), `fetchAllGroupMembers()` (5 perces cache)
+- **Fetch**: `fetchPublications()` (paginált, scope-szűrt), `fetchWorkflow()` (org+office+public visibility, scope-szűrt aktív), `fetchArchivedWorkflows()` (scope-eager, dual-list filter-only), `fetchAllOrgWorkflows(orgId)` (opt-in, **nem-cache, nem-Realtime** — pl. CreateEditorialOfficeModal klón-forrás), `fetchAllGroupMembers()` (5 perces cache)
 - **Write-through**: `createPublication`/`updatePublication`/`deletePublication`, `createLayout`/`updateLayout`/`deleteLayout` (cascading delete cikkekkel), `createDeadline`/`updateDeadline`/`deleteDeadline`, `updateArticle(id, data)` (CF-en át), `createValidation`/`updateValidation`/`deleteValidation`
 - **Util**: `applyArticleUpdate(serverDocument)` (külső írók)
+
+### Race-védelem (refek)
+- **`workflowLatestUpdatedAtRef`** (`Map<$id, $updatedAt>`) — globális `$updatedAt` version-check minden workflow-eseményre. Out-of-order Realtime payload-ok stale cross-list upsert-jét blokkolja (`workflows` ↔ `archivedWorkflows` átmenetnél elengedhetetlen)
+- **`archivedFetchGenRef`** — `fetchArchivedWorkflows` A→B→A scope-váltás gen-counter, finally-ben gen-guard
+- **`fetchWorkflowGenRef`** — `fetchWorkflow` finally-loading-race védelem (régebbi fetch ne oltsa ki a frissebb fetch loading flag-jét). Megjegyzés: a list-override race-fix halasztva, ld. forráskód komment
 
 ### Realtime
 - 7 collection: ARTICLES, PUBLICATIONS, LAYOUTS, DEADLINES, USER_VALIDATIONS, SYSTEM_VALIDATIONS, WORKFLOWS
 - **Subscribe módja**: kötelezően [[RealtimeBus]] `subscribeRealtime()` — NEM közvetlen `client.subscribe()` ([[Hibaelhárítás#Realtime SLOT 0 routing bug Dashboard]])
 - **Scope szűrés**: pub-ok az `activeEditorialOfficeId`-ra; cikkek az `activePublicationId`-ra; validációk csak az aktív pub cikkeire
-- **`$updatedAt` staleness guard** (mint a Plugin-é)
+- **`$updatedAt` staleness guard** (mint a Plugin-é) + globális `workflowLatestUpdatedAtRef` (workflow-eseményekre)
+- **`applyWorkflowEvent` 6-arg signature**: `(setWorkflows, setArchivedWorkflows, versionsMap, ...)` — dual-list (aktív + archivált) Realtime handler. Archive↔restore átmenet mindkét listán szinkron, delete a versionsMap entry-t is törli
+
+### Memoizált context value
+A Provider `value` `useMemo`-zott (deps: minden state, singleton, useCallback). Megelőzi az ok nélküli context-consumer re-render-eket olyan komponenseknél, amelyek csak singleton-okat olvasnak (pl. `useContributorGroups`, `CreateEditorialOfficeModal`).
 
 ## Kapcsolatok
 - **Felhasználói**: minden `useData()`-t hívó komponens; [[ScopeContext]] (TBD); modal-ok (create/update/delete)
@@ -53,4 +63,5 @@ Központi adatállapot kezelő (publications, articles, validations, layouts, de
 
 ## Kapcsolódó
 - [[MaestroEvent]], [[RealtimeBus]], [[ScopeContext]] (TBD), [[ConnectionContext]]
-- [[Döntések/0002-fazis2-dynamic-groups]], [[Döntések/0004-dashboard-realtime-bus]]
+- [[Döntések/0002-fazis2-dynamic-groups]], [[Döntések/0004-dashboard-realtime-bus]], [[Döntések/0006-workflow-lifecycle-scope]]
+- [[WorkflowLibrary]] (a panel a `archivedWorkflows` + scope-szűrt `workflows` consumer-e)

@@ -25,6 +25,20 @@ aliases: [AuthContext, Dashboard AuthContext]
 - **Debounce**: 300ms — cascade műveletek (pl. org törlése × N office) egy fetch-be vonódnak
 - **Silent vs. fail-closed**: update/rename → `silent: true` (tranziens hiba ne törölje a scope-ot); delete → `silent: false` (hozzáférés-vesztés)
 
+## Modul-szintű singleton exportok
+A `getClient()` / `getAccount()` mintájára a modul publikusan exportálja a `databases` és `functions` Appwrite példányt is:
+
+```js
+export function getDatabases() { /* ... */ }
+export function getFunctions() { /* ... */ }
+```
+
+**Mikor kell?** DataProvider-en KÍVÜL futó komponensek (pl. `routes/settings/GroupsRoute.jsx`, `features/workflowDesigner/WorkflowDesignerRedirect.jsx` legacy URL redirect). A render-on-kívüli vagy modul-szintű kontextusban is használhatóak.
+
+**Mikor NE?** DataProvider-en BELÜL: ott a `useData().databases` / `.storage` a hivatalos belépési pont (egyetlen Provider-példány, hot-config swap-pal kompatibilis).
+
+**Tilos**: `new Databases(getClient())` ad-hoc — silent dual-instance bug-okat okoz. Ld. [[Fejlesztési szabályok]].
+
 ## Kapcsolatok
 - **Hívják**: Login route, [[ScopeContext]] (TBD) (onboarding), [[DataContext]] (tagságok betöltése előtt)
 - **Hívja**: `fetchMemberships()` (paralel org + office query), `callInviteFunction()` (közös CF helper), [[RealtimeBus]] (`subscribeRealtime`)
@@ -35,4 +49,5 @@ aliases: [AuthContext, Dashboard AuthContext]
 
 ## Kapcsolódó
 - [[DataContext]] (Dashboard), [[RealtimeBus]], [[ScopeContext]] (TBD), [[UserContext]] (Plugin megfelelő)
-- [[Döntések/0003-tenant-team-acl]], [[Döntések/0004-dashboard-realtime-bus]]
+- [[Döntések/0003-tenant-team-acl]], [[Döntések/0004-dashboard-realtime-bus]], [[Döntések/0006-workflow-lifecycle-scope]]
+- [[useOrgRole]] (a `orgMemberships` központi consumer-e)
