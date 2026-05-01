@@ -42,3 +42,17 @@ tags: [moc, fejlesztés]
 5. ExtendScript bridge — string-ként generált scriptek
 6. Plugin izoláció — saját `window` objektum
 7. InDesign `.idlk` — valódi fájlzár (DB lock informatív)
+
+## Dashboard-specifikus szabályok
+
+- **DataProvider-en kívül `getDatabases()` / `getFunctions()`**: az [[Komponensek/AuthContext]] modul-szintű publikus exportja a hivatalos belépési pont. Tilos `new Databases(getClient())` konstrukció ad-hoc módon (silent dual-instance bug, render-ciklusonként új példány). DataProvider-en BELÜL: `useData().databases` / `.storage`.
+- **`useOrgRole(orgId)` hook**: a `callerOrgRole` pattern központi forrása ([[Komponensek/useOrgRole]]) — ne kalkuláld kézzel `orgMemberships.find()`-dal. 3 szemantikai variáns van (active-org / workflow-owner-org / publication-org), ezért **explicit `organizationId` paraméter** (nincs implicit default).
+
+## Dashboard-specifikus szabályok
+
+- **Realtime feliratkozás**: kizárólag [[Komponensek/RealtimeBus]] `subscribeRealtime()`-on keresztül — közvetlen `client.subscribe()` TILOS ([[Döntések/0004-dashboard-realtime-bus]], [[Hibaelhárítás#Realtime SLOT 0 routing bug Dashboard]]).
+- **Appwrite példány DataProvider-en KÍVÜL**: az [[Komponensek/AuthContext]] modul-szintű `getDatabases()` / `getFunctions()` exportja a hivatalos belépési pont. Tilos `new Databases(getClient())` konstrukció ad-hoc módon — silent dual-instance bug-okat okoz.
+- **Appwrite példány DataProvider-en BELÜL**: `useData().databases` / `.storage` (a Provider value singleton-ja).
+- **`callerOrgRole` pattern**: a `useOrgRole(orgId)` hook ([[Komponensek/useOrgRole]]) a központi forrás — ne kalkuláld kézzel `orgMemberships.find()`-dal.
+- **Modal-alapú dialógusok**: natív `window.prompt()` TILOS — `usePrompt` (Promise-alapú) vagy `useCopyDialog` hook a `ModalContext`-ből. Stílusozható, screen reader-friendly, mobil-konzisztens.
+- **Tenant collection ACL-pattern**: új `groups`-/`organizationInvites`-/`workflows`-szerű collection-höz `buildOrgAclPerms()` / `buildOfficeAclPerms()` / `buildWorkflowAclPerms()` helper kötelező + `rowSecurity: true` a collection-ön ([[Döntések/0003-tenant-team-acl]], [[Döntések/0006-workflow-lifecycle-scope]]).

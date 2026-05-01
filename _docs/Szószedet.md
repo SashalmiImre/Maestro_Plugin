@@ -38,6 +38,9 @@ tags: [referencia]
 | **cookieFallback** | `localStorage`-ban tárolt session (UXP cookie limitáció miatt) |
 | **Fetch generáció-számláló** | Elavult fetch eredmények eldobása párhuzamos hívások esetén |
 | **Ghost Socket védelem** | Socket generáció-számláló — régi socket close event-jei ignorálva |
+| **`useOrgRole(orgId)`** | Központi callerOrgRole hook (active-org / owner-org / pub-org variánsok) — [[Komponensek/useOrgRole]] |
+| **`getDatabases()` / `getFunctions()`** | [[Komponensek/AuthContext]] modul-szintű singleton — DataProvider-en KÍVÜLI használathoz |
+| **`workflowLatestUpdatedAtRef`** | Globális `$updatedAt` Map a workflow Realtime out-of-order védelemhez ([[Komponensek/DataContext]]) |
 
 ## Útvonalkezelés
 
@@ -47,3 +50,16 @@ tags: [referencia]
 | **MOUNT_PREFIX** | `/Volumes` (macOS) vagy `C:/Volumes` (Windows) |
 | **`toCanonicalPath()`** | Natív → DB formátum konverzió |
 | **`toNativePath()`** | DB → natív formátum konverzió |
+
+## Workflow & Bővítmények
+
+| Fogalom | Leírás |
+|---------|--------|
+| **WorkflowLibraryPanel** | Közös workflow-könyvtár modal (breadcrumb chip + publikáció-hozzárendelés) — [[Komponensek/WorkflowLibrary]] |
+| **WorkflowExtension** | DB-tárolt ExtendScript validátor / parancs (Proposed) — [[Komponensek/WorkflowExtension]] |
+| **`WORKFLOW_STATE_COLORS`** | Közös szín-paletta + `nextAvailableColor()` helper — [[Komponensek/WorkflowStateColors]] |
+| **`visibility` enum (3-state)** | `editorial_office` / `organization` / `public` — workflow scope ([[Döntések/0006-workflow-lifecycle-scope]]) |
+| **`compiledWorkflowSnapshot`** | Aktivált publikáció snapshot mező — futó workflow immutable védelem |
+| **`archivedAt`** | Soft-delete mező — 7 napos retention, `cleanup-archived-workflows` napi cron |
+| **`buildWorkflowAclPerms()`** | Doc-szintű ACL helper a `workflows` collection-höz (Fázis 2 minta kiterjesztése) |
+| **`ext.<slug>` prefix** | Workflow JSON `validations` / `commands` listájában custom extension hivatkozás |

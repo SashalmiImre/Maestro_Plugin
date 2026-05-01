@@ -46,3 +46,20 @@ Részletek: [[Komponensek/EndpointManager]], [[Döntések/0001-dual-proxy-failov
 **Ok**: InDesign UXP `afterSave` event nem különbözteti meg a programozott vs. user mentést.
 **Megoldás**: `maestroSkipMonitor` flag állítása a save előtt, törlése utána. Mintáért: keress a kódban `maestroSkipMonitor`-ra.
 Részletek: [[Szószedet#maestroSkipMonitor]].
+
+---
+
+## Office nélküli szervezetre váltás után stale publikáció / workflow state
+
+**Tünet**: Új szervezetre váltáskor (0 office) az `ArticleTable` nem tűnik el, az onboarding splash sosem jelenik meg. A workflow chip is "kattintható"-nak látszik, de a célállapot nem konzisztens a sibling "Szerkesztőség" dropdown viselkedésével.
+**Ok**: `DashboardLayout.jsx:102` scope-effect korai `if (!activeEditorialOfficeId) return;` guard. A `fetchPublications` / `fetchWorkflow` / `switchPublication(null)` null-tolerant — a `setPublications([])`, `setWorkflows([])`, articles/layouts/deadlines/validations clear már mind benne van. A guard redundánsan blokkolja a clear-elést, ezért a `publications.length > 0` miatt az `isOnboarding` (`publications.length === 0`) sose teljesül.
+**Megoldás**: A guard-return törlése. A null-tolerant fetch függvények elvégzik a clear-t. Plusz a workflow chip `disabled` állapota a `isWorkflowDisabled = !activeEditorialOfficeId || isOfficeSetupPending` képletre épül (legacy default office + 0 publikáció esetére is).
+Részletek: [[Komponensek/DataContext]], [[Komponensek/AuthContext]], [[Döntések/0006-workflow-lifecycle-scope]].
+
+---
+
+## Office nélküli szervezetre váltás után stale publikáció / workflow state
+**Tünet**: Új szervezetre váltáskor (0 office vagy "legacy default office" + 0 publikáció) az `ArticleTable` nem tűnik el, az onboarding splash sosem jelenik meg.
+**Ok**: `DashboardLayout.jsx` scope-effect korai `if (!activeEditorialOfficeId) return;` guard. A `ScopeContext` stale-ID validáció `setActiveOffice(null)`-ra állít, de a guard ezen az ágon blokkolja a `fetchPublications` / `fetchWorkflow` / `switchPublication(null)` clear-elést — `publications.length > 0` miatt az `isOnboarding` (`publications.length === 0`) sose teljesül.
+**Megoldás**: A guard-return eltávolítása. A `fetchPublications()` null office-ra `setPublications([])`-t ad, `fetchWorkflow()` null scope-ra `setWorkflows([])`-t ad, `switchPublication(null)` clearel articles/layouts/deadlines/validations-t — mind null-tolerant, ezért a belső guard redundáns volt.
+Részletek: [[Komponensek/DataContext]] (null-tolerant fetch), Feladatok M. szekció #97.
