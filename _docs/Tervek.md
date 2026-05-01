@@ -11,25 +11,24 @@ Egy átfogóbb leírást szeretnék a Maestro működéséről adni neked. Ha el
 
 
 #### Workflow kezelés
-- A workflow-k a szerkesztőségeknél állíthatók be.
-- Szintén a szerkesztőségeknél lehet kiadványt létrehozni, egy kiadványhoz csak egy workflow tartozhat, amit a kiadvány élesítése után már nem lehet módosítani, lecserélni egy másikra.
-- A workflow-kban definiált felhasználó-csoportok beépülnek a szerkesztőség felhasználó-csoportjaiba. 
-- Azokat a felhasználó-csoportokat amik nem kapcsolódnak a szerkesztőségbe felvett egyik workflow-hoz sem, azokat szabadon lehet átnevezni, törölni, összeolvasztani egy másikkal.
-- A felhasználó-csoportokat amik viszont kapcsolódnak a szerkesztőségbe felvett bármelyik workflow-hoz, nem lehet törölni és átnevezni, viszont felhasználókat lehet felvenni beléjük és workflow-hoz nem kapcsolódó felhasználó csoportokat beléjük olvasztani (merge).
-- A workflow-kezelőben kiválasztott workflow-ról egy másolat keletkezik a kiadványon belül. 
-- A workflow-kezelőben a saját worklow
+
+> Implementálva 2026-04-20: lásd [[Döntések/0006-workflow-lifecycle-scope]]. A workflow self-contained entitás, 3-state visibility (`editorial_office` / `organization` / `public`), soft-delete + napi cron hard-delete, doc-szintű ACL, breadcrumb chip + publication-assignment-os `WorkflowLibraryPanel`, idegen workflow read-only + Duplikál & Szerkeszt CTA.
 
 
-
-#### *Parancsok
-
-
-#### *Validátorok
+#### *Parancsok és validátorok
+- A parancsok és validátorok közös, dinamikus extension-rendszerre épülnek: minden új parancs/validátor egy DB-ben tárolt **InDesign ExtendScript** szkript, amit a plugin runtime betölt és futtat.
+- A kód kizárólag InDesign ExtendScript lehet — vagyis olyan, ami amúgy is futhatna InDesign szkriptként. Nem kell külön JS sandbox, mert az ExtendScript runtime a meglévő, kontrollált környezet (a beépített parancsok és validátorok is így futnak).
+- Az extension egy DB doc (új `workflowExtensions` collection a workflow-k mintájára), mezői: név, slug (egyedi szerkesztőségen belül), kind (`validator` | `command`), scope (`article` | `publication`), kód (ExtendScript forrás), opcionális paraméter-séma, láthatósági scope (mint a workflow-knál: szerkesztőség / kiadó), archiválás.
+- Az extension kódjának egyetlen kötött szerződést kell követnie: globális `maestroExtension(input)` függvény, ami JSON-ben kapja a kontextust (cikk, opciók, kiadvány-gyökér), és JSON-ben adja vissza az eredményt — validátornál `{ isValid, errors[], warnings[] }`, parancsnál `{ success, error?, message? }`.
+- A workflow Designerben a beépített és a custom extension-ök egyetlen választható listában jelennek meg; a workflow JSON `validations` / `commands` mezőiben a custom hivatkozás `ext.<slug>` prefixszel megy (nincs új mező a sémában).
+- A kiadvány aktiválásakor a workflow snapshot mellé az **extension-snapshot** is rögzül (a használt custom-ok kódja + metaadata) — futó kiadvány alól nem módosítható a viselkedés.
+- Phase 0 (MVP): csak `validator` és `command` kind, csak `article` scope, admin-only CRUD, egyszerű textarea editor + alap szintaxis-validáció (nincs Monaco), nincs marketplace.
+- Phase 1+: publikáció-scope extension, ExtendScript-oldali Maestro SDK (logger / fájlhozzáférés helper), 3rd-party közzététel, marketplace, jogosultsági integráció (a fenti felhasználó-jogosultsági rendszer extension-szintű kibővítése).
+- Megvalósításkor a részletes architektúra-vázlat (adatmodell, plugin runtime dispatch, snapshot stratégia, fájl-térkép, kockázatok) ADR-be kerül ([[Döntések/0007-workflow-extensions]]) + atomic note a kontraktról ([[Komponensek/WorkflowExtension]]).
 
 
 #### **Dashboard UI redesign**
-
- Alapvetően a Stitch által létrehozott irányt megfelelőnek találom, a te észrevételeidet szeretném a sajátjaimmal kiegészíteni. 
+Alapvetően a Stitch által létrehozott irányt megfelelőnek találom, a te észrevételeidet szeretném a sajátjaimmal kiegészíteni. 
 
 
 
