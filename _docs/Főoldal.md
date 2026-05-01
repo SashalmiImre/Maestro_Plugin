@@ -31,6 +31,8 @@ tags: [moc]
 - [[Naplók/index|Naplók]] — daily notes
 - [[Csomagok/index|Csomagok]] — package overview-k
 - [[Hibaelhárítás]] — ismert problémák és workaround-ok
+- [[Tervek]] — folyamatban lévő tervek és nyitott design-kérdések
+- [[Feladatok]] — aktuális teendők (rövid lista, érett tartalom az ADR-ekbe / atomic note-okba költözik)
 
 ## Archívum
 

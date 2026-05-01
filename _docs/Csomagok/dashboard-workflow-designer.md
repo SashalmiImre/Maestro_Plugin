@@ -34,3 +34,7 @@ A design rendszer: Dashboard Stitch „Digital Curator" design tokenek (glassmor
 - **Realtime**: a Workflow Designer doc-szintű Realtime csatornát használ ([[Komponensek/RealtimeBus]] `documentChannel`-en át) — ütközés-warning remote version eltérésnél
 - **Compiled snapshot**: a Plugin a `workflows.compiled` JSON-t olvassa runtime-on; a Dashboard [[Komponensek/DataContext]] `workflow` derived state ezt parsolja
 - **Adatmodell**: az Appwrite `workflows` collection a fázis 2 dinamikus csoport-rendszer része ([[Döntések/0002-fazis2-dynamic-groups]])
+- **Életciklus + scope**: 3-state visibility (`editorial_office` / `organization` / `public`), soft-delete + napi cron, idegen workflow read-only + Duplikál & Szerkeszt CTA — részletek: [[Döntések/0006-workflow-lifecycle-scope]]
+- **Workflow könyvtár modal**: közös belépési pont a breadcrumb chip-ből és a publikáció-hozzárendelésből — [[Komponensek/WorkflowLibrary]]
+- **Színpaletta**: a NodePalette és a `defaultWorkflow.json` közös szín-forrása — [[Komponensek/WorkflowStateColors]]
+- **Custom parancsok / validátorok (terv)**: ExtendScript extension-ek a workflow JSON-ban `ext.<slug>` prefixszel — [[Döntések/0007-workflow-extensions]] (Proposed), [[Komponensek/WorkflowExtension]]
