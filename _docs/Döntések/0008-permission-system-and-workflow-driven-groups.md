@@ -5,9 +5,120 @@ date: 2026-05-01
 last_updated: 2026-05-02
 ---
 
+> **A.3.6 záradék (2026-05-02 — Codex final review fix-ekkel)**:
+>
+> A retrofit fő tanulságai (Codex final review):
+>
+> 1. **`callerUser.labels` betöltés kötelező** — a CF entry-pointban az
+>    `x-appwrite-user-labels` headerből CSV-formátumban beolvassuk a user
+>    labels-t és átadjuk a permission helpereknek. E nélkül a globális
+>    `admin` label shortcut **halott kód** lenne.
+> 2. **`workflow.share` slug bekötve** — az ADR 38-as taxonómia kanonikus
+>    eleme; a `update_workflow_metadata` visibility-mező változtatásához
+>    most ez a slug a guard (vagy `createdBy === callerId` ownership
+>    fallback). **Plusz: a `create_workflow` is gate-eli** — ha a payload
+>    non-default `visibility`-t kér (`organization` vagy `public`),
+>    `workflow.share` jog szükséges (különben egy `workflow.create`-jogú
+>    user megkerülné az `update_workflow_metadata` visibility-gate-jét —
+>    Codex final sign-off ship-blocker fix). A `duplicate_workflow`
+>    változatlan, mert hardcoded `editorial_office` scope-on indul.
+>    Korábbi téves komment, hogy a slug "nincs a taxonómiában".
+> 3. **403 contract egységesítés** — minden retrofit-elt 403 mostantól
+>    `insufficient_permission` reason + `{slug, scope: 'office'|'org',
+>    requiresOwnership?: true}` mezőkkel. A `not_workflow_owner` régi reason
+>    eltüntetve a retrofit-elt action-ökön. A `create_editorial_office`
+>    legacy `not_a_member`/`insufficient_role` reason-jeit szándékosan
+>    NEM érintettük (lásd alábbi kivételek).
+> 4. **Globális env fail-fast** — `PERMISSION_SETS_COLLECTION_ID` és
+>    `GROUP_PERMISSION_SETS_COLLECTION_ID` mostantól minden invocationon
+>    kötelezőek. Deploy-előfeltétel: `bootstrap_permission_sets_schema`
+>    futtatása.
+>
+> **A.3.6 harden pass (2026-05-02 — Codex baseline + adversarial review fix-ek)**:
+>
+> A `/harden` skill 2 további Critical fix-et hozott be, mielőtt a változás
+> ship-ready lett volna:
+>
+> 1. **Kilépett creator ownership-fallback membership-check**
+>    (`archive_workflow`/`restore_workflow` és `update_workflow_metadata`
+>    visibility-ágon): a `createdBy === callerId` ownership csak akkor
+>    érvényes, ha a caller még office-tag. Egy kilépett user a workflow-jára
+>    nem maradhat jogosult — a `createdBy` mező soha-le-nem-járó privilege-
+>    eszkalációs felület lenne. Implementáció: új shared helper
+>    `permissions.isStillOfficeMember(databases, env, userId, officeId)`,
+>    fail-closed boolean.
+> 2. **Member-path defense-in-depth `editorialOfficeMemberships` cross-check**
+>    a `buildPermissionSnapshot` snapshot-build elején: ha a user nincs
+>    `editorialOfficeMemberships`-ben (pl. out-of-band DB-write rogue
+>    `groupMembership` rekordot adott), a member-path üres `permissionSlugs`
+>    Set-tel tér vissza. A normál CF write-path collection-ACL-jei eddig is
+>    védték az integritást, de Appwrite Console / direkt API key script /
+>    kompromittált backup-restore most már kódszintű guarddal lezárva.
+>
+> A simplify pass az inline office-membership lookup duplikáció (3 hely)
+> egyetlen `permissions.isStillOfficeMember` helperbe DRY-elte. A
+> `permissionEnv` globálisan kötelező új mezővel: `officeMembershipsCollectionId`.
+>
+> Verifikáló Codex review: **clean, iteráció nem kell**. Az új helper
+> minden 24 office-scope `userHasPermission()` hívásnál effektív, és a
+> `snapshotsByOffice` cache 1-3 DB lookup-ra tompítja a CF-call költségét.
+>
+> **Megmaradt design-decided pontok (NEM javítjuk)**:
+>
+> - **Intra-request snapshot cache stale auth**: a `permissionContext`
+>   memoizációja request-snapshot consistency-t ad (a CF egy egységes
+>   nézetet lát). Ha egy multi-step action közben a user permission-je
+>   változik, a CF a request kezdetekor ismert állapot szerint dönt
+>   végig — ez tudatos elv, nem védendő bypass-szal.
+> - **Frontend BREAKING `insufficient_permission` toast-mapping**: a
+>   vault szabálya ("nincs visszafelé-kompat") elfogadta. A.4 frontend
+>   frissítés hatáskörbe tartozik a régi `insufficient_role` reason-keresés
+>   átállítása slug-alapúra.
+>
+> **Megmaradt security risks (Phase 2 / megfontolásra)**:
+>
+> - **Slug-katalógus drift**: a CF inline `OFFICE_SCOPE_PERMISSION_SLUGS` /
+>   `DEFAULT_PERMISSION_SETS` és a shared ESM modul manuális szinkron alatt
+>   állnak; az A.3.6 retrofit során egyszer már materializálódott a drift
+>   (`workflow.share` halott kód). Phase 2 (A.7.1): AST-equality CI test.
+> - **Member-path authority**: a `buildPermissionSnapshot` member-pathon a
+>   `groupMemberships` collection-en alapul (NEM az `editorialOfficeMemberships`-en).
+>   A jelenlegi write-path kollekció-ACL-jei védik az integritást, de
+>   out-of-band DB-írás (Console / direkt API key bypass) privilege-
+>   eszkalációs felület. Phase 2: cross-check editorialOfficeMemberships.
+> - **`archive_workflow`/`restore_workflow` auth-late ordering**: a workflow
+>   doc fetch + scope-match a permission guard ELŐTT van, hogy a `createdBy`
+>   ownership fallback eldönthető legyen. Implikáció: nem-jogosult caller
+>   információt szerezhet a workflow létezéséről (`workflow_not_found` vs.
+>   `scope_mismatch` vs. `403`). Tudatos tradeoff.
+> - **Vegyes 403 reason-készlet**: néhány action még `not_a_member` (legacy
+>   `create_editorial_office`, `leave_organization`) vagy `insufficient_role`
+>   (`bootstrap_*_schema`, `backfill_tenant_acl` — owner-only, A.3.6
+>   hatókörén kívül) reason-t használ. A frontend (A.4) **nem támaszkodhat
+>   arra, hogy minden 403 `insufficient_permission`** — az error-mappingnek
+>   három reason-osztályra kell felkészülnie (insufficient_permission /
+>   not_workflow_owner — már nincs / not_a_member / insufficient_role).
+> - **`update_organization` BREAKING**: az ADR `org.rename` slug-ot owner-
+>   onlyként rögzíti (`ADMIN_EXCLUDED_ORG_SLUGS`); a régi viselkedés admin-t
+>   is engedett. A.4 frontend frissítésig az admin user a UI-ban látja a
+>   rename CTA-t, de 403-at kap. Megoldás: A.4-ben a `useOrgRole` mellé
+>   slug-alapú gate (`userHasOrgPermission(...)` cache).
+>
+> **Szándékos retrofit-kivételek**:
+>
+> - `create_editorial_office` — az új office még nem létezik (`officeId=???`
+>   problémás). A helper `userHasPermission()` 2. lépése owner/admin-nak
+>   amúgy is minden 33 slugot megad → logikailag ekvivalens a régi
+>   role-checkkel, ezért érintetlenül hagytuk.
+> - `bootstrap_*_schema`, `backfill_tenant_acl` — owner-only schema action-
+>   ök, az A.3.6 hatókörén kívül. Külön ADR-update szükséges, ha permission-
+>   set-elhetővé tesszük őket.
+> - `accept`, `decline_invite`, `list_my_invites`, `leave_organization` —
+>   saját önkezelő flow-k, nincs auth-gate.
+
 # 0008 — Jogosultsági rendszer + workflow-driven felhasználó-csoportok
 
-> **Implementáció állapota (2026-05-02)**: A. blokk (workflow-driven groups) szerver-oldala kész — A.1 (adatmodell + shared validátor + ADR), A.2 (CF actionök) implementálva, deploy-ra vár. **A.3 (permissionSets réteg) szerver-oldala kész**: A.3.1-A.3.5 + A.3.7 server-side cache implementálva — `permissions.js` shared modul (38 slug + 8 csoport + 3 default permission set) + CF inline duplikátum (`buildPermissionSnapshot`, `userHasPermission`, `userHasOrgPermission`, `validatePermissionSetSlugs`, `createPermissionContext`); `bootstrap_organization` és `create_editorial_office` automatikusan seedeli a 3 default permission set-et (`owner_base`, `admin_base`, `member_base`) office-onként; új CRUD action-ök: `create_permission_set`, `update_permission_set`, `archive_permission_set`, `restore_permission_set`, `assign_permission_set_to_group`, `unassign_permission_set_from_group`. **Hátra van**: A.3.6 (meglévő CF guardok lecserélése `userHasPermission()`-re — külön commit, iteratív rollout), A.4 (Dashboard UI), A.5 (Plugin runtime).
+> **Implementáció állapota (2026-05-02)**: A. blokk (workflow-driven groups) szerver-oldala kész — A.1 (adatmodell + shared validátor + ADR), A.2 (CF actionök) implementálva, deploy-ra vár. **A.3 (permissionSets réteg) szerver-oldala teljesen kész**: A.3.1-A.3.7 implementálva — `permissions.js` shared modul (38 slug + 8 csoport + 3 default permission set) + CF inline duplikátum (`buildPermissionSnapshot`, `userHasPermission`, `userHasOrgPermission`, `validatePermissionSetSlugs`, `createPermissionContext`); `bootstrap_organization` és `create_editorial_office` automatikusan seedeli a 3 default permission set-et (`owner_base`, `admin_base`, `member_base`) office-onként; új CRUD action-ök: `create_permission_set`, `update_permission_set`, `archive_permission_set`, `restore_permission_set`, `assign_permission_set_to_group`, `unassign_permission_set_from_group`. **A.3.6 retrofit kész** (2026-05-02): 28 CF-action guard lecserélve `userHasPermission()` (23 office-scope) / `userHasOrgPermission()` (3 org-scope) hívásra; régi `403 not_a_member` / `insufficient_role` → új `403 insufficient_permission` + `{slug, scope}` mező; **2 BREAKING change**: (a) `update_organization` → `org.rename` admin elveszti, csak owner; (b) frontend toast-ok generic-be esnek vissza, amíg az A.4 dashboard frontend nem áll át. **Hátra van**: A.4 (Dashboard UI), A.5 (Plugin runtime).
 
 ## Kontextus
 

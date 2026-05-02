@@ -87,9 +87,20 @@ maestro-server/
     ├── migrate-legacy-paths/          ← Régi útvonalak batch migrációja (manuális, DRY_RUN)
     │   ├── package.json
     │   └── src/main.js
-    ├── invite-to-organization/        ← Tenant management (bootstrap + create + accept egy CF-ben)
+    ├── invite-to-organization/        ← Tenant management + workflow + permission set CRUD (egy CF-ben, ~36 action)
     │   ├── package.json
-    │   └── src/main.js
+    │   └── src/
+    │       ├── main.js                 ← Action-router + env + permissionContext (~6964 sor, A.3.6 + Fázis 1 helper-extract után)
+    │       ├── permissions.js          ← A.3.5/A.3.7 — userHasPermission/userHasOrgPermission + isStillOfficeMember (A.3.6 harden 2026-05-03)
+    │       ├── teamHelpers.js          ← Per-tenant Team ACL builder + ensureTeam/Membership helperek
+    │       ├── defaultWorkflow.json    ← Bootstrap workflow seed
+    │       └── helpers/                ← Fázis 1 helper-extract (2026-05-03)
+    │           ├── constants.js        (CASCADE_BATCH_LIMIT, MAX_REFERENCES_PER_SCAN, WORKFLOW_VISIBILITY_*, PARSE_ERROR)
+    │           ├── cascade.js          (deleteByQuery, cascadeDeleteOffice)
+    │           ├── compiledValidator.js (workflowReferencesSlug, contributorJsonReferencesSlug, validateCompiledSlugsInline, buildCompiledValidationFailure)
+    │           ├── workflowDoc.js      (createWorkflowDoc — schema-safe fallback)
+    │           ├── groupSeed.js       (seedGroupsFromWorkflow, findEmptyRequiredGroupSlugs, seedDefaultPermissionSets)
+    │           └── deadlineValidator.js (validateDeadlinesInline)
     └── team/                          ← DEPRECATED (Fázis 2: groupMemberships collection váltotta ki)
 ```
 
@@ -137,7 +148,7 @@ maestro-server/
 | `cleanup-orphaned-thumbnails` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `THUMBNAILS_BUCKET_ID` |
 | `cleanup-archived-workflows` | `DATABASE_ID`, `WORKFLOWS_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, opcionálisan `ARCHIVED_RETENTION_DAYS` (default 7) |
 | `migrate-legacy-paths` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `DRY_RUN` |
-| `invite-to-organization` | `DATABASE_ID`, `ORGANIZATIONS_COLLECTION_ID`, `ORGANIZATION_MEMBERSHIPS_COLLECTION_ID`, `EDITORIAL_OFFICES_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `ORGANIZATION_INVITES_COLLECTION_ID`, `GROUPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID` (csak a delete ágakhoz kell; hiánya esetén a `delete_organization` / `delete_editorial_office` / `delete_group` action 500 `misconfigured`-et ad, a többi action nem érintett), `ARTICLES_COLLECTION_ID` (csak `delete_group`-hoz kell a contributor scan miatt; hiánya esetén az action 500 `misconfigured`-et ad), `PERMISSION_SETS_COLLECTION_ID` és `GROUP_PERMISSION_SETS_COLLECTION_ID` (csak a `bootstrap_permission_sets_schema` action-höz kötelezőek — A.1 / ADR 0008) |
+| `invite-to-organization` | `DATABASE_ID`, `ORGANIZATIONS_COLLECTION_ID`, `ORGANIZATION_MEMBERSHIPS_COLLECTION_ID`, `EDITORIAL_OFFICES_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `ORGANIZATION_INVITES_COLLECTION_ID`, `GROUPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID` (csak a delete ágakhoz kell; hiánya esetén a `delete_organization` / `delete_editorial_office` / `delete_group` action 500 `misconfigured`-et ad, a többi action nem érintett), `ARTICLES_COLLECTION_ID` (csak `delete_group`-hoz kell a contributor scan miatt; hiánya esetén az action 500 `misconfigured`-et ad), **`PERMISSION_SETS_COLLECTION_ID`** és **`GROUP_PERMISSION_SETS_COLLECTION_ID`** (A.3.6 retrofit, 2026-05-03 óta **GLOBÁLISAN KÖTELEZŐEK** — minden retrofit-elt action `userHasPermission()` member-path lookup-ja használja; korábban csak a `bootstrap_permission_sets_schema` action-höz voltak kötelezőek) |
 
 ---
 
@@ -562,16 +573,17 @@ Két új attribútum a `workflows` collection-ön:
 - Payload: `{ groupId, permissionSetId }`. Junction doc lookup + delete.
 - Idempotens: ha nem létezik junction → success `already_unassigned`.
 
-### `permissions.js` modul (A.3.5)
+### `permissions.js` modul (A.3.5 + A.3.6 + 2026-05-03 harden)
 
 A jogosultsági helper kétféle:
 
 - **[`packages/maestro-shared/permissions.js`](packages/maestro-shared/permissions.js)** (ESM, kliens + szerver): slug-konstansok (38 slug + 8 `PERMISSION_GROUPS`), `DEFAULT_PERMISSION_SETS`, `validatePermissionSetSlugs`, sync helperek (`isOfficeScopeSlug`, `isOrgScopeSlug`, `clientHasPermission`).
 - **[`packages/maestro-server/.../src/permissions.js`](packages/maestro-server/functions/invite-to-organization/src/permissions.js)** (CommonJS, server-only): inline duplikáció + async lookup helperek:
-  - `userHasPermission(databases, env, user, slug, officeId, snapshotsByOffice?, orgRoleByOrg?)` — office-scope (33 slug). 1) global admin label, 2) `organizationMemberships.role === 'owner'/'admin'` → mind a 33 slug, 3) member-path: `groupMemberships` × `groupPermissionSets` × `permissionSets.permissions[]` (`archivedAt === null` szűrt, `OFFICE_SCOPE_PERMISSION_SLUG_SET` defense). Throw `org.*` slugra.
+  - `userHasPermission(databases, env, user, slug, officeId, snapshotsByOffice?, orgRoleByOrg?)` — office-scope (33 slug). 1) global admin label (a CF entry-pointja az `x-appwrite-user-labels` headerből CSV-ben tölti be — A.3.6 final review fix), 2) `organizationMemberships.role === 'owner'/'admin'` → mind a 33 slug, 3) **`isStillOfficeMember` defense-in-depth cross-check (A.3.6 harden 2026-05-03)** — ha a user nincs `editorialOfficeMemberships`-ben, üres set, 4) member-path: `groupMemberships` × `groupPermissionSets` × `permissionSets.permissions[]` (`archivedAt === null` szűrt, `OFFICE_SCOPE_PERMISSION_SLUG_SET` defense). Throw `org.*` slugra.
   - `userHasOrgPermission(databases, env, user, slug, orgId, orgRoleByOrg?)` — org-scope (5 slug). 1) global admin label, 2) `organizationMemberships.role === 'owner'` → mind az 5, `'admin'` → 3 (kivéve `org.delete`/`org.rename`). Throw nem-`org.*` slugra.
+  - `isStillOfficeMember(databases, env, userId, officeId)` — **A.3.6 harden 2026-05-03**: shared single-source-of-truth a `editorialOfficeMemberships` lookup-okhoz. Fail-closed boolean. 3 hívási hely: `buildPermissionSnapshot` member-path, `archive_workflow`/`restore_workflow` ownership-fallback, `update_workflow_metadata` visibility-ág. Két privilege-eszkalációs felület lezárása: (a) rogue `groupMembership` write (out-of-band DB), (b) kilépett creator ownership.
   - `buildPermissionSnapshot()` — egyszer számol per office, `{ userId, editorialOfficeId, organizationId, orgRole, permissionSlugs: Set<string>, hasGlobalAdminLabel }` formátumban.
-  - `createPermissionContext()` — `{ snapshotsByOffice: Map, orgRoleByOrg: Map }` per-request scaffold (A.3.7 server-side cache).
+  - `createPermissionContext()` — `{ snapshotsByOffice: Map, orgRoleByOrg: Map }` per-request scaffold (A.3.7 server-side cache). **Request-snapshot consistency**: a memoizált snapshot a CF-call lifecycle-ja alatt él — egy mid-request permission-változás NEM látszik a request belül (szándékos elv).
   - `validatePermissionSetSlugs(slugs)` — write-path validáció (CRUD action-ök).
 
 **Drift kockázat**: a slug-set, `DEFAULT_PERMISSION_SETS` és `validatePermissionSetSlugs` a CF inline-ban duplikált. A két forrás manuálisan szinkronban tartandó (Phase 2 / A.7.1: AST-equality CI test vagy single-source bundle). Ugyanaz a minta, mint a `validateCompiledSlugsInline` (A.2.1).
@@ -584,9 +596,35 @@ A jogosultsági helper kétféle:
 **Új CF action-ök (#30, #80, #81)**:
 - `update_workflow_metadata` — `{ editorialOfficeId, workflowId, name?, visibility?, description?, force? }`, org admin/owner auth, office scope match, name uniqueness per office, visibility whitelist. **#80 szűkítés warning**: a `#30`-as `visibility_downgrade_blocked` hard block lecserélve `visibility_shrinkage_warning + force: true` soft warning flow-ra — a kliens popup-ban megerősítteti a usert és `force: true` flag-gel újraküldi. **#81 owner-guard**: a `visibility` változtatást csak a `createdBy === callerId` tulajdonos végezheti (rename/description továbbra is org admin/owner). A `description` field nullable, a trim-elt üres string `null` szándékos törlést jelent (`undefined` = no-op). ACL újraszámolás (`buildWorkflowAclPerms`) minden visibility-váltásnál.
 - `duplicate_workflow` — `{ editorialOfficeId, workflowId, name? }`, **#81 cross-tenant**. Az `editorialOfficeId` mostantól a TARGET office (a caller aktív office-a), a forrás bárhol lehet ha a caller olvashatja (scope alapján). A duplikátum MINDIG `editorial_office` scope-on indul, `createdBy = caller`. Auto-suffix a name-hez (`(másolat)`, `(másolat 2)`, …) ha a user nem ad explicit nevet és van ütközés (cap 20). Archivált forrás: 400 `source_archived`.
-- `archive_workflow` + `restore_workflow` (#81) — `{ editorialOfficeId, workflowId }`, közös handler (`isArchive` flag). Auth: `createdBy === callerId` VAGY org owner/admin fallback. Soft-delete: `archivedAt = now()` / `null`. Idempotens: már archivált → `already_archived`, már aktív → `already_active`. A doc read ACL-je változatlan marad, hogy a még futó publikáció UI-ja tovább lássa.
+- `archive_workflow` + `restore_workflow` (#81) — `{ editorialOfficeId, workflowId }`, közös handler (`isArchive` flag). Auth (A.3.6 + 2026-05-03 harden): `createdBy === callerId` ownership-fallback **+ `isStillOfficeMember()` check** (kilépett creator nem maradhat jogosult), VAGY `userHasPermission('workflow.archive', officeId)`. Soft-delete: `archivedAt = now()` / `null`. Idempotens: már archivált → `already_archived`, már aktív → `already_active`. A doc read ACL-je változatlan marad, hogy a még futó publikáció UI-ja tovább lássa.
 - `delete_workflow` — `{ editorialOfficeId, workflowId }`, org owner/admin auth. **Blocking scan**: a workflow-ra hivatkozó publikációk listája (`publications.workflowId === workflowId`) — ha van, `workflow_in_use` + `usedByPublications: [...]`. Hatókör: ha `visibility='organization'`, az egész org minden office-át scan-eli; egyébként csak a saját office-t. Cap: `MAX_REFERENCES_PER_SCAN=50` (korai kilépés), `CASCADE_BATCH_LIMIT=100` (paginált listDocuments). A hard-delete a `cleanup-archived-workflows` scheduled CF-en keresztül automatizált — a 7 napon túl archivált workflow-kra.
-- `create_workflow` kiegészítés (#30): új row `visibility` (default `editorial_office`) + `createdBy = caller` + `organization` / `public` scope választás support.
+- `create_workflow` kiegészítés (#30): új row `visibility` (default `editorial_office`) + `createdBy = caller` + `organization` / `public` scope választás support. **A.3.6 ship-blocker fix**: ha `payload.visibility !== WORKFLOW_VISIBILITY_DEFAULT`, plusz `workflow.share` slug-guard (különben egy `workflow.create`-jogú user megkerülné az `update_workflow_metadata` visibility-gate-jét).
+
+### A.3.6 retrofit (2026-05-02 → 2026-05-03 harden, ADR 0008)
+
+A meglévő CF action guardok átkötve a slug-alapú permission rendszerre:
+
+- **24 office-scope action** `userHasPermission()` hívást kap (`workflow.create/edit/archive/duplicate/share`, `group.create/rename/delete/member.add/member.remove`, `permissionSet.create/edit/archive/assign`, `office.rename/delete`, `publication.create/activate/workflow.assign`).
+- **3 org-scope action** `userHasOrgPermission()` (`org.member.invite`, `org.rename`, `org.delete`). **BREAKING**: az `org.rename` és `org.delete` az `ADMIN_EXCLUDED_ORG_SLUGS`-ban — admin elveszti rename/delete jogát, kizárólag owner.
+- **2 dual-check** a `create_publication_with_workflow`-ban (`publication.create` ÉS `publication.workflow.assign`).
+- **Új error reason** `403 insufficient_permission` + `{slug, scope: 'office'|'org', requiresOwnership?: true, field?: 'visibility'}` mezők. A `403 not_workflow_owner` és `403 not_a_member` reason-ök (a retrofit-elt action-ökön) `insufficient_permission`-re egységesítve.
+- **Globális env vars** (A.3.6, 2026-05-03 óta KÖTELEZŐ): `PERMISSION_SETS_COLLECTION_ID`, `GROUP_PERMISSION_SETS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID` (utóbbi az `isStillOfficeMember` defense-in-depth lookup-hoz).
+
+**Szándékos retrofit-kivételek**: `create_editorial_office` (még nincs officeId, marad `org owner/admin` check), `bootstrap_*_schema` / `backfill_tenant_acl` (owner-only schema action-ök), `accept` / `decline_invite` / `leave_organization` / `list_my_invites` (saját önkezelő flow).
+
+**2026-05-03 harden Critical fix-ek**:
+1. **Kilépett creator ownership-fallback membership-check**: `archive_workflow`/`restore_workflow` és `update_workflow_metadata` visibility-ág `createdBy === callerId` ownership csak akkor érvényes, ha a caller `isStillOfficeMember()`. Privilege-eszkalációs felület lezárva.
+2. **Member-path defense-in-depth `editorialOfficeMemberships` cross-check**: `buildPermissionSnapshot` member-path elején `isStillOfficeMember()` lookup. Rogue `groupMembership` (out-of-band DB-write) privilege-eszkalációs felület lezárva.
+
+**Frontend impact A.4-re**: a 403 reason-mapping átállás slug-alapúra. A.4-ig a régi `insufficient_role` toast-ok generic-be esnek vissza (vault szabálya: nincs visszafelé-kompat).
+
+### Fázis 1 helper-extract (2026-05-03)
+
+A `main.js` 7790 → 6964 sor (-844 sor, -11%) az inline helper-függvények külön modulokba költöztetésével. Új mappa: [packages/maestro-server/functions/invite-to-organization/src/helpers/](packages/maestro-server/functions/invite-to-organization/src/helpers/) (6 modul).
+
+**Import-irány tilt** (Codex flag, ciklikus require kockázat): `actions/*` → `helpers/*` → `permissions.js` / `teamHelpers.js`. Visszafelé NEM. CommonJS ciklikus require csendben fél-inicializált exports-ot ad.
+
+A `main.js` tetejére **77 soros TOC-blokk** került a 36 action handler approximate sorszámaival. **Fázis 2 (CF action-bontás)** szándékosan halasztva — a B blokk (Workflow Extensions) elejére időzítve, mert akkor új action-ök jönnek (lásd Feladatok B.0.3).
 
 **Plugin 2-way fetch query** (`DataContext.jsx`):
 ```js

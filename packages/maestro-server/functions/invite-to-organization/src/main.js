@@ -16,6 +16,107 @@ const {
 // (CF CommonJS, shared ESM — A.7.1 Phase 2 single-source bundle).
 const permissions = require("./permissions.js");
 
+// Fázis 1 helper-extract (2026-05-02): a korábban inline definiált helperek
+// külön modulokba kerültek a `main.js` átláthatósága érdekében. Komment-anyag
+// változatlanul a forrás-modulokban. Tilt: ciklikus require — minden helper
+// csak `permissions.js` / `teamHelpers.js` / `helpers/constants.js` felé hív.
+const {
+    CASCADE_BATCH_LIMIT,
+    MAX_REFERENCES_PER_SCAN,
+    WORKFLOW_VISIBILITY_VALUES,
+    WORKFLOW_VISIBILITY_DEFAULT,
+    PARSE_ERROR
+} = require("./helpers/constants.js");
+const { deleteByQuery, cascadeDeleteOffice } = require("./helpers/cascade.js");
+const {
+    workflowReferencesSlug,
+    contributorJsonReferencesSlug,
+    validateCompiledSlugsInline,
+    buildCompiledValidationFailure
+} = require("./helpers/compiledValidator.js");
+const { createWorkflowDoc } = require("./helpers/workflowDoc.js");
+const {
+    seedGroupsFromWorkflow,
+    findEmptyRequiredGroupSlugs,
+    seedDefaultPermissionSets
+} = require("./helpers/groupSeed.js");
+const { validateDeadlinesInline } = require("./helpers/deadlineValidator.js");
+
+// ────────────────────────────────────────────────────────────────────────────
+// TARTALOMJEGYZÉK (Fázis 1, 2026-05-02)
+//
+// A fájl 36 action handler + utility-konstans szekciót tartalmaz. A sorszámok
+// a refactor utáni állapotot tükrözik (a require-blokk + JSDoc + utility-k
+// után indul a `module.exports` async function, és benne sorrendben az
+// action-ekre dispatcheléssel). A B blokk (Workflow Extensions, Feladatok
+// B.0.3) refactor során ezek a szekciók külön `actions/*.js` modulokba
+// kerülnek — addig egy hosszú else-if láncként élnek itt.
+//
+// Konstansok és utility-k (a require-ek alatt):
+//   `DEFAULT_WORKFLOW`, `INVITE_VALIDITY_DAYS`, `TOKEN_BYTES`, `EMAIL_REGEX`,
+//   `VALID_ACTIONS`, `SLUG_REGEX`, `SLUG_MAX_LENGTH`, `NAME_MAX_LENGTH`,
+//   `fail()`, `HUN_ACCENT_MAP`, `slugifyName()`, `sanitizeString()`.
+//
+// CF entry-point: `module.exports = async function ({ req, res, log, error })`.
+//   Init: payload parse, action whitelist, callerId header, SDK + env-guard,
+//   `permissionEnv` + `permissionContext` + `callerUser` (A.3.6 / A.3.7).
+//
+// ACTION HANDLEREK (megközelítő sorszámok — futtatáskor pontosak lehetnek
+//   a ±5-10 soros eltolódásig):
+//
+//   Tenant onboarding & invite flow:
+//     - bootstrap_organization | create_organization     ~ 418
+//     - create (admin invite)                            ~ 759
+//     - accept                                           ~ 910
+//     - list_my_invites                                  ~ 1085
+//     - decline_invite                                   ~ 1207
+//     - leave_organization                               ~ 1303
+//
+//   Group CRUD (A.2 + A.3.6):
+//     - add_group_member                                 ~ 1540
+//     - remove_group_member                              ~ 1651
+//     - create_group                                     ~ 1806
+//     - update_group_metadata | rename_group             ~ 1954
+//     - archive_group | restore_group                    ~ 2215
+//     - delete_group                                     ~ 2517
+//
+//   Schema bootstrap (owner-only):
+//     - bootstrap_workflow_schema                        ~ 2822
+//     - bootstrap_publication_schema                     ~ 3016
+//     - bootstrap_groups_schema                          ~ 3094
+//     - bootstrap_permission_sets_schema                 ~ 3275
+//
+//   Permission set CRUD (A.3 + A.3.6):
+//     - create_permission_set                            ~ 3464
+//     - update_permission_set                            ~ 3601
+//     - archive_permission_set | restore_permission_set  ~ 3741
+//     - assign_permission_set_to_group                   ~ 3853
+//     - unassign_permission_set_from_group               ~ 3997
+//
+//   Workflow CRUD (#30/#80/#81 + A.3.6):
+//     - create_workflow                                  ~ 4093
+//     - create_editorial_office (LEGACY org-role check)  ~ 4261
+//     - update_workflow                                  ~ 4501
+//     - update_workflow_metadata                         ~ 4677
+//     - archive_workflow | restore_workflow              ~ 4983
+//     - delete_workflow                                  ~ 5109
+//     - duplicate_workflow                               ~ 5271
+//
+//   Publication actions (A.2.2-A.2.10 + A.3.6):
+//     - create_publication_with_workflow (dual-check)    ~ 5508
+//     - assign_workflow_to_publication                   ~ 5710
+//     - activate_publication                             ~ 5898
+//
+//   Org & office CRUD (A.3.6 org-scope):
+//     - update_organization (BREAKING: org.rename owner) ~ 6112
+//     - update_editorial_office                          ~ 6183
+//     - delete_editorial_office                          ~ 6283
+//     - delete_organization (org.delete owner-only)      ~ 6392
+//
+//   Tenant ACL migráció (Fázis 2 / #60):
+//     - backfill_tenant_acl                              ~ 6600
+// ────────────────────────────────────────────────────────────────────────────
+
 /**
  * Appwrite Function: Invite To Organization
  *
@@ -177,262 +278,22 @@ const VALID_ACTIONS = new Set([
     'assign_permission_set_to_group', 'unassign_permission_set_from_group'
 ]);
 
-// Workflow láthatóság enum — Feladat #80 (2026-04-20) óta 3-way: a `public`
-// scope-pal a workflow a teljes platformon elérhető (minden authentikált
-// user láthatja). A 2-way MVP (#30) `editorial_office` / `organization`
-// szemantikája változatlan.
-const WORKFLOW_VISIBILITY_VALUES = ['organization', 'editorial_office', 'public'];
-const WORKFLOW_VISIBILITY_DEFAULT = 'editorial_office';
-
-// Kaszkád törlés batch mérete — lapozás a nagy dokumentum-mennyiségek kezeléséhez.
-const CASCADE_BATCH_LIMIT = 100;
-
-// Scan-eredmény felső korlát forrásonként (delete_group referencia-check).
-// Ha egy scan eléri, a hátralévő lapokat nem olvassuk — az admin UI-nak ennyi
-// példa bőven elég a "használatban van" állapot érzékeltetéséhez, és a payload
-// + memória bounded marad pathologikus (tízezer+ hivatkozás) esetekben is.
-const MAX_REFERENCES_PER_SCAN = 50;
-
-/**
- * Workflow doc létrehozás a #30-as mezőkkel (`visibility`, `createdBy`) és
- * #80 doc-szintű ACL-lel, schema-safe fallback-kel. Ha a
- * `bootstrap_workflow_schema` még nem futott le egy upgrade alatt álló
- * env-ben, az Appwrite `document_invalid_structure` (400) hibát dob az új
- * mezőkre — ilyenkor a helper a mezők nélkül retry-ol, hogy a seed +
- * interaktív create/duplicate flow ne essen ki (legacy kompatibilitás).
- *
- * Rollout-biztonság (#30 harden P1). A `visibility` paraméter kötelező, hogy
- * a hívó (seed: default; interaktív create: user-whitelisted; duplicate:
- * forrásról öröklött + fallback) adja, a `createdBy` mindig a callerId.
- *
- * A fallback CSAK a default visibility-re megengedett (null → `editorial_office`
- * olvasási szemantika: nincs adatvesztés). Ha a hívó `organization` / `public`
- * visibility-t kér és a schema még hiányzik, a hiba propagál — különben a user
- * által kért scope csendben `editorial_office`-ra degradálódna (silent downgrade).
- *
- * **Feladat #80**: `permissions` paraméter — doc-szintű ACL (read:
- * `team:office_${officeId}` / `team:org_${orgId}` / `users` a `visibility`
- * függvényében). A hívó a `buildWorkflowAclPerms(visibility, orgId, officeId)`
- * helperrel állítsa elő. A `rowSecurity: true` collection flag kötelező a
- * `workflows`-on, különben a collection-szintű `read("users")` felülírja.
- */
-async function createWorkflowDoc(
-    databases, databaseId, workflowsCollectionId, docId, baseFields, visibility, callerId, permissions, log
-) {
-    try {
-        return await databases.createDocument(
-            databaseId,
-            workflowsCollectionId,
-            docId,
-            {
-                ...baseFields,
-                visibility,
-                createdBy: callerId
-            },
-            permissions
-        );
-    } catch (err) {
-        const msg = err?.message || '';
-        const isSchemaMissing =
-            (err?.type === 'document_invalid_structure' || err?.code === 400)
-            && /visibility|createdBy|unknown attribute/i.test(msg);
-        if (!isSchemaMissing) {
-            throw err;
-        }
-        if (visibility !== WORKFLOW_VISIBILITY_DEFAULT) {
-            // Nem tudjuk biztonságosan elmenteni a nem-default visibility-t —
-            // az eredeti hiba terjedjen a hívóra (az `bootstrap_workflow_schema`
-            // futtatása után retry-olható).
-            throw err;
-        }
-        log(`[WorkflowDoc] Schema hiányos (visibility/createdBy) — legacy retry without #30 fields. docId=${docId}`);
-        return databases.createDocument(
-            databaseId,
-            workflowsCollectionId,
-            docId,
-            baseFields,
-            permissions
-        );
-    }
-}
-
-/**
- * Egy collection összes, adott mezőértékhez tartozó dokumentumát törli.
- * Lapozással dolgozik, minden batch-et Promise.allSettled-lel párhuzamosít.
- *
- * **Fail-closed**: ha bármely dokumentum törlése sikertelen, a függvény
- * dob a batch feldolgozás után (miután az összes aktuális batch művelet
- * lefutott — nem „all-or-nothing", hanem „fuss amennyi megy, aztán dobj").
- * Ez garantálja, hogy a hívó NEM törli a szülő doc-ot részleges gyerek
- * cleanup után.
- *
- * @param {sdk.Databases} databases
- * @param {string} databaseId
- * @param {string} collectionId
- * @param {string} fieldName — szűrő mező neve (pl. 'editorialOfficeId')
- * @param {string} fieldValue — szűrő mező értéke
- * @returns {Promise<{ found: number, deleted: number }>}
- * @throws {Error} ha bármely dokumentum törlése sikertelen
- */
-async function deleteByQuery(databases, databaseId, collectionId, fieldName, fieldValue) {
-    let totalFound = 0;
-    let totalDeleted = 0;
-    const failures = [];
-
-    while (true) {
-        const response = await databases.listDocuments(
-            databaseId,
-            collectionId,
-            [
-                sdk.Query.equal(fieldName, fieldValue),
-                sdk.Query.limit(CASCADE_BATCH_LIMIT)
-            ]
-        );
-        if (response.documents.length === 0) break;
-
-        totalFound += response.documents.length;
-
-        const deleteResults = await Promise.allSettled(
-            response.documents.map(doc =>
-                databases.deleteDocument(databaseId, collectionId, doc.$id)
-            )
-        );
-
-        let batchDeleted = 0;
-        for (let i = 0; i < deleteResults.length; i++) {
-            const result = deleteResults[i];
-            if (result.status === 'fulfilled') {
-                batchDeleted++;
-            } else {
-                failures.push({
-                    docId: response.documents[i].$id,
-                    message: result.reason?.message || String(result.reason)
-                });
-            }
-        }
-        totalDeleted += batchDeleted;
-
-        // Ha egy batch egyetlen törlése sem sikerült, a következő listDocuments
-        // ugyanazokat a dokumentumokat adná vissza → végtelen ciklus. Kilépünk,
-        // a failures lista lejjebb dob.
-        if (batchDeleted === 0) break;
-
-        // Ha az utolsó batch nem telt meg, nincs több dokumentum → kilépünk
-        // egy felesleges listDocuments hívás nélkül.
-        if (response.documents.length < CASCADE_BATCH_LIMIT) break;
-    }
-
-    if (failures.length > 0) {
-        const err = new Error(
-            `deleteByQuery: ${failures.length}/${totalFound} törlés sikertelen a(z) "${collectionId}" collectionben (${fieldName}=${fieldValue}). Első hiba: ${failures[0].message}`
-        );
-        err.collectionId = collectionId;
-        err.failures = failures;
-        throw err;
-    }
-
-    return { found: totalFound, deleted: totalDeleted };
-}
-
-/**
- * Szerkesztőség-szintű kaszkád törlés — a publikációkat doc-onként törli
- * (a cascade-delete CF kapja el a publication.delete event-et és takarítja
- * az articles/layouts/deadlines-t rekurzívan), a többi office-kötött
- * collectiont pedig deleteByQuery-vel iratja ki.
- *
- * NEM törli magát az office dokumentumot — ezt a hívó intézi, hogy a
- * delete_organization ág is ezen a helper-en keresztül takaríthassa
- * az office-ait a saját lépéseiben.
- *
- * **Fail-closed**: bármely lépés hibája esetén dob, és a hívó NEM
- * törölheti az office doc-ot (különben árva gyerekek maradnának).
- * A hívó responsibility, hogy `try/catch`-el kezelje.
- *
- * @returns {Promise<{ publications, workflows, groups, groupMemberships, officeMemberships }>}
- * @throws {Error} ha bármely gyerek dokumentum törlése sikertelen
- */
-async function cascadeDeleteOffice(databases, officeId, env, log) {
-    const {
-        databaseId,
-        publicationsCollectionId,
-        workflowsCollectionId,
-        groupsCollectionId,
-        groupMembershipsCollectionId,
-        officeMembershipsCollectionId
-    } = env;
-
-    // 1) Publikációk — doc-onkénti deleteDocument, hogy a cascade-delete CF
-    //    kapja el a publication.delete event-et (articles → layouts → deadlines,
-    //    majd article.delete → validations + thumbnails).
-    //
-    //    Fail-closed: az első sikertelen törlés után azonnal dobunk —
-    //    a részleges törlés nem vezethet árva office-szintű cleanup-hoz.
-    let pubFound = 0;
-    let pubDeleted = 0;
-    while (true) {
-        const response = await databases.listDocuments(
-            databaseId,
-            publicationsCollectionId,
-            [
-                sdk.Query.equal('editorialOfficeId', officeId),
-                sdk.Query.limit(CASCADE_BATCH_LIMIT)
-            ]
-        );
-        if (response.documents.length === 0) break;
-
-        pubFound += response.documents.length;
-
-        // Szekvenciális törlés — a cascade-delete CF nehéz munka, ne indítsuk
-        // egyszerre 100 párhuzamos kaszkádot, az rate limit-be futna.
-        // Az első hiba → throw (fail-closed).
-        for (const doc of response.documents) {
-            try {
-                await databases.deleteDocument(databaseId, publicationsCollectionId, doc.$id);
-                pubDeleted++;
-            } catch (err) {
-                const wrapped = new Error(
-                    `cascadeDeleteOffice: publikáció ${doc.$id} ("${doc.name || '?'}") törlése sikertelen: ${err.message}`
-                );
-                wrapped.cause = err;
-                wrapped.collectionId = publicationsCollectionId;
-                wrapped.docId = doc.$id;
-                throw wrapped;
-            }
-        }
-
-        if (response.documents.length < CASCADE_BATCH_LIMIT) break;
-    }
-
-    // 2) A többi office-kötött collection — parallel deleteByQuery.
-    //    Promise.all: ha bármelyik dob, a többi in-flight is befejeződik,
-    //    de a wrapper rejection propagál, és NEM jutunk el az office doc
-    //    törléséhez.
-    const [workflows, groups, groupMemberships, officeMemberships] = await Promise.all([
-        deleteByQuery(databases, databaseId, workflowsCollectionId, 'editorialOfficeId', officeId),
-        deleteByQuery(databases, databaseId, groupsCollectionId, 'editorialOfficeId', officeId),
-        deleteByQuery(databases, databaseId, groupMembershipsCollectionId, 'editorialOfficeId', officeId),
-        deleteByQuery(databases, databaseId, officeMembershipsCollectionId, 'editorialOfficeId', officeId)
-    ]);
-
-    log(`[CascadeOffice ${officeId}] pubs=${pubDeleted}/${pubFound}, workflows=${workflows.deleted}/${workflows.found}, groups=${groups.deleted}/${groups.found}, groupMemberships=${groupMemberships.deleted}/${groupMemberships.found}, officeMemberships=${officeMemberships.deleted}/${officeMemberships.found}`);
-
-    return {
-        publications: { found: pubFound, deleted: pubDeleted },
-        workflows,
-        groups,
-        groupMemberships,
-        officeMemberships
-    };
-}
+// (Fázis 1 helper-extract, 2026-05-02): a `WORKFLOW_VISIBILITY_*`,
+// `CASCADE_BATCH_LIMIT`, `MAX_REFERENCES_PER_SCAN`, `PARSE_ERROR` konstansok
+// a `helpers/constants.js` modulba kerültek és a fájl tetején a require-blokk
+// hozza vissza őket. A `createWorkflowDoc`, `deleteByQuery`, `cascadeDeleteOffice`,
+// `workflowReferencesSlug`, `contributorJsonReferencesSlug`, `validateCompiledSlugsInline`,
+// `buildCompiledValidationFailure`, `seedGroupsFromWorkflow`,
+// `findEmptyRequiredGroupSlugs`, `seedDefaultPermissionSets`,
+// `validateDeadlinesInline` szintén külön modulokban — a `helpers/cascade.js`,
+// `helpers/compiledValidator.js`, `helpers/workflowDoc.js`,
+// `helpers/groupSeed.js`, `helpers/deadlineValidator.js` fájlokban.
+// (Az alábbi "/** Workflow doc létrehozás..." kezdetű blokk innen kihelyezve.)
 
 // A.2.8 — `DEFAULT_GROUPS` konstans eltávolítva. A felhasználó-csoportok
 // forrása mostantól a workflow `compiled.requiredGroupSlugs[]`; az autoseed
 // flow (`activate_publication` / `assign_workflow_to_publication`) hozza
 // létre a `groups` doc-okat aktiváláskor / hozzárendeléskor.
-
-// Sentinel a `contributorJsonReferencesSlug` parse-hibás visszatéréséhez —
-// fail-closed jelzés a hívóknak (delete_group/archive_group blocker scan).
-const PARSE_ERROR = 'parse_error';
 
 // Slug formátum: kisbetű, szám, kötőjel. A frontend is ugyanezt alkalmazza.
 const SLUG_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -471,141 +332,6 @@ function slugifyName(name) {
 }
 
 /**
- * Workflow compiled JSON slug-hivatkozás ellenőrzés a `delete_group` action-höz.
- *
- * A compiled JSON több, eltérő alakú helyen hivatkozhat csoport slug-okra
- * (a defaultWorkflow.json schémája szerint):
- *   - `statePermissions[stateId]: string[]`              (ki mozgathatja onnan)
- *   - `leaderGroups: string[]`                           (ACL bypass)
- *   - `transitions[].allowedGroups: string[]`            (átmenet végrehajtás)
- *   - `commands[stateId][].allowedGroups: string[]`      (parancsok futtatása)
- *   - `elementPermissions[kind][field].groups: string[]` (UI elem szerkesztés,
- *     csak ha type === 'groups' — 'anyMember' / egyéb típusokat átugrunk)
- *   - `contributorGroups: [{ slug, label }]`             (contributor szerepkörök;
- *     tömb stringekből is elfogadott legacy/defensiv okból)
- *   - `capabilities[capId]: string[]`                    (pl. canAddArticlePlan)
- *
- * Bármely match → true. Ismeretlen / hiányzó mezőket csendben átugorjuk, hogy
- * verziózott schema bővítés ne crash-eljen.
- *
- * @param {Object} compiled - parsed workflow compiled JSON
- * @param {string} targetSlug - a törlendő csoport slug-ja
- * @returns {boolean} true, ha a slug bárhol szerepel
- */
-function workflowReferencesSlug(compiled, targetSlug) {
-    if (!compiled || typeof compiled !== 'object') return false;
-
-    // A.2.7 — requiredGroupSlugs[].slug (workflow self-defined csoport-lista,
-    // A.1.5 óta). Ha a slug a workflow definíciós halmazában van (akkor is, ha
-    // semelyik más mezőben nem hivatkozott), `group_in_use` blokk indokolt:
-    // a workflow autoseed-elné egy új aktiválásnál, és a törlés ezt elrontaná.
-    if (Array.isArray(compiled.requiredGroupSlugs)) {
-        for (const entry of compiled.requiredGroupSlugs) {
-            if (entry && typeof entry === 'object' && entry.slug === targetSlug) return true;
-        }
-    }
-
-    // leaderGroups: string[]
-    if (Array.isArray(compiled.leaderGroups) && compiled.leaderGroups.includes(targetSlug)) {
-        return true;
-    }
-
-    // contributorGroups: [{ slug, label }] — legacy string[] is elfogadott
-    if (Array.isArray(compiled.contributorGroups)) {
-        for (const entry of compiled.contributorGroups) {
-            if (typeof entry === 'string' && entry === targetSlug) return true;
-            if (entry && typeof entry === 'object' && entry.slug === targetSlug) return true;
-        }
-    }
-
-    // statePermissions[stateId]: string[]
-    if (compiled.statePermissions && typeof compiled.statePermissions === 'object') {
-        for (const slugs of Object.values(compiled.statePermissions)) {
-            if (Array.isArray(slugs) && slugs.includes(targetSlug)) return true;
-        }
-    }
-
-    // transitions[].allowedGroups: string[]
-    if (Array.isArray(compiled.transitions)) {
-        for (const t of compiled.transitions) {
-            if (t && Array.isArray(t.allowedGroups) && t.allowedGroups.includes(targetSlug)) {
-                return true;
-            }
-        }
-    }
-
-    // commands[stateId][].allowedGroups: string[]
-    if (compiled.commands && typeof compiled.commands === 'object') {
-        for (const cmdList of Object.values(compiled.commands)) {
-            if (!Array.isArray(cmdList)) continue;
-            for (const cmd of cmdList) {
-                if (cmd && Array.isArray(cmd.allowedGroups) && cmd.allowedGroups.includes(targetSlug)) {
-                    return true;
-                }
-            }
-        }
-    }
-
-    // elementPermissions[kind][field]: { type, groups? }
-    if (compiled.elementPermissions && typeof compiled.elementPermissions === 'object') {
-        for (const kind of Object.values(compiled.elementPermissions)) {
-            if (!kind || typeof kind !== 'object') continue;
-            for (const descriptor of Object.values(kind)) {
-                if (!descriptor || typeof descriptor !== 'object') continue;
-                if (descriptor.type === 'groups' && Array.isArray(descriptor.groups)
-                    && descriptor.groups.includes(targetSlug)) {
-                    return true;
-                }
-            }
-        }
-    }
-
-    // capabilities[capId]: string[]
-    if (compiled.capabilities && typeof compiled.capabilities === 'object') {
-        for (const slugs of Object.values(compiled.capabilities)) {
-            if (Array.isArray(slugs) && slugs.includes(targetSlug)) return true;
-        }
-    }
-
-    return false;
-}
-
-/**
- * A `contributors` (articles) és `defaultContributors` (publications) JSON
- * longtext mezők kulcs-szinten tárolják a csoport slug-okat (pl.
- * `{"designers": "user_abc", "writers": null}`). Ha a csoportot töröljük és
- * ilyen kulcs még van, a stranded slug kulcs láthatatlanná válik a UI-ban
- * (a dashboard csak a létező csoportokat rendereli), így ezek a rekordok
- * data-loss állapotba kerülnek. Ez a helper vizsgálja, hogy a JSON string
- * bármilyen értékkel tartalmazza-e a target slug-ot kulcsként.
- *
- * hasOwnProperty: a `null` érték is reservation — a törlés-blokk ugyanúgy
- * jogos, mintha aktív userId lenne rendelve.
- *
- * **Fail-closed parse-hibára**: sérült JSON esetén a return `PARSE_ERROR`
- * sentinel — a hívó (delete_group/archive_group) a doc-ot konzervatívan
- * blocker-listába teszi (`parseError: true` flag), különben egy korrupt
- * JSON elnyelhetné a hivatkozást és a csoport törölhetővé válna data-loss
- * veszéllyel.
- *
- * @param {string|null|undefined} contributorsJson - a mező nyers értéke
- * @param {string} targetSlug - a törlendő csoport slug-ja
- * @returns {boolean|typeof PARSE_ERROR} true (slug kulcsként megjelenik),
- *   false (nincs hivatkozás), vagy `PARSE_ERROR` (sérült JSON, hívó blokkol)
- */
-function contributorJsonReferencesSlug(contributorsJson, targetSlug) {
-    if (!contributorsJson || typeof contributorsJson !== 'string') return false;
-    let parsed;
-    try {
-        parsed = JSON.parse(contributorsJson);
-    } catch {
-        return PARSE_ERROR;
-    }
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
-    return Object.prototype.hasOwnProperty.call(parsed, targetSlug);
-}
-
-/**
  * Trimelt, hosszra szűrt string vagy null, ha üres.
  */
 function sanitizeString(value, maxLength) {
@@ -616,578 +342,6 @@ function sanitizeString(value, maxLength) {
     return trimmed;
 }
 
-/**
- * A.1.9 / A.2.1 — Hard contract validátor a workflow `compiled` JSON-ra.
- *
- * Inline másolat a `packages/maestro-shared/compiledValidator.js`-ből
- * (a CF CommonJS, nem tud ES importot — ugyanaz a minta, mint a
- * `validateDeadlinesInline`). A két forrás SZINKRONBAN MARAD: ha a
- * shared validátor változik, ezt is frissíteni kell. A test-coverage a
- * shared modulra vonatkozik, ez a copy defense-in-depth.
- *
- * Ellenőrzi, hogy a compiled minden slug-hivatkozó mezője csak olyan
- * slug-ot tartalmaz, amely a `requiredGroupSlugs[].slug` halmaz eleme.
- * Ezt a kliens-oldali compiler (Designer save flow) is futtatja — itt
- * a CF write-path a végső védvonal.
- *
- * @param {Object} compiled
- * @returns {{ valid: boolean, errors: Array<{ code, slug?, location?, message }> }}
- */
-function validateCompiledSlugsInline(compiled) {
-    const errors = [];
-
-    if (!compiled || typeof compiled !== 'object') {
-        errors.push({ code: 'invalid_compiled', message: 'A compiled JSON üres vagy érvénytelen.' });
-        return { valid: false, errors };
-    }
-
-    let requiredGroupSlugs = [];
-    if (compiled.requiredGroupSlugs != null) {
-        if (Array.isArray(compiled.requiredGroupSlugs)) {
-            requiredGroupSlugs = compiled.requiredGroupSlugs;
-        } else {
-            errors.push({
-                code: 'invalid_field_type',
-                location: 'requiredGroupSlugs',
-                message: `A "requiredGroupSlugs" mezőnek tömbnek kell lennie (kapott: ${typeof compiled.requiredGroupSlugs === 'object' ? 'objektum' : typeof compiled.requiredGroupSlugs}).`
-            });
-        }
-    }
-
-    const allowed = new Set();
-    const duplicates = new Set();
-    for (let i = 0; i < requiredGroupSlugs.length; i++) {
-        const entry = requiredGroupSlugs[i];
-        if (!entry?.slug || typeof entry.slug !== 'string') {
-            errors.push({
-                code: 'invalid_required_group_entry',
-                location: `requiredGroupSlugs[${i}]`,
-                message: `A requiredGroupSlugs[${i}] elemnek hiányzik vagy érvénytelen a slug mezője.`
-            });
-            continue;
-        }
-        if (allowed.has(entry.slug)) {
-            duplicates.add(entry.slug);
-        } else {
-            allowed.add(entry.slug);
-        }
-    }
-    for (const slug of duplicates) {
-        errors.push({
-            code: 'duplicate_required_group_slug',
-            slug,
-            location: 'requiredGroupSlugs',
-            message: `A requiredGroupSlugs többször tartalmazza a "${slug}" slug-ot.`
-        });
-    }
-
-    function asSlugArray(value, location) {
-        if (value == null) return [];
-        if (Array.isArray(value)) return value;
-        errors.push({
-            code: 'invalid_field_type',
-            location,
-            message: `A "${location}" mezőnek tömbnek kell lennie (kapott: ${typeof value === 'object' ? 'objektum' : typeof value}).`
-        });
-        return [];
-    }
-
-    function asObject(value, location) {
-        if (value == null) return {};
-        if (typeof value === 'object' && !Array.isArray(value)) return value;
-        errors.push({
-            code: 'invalid_field_type',
-            location,
-            message: `A "${location}" mezőnek objektumnak kell lennie (kapott: ${Array.isArray(value) ? 'tömb' : typeof value}).`
-        });
-        return {};
-    }
-
-    function pushUnknown(slug, location, message) {
-        errors.push({ code: 'unknown_group_slug', slug, location, message });
-    }
-
-    // transitions[].allowedGroups
-    for (const t of asSlugArray(compiled.transitions, 'transitions')) {
-        const loc = `transitions["${t?.from}"->"${t?.to}"].allowedGroups`;
-        for (const slug of asSlugArray(t?.allowedGroups, loc)) {
-            if (!allowed.has(slug)) {
-                pushUnknown(slug, loc, `Az átmenet ("${t?.from}" → "${t?.to}") engedélyezett csoportja nem szerepel a workflow felhasználó-csoport listájában: "${slug}".`);
-            }
-        }
-    }
-
-    // commands[stateId][*].allowedGroups
-    for (const [stateId, cmds] of Object.entries(asObject(compiled.commands, 'commands'))) {
-        for (const cmd of asSlugArray(cmds, `commands["${stateId}"]`)) {
-            const loc = `commands["${stateId}"]["${cmd?.id}"].allowedGroups`;
-            for (const slug of asSlugArray(cmd?.allowedGroups, loc)) {
-                if (!allowed.has(slug)) {
-                    pushUnknown(slug, loc, `A "${stateId}" állapot "${cmd?.id}" parancsának engedélyezett csoportja nem szerepel a workflow felhasználó-csoport listájában: "${slug}".`);
-                }
-            }
-        }
-    }
-
-    // elementPermissions[scope][element].groups (csak ha type === 'groups')
-    for (const [scope, elems] of Object.entries(asObject(compiled.elementPermissions, 'elementPermissions'))) {
-        for (const [elemKey, perm] of Object.entries(asObject(elems, `elementPermissions.${scope}`))) {
-            if (perm?.type !== 'groups') continue;
-            const loc = `elementPermissions.${scope}.${elemKey}.groups`;
-            for (const slug of asSlugArray(perm.groups, loc)) {
-                if (!allowed.has(slug)) {
-                    pushUnknown(slug, loc, `Az "${scope}.${elemKey}" elem-jogosultság csoportja nem szerepel a workflow felhasználó-csoport listájában: "${slug}".`);
-                }
-            }
-        }
-    }
-
-    // leaderGroups[]
-    for (const slug of asSlugArray(compiled.leaderGroups, 'leaderGroups')) {
-        if (!allowed.has(slug)) {
-            pushUnknown(slug, 'leaderGroups', `A vezető csoport nem szerepel a workflow felhasználó-csoport listájában: "${slug}".`);
-        }
-    }
-
-    // statePermissions[stateId][]
-    for (const [stateId, slugList] of Object.entries(asObject(compiled.statePermissions, 'statePermissions'))) {
-        const loc = `statePermissions["${stateId}"]`;
-        for (const slug of asSlugArray(slugList, loc)) {
-            if (!allowed.has(slug)) {
-                pushUnknown(slug, loc, `A "${stateId}" állapot mozgatás-engedélyezett csoportja nem szerepel a workflow felhasználó-csoport listájában: "${slug}".`);
-            }
-        }
-    }
-
-    // contributorGroups[].slug
-    for (const cg of asSlugArray(compiled.contributorGroups, 'contributorGroups')) {
-        if (cg?.slug && !allowed.has(cg.slug)) {
-            pushUnknown(cg.slug, 'contributorGroups', `A contributor csoport nem szerepel a workflow felhasználó-csoport listájában: "${cg.slug}".`);
-        }
-    }
-
-    // capabilities[name][]
-    for (const [name, slugList] of Object.entries(asObject(compiled.capabilities, 'capabilities'))) {
-        const loc = `capabilities["${name}"]`;
-        for (const slug of asSlugArray(slugList, loc)) {
-            if (!allowed.has(slug)) {
-                pushUnknown(slug, loc, `A "${name}" képesség csoportja nem szerepel a workflow felhasználó-csoport listájában: "${slug}".`);
-            }
-        }
-    }
-
-    return { valid: errors.length === 0, errors };
-}
-
-/**
- * `validateCompiledSlugsInline` eredményéből 4xx CF response-t épít.
- * Az egyedi slug-okat dedupolja, location listát ad a debugoláshoz.
- *
- * @param {{ valid: boolean, errors: Array }} result
- * @returns {{ reason: string, errors: Array, unknownSlugs?: string[] }}
- */
-function buildCompiledValidationFailure(result) {
-    const unknown = result.errors.filter(e => e.code === 'unknown_group_slug');
-    const unknownSlugs = unknown.length > 0
-        ? [...new Set(unknown.map(e => e.slug).filter(Boolean))]
-        : undefined;
-    return {
-        reason: unknown.length > 0 ? 'unknown_group_slug' : (result.errors[0]?.code || 'invalid_compiled'),
-        errors: result.errors.map(e => ({ code: e.code, slug: e.slug, location: e.location, message: e.message })),
-        unknownSlugs
-    };
-}
-
-/**
- * A.2.2 / A.2.3 — `requiredGroupSlugs[]` autoseed helper.
- *
- * A workflow `compiled.requiredGroupSlugs[]` halmazából minden olyan slugra,
- * amely még nem létezik az adott szerkesztőség `groups` collection-jében,
- * létrehoz egy üres (tag nélküli) `groups` doc-ot — `slug`, `name` (= label),
- * `description`, `color`, `isContributorGroup`, `isLeaderGroup` mezőkkel.
- *
- * Idempotens: a meglévő slug-okat NEM írja felül (first-write wins, ADR 0008
- * "slug-collision policy"). Ha a flag-ek eltérnek a meglévő doc-on és a
- * workflow-ban, a függvény `warnings[]`-ban jelzi, de nem dob hibát.
- *
- * Schema-safe fallback: ha a `bootstrap_groups_schema` még nem futott le, a
- * `description`/`color`/`isContributorGroup`/`isLeaderGroup` mezők hiányában
- * a create payload retry-olódik csak `slug` + `name`-mel (legacy struktúra).
- *
- * @param {sdk.Databases} databases
- * @param {Object} env — { databaseId, groupsCollectionId }
- * @param {Object} compiled — workflow compiled JSON
- * @param {string} editorialOfficeId
- * @param {string} organizationId
- * @param {string} callerId
- * @param {Function} log
- * @param {Function} buildAcl — ACL builder (`buildOfficeAclPerms`)
- * @returns {Promise<{ created: string[], existed: string[], warnings: Array }>}
- */
-async function seedGroupsFromWorkflow(databases, env, compiled, editorialOfficeId, organizationId, callerId, log, buildAcl) {
-    const { databaseId, groupsCollectionId } = env;
-    const result = { created: [], existed: [], warnings: [] };
-
-    const required = Array.isArray(compiled?.requiredGroupSlugs)
-        ? compiled.requiredGroupSlugs
-        : [];
-    if (required.length === 0) return result;
-
-    // 1) Meglévő slug-ok lekérése az office-ban — aktív és archivált
-    //    külön Map-be, hogy az archivált doc ne legyen "csendben létező"
-    //    (harden Codex MUST FIX): archivált slug → autoseed warning, mert
-    //    az archivált doc UI-ból nem látható, runtime-ot eltöri.
-    const existingByName = new Map();
-    const archivedByName = new Map();
-    let cursor = null;
-    while (true) {
-        const queries = [
-            sdk.Query.equal('editorialOfficeId', editorialOfficeId),
-            sdk.Query.select(['$id', 'slug', 'name', 'description', 'color', 'isContributorGroup', 'isLeaderGroup', 'archivedAt']),
-            sdk.Query.limit(100)
-        ];
-        if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
-        let batch;
-        try {
-            batch = await databases.listDocuments(databaseId, groupsCollectionId, queries);
-        } catch (err) {
-            // Schema-fallback: ha a select() ismeretlen mezőre fut, retry
-            // szelektáló nélkül (legacy schema, csak slug+name elérhető).
-            if (err?.code === 400 && /unknown attribute/i.test(err?.message || '')) {
-                const fallbackQueries = [
-                    sdk.Query.equal('editorialOfficeId', editorialOfficeId),
-                    sdk.Query.limit(100)
-                ];
-                if (cursor) fallbackQueries.push(sdk.Query.cursorAfter(cursor));
-                batch = await databases.listDocuments(databaseId, groupsCollectionId, fallbackQueries);
-            } else {
-                throw err;
-            }
-        }
-        if (batch.documents.length === 0) break;
-        for (const doc of batch.documents) {
-            if (!doc.slug) continue;
-            if (doc.archivedAt) {
-                archivedByName.set(doc.slug, doc);
-            } else {
-                existingByName.set(doc.slug, doc);
-            }
-        }
-        if (batch.documents.length < 100) break;
-        cursor = batch.documents[batch.documents.length - 1].$id;
-    }
-
-    // 2) Hiányzó slug-okra create. A `document_already_exists` (race közben
-    //    egy másik request hozta létre) → skip + existed listára.
-    for (const entry of required) {
-        if (!entry || typeof entry.slug !== 'string') continue;
-        // Archivált slug-collision: a doc létezik a sémában, de UI-ból
-        // eltűnt — az autoseed nem írja felül (first-write wins), de
-        // warninggal jelezzük, hogy a user vagy `restore_group`-pal
-        // visszaállítja, vagy `delete_group`-pal véglegesen kitakarítja.
-        const archived = archivedByName.get(entry.slug);
-        if (archived) {
-            result.warnings.push({
-                code: 'group_archived_blocking_autoseed',
-                slug: entry.slug,
-                groupId: archived.$id,
-                note: 'A slug archivált csoporthoz tartozik — az autoseed nem írja felül. Restore_group vagy delete_group szükséges.'
-            });
-            continue;
-        }
-        const existing = existingByName.get(entry.slug);
-        if (existing) {
-            result.existed.push(entry.slug);
-            // Slug-collision warning: ha a workflow flag-jei eltérnek a
-            // meglévő doc-tól. A "first-write wins" politika nem írja felül,
-            // de a hívó a response-ban látja a konfliktusos slug-okat.
-            const collidingFields = [];
-            if (entry.isContributorGroup !== undefined
-                && existing.isContributorGroup !== undefined
-                && entry.isContributorGroup !== existing.isContributorGroup) {
-                collidingFields.push('isContributorGroup');
-            }
-            if (entry.isLeaderGroup !== undefined
-                && existing.isLeaderGroup !== undefined
-                && entry.isLeaderGroup !== existing.isLeaderGroup) {
-                collidingFields.push('isLeaderGroup');
-            }
-            if (collidingFields.length > 0) {
-                result.warnings.push({
-                    code: 'group_slug_collision',
-                    slug: entry.slug,
-                    fields: collidingFields,
-                    note: 'A meglévő groups doc kanonikus marad (first-write wins). Explicit update_group_metadata szükséges a workflow-igazításhoz.'
-                });
-            }
-            continue;
-        }
-
-        const fullPayload = {
-            slug: entry.slug,
-            name: entry.label || entry.slug,
-            editorialOfficeId,
-            organizationId,
-            createdByUserId: callerId
-        };
-        if (entry.description !== undefined) fullPayload.description = entry.description ?? null;
-        if (entry.color !== undefined) fullPayload.color = entry.color ?? null;
-        if (entry.isContributorGroup !== undefined) fullPayload.isContributorGroup = !!entry.isContributorGroup;
-        if (entry.isLeaderGroup !== undefined) fullPayload.isLeaderGroup = !!entry.isLeaderGroup;
-
-        try {
-            await databases.createDocument(
-                databaseId,
-                groupsCollectionId,
-                sdk.ID.unique(),
-                fullPayload,
-                buildAcl(editorialOfficeId)
-            );
-            result.created.push(entry.slug);
-        } catch (err) {
-            if (err?.type === 'document_already_exists' || /unique/i.test(err?.message || '')) {
-                // Race: másik request közben létrehozta — idempotens skip.
-                result.existed.push(entry.slug);
-                continue;
-            }
-            // Schema-safe fallback: az új mezők nem léteznek (`bootstrap_groups_schema`
-            // nem futott). Retry minimal payload-dal — `slug` + `name` + scope.
-            const isSchemaMissing =
-                (err?.type === 'document_invalid_structure' || err?.code === 400)
-                && /unknown attribute|description|color|isContributorGroup|isLeaderGroup/i.test(err?.message || '');
-            if (isSchemaMissing) {
-                try {
-                    await databases.createDocument(
-                        databaseId,
-                        groupsCollectionId,
-                        sdk.ID.unique(),
-                        {
-                            slug: entry.slug,
-                            name: entry.label || entry.slug,
-                            editorialOfficeId,
-                            organizationId,
-                            createdByUserId: callerId
-                        },
-                        buildAcl(editorialOfficeId)
-                    );
-                    result.created.push(entry.slug);
-                    result.warnings.push({
-                        code: 'group_metadata_schema_missing',
-                        slug: entry.slug,
-                        note: 'description/color/isContributorGroup/isLeaderGroup mezők nem elérhetők (futtasd: bootstrap_groups_schema). Csoport name-mel létrehozva.'
-                    });
-                    continue;
-                } catch (fallbackErr) {
-                    log(`[SeedGroups] fallback create hiba (slug=${entry.slug}): ${fallbackErr.message}`);
-                    throw fallbackErr;
-                }
-            }
-            throw err;
-        }
-    }
-
-    return result;
-}
-
-/**
- * A.2.2 — Empty `requiredGroupSlugs` ellenőrzés. Az autoseed után minden
- * slug-hoz legalább 1 `groupMembership` léte kötelező az aktiváláshoz.
- *
- * @param {sdk.Databases} databases
- * @param {Object} env — { databaseId, groupsCollectionId, groupMembershipsCollectionId }
- * @param {string[]} slugs — a `requiredGroupSlugs[].slug` halmaz
- * @param {string} editorialOfficeId
- * @returns {Promise<string[]>} — üres slug-ok listája
- */
-async function findEmptyRequiredGroupSlugs(databases, env, slugs, editorialOfficeId) {
-    const { databaseId, groupsCollectionId, groupMembershipsCollectionId } = env;
-    if (!Array.isArray(slugs) || slugs.length === 0) return [];
-
-    // Slug-onként független lookup (archivált-szűrt group + membership count).
-    // Paralel `Promise.all` — N slug × 2 await szekvenciálisan kb. 2N RTT,
-    // párhuzamosan ~2 RTT (user-facing latency az aktiváló-flow-nál).
-    const checks = await Promise.all(slugs.map(async (slug) => {
-        let groupId = null;
-        try {
-            const groupResult = await databases.listDocuments(
-                databaseId,
-                groupsCollectionId,
-                [
-                    sdk.Query.equal('editorialOfficeId', editorialOfficeId),
-                    sdk.Query.equal('slug', slug),
-                    sdk.Query.select(['$id', 'archivedAt']),
-                    sdk.Query.limit(1)
-                ]
-            );
-            const doc = groupResult.documents[0];
-            if (doc && !doc.archivedAt) groupId = doc.$id;
-        } catch {
-            // Lookup hiba esetén üresnek tekintjük (fail-closed).
-            return slug;
-        }
-        if (!groupId) return slug;
-
-        try {
-            const memResult = await databases.listDocuments(
-                databaseId,
-                groupMembershipsCollectionId,
-                [
-                    sdk.Query.equal('groupId', groupId),
-                    sdk.Query.select(['$id']),
-                    sdk.Query.limit(1)
-                ]
-            );
-            return memResult.documents.length === 0 ? slug : null;
-        } catch {
-            return slug;
-        }
-    }));
-    return checks.filter(s => s !== null);
-}
-
-/**
- * A.3.2 — A 3 default permission set (`owner_base`, `admin_base`, `member_base`)
- * seedelése egy új office-ba. A `bootstrap_organization` és
- * `create_editorial_office` action egyaránt meghívja a workflow seed ELŐTT.
- *
- * **Best-effort, idempotens** (Codex stop-time review):
- * - 409 / `document_already_exists` → skip. Az idempotencia a
- *   `office_slug_unique` indexen alapul (a `bootstrap_permission_sets_schema`
- *   hozza létre). **Index hiányában nincs slug-listing fallback** — a deploy
- *   sorrend szerint a schema bootstrap-nek MEG KELL történnie a default
- *   permission set seed előtt. Ha a fail-closed sorrend megsérül (tenant
- *   schema-bump nélkül indul), a `schema-missing` ágon megáll a seed (lentebb).
- * - schema-hiány (a `bootstrap_permission_sets_schema` még nem futott) →
- *   csendes skip (`errors[]`-be kerül `schema_missing` üzenettel). A bootstrap
- *   később a schema deploy után újra futtatható, vagy a user a Dashboard
- *   PermissionSetsTab-on manuálisan létrehozhatja.
- * - egyéb hiba → log + skip. NEM rollback-eli az org-bootstrapot — az
- *   org owner role-override miatt a 33 office-scope slug bejön a
- *   `userHasPermission()` 2. lépésében, így a permission set hiánya csak a
- *   member-szintű csoport-jogokat érinti (és azokat manuálisan pótolható).
- *
- * **Nincs csoport-mapping** (A.3.2): a permission set-ek létrejönnek, de
- * `groupPermissionSets` doc-ok NEM. A workflow-driven autoseed csak slug-szintű
- * csoport-créatiót tesz; a permission set hozzárendelés a Dashboard
- * `PermissionSetsTab` (A.4) és `EditorialOfficeGroupsTab` (A.4.5) hatáskör.
- *
- * @param {sdk.Databases} databases
- * @param {Object} env — { databaseId, permissionSetsCollectionId }
- * @param {string} organizationId
- * @param {string} editorialOfficeId
- * @param {string} callerId
- * @param {Function} log
- * @param {Function} error
- * @returns {Promise<{ created: string[], skipped: string[], errors: Array<{slug: string, message: string}> }>}
- */
-async function seedDefaultPermissionSets(
-    databases, env, organizationId, editorialOfficeId, callerId, log, error
-) {
-    const { databaseId, permissionSetsCollectionId } = env;
-    const result = { created: [], skipped: [], errors: [] };
-
-    if (!permissionSetsCollectionId) {
-        // env hiánya — a `PERMISSION_SETS_COLLECTION_ID` opcionális minden non-A.3
-        // action-hez. Ezen az ágon a CF a permission set seed-et kihagyja.
-        log(`[SeedPermSets] PERMISSION_SETS_COLLECTION_ID hiányzik, seed kihagyva`);
-        result.errors.push({ slug: '*', message: 'env_missing:PERMISSION_SETS_COLLECTION_ID' });
-        return result;
-    }
-
-    for (const def of permissions.DEFAULT_PERMISSION_SETS) {
-        try {
-            await databases.createDocument(
-                databaseId,
-                permissionSetsCollectionId,
-                sdk.ID.unique(),
-                {
-                    name: def.name,
-                    slug: def.slug,
-                    description: def.description,
-                    permissions: def.permissions,
-                    editorialOfficeId,
-                    organizationId,
-                    createdByUserId: callerId
-                    // archivedAt explicit null → nincs default-szöveg, az
-                    // attribute schema-ja `required: false` engedélyezi.
-                },
-                buildOfficeAclPerms(editorialOfficeId)
-            );
-            result.created.push(def.slug);
-        } catch (err) {
-            const msg = err?.message || '';
-            const isAlreadyExists = err?.code === 409
-                || err?.type === 'document_already_exists'
-                || /unique|already exists/i.test(msg);
-            if (isAlreadyExists) {
-                result.skipped.push(def.slug);
-                continue;
-            }
-            const isSchemaMissing = (err?.type === 'document_invalid_structure' || err?.code === 400)
-                && /unknown attribute|invalid structure|collection.*not found/i.test(msg);
-            if (isSchemaMissing) {
-                log(`[SeedPermSets] schema_missing — bootstrap_permission_sets_schema not yet run. office=${editorialOfficeId}, slug=${def.slug}`);
-                result.errors.push({ slug: def.slug, message: 'schema_missing' });
-                // Az első ilyen hibánál megállunk — a többi slug is ugyanazt
-                // kapná, és a felhasználó számára egy hibaüzenet elég.
-                break;
-            }
-            error(`[SeedPermSets] ${def.slug} create hiba: ${err.message}`);
-            result.errors.push({ slug: def.slug, message: err.message });
-        }
-    }
-
-    return result;
-}
-
-/**
- * A.2.2 — deadline-validáció inline másolat. Ugyanaz a logika, mint a
- * `validate-publication-update` CF §5-ben — a két forrás SZINKRONBAN MARAD
- * (manuális, nincs build pipeline). Pre-aktiválási check a CF-ben.
- */
-function validateDeadlinesInline(publication, deadlines) {
-    const errors = [];
-    if (!deadlines || deadlines.length === 0) return { isValid: true, errors };
-
-    const coverageStart = publication?.coverageStart;
-    const coverageEnd = publication?.coverageEnd;
-    deadlines.forEach((d, i) => {
-        const label = `${i + 1}. határidő`;
-        if (d.startPage == null || d.endPage == null) {
-            errors.push(`${label}: Hiányzó kezdő- vagy végoldal.`);
-        } else {
-            if (d.startPage > d.endPage) errors.push(`${label}: A kezdőoldal nem lehet nagyobb, mint a végoldal.`);
-            if (coverageStart != null && d.startPage < coverageStart) errors.push(`${label}: A kezdőoldal kisebb, mint a kiadvány kezdőoldala.`);
-            if (coverageEnd != null && d.endPage > coverageEnd) errors.push(`${label}: A végoldal nagyobb, mint a kiadvány végoldala.`);
-        }
-        if (!d.datetime || isNaN(new Date(d.datetime).getTime())) {
-            errors.push(`${label}: Érvénytelen dátum/idő.`);
-        }
-    });
-
-    const validRanges = deadlines.filter(d => d.startPage != null && d.endPage != null && d.startPage <= d.endPage);
-    for (let i = 0; i < validRanges.length; i++) {
-        for (let j = i + 1; j < validRanges.length; j++) {
-            const a = validRanges[i], b = validRanges[j];
-            if (a.startPage <= b.endPage && b.startPage <= a.endPage) {
-                errors.push(`Átfedés a ${a.startPage}–${a.endPage} és ${b.startPage}–${b.endPage} oldalak tartománya között.`);
-            }
-        }
-    }
-
-    if (coverageStart != null && coverageEnd != null && validRanges.length > 0) {
-        const sorted = [...validRanges].sort((a, b) => a.startPage - b.startPage);
-        let expectedStart = coverageStart;
-        const uncovered = [];
-        for (const r of sorted) {
-            if (r.startPage > expectedStart) uncovered.push(`${expectedStart}–${r.startPage - 1}`);
-            expectedStart = Math.max(expectedStart, r.endPage + 1);
-        }
-        if (expectedStart <= coverageEnd) uncovered.push(`${expectedStart}–${coverageEnd}`);
-        if (uncovered.length > 0) errors.push(`Nem fedett oldalak: ${uncovered.join(', ')}.`);
-    }
-    return { isValid: errors.length === 0, errors };
-}
 
 module.exports = async function ({ req, res, log, error }) {
     try {
@@ -1254,9 +408,13 @@ module.exports = async function ({ req, res, log, error }) {
         // (articles.contributors JSON slug-kulcsokat tárol). Action-szintű guard.
         const articlesCollectionId = process.env.ARTICLES_COLLECTION_ID;
         // A.1 (ADR 0008) — a `bootstrap_permission_sets_schema` action két új
-        // collectiont hoz létre. Mindkét env var **csak ezen az action-en**
-        // kötelező, ezért action-szintű guard (mintha a publications/articles
-        // env-ek). A többi meglévő action működése ettől független.
+        // collectiont hoz létre. A.3.6 óta a `userHasPermission()` minden
+        // retrofit-elt action-en a member-pathon ezen a két collection-en
+        // keres permission-set lookupot, ezért mindkét env var **globálisan
+        // kötelező** (a deploy-folyamatban a `bootstrap_permission_sets_schema`
+        // futtatása amúgy is előfeltétel). Ha bármelyik hiányzik, a member
+        // user-ek `userHasPermission()` lookup-ja silent üres set-tel térne
+        // vissza, ami a guardokban 403-at eredményezne — fail-fast jobb.
         const permissionSetsCollectionId = process.env.PERMISSION_SETS_COLLECTION_ID;
         const groupPermissionSetsCollectionId = process.env.GROUP_PERMISSION_SETS_COLLECTION_ID;
 
@@ -1271,11 +429,50 @@ module.exports = async function ({ req, res, log, error }) {
         if (!groupsCollectionId) missingEnvVars.push('GROUPS_COLLECTION_ID');
         if (!groupMembershipsCollectionId) missingEnvVars.push('GROUP_MEMBERSHIPS_COLLECTION_ID');
         if (!workflowsCollectionId) missingEnvVars.push('WORKFLOWS_COLLECTION_ID');
+        // A.3.6 (ADR 0008) — `userHasPermission()` member-path lookuphoz kötelező.
+        if (!permissionSetsCollectionId) missingEnvVars.push('PERMISSION_SETS_COLLECTION_ID');
+        if (!groupPermissionSetsCollectionId) missingEnvVars.push('GROUP_PERMISSION_SETS_COLLECTION_ID');
         if (!apiKey) missingEnvVars.push('APPWRITE_API_KEY (vagy x-appwrite-key header)');
         if (missingEnvVars.length > 0) {
             error(`[Config] Hiányzó környezeti változók: ${missingEnvVars.join(', ')}`);
             return fail(res, 500, 'misconfigured', { missing: missingEnvVars });
         }
+
+        // A.3.6 (ADR 0008) — közös permission env objektum a `userHasPermission()`
+        // / `userHasOrgPermission()` hívásokhoz + per-request memoizációs cache.
+        // A CF entry-point egyszer hozza létre a contextet, és minden retrofit-elt
+        // action-helper-hívás ezt kapja paraméterként (snapshot-cache `${userId}::
+        // ${officeId}` kulccsal — Codex baseline review Critical fix).
+        const permissionEnv = {
+            databaseId,
+            officesCollectionId,
+            membershipsCollectionId,
+            // Codex adversarial review 2026-05-02 Critical fix:
+            //   defense-in-depth a member-path `groupMemberships` rogue
+            //   write-tal szemben → office-tagság cross-check.
+            officeMembershipsCollectionId,
+            groupMembershipsCollectionId,
+            groupPermissionSetsCollectionId,
+            permissionSetsCollectionId
+        };
+        const permissionContext = permissions.createPermissionContext();
+
+        // **A.3.6 final review fix (Codex Critical)**: a `permissions.userHasPermission`
+        // / `userHasOrgPermission` 1. lépése `user.labels?.includes('admin')`
+        // shortcutot ad — ezt egy `{ id: callerId }` objektum NEM tudja teljesíteni
+        // (labels=undefined → false), így a globális admin override halott kód
+        // lenne. Az Appwrite runtime az `x-appwrite-user-labels` headerben CSV-
+        // formátumban küldi a user labels-eket — ezt felbontjuk, és a `callerUser`-be
+        // tesszük. (Az `accept`/`list_my_invites`/`leave_organization` action-ök
+        // saját `let callerUser` shadowing-et használnak userApi.get-ből — azok
+        // önkezelő flow-k, NEM hívnak permission helpert, így a globális
+        // shadowing-je biztonságos.)
+        const callerLabelsHeader = req.headers['x-appwrite-user-labels'] || '';
+        const callerLabels = callerLabelsHeader
+            .split(',')
+            .map(s => s.trim())
+            .filter(Boolean);
+        const callerUser = { id: callerId, labels: callerLabels };
 
         // ════════════════════════════════════════════════════════
         // ACTION = 'bootstrap_organization' | 'create_organization'
@@ -1570,6 +767,7 @@ module.exports = async function ({ req, res, log, error }) {
                 newOrgId,
                 newOfficeId,
                 callerId,
+                buildOfficeAclPerms,
                 log,
                 error
             );
@@ -1656,26 +854,23 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 400, 'invalid_role', { allowed: ['admin', 'member'] });
             }
 
-            // 1. Caller jogosultság: létezik-e organizationMembership owner/admin role-lal?
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', organizationId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.limit(1)
-                ]
+            // 1. A.3.6 — `org.member.invite` org-scope permission guard
+            //    (owner + admin egyaránt jogosult; az `ADMIN_EXCLUDED_ORG_SLUGS`
+            //    nem tartalmazza ezt a slugot).
+            const allowed = await permissions.userHasOrgPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'org.member.invite',
+                organizationId,
+                permissionContext.orgRoleByOrg
             );
-
-            if (callerMembership.documents.length === 0) {
-                log(`[Create] Caller ${callerId} nem tagja az org ${organizationId}-nak`);
-                return fail(res, 403, 'not_a_member');
-            }
-
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                log(`[Create] Caller ${callerId} role=${callerRole} — csak owner/admin küldhet meghívót`);
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                log(`[Create] Caller ${callerId} — nincs org.member.invite jogosultság az org ${organizationId}-ra`);
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'org.member.invite',
+                    scope: 'org'
+                });
             }
 
             // 2. Idempotencia: létezik-e már pending invite ugyanerre az email+org párra?
@@ -2435,22 +1630,26 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 404, 'group_not_found');
             }
 
-            // 2. Caller jogosultság: org owner/admin
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', group.organizationId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.limit(1)
-                ]
+            // 2. A.3.6 — `group.member.add` office-scope permission guard.
+            //    Az ADR 0008 szerint owner/admin org-role automatikusan minden
+            //    33 office-scope slugot megad, így a régi role-check
+            //    visszafelé-kompatibilis — a new permission-set rendszerben
+            //    a member is engedélyezhető, ha a group-ja `permissionSets`
+            //    `group.member.add` slugot tartalmaz.
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'group.member.add',
+                group.editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'group.member.add',
+                    scope: 'office'
+                });
             }
 
             // 3. Target user lookup — userName/userEmail denormalizálás + aktív/verifikált check
@@ -2542,22 +1741,21 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 404, 'group_not_found');
             }
 
-            // 2. Caller jogosultság: org owner/admin
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', group.organizationId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.limit(1)
-                ]
+            // 2. A.3.6 — `group.member.remove` office-scope permission guard.
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'group.member.remove',
+                group.editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'group.member.remove',
+                    scope: 'office'
+                });
             }
 
             // 3. GroupMembership keresés és törlés
@@ -2704,23 +1902,21 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 500, 'office_fetch_failed');
             }
 
-            // 2) Caller jogosultság — org owner/admin
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', officeDoc.organizationId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.select(['role']),
-                    sdk.Query.limit(1)
-                ]
+            // 2) A.3.6 — `group.create` office-scope permission guard.
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'group.create',
+                editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'group.create',
+                    scope: 'office'
+                });
             }
 
             // 3) Display name uniqueness az office-on belül
@@ -2932,23 +2128,21 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 500, 'group_fetch_failed');
             }
 
-            // 2) Caller jogosultság — org owner/admin
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', groupDoc.organizationId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.select(['role']),
-                    sdk.Query.limit(1)
-                ]
+            // 2) A.3.6 — `group.rename` office-scope permission guard.
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'group.rename',
+                groupDoc.editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'group.rename',
+                    scope: 'office'
+                });
             }
 
             // 3) Uniqueness — csak akkor, ha label változik (`name` mező).
@@ -3128,23 +2322,22 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 500, 'group_fetch_failed');
             }
 
-            // 2) Caller jogosultság — org owner/admin
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', groupDoc.organizationId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.select(['role']),
-                    sdk.Query.limit(1)
-                ]
+            // 2) A.3.6 — `group.delete` office-scope permission guard
+            //    (archive/restore közös slug, ADR 0008 38-slug taxonómia).
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'group.delete',
+                groupDoc.editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'group.delete',
+                    scope: 'office'
+                });
             }
 
             // 3) Idempotens státusz check
@@ -3428,23 +2621,21 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 500, 'group_fetch_failed');
             }
 
-            // 2) Caller jogosultság — org owner/admin
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', groupDoc.organizationId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.select(['role']),
-                    sdk.Query.limit(1)
-                ]
+            // 2) A.3.6 — `group.delete` office-scope permission guard.
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'group.delete',
+                groupDoc.editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'group.delete',
+                    scope: 'office'
+                });
             }
 
             // 3) Workflow hivatkozás ellenőrzés — az **org összes nem-archivált
@@ -4412,7 +3603,7 @@ module.exports = async function ({ req, res, log, error }) {
                 descriptionValue = trimmed.length === 0 ? null : trimmed;
             }
 
-            // Office lookup → organizationId + caller jogosultság.
+            // Office lookup → organizationId.
             let officeDoc;
             try {
                 officeDoc = await databases.getDocument(databaseId, officesCollectionId, editorialOfficeId);
@@ -4422,22 +3613,21 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 500, 'office_fetch_failed');
             }
 
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', officeDoc.organizationId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.select(['role']),
-                    sdk.Query.limit(1)
-                ]
+            // A.3.6 — `permissionSet.create` office-scope permission guard.
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'permissionSet.create',
+                editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'permissionSet.create',
+                    scope: 'office'
+                });
             }
 
             // Create — slug-ütközés a `office_slug_unique` indexen.
@@ -4526,22 +3716,21 @@ module.exports = async function ({ req, res, log, error }) {
                 });
             }
 
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', setDoc.organizationId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.select(['role']),
-                    sdk.Query.limit(1)
-                ]
+            // A.3.6 — `permissionSet.edit` office-scope permission guard.
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'permissionSet.edit',
+                setDoc.editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'permissionSet.edit',
+                    scope: 'office'
+                });
             }
 
             // Update payload összeállítás — selective.
@@ -4675,23 +3864,22 @@ module.exports = async function ({ req, res, log, error }) {
                 });
             }
 
-            // Auth.
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', setDoc.organizationId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.select(['role']),
-                    sdk.Query.limit(1)
-                ]
+            // A.3.6 — `permissionSet.archive` office-scope permission guard
+            //          (archive és restore közös slug).
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'permissionSet.archive',
+                setDoc.editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'permissionSet.archive',
+                    scope: 'office'
+                });
             }
 
             let updated;
@@ -4783,23 +3971,21 @@ module.exports = async function ({ req, res, log, error }) {
                 });
             }
 
-            // Caller auth — org owner/admin.
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', groupDoc.organizationId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.select(['role']),
-                    sdk.Query.limit(1)
-                ]
+            // A.3.6 — `permissionSet.assign` office-scope permission guard.
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'permissionSet.assign',
+                groupDoc.editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'permissionSet.assign',
+                    scope: 'office'
+                });
             }
 
             // Junction doc create — `group_set_unique` index idempotens.
@@ -4901,7 +4087,7 @@ module.exports = async function ({ req, res, log, error }) {
                 });
             }
 
-            // Group fetch a caller auth-hoz (a `organizationId` szűréshez kell).
+            // Group fetch a caller auth-hoz (az office scope-hoz kell).
             let groupDoc;
             try {
                 groupDoc = await databases.getDocument(databaseId, groupsCollectionId, groupId);
@@ -4911,22 +4097,22 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 500, 'lookup_failed');
             }
 
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', groupDoc.organizationId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.select(['role']),
-                    sdk.Query.limit(1)
-                ]
+            // A.3.6 — `permissionSet.assign` office-scope permission guard
+            //          (assign és unassign közös slug).
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'permissionSet.assign',
+                groupDoc.editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'permissionSet.assign',
+                    scope: 'office'
+                });
             }
 
             // Junction lookup + delete.
@@ -5023,22 +4209,50 @@ module.exports = async function ({ req, res, log, error }) {
             }
             const orgId = office.documents[0].organizationId;
 
-            // 2. Caller jogosultság: org owner/admin
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', orgId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.limit(1)
-                ]
+            // 2. A.3.6 — `workflow.create` office-scope permission guard.
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'workflow.create',
+                editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'workflow.create',
+                    scope: 'office'
+                });
             }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+
+            // 2.5. A.3.6 — Non-default `visibility` esetén `workflow.share`
+            //   slug is szükséges. Anélkül egy `workflow.create` jogosult
+            //   user `organization` vagy `public` scope-ú workflow-t
+            //   hozhatna létre, ami megkerülné az `update_workflow_metadata`
+            //   visibility-gate-jét (Codex final review ship-blocker fix).
+            //   A creator ownership ezen a ponton természetesen az alany
+            //   maga lesz, így a visibility-tágítás joga `workflow.share`-re
+            //   redukálódik (azaz ownership-fallback nincs, mert a
+            //   workflow még nem létezik).
+            if (visibility !== WORKFLOW_VISIBILITY_DEFAULT) {
+                const allowedShare = await permissions.userHasPermission(
+                    databases,
+                    permissionEnv,
+                    callerUser,
+                    'workflow.share',
+                    editorialOfficeId,
+                    permissionContext.snapshotsByOffice,
+                    permissionContext.orgRoleByOrg
+                );
+                if (!allowedShare) {
+                    return fail(res, 403, 'insufficient_permission', {
+                        slug: 'workflow.share',
+                        scope: 'office',
+                        field: 'visibility',
+                        note: `A "${visibility}" scope-ú workflow létrehozásához workflow.share jog szükséges. Default scope (${WORKFLOW_VISIBILITY_DEFAULT}) workflow.share nélkül létrehozható.`
+                    });
+                }
             }
 
             // 3. Név unique check az office-on belül
@@ -5137,6 +4351,15 @@ module.exports = async function ({ req, res, log, error }) {
             }
 
             // 1. Caller jogosultság — org owner/admin.
+            //
+            // A.3.6 (ADR 0008) **tudatos kivétel**: az `office.create` slug az
+            //   ADR 38-as taxonómiájában office-scope-ba van sorolva, de az új
+            //   office még NEM LÉTEZIK — `userHasPermission(slug='office.create',
+            //   officeId=???)` input-ja problémás. Mivel a helper 2. lépése
+            //   úgyis automatikusan minden 33 office-scope slugot megad org
+            //   owner/admin-nak, a régi role-check **logikailag ekvivalens**
+            //   és a "nincs még office" probléma elkerülhető. A retrofit
+            //   itt szándékosan kimarad (Codex 2026-05-02 strategy review).
             const callerMembership = await databases.listDocuments(
                 databaseId,
                 membershipsCollectionId,
@@ -5278,6 +4501,7 @@ module.exports = async function ({ req, res, log, error }) {
                 organizationId,
                 newOfficeId,
                 callerId,
+                buildOfficeAclPerms,
                 log,
                 error
             );
@@ -5387,22 +4611,21 @@ module.exports = async function ({ req, res, log, error }) {
             }
             const orgId = office.documents[0].organizationId;
 
-            // 2. Caller jogosultság: org owner/admin
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', orgId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.limit(1)
-                ]
+            // 2. A.3.6 — `workflow.edit` office-scope permission guard.
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'workflow.edit',
+                editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'workflow.edit',
+                    scope: 'office'
+                });
             }
 
             // 3. Workflow doc betöltés — elsődleges: explicit workflowId,
@@ -5587,22 +4810,24 @@ module.exports = async function ({ req, res, log, error }) {
             }
             const orgId = office.documents[0].organizationId;
 
-            // 2. Caller jogosultság: org owner/admin
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', orgId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.limit(1)
-                ]
+            // 2. A.3.6 — `workflow.edit` office-scope permission guard.
+            //    A visibility-mező változtatása ezen kívül egy második
+            //    `workflow.share` slug-guardot kap a 5-pre lépésben (vagy
+            //    `createdBy === callerId` ownership ad fallback jogot).
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'workflow.edit',
+                editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'workflow.edit',
+                    scope: 'office'
+                });
             }
 
             // 3. Workflow doc betöltés + scope match
@@ -5663,17 +4888,50 @@ module.exports = async function ({ req, res, log, error }) {
                 });
             }
 
-            // 5-pre. #81 — Visibility váltás kizárólag a tulajdonosnak
-            // (`createdBy === callerId`). A rename/description továbbra is
-            // org owner/admin joggal elvégezhető — a scope viszont üzleti
-            // döntés, ami a workflow „gazdájának" a kompetenciája (a plan
-            // szerint a későbbi részletes jogosultsági rendszer ezt finomítja).
-            if (updateData.visibility && workflowDoc.createdBy !== callerId) {
-                return fail(res, 403, 'not_workflow_owner', {
-                    field: 'visibility',
-                    yourRole: callerRole,
-                    note: 'A scope (visibility) váltás csak a workflow tulajdonosának (createdBy) van engedélyezve.'
-                });
+            // 5-pre. A.3.6 — Visibility váltás `workflow.share` slug VAGY
+            //   `createdBy === callerId` ownership.
+            //
+            //   Az ADR 0008 38-slug taxonómiájában a `workflow.share` slug a
+            //   visibility (scope) változtatás kanonikus engedélye. Két út
+            //   nyitva: (a) a creator (`createdBy === callerId`) ownership
+            //   automatikus jogot ad a saját workflow-jára (#81 minta), (b)
+            //   a `workflow.share` slugja explicit jog (org owner/admin a
+            //   helper override-jával automatikusan kapja).
+            //
+            //   A rename/description továbbra is `workflow.edit` joggal megy
+            //   (a 2-es lépésben már gate-elve) — ez egy KIEGÉSZÍTŐ guard
+            //   csak a visibility-mezőre, mert az ADR slug-szegregálja a
+            //   metadata-szerkesztés és a scope-megosztás jogát.
+            if (updateData.visibility) {
+                // Codex adversarial 2026-05-02 Critical fix: a `createdBy ===
+                // callerId` ownership csak akkor érvényes, ha a caller még
+                // office-tag (kilépett creator nem maradhat scope-tágító).
+                // A `permissions.isStillOfficeMember` shared helper a
+                // `permissions.js`-ben (fail-closed env/DB hibára).
+                const isCreator = workflowDoc.createdBy === callerId;
+                let allowedShare = isCreator && await permissions.isStillOfficeMember(
+                    databases, permissionEnv, callerId, editorialOfficeId
+                );
+                if (!allowedShare) {
+                    allowedShare = await permissions.userHasPermission(
+                        databases,
+                        permissionEnv,
+                        callerUser,
+                        'workflow.share',
+                        editorialOfficeId,
+                        permissionContext.snapshotsByOffice,
+                        permissionContext.orgRoleByOrg
+                    );
+                }
+                if (!allowedShare) {
+                    return fail(res, 403, 'insufficient_permission', {
+                        slug: 'workflow.share',
+                        scope: 'office',
+                        field: 'visibility',
+                        requiresOwnership: true,
+                        note: 'A scope (visibility) változtatáshoz workflow.share jog vagy createdBy ownership (+ office-tagság) szükséges.'
+                    });
+                }
             }
 
             // 5a. #80 — Visibility szűkítés warning scan (a #30 blocking
@@ -5818,37 +5076,8 @@ module.exports = async function ({ req, res, log, error }) {
                 });
             }
 
-            // 1. Office lookup → organizationId
-            let officeDoc;
-            try {
-                officeDoc = await databases.getDocument(
-                    databaseId,
-                    officesCollectionId,
-                    editorialOfficeId
-                );
-            } catch (err) {
-                if (err?.code === 404) return fail(res, 404, 'office_not_found');
-                error(`[ArchiveWorkflow] office lookup threw: ${err.message} (code=${err.code}, type=${err.type})`);
-                return fail(res, 500, 'office_fetch_failed');
-            }
-            const orgId = officeDoc.organizationId;
-
-            // 2. Caller org membership lookup (role meghatározáshoz)
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', orgId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.limit(1)
-                ]
-            );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-
-            // 3. Workflow doc + scope match
+            // 1. Workflow doc + scope match (a permission guard előtt, hogy
+            //    a `createdBy` ownership fallback eldönthető legyen).
             let workflowDoc;
             try {
                 workflowDoc = await databases.getDocument(
@@ -5863,13 +5092,50 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 403, 'scope_mismatch');
             }
 
-            // 4. Ownership guard: createdBy VAGY org owner/admin fallback.
+            // 2. Office lookup ellenőrzés (404 detekt) — ha az office nem
+            //    létezik, scope_mismatch helyett pontosabb hiba a UI-nak.
+            try {
+                await databases.getDocument(
+                    databaseId,
+                    officesCollectionId,
+                    editorialOfficeId
+                );
+            } catch (err) {
+                if (err?.code === 404) return fail(res, 404, 'office_not_found');
+                error(`[ArchiveWorkflow] office lookup threw: ${err.message} (code=${err.code}, type=${err.type})`);
+                return fail(res, 500, 'office_fetch_failed');
+            }
+
+            // 3. A.3.6 — `workflow.archive` office-scope permission guard,
+            //    `createdBy === callerId` ownership fallback-kel (#81 minta).
+            //    A creator a saját workflow-ját akkor is archiválhatja /
+            //    visszaállíthatja, ha nincs explicit `workflow.archive` slugja —
+            //    DE csak akkor, ha még office-tag (Codex adversarial 2026-05-02:
+            //    egy kilépett creator a workflow-jára nem maradhat jogosult,
+            //    különben a `createdBy` mező egy soha-le-nem-járó privilege-
+            //    eszkalációs felület lenne). A `permissions.isStillOfficeMember`
+            //    shared helper a `permissions.js`-ben (fail-closed env/DB hibára).
             const isCreator = workflowDoc.createdBy === callerId;
-            const isOrgAdmin = callerRole === 'owner' || callerRole === 'admin';
-            if (!isCreator && !isOrgAdmin) {
-                return fail(res, 403, 'not_workflow_owner', {
-                    yourRole: callerRole,
-                    note: 'Csak a workflow tulajdonosa (createdBy) vagy szervezeti admin/owner végezheti ezt a műveletet.'
+            let allowed = isCreator && await permissions.isStillOfficeMember(
+                databases, permissionEnv, callerId, editorialOfficeId
+            );
+            if (!allowed) {
+                allowed = await permissions.userHasPermission(
+                    databases,
+                    permissionEnv,
+                    callerUser,
+                    'workflow.archive',
+                    editorialOfficeId,
+                    permissionContext.snapshotsByOffice,
+                    permissionContext.orgRoleByOrg
+                );
+            }
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'workflow.archive',
+                    scope: 'office',
+                    requiresOwnership: true,
+                    note: 'Csak a workflow tulajdonosa (createdBy + még office-tag) vagy `workflow.archive` jogosultsággal rendelkező felhasználó végezheti ezt a műveletet.'
                 });
             }
 
@@ -5967,22 +5233,23 @@ module.exports = async function ({ req, res, log, error }) {
             }
             const orgId = office.documents[0].organizationId;
 
-            // 2. Caller jogosultság: org owner/admin
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', orgId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.limit(1)
-                ]
+            // 2. A.3.6 — `workflow.archive` office-scope permission guard
+            //    (a hard-delete az ADR 38-as taxonómiájában az archive-bal
+            //    közös slugot használ; külön `workflow.delete` slug nincs).
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'workflow.archive',
+                editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'workflow.archive',
+                    scope: 'office'
+                });
             }
 
             // 3. Workflow doc betöltés + scope match
@@ -6128,25 +5395,23 @@ module.exports = async function ({ req, res, log, error }) {
             }
             const targetOrgId = office.documents[0].organizationId;
 
-            // 2. Target auth: caller target-org owner/admin (create_workflow-val
-            // analóg). Ez védi a target office-ot: a cross-tenant duplikát
-            // csak akkor kerülhet bele, ha a caller jogosult új workflow-t
-            // létrehozni a target office-ban.
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', targetOrgId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.limit(1)
-                ]
+            // 2. A.3.6 — `workflow.duplicate` office-scope permission guard
+            //    a TARGET office-on. Cross-tenant duplikát csak akkor
+            //    kerülhet bele, ha a caller jogosult duplikálni ide.
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'workflow.duplicate',
+                editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'workflow.duplicate',
+                    scope: 'office'
+                });
             }
 
             // 3. Forrás workflow lookup (bárhol lehet)
@@ -6357,23 +5622,68 @@ module.exports = async function ({ req, res, log, error }) {
                 });
             }
 
-            // 1) Auth: caller office-membership a target office-ban — auth-first
-            //    (workflow-létezést nem szivárogtatjuk nem-tag user-nek).
-            const callerOfficeMembership = await databases.listDocuments(
-                databaseId,
-                officeMembershipsCollectionId,
-                [
-                    sdk.Query.equal('editorialOfficeId', editorialOfficeId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.select(['role', 'organizationId']),
-                    sdk.Query.limit(1)
-                ]
+            // 1) Auth — A.3.6 dual permission check (Codex strategy review):
+            //    az endpoint kombinált művelet (publikáció create + workflow
+            //    assign), ezért MINDKÉT slugnak teljesülnie kell, különben
+            //    egy `publication.create`-jogú user megkerülné a workflow
+            //    assign-jogot. Az ADR 0008 helper-szerződése szerint
+            //    `userHasPermission()` true-t ad org owner/admin-nak mind a
+            //    33 slugra, így a meglévő admin-flow változatlan; member
+            //    user-eknek viszont mindkét slug kell a `permissionSets`-ben.
+            //
+            //    Auth-first védelem: a workflow-létezést nem szivárogtatjuk
+            //    nem-tag user-nek — a permission helper false-t ad, ha a user
+            //    nem tagja az office-nak (orgRole=null, nincs groupMembership).
+            const allowedCreate = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'publication.create',
+                editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerOfficeMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
+            if (!allowedCreate) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'publication.create',
+                    scope: 'office'
+                });
             }
-            const callerOrgId = callerOfficeMembership.documents[0].organizationId;
-            if (callerOrgId && callerOrgId !== organizationId) {
+            const allowedAssign = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'publication.workflow.assign',
+                editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
+            );
+            if (!allowedAssign) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'publication.workflow.assign',
+                    scope: 'office'
+                });
+            }
+
+            // 1.5) Office → org match validáció a payload integritásához.
+            //      A permission helper már ellenőrizte, hogy a caller jogosult
+            //      ezen az office-on, de még mindig le kell csekkolni, hogy
+            //      a `payload.organizationId` és az office tényleges
+            //      organizationId-ja egyezik (különben mismatched scope).
+            let officeOrgIdCheck;
+            try {
+                const officeDoc = await databases.getDocument(
+                    databaseId,
+                    officesCollectionId,
+                    editorialOfficeId
+                );
+                officeOrgIdCheck = officeDoc.organizationId;
+            } catch (err) {
+                if (err?.code === 404) return fail(res, 404, 'office_not_found');
+                error(`[CreatePubWithWorkflow] office fetch hiba: ${err.message}`);
+                return fail(res, 500, 'office_fetch_failed');
+            }
+            if (officeOrgIdCheck && officeOrgIdCheck !== organizationId) {
                 return fail(res, 403, 'organization_mismatch');
             }
 
@@ -6525,21 +5835,24 @@ module.exports = async function ({ req, res, log, error }) {
                 });
             }
 
-            // 2) Caller office membership (auth gate) — auth-first sorrend,
-            //    különben a paralel workflow fetch 404-je kiszivárogtatná
-            //    a workflow-létezést egy nem-tag user-nek (Codex review MAGAS).
-            const callerOfficeMembership = await databases.listDocuments(
-                databaseId,
-                officeMembershipsCollectionId,
-                [
-                    sdk.Query.equal('editorialOfficeId', pubDoc.editorialOfficeId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.select(['role']),
-                    sdk.Query.limit(1)
-                ]
+            // 2) A.3.6 — `publication.workflow.assign` office-scope permission
+            //    guard (auth-first sorrend megőrzi a Codex MAGAS review-t: a
+            //    workflow-létezést nem szivárogtatjuk nem-tag user-nek, mert
+            //    a helper false-t ad, ha a user nem tagja az office-nak).
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'publication.workflow.assign',
+                pubDoc.editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerOfficeMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'publication.workflow.assign',
+                    scope: 'office'
+                });
             }
 
             // 3) Workflow fetch + scope match
@@ -6712,19 +6025,21 @@ module.exports = async function ({ req, res, log, error }) {
                 });
             }
 
-            // 2) Caller office membership
-            const callerOfficeMembership = await databases.listDocuments(
-                databaseId,
-                officeMembershipsCollectionId,
-                [
-                    sdk.Query.equal('editorialOfficeId', pubDoc.editorialOfficeId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.select(['role']),
-                    sdk.Query.limit(1)
-                ]
+            // 2) A.3.6 — `publication.activate` office-scope permission guard.
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'publication.activate',
+                pubDoc.editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerOfficeMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'publication.activate',
+                    scope: 'office'
+                });
             }
 
             // 3) workflowId kötelező
@@ -6901,24 +6216,28 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 400, 'invalid_name');
             }
 
-            // Caller jogosultság: org owner/admin
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', organizationId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.limit(1)
-                ]
+            // A.3.6 — `org.rename` org-scope permission guard.
+            //
+            // **BREAKING CHANGE az ADR 0008 szerint**: a régi viselkedés
+            // owner+admin-t engedett, az új `org.rename` slug a helper
+            // `ADMIN_EXCLUDED_ORG_SLUGS` halmazában szerepel — **csak owner**
+            // végezheti. Az ADR 38-as taxonómia erre a slug-ra explicit
+            // owner-only kompetenciát ír elő. A vault szabálya alapján
+            // ("nincs éles verzió, nincs visszafelé-kompatibilitás követelmény")
+            // ezt a változást szándékosan benne hagyjuk a retrofitben.
+            const allowed = await permissions.userHasOrgPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'org.rename',
+                organizationId,
+                permissionContext.orgRoleByOrg
             );
-
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'org.rename',
+                    scope: 'org'
+                });
             }
 
             // Org dokumentum frissítése
@@ -6982,23 +6301,21 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 500, 'office_fetch_failed');
             }
 
-            // 2) Caller jogosultság — org owner/admin
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', officeDoc.organizationId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.select(['role']),
-                    sdk.Query.limit(1)
-                ]
+            // 2) A.3.6 — `office.rename` office-scope permission guard.
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'office.rename',
+                editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'office.rename',
+                    scope: 'office'
+                });
             }
 
             // 3) Uniqueness check — ugyanazon org más office-a nem foglalhatja
@@ -7085,23 +6402,21 @@ module.exports = async function ({ req, res, log, error }) {
 
             const officeOrgId = officeDoc.organizationId;
 
-            // 2) Caller jogosultság — org owner/admin
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', officeOrgId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.select(['role']),
-                    sdk.Query.limit(1)
-                ]
+            // 2) A.3.6 — `office.delete` office-scope permission guard.
+            const allowed = await permissions.userHasPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'office.delete',
+                editorialOfficeId,
+                permissionContext.snapshotsByOffice,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner' && callerRole !== 'admin') {
-                return fail(res, 403, 'insufficient_role', { yourRole: callerRole });
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'office.delete',
+                    scope: 'office'
+                });
             }
 
             // 3) Kaszkád takarítás a helper-rel — fail-closed.
@@ -7193,25 +6508,22 @@ module.exports = async function ({ req, res, log, error }) {
                 return fail(res, 500, 'organization_fetch_failed');
             }
 
-            // 2) Caller jogosultság — owner-only
-            const callerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', organizationId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.select(['role']),
-                    sdk.Query.limit(1)
-                ]
+            // 2) A.3.6 — `org.delete` org-scope permission guard.
+            //    Az `ADMIN_EXCLUDED_ORG_SLUGS`-ban szerepel (helper) — **csak
+            //    owner** végezheti. Ezzel a régi `callerRole !== 'owner'`
+            //    explicit ellenőrzés átállt a slug-alapú szemantikára.
+            const allowed = await permissions.userHasOrgPermission(
+                databases,
+                permissionEnv,
+                callerUser,
+                'org.delete',
+                organizationId,
+                permissionContext.orgRoleByOrg
             );
-            if (callerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            const callerRole = callerMembership.documents[0].role;
-            if (callerRole !== 'owner') {
-                return fail(res, 403, 'insufficient_role', {
-                    yourRole: callerRole,
-                    required: 'owner'
+            if (!allowed) {
+                return fail(res, 403, 'insufficient_permission', {
+                    slug: 'org.delete',
+                    scope: 'org'
                 });
             }
 

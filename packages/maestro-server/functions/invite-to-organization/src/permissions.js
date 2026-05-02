@@ -219,6 +219,49 @@ async function lookupOrgIdFromOffice(databases, env, editorialOfficeId) {
 }
 
 /**
+ * Office-tagság ellenőrzés egy adott `(userId, editorialOfficeId)` párra.
+ *
+ * Single-source-of-truth a defense-in-depth office-membership lookup-okhoz —
+ * 3 hívási hely között megosztott:
+ *   1. `buildPermissionSnapshot` member-path eleje (rogue `groupMembership`
+ *      privilege-eszkalációs felület lezárása).
+ *   2. `archive_workflow`/`restore_workflow` ownership-fallback (kilépett
+ *      creator a workflow-jára nem maradhat jogosult).
+ *   3. `update_workflow_metadata` visibility-ág ownership-fallback (ugyanaz).
+ *
+ * **Fail-closed**: env-hiány vagy DB-hiba esetén `false`, hogy az ownership-
+ * jog csendben ne adódjon meg. Az SDK runtime log-olja a HTTP exception-t —
+ * a hívóhelyek további logging-ja redundáns, és a Codex adversarial review
+ * (2026-05-02) szerint a fail-closed defense-in-depth **szándékosan** néma.
+ *
+ * @param {sdk.Databases} databases
+ * @param {Object} env - { databaseId, officeMembershipsCollectionId }
+ * @param {string} userId
+ * @param {string} editorialOfficeId
+ * @returns {Promise<boolean>}
+ */
+async function isStillOfficeMember(databases, env, userId, editorialOfficeId) {
+    if (!userId || !editorialOfficeId) return false;
+    const { databaseId, officeMembershipsCollectionId } = env;
+    if (!officeMembershipsCollectionId) return false;
+    try {
+        const list = await databases.listDocuments(
+            databaseId,
+            officeMembershipsCollectionId,
+            [
+                sdk.Query.equal('userId', userId),
+                sdk.Query.equal('editorialOfficeId', editorialOfficeId),
+                sdk.Query.select(['$id']),
+                sdk.Query.limit(1)
+            ]
+        );
+        return list.documents.length > 0;
+    } catch {
+        return false;
+    }
+}
+
+/**
  * User org-role lookup egy adott szervezetre. Per-request `orgRoleByOrg`
  * Map-pel cache-elt (a hívó adja át).
  *
@@ -279,8 +322,12 @@ async function getOrgRole(databases, env, userId, organizationId, orgRoleByOrg) 
  *
  * @param {Object} databases - sdk.Databases
  * @param {Object} env - { databaseId, officesCollectionId, membershipsCollectionId,
+ *                         officeMembershipsCollectionId,
  *                         groupMembershipsCollectionId, groupPermissionSetsCollectionId,
  *                         permissionSetsCollectionId }
+ *   Az `officeMembershipsCollectionId` opcionális, de erősen ajánlott —
+ *   defense-in-depth a member-path `groupMemberships` rogue write-tal szemben
+ *   (lásd a 4-es lépésben).
  * @param {Object} user - { id, labels?: string[] }
  * @param {string} editorialOfficeId
  * @param {Map<string, string|'owner'|'admin'|'member'|null>} [orgRoleByOrg]
@@ -323,10 +370,31 @@ async function buildPermissionSnapshot(databases, env, user, editorialOfficeId, 
         };
     }
 
-    const { databaseId, groupMembershipsCollectionId, groupPermissionSetsCollectionId, permissionSetsCollectionId } = env;
+    const { databaseId, groupMembershipsCollectionId, groupPermissionSetsCollectionId, permissionSetsCollectionId, officeMembershipsCollectionId } = env;
     if (!groupMembershipsCollectionId || !groupPermissionSetsCollectionId || !permissionSetsCollectionId) {
         // env hiánya → fail-closed üres set (member-pathon nincs jog)
         return { userId, editorialOfficeId, organizationId, orgRole, permissionSlugs: slugs, hasGlobalAdminLabel: false };
+    }
+
+    // **A.3.6 hardening (Codex adversarial review 2026-05-02 Critical fix)**:
+    //   Defense-in-depth `editorialOfficeMemberships` cross-check a
+    //   `isStillOfficeMember` shared helperrel. A `userHasPermission()`
+    //   member-path-on a `groupMemberships` collection-en alapul, és a
+    //   collection-ACL védi az integritást rendes körülmények között —
+    //   DE: egy out-of-band DB-write (Appwrite Console / direkt API key
+    //   script / kompromittált backup-restore) létrehozhat rogue
+    //   `groupMembership` rekordot anélkül, hogy a user `editorialOfficeMemberships`
+    //   tag lenne. Itt ezt explicit megakadályozzuk: ha a user nem tagja
+    //   az office-nak, member-path üres set (privilege-eszkalációs felület
+    //   lezárása). Az `officeMembershipsCollectionId` env-hiánya esetén az
+    //   `isStillOfficeMember` `false`-t ad — ami **fail-closed** member-pathon.
+    //   A `main.js` deploy-ban globálisan kötelezőként kezeli, így normál
+    //   esetben a guard érvényesül.
+    if (officeMembershipsCollectionId) {
+        const stillMember = await isStillOfficeMember(databases, env, userId, editorialOfficeId);
+        if (!stillMember) {
+            return { userId, editorialOfficeId, organizationId, orgRole, permissionSlugs: slugs, hasGlobalAdminLabel: false };
+        }
     }
 
     // groupMemberships lapozás (Codex review P1: 100+ csoport esetén csonkulás).
@@ -543,6 +611,7 @@ module.exports = {
 
     // Async helpers
     lookupOrgIdFromOffice,
+    isStillOfficeMember,
     getOrgRole,
     buildPermissionSnapshot,
     userHasPermission,

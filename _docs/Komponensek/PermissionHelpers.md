@@ -5,7 +5,9 @@ aliases: [PermissionHelpers, permissions.js, userHasPermission helper, userHasOr
 
 # PermissionHelpers — `permissions.js` modul
 
-> **Státusz**: Implemented (A.3.5, 2026-05-02). Server-side rész kész és deployable; kliens-oldali integráció A.4 (Dashboard) + A.5 (Plugin) hatáskör.
+> **Státusz**: Implemented (A.3.5 + A.3.6 retrofit + 2026-05-03 harden, deploy-ready). Server-side rész kész; kliens-oldali integráció A.4 (Dashboard) + A.5 (Plugin) hatáskör.
+>
+> **2026-05-03 harden Critical fix**: új `isStillOfficeMember()` helper export, és a `buildPermissionSnapshot` member-path elején `editorialOfficeMemberships` defense-in-depth cross-check. Két privilege-eszkalációs felület lezárva (rogue `groupMembership` write + kilépett creator ownership).
 
 ## Cél
 
@@ -45,11 +47,12 @@ A 38 slug részleteit a [[PermissionTaxonomy]] tartalmazza. Itt csak a kódbeli 
 | Helper | Funkció |
 |---|---|
 | `lookupOrgIdFromOffice(databases, env, officeId)` | `office.organizationId` lookup |
+| `isStillOfficeMember(databases, env, userId, officeId)` | **A.3.6 harden 2026-05-03**: defense-in-depth `editorialOfficeMemberships` lookup. Fail-closed boolean (env-hiány / DB-hiba → `false`). Single-source-of-truth a 3 hívóhelyen: `buildPermissionSnapshot` member-path, `archive_workflow`/`restore_workflow` ownership-fallback, `update_workflow_metadata` visibility-ág. |
 | `getOrgRole(databases, env, userId, orgId, orgRoleByOrg?)` | User org-role (`'owner' \| 'admin' \| 'member' \| null`). **Cache-kulcs: `${userId}::${orgId}`** (Codex Critical fix: cross-user leak elkerülése). **Hibára NEM cache-el** (Codex P2 fix: tranziens DB hiba ne fagyassza le a request engedélyezését). |
-| `buildPermissionSnapshot(databases, env, user, officeId, orgRoleByOrg?)` | Egyszer számol per office: `{userId, editorialOfficeId, organizationId, orgRole, permissionSlugs: Set<string>, hasGlobalAdminLabel}`. 1) Office → orgId, 2) user org-role, 3) **owner/admin shortcut** → 33 slug halmaz, 4) member-path → `groupMemberships` × `groupPermissionSets` × `permissionSets` (`Query.isNull('archivedAt')` szűrt). |
+| `buildPermissionSnapshot(databases, env, user, officeId, orgRoleByOrg?)` | Egyszer számol per office: `{userId, editorialOfficeId, organizationId, orgRole, permissionSlugs: Set<string>, hasGlobalAdminLabel}`. 1) Office → orgId, 2) user org-role, 3) **owner/admin shortcut** → 33 slug halmaz, 4) **`isStillOfficeMember` cross-check (rogue `groupMembership` lezárás, A.3.6 harden 2026-05-03)**, 5) member-path → `groupMemberships` × `groupPermissionSets` × `permissionSets` (`Query.isNull('archivedAt')` szűrt). |
 | `userHasPermission(databases, env, user, slug, officeId, snapshotsByOffice?, orgRoleByOrg?)` | Office-scope ellenőrzés. **Throw `org.*` slugra**. **Cache-kulcs: `${userId}::${officeId}`** (Codex Critical fix). |
 | `userHasOrgPermission(databases, env, user, slug, orgId, orgRoleByOrg?)` | Org-scope ellenőrzés. **Throw NEM `org.*`-ra**. Owner → mind az 5; admin → 3 (kivéve `org.delete`/`org.rename`). |
-| `createPermissionContext()` | `{ snapshotsByOffice: Map, orgRoleByOrg: Map }` per-request scaffold. A CF entry-pointja az elején hívja. |
+| `createPermissionContext()` | `{ snapshotsByOffice: Map, orgRoleByOrg: Map }` per-request scaffold. A CF entry-pointja az elején hívja. **Request-snapshot consistency**: a memoizált snapshot a CF-call teljes lifecycle-ja alatt él — egy mid-request permission-változás NEM látszik a request belül (szándékos). |
 
 ## Per-request memoizáció
 
@@ -65,6 +68,8 @@ Codex baseline review P1 fix: az összes lapozott `select()`-ben explicit szerep
 
 - A `buildPermissionSnapshot` member-pathon csak office-scope slug-ot vesz a Set-be (`OFFICE_SCOPE_PERMISSION_SLUG_SET.has(slug)` check) — DevTools / direkt DB write ellen véd.
 - `permissionSets.permissions[]` write-time validáció: `validatePermissionSetSlugs()` 400 `org_scope_slug_not_allowed` az `org.*`-ra (CF write-path + UI guard).
+- **`editorialOfficeMemberships` cross-check (A.3.6 harden 2026-05-03)**: az `isStillOfficeMember()` helper a member-path elején ellenőrzi, hogy a user tagja-e az office-nak. Egy out-of-band DB-write (Appwrite Console / direkt API key script / kompromittált backup-restore) létrehozhat rogue `groupMembership` rekordot anélkül, hogy a user `editorialOfficeMemberships`-tag lenne — a helper ezt a privilege-eszkalációs felületet zárja le.
+- **Kilépett creator membership-check**: a `workflow.share` és `workflow.archive` action-ök `createdBy === callerId` ownership-fallback-jét most az `isStillOfficeMember()` is gate-eli — egy kilépett user a workflow-jára nem maradhat jogosult.
 
 ## Default permission set seed
 
