@@ -137,7 +137,7 @@ maestro-server/
 | `cleanup-orphaned-thumbnails` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `THUMBNAILS_BUCKET_ID` |
 | `cleanup-archived-workflows` | `DATABASE_ID`, `WORKFLOWS_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, opcionálisan `ARCHIVED_RETENTION_DAYS` (default 7) |
 | `migrate-legacy-paths` | `DATABASE_ID`, `ARTICLES_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID`, `DRY_RUN` |
-| `invite-to-organization` | `DATABASE_ID`, `ORGANIZATIONS_COLLECTION_ID`, `ORGANIZATION_MEMBERSHIPS_COLLECTION_ID`, `EDITORIAL_OFFICES_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `ORGANIZATION_INVITES_COLLECTION_ID`, `GROUPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID` (csak a delete ágakhoz kell; hiánya esetén a `delete_organization` / `delete_editorial_office` / `delete_group` action 500 `misconfigured`-et ad, a többi action nem érintett), `ARTICLES_COLLECTION_ID` (csak `delete_group`-hoz kell a contributor scan miatt; hiánya esetén az action 500 `misconfigured`-et ad) |
+| `invite-to-organization` | `DATABASE_ID`, `ORGANIZATIONS_COLLECTION_ID`, `ORGANIZATION_MEMBERSHIPS_COLLECTION_ID`, `EDITORIAL_OFFICES_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `ORGANIZATION_INVITES_COLLECTION_ID`, `GROUPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID`, `WORKFLOWS_COLLECTION_ID`, `PUBLICATIONS_COLLECTION_ID` (csak a delete ágakhoz kell; hiánya esetén a `delete_organization` / `delete_editorial_office` / `delete_group` action 500 `misconfigured`-et ad, a többi action nem érintett), `ARTICLES_COLLECTION_ID` (csak `delete_group`-hoz kell a contributor scan miatt; hiánya esetén az action 500 `misconfigured`-et ad), `PERMISSION_SETS_COLLECTION_ID` és `GROUP_PERMISSION_SETS_COLLECTION_ID` (csak a `bootstrap_permission_sets_schema` action-höz kötelezőek — A.1 / ADR 0008) |
 
 ---
 
@@ -289,7 +289,7 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 
 **Bemeneti payload**:
 ```json
-{ "action": "bootstrap_organization" | "create_organization" | "create" | "accept" | "list_my_invites" | "decline_invite" | "leave_organization" | "add_group_member" | "remove_group_member" | "create_workflow" | "update_workflow" | "update_workflow_metadata" | "delete_workflow" | "duplicate_workflow" | "archive_workflow" | "restore_workflow" | "bootstrap_workflow_schema" | "bootstrap_publication_schema" | "delete_organization" | "delete_editorial_office" | "backfill_tenant_acl", ... }
+{ "action": "bootstrap_organization" | "create_organization" | "create" | "accept" | "list_my_invites" | "decline_invite" | "leave_organization" | "add_group_member" | "remove_group_member" | "create_workflow" | "update_workflow" | "update_workflow_metadata" | "delete_workflow" | "duplicate_workflow" | "archive_workflow" | "restore_workflow" | "bootstrap_workflow_schema" | "bootstrap_publication_schema" | "bootstrap_permission_sets_schema" | "delete_organization" | "delete_editorial_office" | "backfill_tenant_acl", ... }
 ```
 
 **Biztonsági megjegyzés**: Korábban létezett egy `organization-membership-guard` trigger CF, amely egy `modifiedByClientId === 'server-guard'` sentinellel engedélyezte az invite-eredetű membership-eket. Ez **kliens-forgeable** volt — bármely hitelesített user beállíthatta a payload-ban. A Codex adversarial review jelezte a kritikus sebezhetőséget, és a javítás ACL-alapú védelemre váltott (B.5 utolsó iteráció, 2026-04-07).
@@ -482,6 +482,16 @@ Két új attribútum a `workflows` collection-ön:
 - Owner-only (any org-ban owner role elég).
 - `databases.createStringAttribute(publications, 'compiledWorkflowSnapshot', 1_000_000, required=false, default=null)` — 409 catch → skip.
 - A mezőt a `validate-publication-update` CF §5a írja aktiválási sikeres átmenetnél (a workflow `compiled` JSON pillanatképe). Onnantól immutable (§6b guard). Legacy (snapshot nélküli) aktív publikációkon null marad — a Plugin a `workflowId` cache-re fallback-el (Feladat #38).
+
+**Idempotens permission set schema bootstrap** — `bootstrap_permission_sets_schema` CF action (A.1 / ADR 0008):
+- Owner-only (any org-ban owner role elég).
+- Két új collection (`permissionSets` + `groupPermissionSets`) idempotens létrehozása `documentSecurity: true` flaggel. A collection-szintű perms üres — a doc-szintű team ACL ad olvasási jogot (ADR 0003 minta szerint). A 409 / "already exists" → `skipped`, a hiba propagál minden más esetre.
+- `permissionSets` attribútumok: `name`, `slug`, `description`, `permissions[]` (string array), `editorialOfficeId`, `organizationId`, `archivedAt`, `createdByUserId`. Indexek: `office_slug_unique`, `office_idx`, `org_idx`.
+- `groupPermissionSets` (m:n junction) attribútumok: `groupId`, `permissionSetId`, `editorialOfficeId`, `organizationId`. Indexek: `group_set_unique`, `office_idx`, `group_idx`, `set_idx`.
+- Action-szintű env var guard: `PERMISSION_SETS_COLLECTION_ID` + `GROUP_PERMISSION_SETS_COLLECTION_ID` — csak ezen az action-ön kötelezőek; a többi action működése érintetlen.
+- A default permission set-ek (`owner_base`, `admin_base`, `member_base`) seedelése **NEM ennek az action-nek a feladata** — A.3.2 alatt a `bootstrap_organization` kibővítése fogja végezni.
+- Aszinkron Appwrite attribute processing miatt az index-create első futáson 400-zal elbukhat (`indexesPending`) — a user 10s múlva újra futtatja az action-t (idempotens).
+- Deploy után a Console-on ellenőrizendő: a két új collection `rowSecurity` flag-je aktív (különben a doc-szintű ACL nem érvényesül).
 
 **Snapshot-preferáló workflow lookup** (CF hardening, #37):
 - `update-article` CF `getWorkflowForPublication()` — ha a publikációnak van `compiledWorkflowSnapshot`-ja, a CF kizárólag azt parse-olja (snap cache kulcs: `snap:${pubId}:${length}`). Csak snapshot hiányában / parse hibánál esik vissza a live `workflowId` lookup-ra. A workflow Dashboard-oldali módosításai így NEM érintik az aktivált publikáció cikk-validációit.

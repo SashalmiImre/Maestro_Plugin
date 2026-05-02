@@ -40,11 +40,12 @@ Közös modal a workflow-könyvtár megnyitásához két különböző kontextus
 
 ## Gotchas / döntések
 - **`disabled` chip + tooltip**: ha a user új szervezetnél van, ahol nincs office, vagy "legacy default office" + 0 publikáció → a breadcrumb chip `disabled`, magyarázó tooltip. Részletek: [[Hibaelhárítás#Office nélküli szervezetre váltás után stale publikáció / workflow state]].
-- **`canCreateWorkflow` role-gate**: csak owner/admin az aktív office org-jában láthatja a "+ Új workflow" / "Duplikál & szerkeszt" CTA-kat. Member-user kérje az ownertől (ld. ADR 0006 #88).
+- **`canCreateWorkflow` role-gate**: csak owner/admin az aktív office org-jában láthatja a "+ Új workflow" / "Duplikál & szerkeszt" CTA-kat. Member-user kérje az ownertől (ld. ADR 0006 #88). **Megjegyzés**: a [[Döntések/0008-permission-system-and-workflow-driven-groups|ADR 0008]] implementációja után a role-gate átáll `userHasPermission(user, 'workflow.create' / 'workflow.duplicate', editorialOfficeId)`-ra.
 - **Idegen workflow**: a "Megnyit" akció read-only módba navigál; mentés-kísérlet "Más néven mentés" flow-ra vált.
+- **Workflow-hozzárendelés autoseed (terv)**: ADR 0008 szerint a publikáció-hozzárendelés pillanatában a workflow `compiled.requiredGroupSlugs[]` minden slug-jára autoseed `groups` doc létrehozás (idempotens, üres tagsággal).
 - A scope chip-csoport mintájára a Dashboard egyéb felületein is használható **újrafelhasználható UI elem** lehet a jövőben (Feladatok #N-01).
 
 ## Kapcsolódó
-- ADR: [[Döntések/0006-workflow-lifecycle-scope]]
-- Komponensek: [[DataContext]], [[useOrgRole]], [[RealtimeBus]], [[WorkflowStateColors]]
+- ADR: [[Döntések/0006-workflow-lifecycle-scope]], [[Döntések/0008-permission-system-and-workflow-driven-groups]] (jövőbeli `userHasPermission()` integráció + autoseed flow)
+- Komponensek: [[DataContext]], [[useOrgRole]], [[RealtimeBus]], [[WorkflowStateColors]], [[PermissionTaxonomy]]
 - Csomag: [[Csomagok/dashboard-workflow-designer]]

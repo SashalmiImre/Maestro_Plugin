@@ -4,7 +4,7 @@
  * JSON formátumú export és import logika a workflow designerhez.
  */
 
-import { graphToCompiled, extractGraphData, compiledToGraph } from './compiler.js';
+import { graphToCompiled, extractGraphData } from './compiler.js';
 
 /**
  * Workflow exportálása JSON fájlba.
@@ -132,13 +132,3 @@ export function computeImportDiff(currentNodes, currentEdges, currentMetadata, i
     return { addedStates, removedStates, changedTransitions, metadataChanges };
 }
 
-/**
- * Import alkalmazása — compiledToGraph-on keresztül.
- *
- * @param {Object} importedCompiled
- * @param {Object|null} importedGraph
- * @returns {{ nodes: Object[], edges: Object[], metadata: Object, viewport: Object|null }}
- */
-export function applyImport(importedCompiled, importedGraph) {
-    return compiledToGraph(importedCompiled, importedGraph);
-}

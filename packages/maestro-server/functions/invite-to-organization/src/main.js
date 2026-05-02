@@ -124,6 +124,10 @@ const {
  * - GROUP_MEMBERSHIPS_COLLECTION_ID
  * - WORKFLOWS_COLLECTION_ID
  * - PUBLICATIONS_COLLECTION_ID (Fázis 8 — a delete_* action-ökhöz)
+ * - PERMISSION_SETS_COLLECTION_ID (A.1 / ADR 0008 — csak a
+ *   `bootstrap_permission_sets_schema` action-höz)
+ * - GROUP_PERMISSION_SETS_COLLECTION_ID (A.1 / ADR 0008 — csak a
+ *   `bootstrap_permission_sets_schema` action-höz)
  */
 
 /**
@@ -146,6 +150,7 @@ const VALID_ACTIONS = new Set([
     'create_group', 'rename_group', 'delete_group',
     'bootstrap_workflow_schema',
     'bootstrap_publication_schema',
+    'bootstrap_permission_sets_schema',
     'create_workflow', 'update_workflow',
     'update_workflow_metadata',
     'delete_workflow', 'duplicate_workflow',
@@ -648,6 +653,12 @@ module.exports = async function ({ req, res, log, error }) {
         // Fázis 9 — a delete_group action contributor-scan ellenőrzéshez kell
         // (articles.contributors JSON slug-kulcsokat tárol). Action-szintű guard.
         const articlesCollectionId = process.env.ARTICLES_COLLECTION_ID;
+        // A.1 (ADR 0008) — a `bootstrap_permission_sets_schema` action két új
+        // collectiont hoz létre. Mindkét env var **csak ezen az action-en**
+        // kötelező, ezért action-szintű guard (mintha a publications/articles
+        // env-ek). A többi meglévő action működése ettől független.
+        const permissionSetsCollectionId = process.env.PERMISSION_SETS_COLLECTION_ID;
+        const groupPermissionSetsCollectionId = process.env.GROUP_PERMISSION_SETS_COLLECTION_ID;
 
         // ── Fail-fast env var guard ──
         const missingEnvVars = [];
@@ -2766,6 +2777,189 @@ module.exports = async function ({ req, res, log, error }) {
                 created,
                 skipped,
                 note: 'Az attribútum feldolgozása ~5-10s. Várj a publikáció aktiválás előtt.'
+            });
+        }
+
+        // ════════════════════════════════════════════════════════
+        // ACTION = 'bootstrap_permission_sets_schema'
+        // ════════════════════════════════════════════════════════
+        //
+        // A.1 (ADR 0008) — két új collection idempotens létrehozása a
+        // jogosultság-csoport (permissionSet) réteghez. A `bootstrap_workflow_schema`
+        // mintáját követi: owner-only, 409 → skip, `created`/`skipped`/`indexesPending`
+        // listák a response-ban.
+        //
+        // Doc-szintű ACL (ADR 0003): collection perms üres + `documentSecurity: true`,
+        // a read-jogot a doc-onkénti `team:office_${officeId}` adja. Deploy után a
+        // Console-on ellenőrizendő, hogy a `rowSecurity` flag aktív (különben a
+        // doc-ACL nem érvényesül).
+        if (action === 'bootstrap_permission_sets_schema') {
+            // 1. Caller legalább egy org owner-e
+            const ownerships = await databases.listDocuments(
+                databaseId,
+                membershipsCollectionId,
+                [
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.equal('role', 'owner'),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (ownerships.documents.length === 0) {
+                return fail(res, 403, 'insufficient_role', {
+                    requiredRole: 'owner'
+                });
+            }
+
+            // 2. Action-szintű env var guard (csak itt kötelező).
+            const missingActionEnvVars = [];
+            if (!permissionSetsCollectionId) {
+                missingActionEnvVars.push('PERMISSION_SETS_COLLECTION_ID');
+            }
+            if (!groupPermissionSetsCollectionId) {
+                missingActionEnvVars.push('GROUP_PERMISSION_SETS_COLLECTION_ID');
+            }
+            if (missingActionEnvVars.length > 0) {
+                return fail(res, 500, 'misconfigured', {
+                    missing: missingActionEnvVars
+                });
+            }
+
+            const created = [];
+            const skipped = [];
+            const indexesPending = [];
+
+            // ── Lokális helperek (csak ezen az action-en belül) ──────────
+            // A 3 ismétlődő boilerplate egységesítése: collection-create,
+            // attribute-create-loop, index-create-loop. Az `isAlreadyExists`
+            // a 409 / "already exists" idempotens skip-feltételt fedi.
+            const isAlreadyExists = (err) =>
+                err?.code === 409 || /already exists/i.test(err?.message || '');
+
+            const ensureCollection = async (colId, label) => {
+                try {
+                    await databases.createCollection(databaseId, colId, label, [], true, true);
+                    created.push(`collection:${label}`);
+                    return true;
+                } catch (err) {
+                    if (isAlreadyExists(err)) {
+                        skipped.push(`collection:${label}`);
+                        return true;
+                    }
+                    error(`[BootstrapPermissionSetsSchema] ${label} collection létrehozás hiba: ${err.message}`);
+                    return fail(res, 500, 'schema_collection_failed', { collection: label, error: err.message });
+                }
+            };
+
+            const ensureAttributes = async (colId, label, attrs) => {
+                for (const attr of attrs) {
+                    try {
+                        if (attr.kind === 'datetime') {
+                            await databases.createDatetimeAttribute(databaseId, colId, attr.name, attr.required, null, false);
+                        } else {
+                            await databases.createStringAttribute(databaseId, colId, attr.name, attr.size, attr.required, null, attr.array === true);
+                        }
+                        created.push(`${label}.${attr.name}`);
+                    } catch (err) {
+                        if (isAlreadyExists(err)) {
+                            skipped.push(`${label}.${attr.name}`);
+                        } else {
+                            error(`[BootstrapPermissionSetsSchema] ${label}.${attr.name} attribútum hiba: ${err.message}`);
+                            return fail(res, 500, 'schema_attribute_failed', { collection: label, attribute: attr.name, error: err.message });
+                        }
+                    }
+                }
+                return true;
+            };
+
+            const ensureIndexes = async (colId, label, indexes) => {
+                for (const idx of indexes) {
+                    try {
+                        await databases.createIndex(databaseId, colId, idx.key, idx.type, idx.attrs);
+                        created.push(`${label}.index:${idx.key}`);
+                    } catch (err) {
+                        const msg = err?.message || '';
+                        if (isAlreadyExists(err)) {
+                            skipped.push(`${label}.index:${idx.key}`);
+                        } else if (err?.code === 400 && /not available|processing|unknown attribute/i.test(msg)) {
+                            // Az aszinkron attribute-feldolgozás 400-at pending-re
+                            // tesszük, egyéb 400 (érvénytelen index név, inkompatibilis
+                            // attribute típus stb.) propagáljon — ne nyelje el a driftet.
+                            indexesPending.push(`${label}.${idx.key}`);
+                        } else {
+                            error(`[BootstrapPermissionSetsSchema] ${label}.index:${idx.key} hiba: ${err.message}`);
+                            return fail(res, 500, 'schema_index_failed', { collection: label, index: idx.key, error: err.message });
+                        }
+                    }
+                }
+                return true;
+            };
+
+            // ── permissionSets ──────────────────────────────────────────
+            // A `permissions` egy string tömb — egy slug max 100 char
+            // (`<resource>.<sub>.<action>` formátum bőven elfér). Az
+            // `archivedAt` nullable (soft-delete marker).
+            const permissionSetsAttrs = [
+                { name: 'name',              kind: 'string',   size: 100,  required: true },
+                { name: 'slug',              kind: 'string',   size: 100,  required: true },
+                { name: 'description',       kind: 'string',   size: 500,  required: false },
+                { name: 'permissions',       kind: 'string',   size: 100,  required: true,  array: true },
+                { name: 'editorialOfficeId', kind: 'string',   size: 36,   required: true },
+                { name: 'organizationId',    kind: 'string',   size: 36,   required: true },
+                { name: 'archivedAt',        kind: 'datetime',             required: false },
+                { name: 'createdByUserId',   kind: 'string',   size: 36,   required: false }
+            ];
+            // Az `office_slug_unique` egy office-on belül slug-ütközést
+            // akadályoz; az `office_idx` / `org_idx` a Realtime + listing
+            // query-khez kell.
+            const permissionSetsIndexes = [
+                { key: 'office_slug_unique', type: 'unique', attrs: ['editorialOfficeId', 'slug'] },
+                { key: 'office_idx',         type: 'key',    attrs: ['editorialOfficeId'] },
+                { key: 'org_idx',            type: 'key',    attrs: ['organizationId'] }
+            ];
+
+            const psCol = await ensureCollection(permissionSetsCollectionId, 'permissionSets');
+            if (psCol !== true) return psCol;
+            const psAttrs = await ensureAttributes(permissionSetsCollectionId, 'permissionSets', permissionSetsAttrs);
+            if (psAttrs !== true) return psAttrs;
+            const psIdx = await ensureIndexes(permissionSetsCollectionId, 'permissionSets', permissionSetsIndexes);
+            if (psIdx !== true) return psIdx;
+
+            // ── groupPermissionSets (m:n junction) ──────────────────────
+            const groupPermissionSetsAttrs = [
+                { name: 'groupId',           kind: 'string', size: 36, required: true },
+                { name: 'permissionSetId',   kind: 'string', size: 36, required: true },
+                { name: 'editorialOfficeId', kind: 'string', size: 36, required: true },
+                { name: 'organizationId',    kind: 'string', size: 36, required: true }
+            ];
+            // A `group_set_unique` (groupId, permissionSetId) páronként egy
+            // junction doc-ot enged — duplikátum-blokk. A többi index a
+            // Realtime/lookup útvonalakhoz.
+            const groupPermissionSetsIndexes = [
+                { key: 'group_set_unique', type: 'unique', attrs: ['groupId', 'permissionSetId'] },
+                { key: 'office_idx',       type: 'key',    attrs: ['editorialOfficeId'] },
+                { key: 'group_idx',        type: 'key',    attrs: ['groupId'] },
+                { key: 'set_idx',          type: 'key',    attrs: ['permissionSetId'] }
+            ];
+
+            const gpsCol = await ensureCollection(groupPermissionSetsCollectionId, 'groupPermissionSets');
+            if (gpsCol !== true) return gpsCol;
+            const gpsAttrs = await ensureAttributes(groupPermissionSetsCollectionId, 'groupPermissionSets', groupPermissionSetsAttrs);
+            if (gpsAttrs !== true) return gpsAttrs;
+            const gpsIdx = await ensureIndexes(groupPermissionSetsCollectionId, 'groupPermissionSets', groupPermissionSetsIndexes);
+            if (gpsIdx !== true) return gpsIdx;
+
+            log(`[BootstrapPermissionSetsSchema] User ${callerId}: created=[${created.join(',')}] skipped=[${skipped.join(',')}] indexesPending=[${indexesPending.join(',')}]`);
+
+            const note = indexesPending.length > 0
+                ? 'Az attribútumok feldolgozása ~5-10s. Futtasd újra az action-t amíg az indexesPending lista kiürül.'
+                : 'A schema kész. A következő lépés (A.3.2): bootstrap_organization kibővítése default permission set-ek seedelésével.';
+
+            return res.json({
+                success: true,
+                created,
+                skipped,
+                indexesPending,
+                note
             });
         }
 

@@ -1,5 +1,14 @@
 {
   "version": 1,
+  "requiredGroupSlugs": [
+    { "slug": "editors",          "label": "Szerkesztők",        "description": "Szövegszerkesztés, jóváhagyás.",        "color": "#A0E0FF", "isContributorGroup": true,  "isLeaderGroup": false },
+    { "slug": "designers",        "label": "Tervezők",           "description": "Tördelés, layout készítés.",            "color": "#FFEA00", "isContributorGroup": true,  "isLeaderGroup": false },
+    { "slug": "writers",          "label": "Szerzők",            "description": "Cikkek szövegét írják.",                "color": "#B5E0A0", "isContributorGroup": true,  "isLeaderGroup": false },
+    { "slug": "image_editors",    "label": "Képszerkesztők",     "description": "Képek beszerzése, retusálás.",          "color": "#A0FFE0", "isContributorGroup": true,  "isLeaderGroup": false },
+    { "slug": "art_directors",    "label": "Művészeti vezetők",  "description": "Tervezési csapat vezetése.",            "color": "#FF8C61", "isContributorGroup": true,  "isLeaderGroup": true  },
+    { "slug": "managing_editors", "label": "Vezetőszerkesztők",  "description": "Szerkesztőségi folyamat felügyelete.",  "color": "#FF8888", "isContributorGroup": true,  "isLeaderGroup": true  },
+    { "slug": "proofwriters",     "label": "Korrektorok",        "description": "Korrektúra, helyesírás-ellenőrzés.",    "color": "#C5A0FF", "isContributorGroup": true,  "isLeaderGroup": false }
+  ],
   "states": [
     {
       "id": "designing",

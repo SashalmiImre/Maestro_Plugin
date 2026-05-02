@@ -63,3 +63,18 @@ tags: [referencia]
 | **`archivedAt`** | Soft-delete mező — 7 napos retention, `cleanup-archived-workflows` napi cron |
 | **`buildWorkflowAclPerms()`** | Doc-szintű ACL helper a `workflows` collection-höz (Fázis 2 minta kiterjesztése) |
 | **`ext.<slug>` prefix** | Workflow JSON `validations` / `commands` listájában custom extension hivatkozás |
+
+## Jogosultsági rendszer (Proposed — [[Döntések/0008-permission-system-and-workflow-driven-groups]])
+
+| Fogalom | Leírás |
+|---------|--------|
+| **Felhasználó-csoport** | Szerkesztőség-szintű csoport (`groups` collection, [[Döntések/0002-fazis2-dynamic-groups|ADR 0002]]) — workflow-driven slug, autoseed-elődik hozzárendeléskor / aktiváláskor |
+| **Jogosultság-csoport** (permission set) | `permissionSets` collection — coarse permission slug-ok logikai csoportja, m:n kapcsolat felhasználó-csoportokhoz |
+| **Permission slug** | `<resource>.<action>` formátumú azonosító (pl. `workflow.state.edit`) — egy CF-action-szerű művelet engedélyezésére. Két scope: 5 org-scope (`org.*` — kizárólag `organizationMemberships.role`-ból) + 33 office-scope (`permissionSets`-en át). Részletes lista: [[Komponensek/PermissionTaxonomy]] |
+| **`requiredGroupSlugs[]`** | Workflow `compiled` JSON top-level mezője — a workflow által hivatkozott összes felhasználó-csoport kanonikus listája `{slug, label, description, color, isContributorGroup, isLeaderGroup}` formában. A többi slug-mező (`transitions.allowedGroups`, `commands.allowedGroups`, `elementPermissions.*.*.groups`, `leaderGroups`, `statePermissions.*`, `contributorGroups`, `capabilities.*`) ennek subset-je |
+| **Autoseed (csoport)** | Hozzárendeléskor / aktiváláskor a hiányzó `requiredGroupSlugs[]` elemekre üres `groups` doc létrehozás (idempotens) — a `slug` + `label` + `description` + `color` + `isContributorGroup` + `isLeaderGroup` mezők átvételével |
+| **Slug immutable** | A `groups.slug` ID-szerű — csak a `label`, `description`, `color`, `isContributorGroup`, `isLeaderGroup` szerkeszthetőek (workflow-hivatkozás stabilitása) |
+| **`userHasPermission()`** / **`userHasOrgPermission()`** | Két shared helper (`packages/maestro-shared/permissions.js`). Office-scope (33 slug): admin label → `organizationMemberships.role` → permission set lookup. Org-scope (5 slug): admin label → `organizationMemberships.role` only (member-nek nincs `org.*` slug-ja). |
+| **`groupPermissionSets`** | M:n junction collection — `groupId` ↔ `permissionSetId` |
+| **`empty_required_groups` (409)** | Aktiválás-blokkoló error, ha valamely `requiredGroupSlugs` slug-ban nincs tag |
+| **`group_in_use` (409)** | Csoport-törlés blokkoló error, ha aktív pub vagy nem-archivált workflow `requiredGroupSlugs`-ban szerepel |

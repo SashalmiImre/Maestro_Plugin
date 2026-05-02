@@ -28,8 +28,51 @@ Egy átfogóbb leírást szeretnék a Maestro működéséről adni neked. Ha el
 
 
 #### **Dashboard UI redesign**
-Alapvetően a Stitch által létrehozott irányt megfelelőnek találom, a te észrevételeidet szeretném a sajátjaimmal kiegészíteni. 
 
+Alapvetően a Stitch által létrehozott irányt megfelelőnek találom, a te észrevételeidet szeretném a sajátjaimmal kiegészíteni.
 
+**Megőrzendő:** világos és sötét téma kezelése továbbra is kell — mindkét variánst meg kell tartani (Editorial OS dark + light megfelelője).
 
-  
+**Általános benyomás:** a dark „Editorial OS" identitás iránya jó (No-Line szabály, tonal layering, state badge pattern a helyén). Stitch projekt: `1419785137701042796`, 5 screen áttekintve 2026-04-22-én. A Table View két variánsa közül a **v2 markánsan jobb UX-ileg**, érdemes erre építeni.
+
+**Table View** (v2 irányra építeni):
+- *Kiemelendő:* relatív idő labelek átveendők (`Ma 09:00`, `Holnap 12:00`, `Péntek 10:00`).
+- Cikkcím alatt subtitle (rovat / típus) — jó info-density.
+- Ikonos HUD + „MŰVELETEK" label tisztább.
+- „CSAK SAJÁT" uppercase toggle felesleges — sentence case elég.
+- Nav címkék magyarosítandók (a generált screen-en angolok voltak).
+- A sidebar a valós 5 itemmel jelenjen meg: Cikkek / Layout / Workflow / Felhasználók / Beállítások (a generált 7 helyett).
+- State badge-ekről hiányzik a soft glow drop-shadow — visszahozandó (ne lapos solid pill).
+- Alsó HUD ne legyen zsúfolt, kijelölésszám is látsszon.
+
+**Flatplan:**
+- A layout kódok egybetűsek (A, B, C, D…) — nem „Section A/B/C" tab.
+- Cover spread vizuális hangsúly OK (helyes editorial döntés).
+- A spread-kártyák kerettelenebbek legyenek a No-Line szabály szerint.
+- Alsó progress bar (`17/48 oldal · 8%`) jó forma.
+
+**Workflow Designer** (a legerősebb screen):
+- Háromosztat (paletta + canvas + properties sidebar) tartandó.
+- Selected node accent ring, edge label-ek, minimap, danger action OK.
+- Magyar palette címkék (ÁLLAPOTOK / SZEREPLŐK / VALIDÁCIÓK) OK.
+- Canvas kissé üres volt — a kért 7 állapotból csak 5 jelent meg a generálásnál.
+
+**Publication Settings modal** (a leggyengébb iteráció):
+- Coverage bar, tab active underline, warning tile OK.
+- Hiányzik a kért **timeline vizualizáció** — csak az „Ütemezés áttekintése" fejléc van, alatta üres.
+- A 3. kártya warning státusza túl visszafogott, nem olvasható első ránézésre.
+
+**Hiányzó / regenerálandó screenek:**
+- Login flow.
+- Workflow Library Panel (korábbi N-01 task → [[Komponensek/WorkflowLibrary]]).
+- Organization Settings / Editorial Office Groups Matrix.
+- Create Publication modal.
+
+**Javasolt következő iteráció:**
+1. Table View regenerálás v2 irányban (relatív idő + subtitle + ikonos HUD).
+2. Publication Settings modal újragenerálása timeline-nal.
+3. Flatplan: layout kódok javítása.
+4. Light theme variáns generálása a megerősített dark v2 base-ről (`apply_design_system` a legjobb screenekre).
+5. A fenti hiányzó screenek generálása.
+
+> Megj.: a Workflow Designer Fázis 0-hoz külön Stitch projekt (`6473627341647079144`) is van — annak részletes annotációi és „Eltérés a tervtől" észrevételei a [[workflow-designer/stitch-screens/README|stitch-screens]] mappában olvashatók. Az itteni Dashboard UI redesign attól független iteráció.

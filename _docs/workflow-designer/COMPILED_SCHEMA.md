@@ -10,6 +10,7 @@
 ```jsonc
 {
   "version": 12,                              // monoton növekvő, auto-inkrementált mentéskor
+  "requiredGroupSlugs": [ /* a workflow által hivatkozott felhasználó-csoportok deklarált listája */ ],
   "states": [ /* állapotok */ ],
   "transitions": [ /* átmenetek */ ],
   "validations": { /* state → validátor lista */ },
@@ -21,6 +22,35 @@
   "capabilities": { /* exkluzív capability → csoport slug-ok */ }
 }
 ```
+
+---
+
+## `requiredGroupSlugs`
+
+> Bevezetve: [[Döntések/0008-permission-system-and-workflow-driven-groups|ADR 0008]] — workflow-driven csoport-paradigma.
+
+A workflow **összes hivatkozott felhasználó-csoport slug-jának** kanonikus listája — a célszerkesztőségben az autoseed flow ezekből hoz létre `groups` doc-okat hozzárendeléskor / aktiváláskor.
+
+```jsonc
+[
+  {
+    "slug": "designers",                       // egyedi szerkesztőségen belül
+    "label": "Tervezők",                       // megjelenített név → groups.label
+    "description": "A magazin tördelőcsapata", // → groups.description
+    "color": "#FFEA00",                        // → groups.color (UI badge)
+    "isContributorGroup": true,                // → groups.isContributorGroup (compiled.contributorGroups-be is bekerül)
+    "isLeaderGroup": false                     // → groups.isLeaderGroup (compiled.leaderGroups-be is bekerül)
+  },
+  { "slug": "editors",          "label": "Szerkesztők", "description": "...", "color": "#A0E0FF", "isContributorGroup": true, "isLeaderGroup": false },
+  { "slug": "managing_editors", "label": "Vezetőszerkesztők", "description": "...", "color": "#FF8888", "isContributorGroup": false, "isLeaderGroup": true }
+]
+```
+
+**Szabályok**:
+- A workflow összes többi mezőjében (`transitions[].allowedGroups`, `commands[*].allowedGroups`, `elementPermissions.*.*.groups`, `leaderGroups`, `statePermissions.*`, `contributorGroups[].slug`, `capabilities.*`) **csak olyan slug** szerepelhet, amely a `requiredGroupSlugs[].slug` halmaz eleme. A compiler validátor blokkolja a mentést, ha valamely hivatkozott slug hiányzik.
+- A `compiled.contributorGroups[]` és `compiled.leaderGroups[]` **nem szerkeszthetőek külön** — a compiler ezeket a `requiredGroupSlugs`-ban szereplő `isContributorGroup` / `isLeaderGroup` flag-ekből generálja.
+- Az **autoseed flow** ([[Döntések/0008-permission-system-and-workflow-driven-groups]]): publikáció-hozzárendelés / aktiválás pillanatában minden `requiredGroupSlugs[]` elem-re, ha nincs `groups` doc a célszerkesztőségben, **autoseed** a `slug` + `label` + `description` + `color` + `isContributorGroup` + `isLeaderGroup` mezők átvételével (üres `groupMemberships`-szel).
+- A **`slug` immutable** a `groups` doc-ban — átnevezés csak a `label` és `description` mezőkre. A workflow Designer-ben a `requiredGroupSlugs[].slug` szerkeszthető (új workflow-revízió mentéskor a meglévő slug-ok vagy maradnak, vagy új slug-ot vesznek fel — törlés engedett, ha nincs hivatkozó mező).
 
 ---
 
@@ -171,7 +201,7 @@ A `ContributorsSection` dinamikusan loop-ol ezen a tömbön → minden elemhez e
 
 A `publications.defaultContributors` ugyanezt a formát használja.
 
-**Szabály**: Csak azok a csoportok szerepelhetnek itt, amelyeknek a `groups.isContributorGroup: true`. A designer `compiler.js`-e ezt ellenőrzi.
+**Szabály**: Csak azok a csoportok szerepelhetnek itt, amelyeknek a `requiredGroupSlugs[].isContributorGroup: true` (lásd `requiredGroupSlugs` szakasz). A designer `compiler.js`-e ezt automatikusan generálja.
 
 ---
 
@@ -189,7 +219,7 @@ A leader csoportok tagjai:
 - **Bármely** contributor dropdown-t szerkeszthetik.
 - **Minden** `elementPermissions.*.*.type === "groups"` ellenőrzést átlépnek.
 
-A leader csoportok listáját a compiler a `groups.isLeaderGroup: true` flag-ekből generálja.
+A leader csoportok listáját a compiler a `requiredGroupSlugs[].isLeaderGroup: true` flag-ekből generálja (lásd `requiredGroupSlugs` szakasz).
 
 ---
 
@@ -258,6 +288,11 @@ Egy három állapotú mini workflow (csak illusztráció):
 ```json
 {
   "version": 1,
+  "requiredGroupSlugs": [
+    { "slug": "authors",   "label": "Szerző",     "description": "Cikkeket ír.",        "color": "#A0E0FF", "isContributorGroup": true,  "isLeaderGroup": false },
+    { "slug": "reviewers", "label": "Lektor",     "description": "Cikkeket ellenőriz.", "color": "#FFA500", "isContributorGroup": false, "isLeaderGroup": false },
+    { "slug": "editors",   "label": "Szerkesztő", "description": "Felügyeli a folyamatot.", "color": "#FF8888", "isContributorGroup": false, "isLeaderGroup": true }
+  ],
   "states": [
     { "id": "draft",  "label": "Piszkozat", "color": "#CCCCCC",
       "duration": { "perPage": 30, "fixed": 0 }, "isInitial": true,  "isTerminal": false },

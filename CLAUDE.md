@@ -18,16 +18,16 @@ Cross-project hatás táblázat: [WORKSPACE.md](WORKSPACE.md).
 ## Tudástár belépési pontok (`_docs/`)
 A projekt egyben Obsidian vault is — a gyökér `.obsidian/` a vault root, az `_docs/` a fő tudásmappa. Wikilinkek (`[[Note]]`) működnek a `packages/`-be is.
 
-| Kérdés | Hova menj |
-|---|---|
-| "Mit jelent X fogalom?" | [_docs/Szószedet.md](_docs/Szószedet.md) |
-| "Hogy néz ki a rendszer?" | [_docs/Architektúra.md](_docs/Architektúra.md), [_docs/Hálózat.md](_docs/Hálózat.md), [_docs/Munkafolyamat.md](_docs/Munkafolyamat.md) |
-| "X komponens belső működése?" | [_docs/Komponensek/](_docs/Komponensek/) (atomic notes) |
-| "Volt már ilyen bug? Workaround?" | [_docs/Hibaelhárítás.md](_docs/Hibaelhárítás.md) |
-| "Miért így van ez a döntés?" | [_docs/Döntések/](_docs/Döntések/) (ADR-ek) |
-| "Mit csináltunk YYYY-MM-DD-án?" | [_docs/Naplók/](_docs/Naplók/) |
-| "Miben kell most dolgozni?" | [_docs/Feladatok.md](_docs/Feladatok.md) |
-| "Mit terveztünk?" | [_docs/Tervek.md](_docs/Tervek.md) |
+| Kérdés                            | Hova menj                                                                                                                              |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| "Mit jelent X fogalom?"           | [_docs/Szószedet.md](_docs/Szószedet.md)                                                                                               |
+| "Hogy néz ki a rendszer?"         | [_docs/Architektúra.md](_docs/Architektúra.md), [_docs/Hálózat.md](_docs/Hálózat.md), [_docs/Munkafolyamat.md](_docs/Munkafolyamat.md) |
+| "X komponens belső működése?"     | [_docs/Komponensek/](_docs/Komponensek/) (atomic notes)                                                                                |
+| "Volt már ilyen bug? Workaround?" | [_docs/Hibaelhárítás.md](_docs/Hibaelhárítás.md)                                                                                       |
+| "Miért így van ez a döntés?"      | [_docs/Döntések/](_docs/Döntések/) (ADR-ek)                                                                                            |
+| "Mit csináltunk YYYY-MM-DD-án?"   | [_docs/Naplók/](_docs/Naplók/)                                                                                                         |
+| "Miben kell most dolgozni?"       | [_docs/Feladatok.md](_docs/Feladatok.md)                                                                                               |
+| "Mit terveztünk?"                 | [_docs/Tervek.md](_docs/Tervek.md)                                                                                                     |
 
 Tudástár index: [_docs/Főoldal.md](_docs/Főoldal.md).
 

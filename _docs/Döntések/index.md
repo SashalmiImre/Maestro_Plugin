@@ -15,6 +15,7 @@ Sorrend = időbeli (`NNNN` szekvencia).
 | 0005 | [[0005-dashboard-custom-domain]] | 2026-04-19 | Accepted |
 | 0006 | [[0006-workflow-lifecycle-scope]] | 2026-04-20 | Accepted |
 | 0007 | [[0007-workflow-extensions]] | 2026-05-01 | Proposed |
+| 0008 | [[0008-permission-system-and-workflow-driven-groups]] | 2026-05-01 | Proposed |
 
 ## Új ADR
 1. Másold a [[Templates/decision-template]] tartalmát.

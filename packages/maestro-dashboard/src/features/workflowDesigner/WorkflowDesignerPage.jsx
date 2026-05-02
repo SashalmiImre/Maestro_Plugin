@@ -32,6 +32,7 @@ import { openCreateWorkflowModal } from '../../components/workflows/CreateWorkfl
 import { WORKFLOW_VISIBILITY_DEFAULT, WORKFLOW_VISIBILITY_LABELS } from '@shared/constants.js';
 import { compiledToGraph, graphToCompiled, extractGraphData } from './compiler.js';
 import { validateWorkflow } from './validator.js';
+import { validateCompiledSlugs, summarizeValidationErrors } from '@shared/compiledValidator.js';
 import { saveWorkflow, duplicateWorkflow } from './api.js';
 import { exportWorkflow } from './exportImport.js';
 import { workflowPath } from '../../routes/paths.js';
@@ -107,6 +108,7 @@ export default function WorkflowDesignerPage() {
     const [nodes, setNodes, onNodesChange] = useNodesState([]);
     const [edges, setEdges, onEdgesChange] = useEdgesState([]);
     const [metadata, setMetadata] = useState({
+        requiredGroupSlugs: [],
         contributorGroups: [],
         leaderGroups: [],
         elementPermissions: {},
@@ -539,10 +541,20 @@ export default function WorkflowDesignerPage() {
         // 1. Compiled JSON generálás
         const compiled = graphToCompiled(nodes, edges, metadata);
 
-        // 2. Validáció
+        // 2. Validáció (graph-szintű — initial/terminal/duplicate-state stb.)
         const { valid, errors } = validateWorkflow(compiled);
         if (!valid) {
             setSaveError(errors[0]);
+            return;
+        }
+
+        // 2b. Hard contract validáció (A.1.9 / ADR 0008): minden hivatkozott
+        // slug a `requiredGroupSlugs[]` halmaz eleme legyen, és ne legyen
+        // duplikáció. A `compiledValidator.js` shared modul azonos logikát ad
+        // a CF write-path enforcement-jéhez (A.2.1) — kliens-szerver konzisztens.
+        const slugCheck = validateCompiledSlugs(compiled);
+        if (!slugCheck.valid) {
+            setSaveError(summarizeValidationErrors(slugCheck));
             return;
         }
 
