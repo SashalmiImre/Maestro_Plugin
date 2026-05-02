@@ -29,7 +29,7 @@ import { showAutoseedWarnings } from '../../utils/autoseedWarnings.js';
 const DEFAULT_LAYOUT_NAME = 'A';
 
 export default function CreatePublicationModal() {
-    const { workflows, createPublication, createLayout, applyPublicationPatchLocal } = useData();
+    const { workflows, createPublication, createLayout, deletePublication, applyPublicationPatchLocal } = useData();
     const { assignWorkflowToPublication } = useAuth();
     const { closeModal } = useModal();
     const { showToast } = useToast();
@@ -138,8 +138,29 @@ export default function CreatePublicationModal() {
 
             const publication = await createPublication(payload);
 
-            // Automatikus „A" layout — ha elbukik, a kiadvány már létrejött,
-            // csak figyelmeztetést mutatunk (layout kézzel létrehozható).
+            // Workflow hozzárendelés + autoseed CF-en át — KRITIKUS lépés.
+            // Codex stop-time review: a publikáció NEM maradhat orphan
+            // workflowId nélkül (különben a stack csendben rossz / null
+            // workflow-val futna). Ha az assign bukik → rollback (delete).
+            try {
+                const assignResp = await assignWorkflowToPublication(publication.$id, workflowId);
+                applyPublicationPatchLocal(publication.$id, assignResp?.publication || { workflowId });
+                showAutoseedWarnings(showToast, assignResp?.autoseed?.warnings, 'CreatePublicationModal');
+            } catch (assignErr) {
+                console.warn('[CreatePublicationModal] Workflow assign sikertelen — rollback:', assignErr);
+                try {
+                    await deletePublication(publication.$id);
+                } catch (rollbackErr) {
+                    console.error('[CreatePublicationModal] Rollback (deletePublication) sikertelen — orphan publikáció maradt!', rollbackErr);
+                }
+                const reason = assignErr?.code || assignErr?.message || 'unknown';
+                throw new Error(`workflow_assign_failed: ${reason}`);
+            }
+
+            // Automatikus „A" layout — workflow assign UTÁN, hogy a teljes
+            // happy-path sikerült (autoseed + workflowId). Ha a layout
+            // create bukik, a kiadvány már konzisztens állapotban van —
+            // csak warning toast (a user kézzel létrehozhat layout-ot).
             try {
                 await createLayout({
                     publicationId: publication.$id,
@@ -151,28 +172,7 @@ export default function CreatePublicationModal() {
                 showToast('A kiadvány létrejött, de az alapértelmezett layout létrehozása sikertelen volt.', 'warning');
             }
 
-            // Workflow hozzárendelés + autoseed CF-en át. Best-effort: ha
-            // elbukik, a kiadvány már létrejött — a user a Settings modalban
-            // utólag hozzárendelhet egy workflow-t.
-            let assignWarning = null;
-            try {
-                const assignResp = await assignWorkflowToPublication(publication.$id, workflowId);
-                // Lokális state patch — fresh doc a CF response-ban
-                // (autoritatív `$updatedAt`), így a Realtime stale-guard
-                // megvédi a régi push-tól. Fallback: csak a workflowId
-                // mezőt patcheljük + a helper a `$updatedAt`-et rárakja.
-                applyPublicationPatchLocal(publication.$id, assignResp?.publication || { workflowId });
-                showAutoseedWarnings(showToast, assignResp?.autoseed?.warnings, 'CreatePublicationModal');
-            } catch (assignErr) {
-                console.warn('[CreatePublicationModal] Workflow hozzárendelés / autoseed sikertelen:', assignErr);
-                assignWarning = assignErr?.code || assignErr?.message || 'unknown';
-            }
-
-            if (assignWarning) {
-                showToast(`„${publication.name}" létrehozva, de a workflow hozzárendelés sikertelen (${assignWarning}). A Beállítások modalban manuálisan rendelheted hozzá.`, 'warning');
-            } else {
-                showToast(`„${publication.name}" kiadvány létrehozva.`, 'success');
-            }
+            showToast(`„${publication.name}" kiadvány létrehozva.`, 'success');
             closeModal();
         } catch (err) {
             console.error('[CreatePublicationModal] Létrehozás hiba:', err);
