@@ -64,7 +64,7 @@ tags: [referencia]
 | **`buildWorkflowAclPerms()`** | Doc-szintű ACL helper a `workflows` collection-höz (Fázis 2 minta kiterjesztése) |
 | **`ext.<slug>` prefix** | Workflow JSON `validations` / `commands` listájában custom extension hivatkozás |
 
-## Jogosultsági rendszer (Proposed — [[Döntések/0008-permission-system-and-workflow-driven-groups]])
+## Jogosultsági rendszer (Partially-Implemented — [[Döntések/0008-permission-system-and-workflow-driven-groups]])
 
 | Fogalom | Leírás |
 |---------|--------|
@@ -77,4 +77,10 @@ tags: [referencia]
 | **`userHasPermission()`** / **`userHasOrgPermission()`** | Két shared helper (`packages/maestro-shared/permissions.js`). Office-scope (33 slug): admin label → `organizationMemberships.role` → permission set lookup. Org-scope (5 slug): admin label → `organizationMemberships.role` only (member-nek nincs `org.*` slug-ja). |
 | **`groupPermissionSets`** | M:n junction collection — `groupId` ↔ `permissionSetId` |
 | **`empty_required_groups` (409)** | Aktiválás-blokkoló error, ha valamely `requiredGroupSlugs` slug-ban nincs tag |
-| **`group_in_use` (409)** | Csoport-törlés blokkoló error, ha aktív pub vagy nem-archivált workflow `requiredGroupSlugs`-ban szerepel |
+| **`group_in_use` (409)** | Csoport-törlés / archiválás blokkoló error — workflows / activePublications snapshot / publications.defaultContributors / articles.contributors hivatkozásokkal |
+| **`activate_publication` CF action** | Szinkron aktiváló — auth gate (office-membership) + TOCTOU (`expectedUpdatedAt`) + deadline-fedés + autoseed + min. 1 tag-check minden slug-on + atomic update `compiledWorkflowSnapshot` + `server-guard` sentinel a post-event guard skip-jéhez. Idempotens: snapshot string-egyezésnél `already_activated` early return. |
+| **`assign_workflow_to_publication` CF action** | Szinkron workflow-rendelő — autoseed + 3-way visibility scope match + aktivált pub workflow-cseréje 409 `publication_active_workflow_locked`. |
+| **`server-guard` sentinel** | `modifiedByClientId: 'server-guard'` mező a publikáció update-en — a `validate-publication-update` post-event CF skip-pel reagál (nem revertel, nem írja át a snapshot-ot). Az aktiváló CF csak akkor ír, ha minden pre-aktiválási check zöld. |
+| **`PARSE_ERROR` sentinel (CF)** | `contributorJsonReferencesSlug` fail-closed jelzés sérült contributors JSON esetén — a `delete_group`/`archive_group` blocker-listára `parseError: true` flaggel teszi a doc-ot, különben adatvesztés. |
+| **`applyPublicationPatchLocal()`** | [[Komponensek/DataContext]] helper — CF response.publication-t lokális state-re patcheli az `isStaleUpdate` szemantikával + `$updatedAt` autoritatív fallback. Megelőzi a Realtime-pong sorrend "régi state visszaírás"-t a `success` toast után. |
+| **`autoseed warnings[]`** | A `seedGroupsFromWorkflow` non-fatal anomáliák listája: `group_slug_collision` (eltérő flag-ek a meglévő doc-on), `group_archived_blocking_autoseed` (slug archivált csoporthoz tartozik), `group_metadata_schema_missing` (`bootstrap_groups_schema` még nem futott). UI: [[Komponensek/AuthContext|showAutoseedWarnings]] toast helper. |

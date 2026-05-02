@@ -1,10 +1,13 @@
 ---
 tags: [adr, jogosultság, csoportok, workflow, permission-sets]
-status: Proposed
+status: Partially-Implemented
 date: 2026-05-01
+last_updated: 2026-05-02
 ---
 
 # 0008 — Jogosultsági rendszer + workflow-driven felhasználó-csoportok
+
+> **Implementáció állapota (2026-05-02)**: A. blokk (workflow-driven groups) szerver-oldala kész — A.1 (adatmodell + shared validátor + ADR), A.2 (CF actionök) implementálva, deploy-ra vár. UI (A.4) és Plugin-runtime (A.5) hátra van. B. blokk (permissionSets) még nem indult.
 
 ## Kontextus
 
@@ -327,7 +330,7 @@ A két réteg **AND-elődik** a CF guardokban: workflow-runtime művelet (cikk-f
 | `packages/maestro-server/.../bootstrap_permission_sets_schema` | Új schema bootstrap CF |
 | `packages/maestro-shared/permissions.js` | Két helper: `userHasPermission(user, slug, editorialOfficeId)` (33 office-scope slug — admin label → org-role → permission set lookup) és `userHasOrgPermission(user, orgSlug, organizationId)` (5 org-scope slug — admin label → org-role only). `permissionSets.permissions[]` validáció: `org.*` prefix tilos. Per-request memoizáció `permissionSnapshot`-tal. |
 | `packages/maestro-server/.../assign_workflow_to_publication` (+ Designer compiler) | Slug-collision detektálás: ha `requiredGroupSlugs[]` flag-jei eltérnek a meglévő `groups` doc flag-jeitől → `group_slug_collision` warning a response `warnings[]`-ban (NEM blokk; a meglévő `groups` doc kanonikus) |
-| `packages/maestro-shared/groups.js` | `DEFAULT_GROUPS` konstans **eltávolítva** (workflow-driven a forrás) |
+| `packages/maestro-shared/groups.js` | `DEFAULT_GROUPS` konstans **deprecated** (workflow-driven a forrás). A.2.8-ban már nincs CF-szintű seed; legacy UI-rendezési hint-ként megmarad, amíg a frontend `useContributorGroups` (A.4) át nem áll a `compiled.requiredGroupSlugs[]` index-rendezésre. |
 | `packages/maestro-dashboard/.../UserGroupsTab.jsx` | Új tab: csoport-lista, tagok, `label`/`description`/`color`/`isContributorGroup`/`isLeaderGroup` szerkesztése (a `slug` immutable!), törlés (`group_in_use` validációval) |
 | `packages/maestro-dashboard/.../PermissionSetsTab.jsx` | Új tab: lista, létrehozás, archiválás |
 | `packages/maestro-dashboard/.../PermissionSetEditor.jsx` | Modal vagy oldal: 8 logikai csoport-fa + 38 checkbox-opció ([[Komponensek/PermissionTaxonomy]]) |

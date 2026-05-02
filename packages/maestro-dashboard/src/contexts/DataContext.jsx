@@ -550,6 +550,46 @@ export function DataProvider({ children }) {
         return doc;
     }, [databases]);
 
+    /**
+     * A.2.9 — lokális publikáció state patch DB hívás nélkül.
+     * Akkor használjuk, amikor egy szerver-CF action (`activate_publication`,
+     * `assign_workflow_to_publication`) már elvégezte a DB írást, és a UI-t
+     * azonnal frissíteni kell, anélkül, hogy a Realtime push-ra várnánk
+     * (különben a `success` toast után a UI rövid ideig a régi
+     * workflowId/isActivated állapotot mutatná).
+     *
+     * **Stale-guard mindkét irányban** (harden 4. fázis, Codex KRITIKUS):
+     *   - Ha a Realtime ág már megérkezett egy frissebb payloadot (a CF
+     *     write után, a HTTP response-t megelőzve), a `local.$updatedAt`
+     *     frissebb lesz a patch-nél → a patch SKIP-pel kerülendő, különben
+     *     a régi response felülírná a friss állapotot.
+     *   - A patch KÖTELEZŐEN frissíti a `$updatedAt`-et a friss szerver-
+     *     időponttal (CF response.publication esetén), különben fallback
+     *     `now()` — így a későbbi `isStaleUpdate` döntés is helyes.
+     *
+     * @param {string} id
+     * @param {Partial<PublicationDoc>} patch
+     */
+    const applyPublicationPatchLocal = useCallback((id, patch) => {
+        if (!id || !patch || typeof patch !== 'object') return;
+        const patchWithTimestamp = patch.$updatedAt
+            ? patch
+            : { ...patch, $updatedAt: new Date().toISOString() };
+        setPublications((prev) => {
+            // No-op early return: ha az id nincs a listában, ne új array-t
+            // adjunk vissza (különben felesleges re-render minden consumeren).
+            if (!prev.some(p => p.$id === id)) return prev;
+            return prev.map((p) => {
+                if (p.$id !== id) return p;
+                // Stale-guard: a Realtime ágban használt `isStaleUpdate`
+                // ugyanazt a szemantikát alkalmazza — közös helper, hogy egy
+                // helyen javítható az edge-case (pl. ms-azonosság).
+                if (isStaleUpdate(p, patchWithTimestamp)) return p;
+                return { ...p, ...patchWithTimestamp };
+            });
+        });
+    }, []);
+
     const deletePublication = useCallback(async (id) => {
         await databases.deleteDocument({
             databaseId: DATABASE_ID,
@@ -784,6 +824,7 @@ export function DataProvider({ children }) {
         fetchAllGroupMembers, getMemberName,
         // Write-through API
         createPublication, updatePublication, deletePublication,
+        applyPublicationPatchLocal,
         createLayout, updateLayout, deleteLayout,
         createDeadline, updateDeadline, deleteDeadline,
         updateArticle
@@ -797,6 +838,7 @@ export function DataProvider({ children }) {
         fetchAllOrgWorkflows,
         fetchAllGroupMembers, getMemberName,
         createPublication, updatePublication, deletePublication,
+        applyPublicationPatchLocal,
         createLayout, updateLayout, deleteLayout,
         createDeadline, updateDeadline, deleteDeadline,
         updateArticle

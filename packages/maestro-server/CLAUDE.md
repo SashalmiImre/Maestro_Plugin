@@ -289,7 +289,7 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 
 **Bemeneti payload**:
 ```json
-{ "action": "bootstrap_organization" | "create_organization" | "create" | "accept" | "list_my_invites" | "decline_invite" | "leave_organization" | "add_group_member" | "remove_group_member" | "create_workflow" | "update_workflow" | "update_workflow_metadata" | "delete_workflow" | "duplicate_workflow" | "archive_workflow" | "restore_workflow" | "bootstrap_workflow_schema" | "bootstrap_publication_schema" | "bootstrap_permission_sets_schema" | "delete_organization" | "delete_editorial_office" | "backfill_tenant_acl", ... }
+{ "action": "bootstrap_organization" | "create_organization" | "create" | "accept" | "list_my_invites" | "decline_invite" | "leave_organization" | "add_group_member" | "remove_group_member" | "create_group" | "rename_group" | "update_group_metadata" | "archive_group" | "restore_group" | "delete_group" | "create_workflow" | "update_workflow" | "update_workflow_metadata" | "delete_workflow" | "duplicate_workflow" | "archive_workflow" | "restore_workflow" | "assign_workflow_to_publication" | "activate_publication" | "bootstrap_workflow_schema" | "bootstrap_publication_schema" | "bootstrap_groups_schema" | "bootstrap_permission_sets_schema" | "delete_organization" | "delete_editorial_office" | "backfill_tenant_acl", ... }
 ```
 
 **Biztonsági megjegyzés**: Korábban létezett egy `organization-membership-guard` trigger CF, amely egy `modifiedByClientId === 'server-guard'` sentinellel engedélyezte az invite-eredetű membership-eket. Ez **kliens-forgeable** volt — bármely hitelesített user beállíthatta a payload-ban. A Codex adversarial review jelezte a kritikus sebezhetőséget, és a javítás ACL-alapú védelemre váltott (B.5 utolsó iteráció, 2026-04-07).
@@ -297,21 +297,22 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 **ACTION='bootstrap_organization'** (onboarding flow):
 1. Caller user kötelező (`x-appwrite-user-id` header).
 2. Bemeneti mezők: `orgName`, `orgSlug`, `officeName`, `officeSlug` (mind trim + length check + slug regex validáció).
-3. **Atomikus 4+14 collection write** API key-jel:
+3. **Atomikus tenant + workflow write** API key-jel:
    - `organizations` — `{ name, slug, ownerUserId: callerId }`
    - `organizationMemberships` — `{ organizationId, userId: callerId, role: 'owner', addedByUserId: callerId }`
-   - `editorialOffices` — `{ organizationId, name, slug }` (workflowId nullként, Fázis 4 tölti)
+   - `editorialOffices` — `{ organizationId, name, slug }` (workflowId nullként, a 7. lépés tölti)
    - `editorialOfficeMemberships` — `{ editorialOfficeId, organizationId, userId: callerId, role: 'admin' }`
-   - **Fázis 2 — Group seeding**: 7 `groups` dokumentum (`DEFAULT_GROUPS` alapján, scope: officeId + orgId) + 7 `groupMemberships` (a bootstrapping user-t minden csoportba felveszi, denormalizált `userName`/`userEmail`-lel).
-4. **Best-effort rollback**: ha a 2-3-4. lépésnél hiba van, a már létrehozott rekordokat visszatörli fordított sorrendben (try/catch minden cleanup lépésen). A group seeding hiba nem akadályozza meg az org bootstrap sikerét (`groupsSeeded: false` a response-ban).
+   - **A.2.8 (ADR 0008, 2026-05-02)**: a 7-csoport default group/groupMembership seedelés **kivéve**. Az új office 0 felhasználó-csoporttal indul; a workflow `requiredGroupSlugs[]` a forrás, az autoseed flow (`activate_publication` / `assign_workflow_to_publication`) hozza létre őket.
+   - **Workflow seed**: `defaultWorkflow.json` clone az új office alá (lásd [packages/maestro-shared/defaultWorkflow.json](packages/maestro-shared/defaultWorkflow.json)). A default workflow `requiredGroupSlugs[]`-je tartalmazza a 7 hagyományos slugot (editors/designers/writers/...) — autoseed-elhetőek aktiváláskor.
+4. **Best-effort rollback**: ha a tenant lépéseknél hiba van, a már létrehozott rekordokat visszatörli fordított sorrendben (try/catch minden cleanup lépésen). A workflow seeding hiba nem akadályozza meg az org bootstrap sikerét.
 5. Slug ütközés: `org_slug_taken` / `office_slug_taken` (409).
-6. Response: `{ success: true, action: 'bootstrapped' | 'existing', organizationId, editorialOfficeId }`.
+6. Response: `{ success: true, action: 'bootstrapped' | 'existing', organizationId, editorialOfficeId, groupsSeeded: false, workflowSeeded }`.
 
 **ACTION='create_organization'** (#40, avatar dropdown „Új szervezet…"):
 
-A `bootstrap_organization`-vel azonos 7 lépéses atomikus create logika (4 collection write + team ACL + 7 default group + 7 group membership + workflow seed), de az idempotencia check kihagyva. Akkor használandó, ha a caller már tagja egy meglévő orgnak és explicit ÚJ szervezetet kér. Frontend-oldali duplaklikk-védelem szükséges (modal `isSubmitting` guard). Slug ütközés: szerveroldali unique index → `org_slug_taken` (409).
+A `bootstrap_organization`-vel azonos atomikus create logika (4 collection write + team ACL + workflow seed), de az idempotencia check kihagyva, és (A.2.8 óta) felhasználó-csoport seedelés nélkül. Akkor használandó, ha a caller már tagja egy meglévő orgnak és explicit ÚJ szervezetet kér. Frontend-oldali duplaklikk-védelem szükséges (modal `isSubmitting` guard). Slug ütközés: szerveroldali unique index → `org_slug_taken` (409).
 
-Response: `{ success: true, action: 'created', organizationId, editorialOfficeId, groupsSeeded, workflowSeeded }`.
+Response: `{ success: true, action: 'created', organizationId, editorialOfficeId, groupsSeeded: false, workflowSeeded }`.
 
 **ACTION='create'** (admin meghívó küldés):
 1. Caller user lekérése (`x-appwrite-user-id` header).
@@ -387,6 +388,41 @@ Response: `{ success: true, action: 'left', organizationId, removed: { organizat
 3. **Caller jogosultság check** — group lekérés → org membership lookup → `owner` vagy `admin`.
 4. `listDocuments(groupMemberships, [eq(groupId), eq(userId)])` → delete.
 5. **Idempotens**: ha nem létezik → success `{ action: 'already_removed' }`.
+6. **A.2.5 (ADR 0008) warning scan**: ha a delete után a csoport üres lett ÉS a slug bármely aktív publikáció `compiledWorkflowSnapshot.requiredGroupSlugs[]`-ben szerepel (org-szintű scan, `MAX_REFERENCES_PER_SCAN=50` cap), a response `warnings: [{ code: 'empty_required_group', slug, groupId, affectedPublications: [...], note }]` mezővel jelzi. A művelet engedett (snapshot védi a runtime-ot), best-effort scan (hibára nem blokkol). Az UI banner-ként megjeleníti.
+
+**ACTION='update_group_metadata'** (alias: `rename_group`):
+1. Caller user + `groupId` kötelező.
+2. **Slug immutable enforcement**: `payload.slug !== undefined` → 400 `slug_immutable`.
+3. Frissíthető mezők (mindegyik opcionális, `undefined` = no-op):
+   - `label` vagy `name` — UI-ban "Címke", DB-ben a `name` mezőben tárolva (max 128 char).
+   - `description` — max 500 char, `null` = explicit törlés.
+   - `color` — CSS hex (`#rrggbb`/`#rrggbbaa`/`#rgb`), nullable.
+   - `isContributorGroup` / `isLeaderGroup` — boolean.
+4. Caller jogosultság: org owner/admin.
+5. Label-uniqueness check az office-on belül (csak ha változik).
+6. **Schema-safe fallback**: ha az új mezők (`description`/`color`/`isContributorGroup`/`isLeaderGroup`) hiányoznak a sémából, két ág:
+   - Tiszta legacy `rename_group` (csak `name` érkezett) → success `{ action: 'renamed' }`.
+   - Vegyes payload → 422 `schema_missing` + `bootstrap_groups_schema` hint (ne adjunk hamisan sikeres response-t részleges update után).
+
+**ACTION='archive_group' / 'restore_group'** (A.2.7):
+
+Soft-delete a csoporton — `archivedAt` set/null. Idempotens (`already_archived`/`already_active`). Az `archive_group` ugyanazt a blocker-set-et alkalmazza, mint a `delete_group`: blokk, ha nem-archivált workflow `requiredGroupSlugs[]`/state-mezők hivatkozzák, VAGY aktív pub `compiledWorkflowSnapshot` hivatkozza. A tagok (`groupMemberships`) intaktan maradnak — a restore-szemantika megőrzéséhez. Auth: org owner/admin. Schema-safe fallback: ha az `archivedAt` mező hiányzik, 422 `schema_missing` + `bootstrap_groups_schema` hint.
+
+**ACTION='delete_group'** (A.2.7 update — `DEFAULT_GROUPS` védelem eltávolítva, A.2.8 óta):
+
+Hard-delete + kaszkád. Blocker-check: org-szintű scan (a) **nem-archivált workflow** compiled JSON-ja hivatkozza (`workflowReferencesSlug` az új `requiredGroupSlugs[]` mezőt is fedi); (b) **aktív publikáció `compiledWorkflowSnapshot`**-ja hivatkozza; (c) `articles.contributors` / `publications.defaultContributors` JSON kulcsként tartalmazza. Bármelyik → 409 `group_in_use` + `workflows`/`activePublications`/`publications`/`articles` listák. Auth: org owner/admin. Cascade: `groupMemberships` → `groups` doc → compensating sweep race-védelemhez.
+
+**ACTION='assign_workflow_to_publication'** (A.2.3):
+
+Workflow hozzárendelése publikációhoz. Lépések: (1) caller office-membership a pub office-ában; (2) pub fetch + workflow fetch + 3-way visibility scope match; (3) aktivált pub workflow-cseréje TILTOTT (`publication_active_workflow_locked` 409); (4) **autoseed** (`seedGroupsFromWorkflow` helper) — minden hiányzó `requiredGroupSlugs[].slug`-ra üres `groups` doc, idempotens, `first-write wins` policy + `group_slug_collision` warning eltérő flag-ekre + schema-safe fallback `bootstrap_groups_schema` nélkül; (5) pub update `workflowId`-vel. Min. 1 tag-check **NINCS** — az csak az `activate_publication`-nél kötelező. Response: `{ success, publicationId, workflowId, autoseed: { created, existed, warnings } }`.
+
+**ACTION='activate_publication'** (A.2.2 + A.2.4):
+
+Publikáció aktiválása. Lépések: (1) caller office-membership; (2) **TOCTOU guard** — opcionális `expectedUpdatedAt` payload mezővel összevetjük a fresh `pubDoc.$updatedAt`-et, eltérés → 409 `concurrent_modification`; (3) `workflowId` set + workflow fetch; (4) **pre-aktiválási validáció** inline `validateDeadlinesInline`-szel (workflowId megvan, deadlinek lefedik a coverage-et átfedés nélkül) → 422 `invalid_deadlines` ha invalid; (5) **autoseed** (`seedGroupsFromWorkflow`); (6) **min. 1 tag check** (`findEmptyRequiredGroupSlugs`) → 409 `empty_required_groups: [slugs]` ha nincs; (7) idempotens `already_activated` ha pub már aktivált + snapshot azonos a workflow `compiled`-jével; (8) atomic update: `{ isActivated: true, activatedAt, compiledWorkflowSnapshot: wf.compiled, modifiedByClientId: 'server-guard' }`. A `server-guard` sentinel a post-event `validate-publication-update` CF-et skip-pelteti, hogy a snapshot ne íródjon felül + a deaktiválási loop ne fusson. Response: `{ success, publicationId, workflowId, activatedAt, autoseed }`.
+
+**ACTION='bootstrap_groups_schema'** (A.2.6 + A.2.7 + A.2.2 előfeltétel):
+
+Owner-only schema-bővítés a `groups` collection-en. Új mezők: `description` (string 500), `color` (string 9, hex), `isContributorGroup` (bool, default false), `isLeaderGroup` (bool, default false), `archivedAt` (datetime, nullable). Plusz unique index `office_slug_unique` az `(editorialOfficeId, slug)` páron — az autoseed `document_already_exists` skip duplikátum-védelméhez kötelező (Codex review). Idempotens (409 → skip), `indexesPending` listával az aszinkron attribute-feldolgozás miatt. Action-szintű env var igény nincs külön (a `GROUPS_COLLECTION_ID` mindig kötelező).
 
 **ACTION='delete_editorial_office'** (Dashboard Redesign Fázis 8):
 1. Caller user kötelező + `editorialOfficeId` payload.

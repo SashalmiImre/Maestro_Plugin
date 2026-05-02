@@ -48,7 +48,7 @@ A belső `asSlugArray(value, location)` és `asObject(value, location)` helperek
 |---|---|
 | [WorkflowDesignerPage.handleSave](../packages/maestro-dashboard/src/features/workflowDesigner/WorkflowDesignerPage.jsx) | A graph-validáció után `validateCompiledSlugs(compiled)` — `unknown_group_slug` esetén `setSaveError`. |
 | [`normalizeAndValidateImport`](../packages/maestro-dashboard/src/features/workflowDesigner/compiler.js) | Import-flow közös helper: round-trip + raw + normalized re-check. Használja a [[CreateWorkflowModal]] (`packages/maestro-dashboard/src/components/workflows/CreateWorkflowModal.jsx`) és az [[ImportDialog]]-pattern (Designer-en belüli import). |
-| Szerver-oldali `update_workflow` CF (A.2.1, **nem implementált**) | Ugyanezt a shared modult fogja hívni a write-path guard-ban. |
+| Szerver-oldali `create_workflow` / `update_workflow` / `duplicate_workflow` CF (A.2.1, **implementált**) | `validateCompiledSlugsInline` inline másolat a [packages/maestro-server/functions/invite-to-organization/src/main.js](../packages/maestro-server/functions/invite-to-organization/src/main.js)-ben (CommonJS, ESM import nem elérhető a CF-ben). Hard contract write-path enforcement: `unknown_group_slug` 400 + `errors`/`unknownSlugs` payload. **Drift-rizikó**: a két forrás kézzel szinkronban tartandó (Phase 2 / A.6: CI AST-equality teszt). |
 
 ## `normalizeAndValidateImport(compiled, graph)`
 

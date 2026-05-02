@@ -15,8 +15,12 @@ aliases: [AuthContext, Dashboard AuthContext]
 - **Auth**: `login(email, password)`, `logout()`, `register(name, email, password)`, `acceptInvite(token)`, `declineInvite(token)`, `leaveOrganization(orgId)`
 - **Tenant ops**: `createOrganization(name, slug)`, `createEditorialOffice(orgId, name, sourceWorkflowId)` — CF `callInviteFunction`-on át
 - **Group ops**: `createGroup(officeId, name)`, `renameGroup(groupId, name)`, `deleteGroup(groupId)`
+- **Publication ops** ([[Döntések/0008-permission-system-and-workflow-driven-groups|ADR 0008]] A.2.2 / A.2.3): `activatePublication(publicationId, expectedUpdatedAt?)`, `assignWorkflowToPublication(publicationId, workflowId, expectedUpdatedAt?)`. Mindkettő `callInviteFunction`-on át — autoseed + `empty_required_groups` 409 / TOCTOU `concurrent_modification` 409 kezelés. A direkt `databases.updateDocument({isActivated: true})` és `updatePublication({workflowId})` megkerülné a server-side autoseedet, ezért a UI ezeken keresztül megy.
 - **Reload**: `reloadMemberships()` → `true`/`false`
 - **Read**: `user`, `organizations`, `editorialOffices`, `orgMemberships`, `membershipsError`, `loading`
+
+## CF error wrapper (`callInviteFunction`)
+A non-2xx CF response-ból `Error` objektumot dob, az alábbi mezőkkel: `code` / `statusCode` / `response` (teljes payload) + lapított `slugs` / `errors` / `unknownSlugs` (ha a CF visszaadta). A hívók `err?.code` mintával olvassák. Korábban duplázott `wrapped.reason` alias eltávolítva (harden 5. fázis): a kódbázis-konvenció `code` egyedüli forrás.
 
 ## Realtime feliratkozás
 - 4 collection: `ORGANIZATIONS`, `EDITORIAL_OFFICES`, `ORGANIZATION_MEMBERSHIPS`, `EDITORIAL_OFFICE_MEMBERSHIPS`

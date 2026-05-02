@@ -222,6 +222,16 @@ async function callInviteFunction(action, payload, defaultReason) {
         const wrapped = new Error(reason);
         wrapped.code = reason;
         wrapped.statusCode = execution.responseStatusCode;
+        // A teljes response-t propagáljuk az érrajra, hogy a hívó hozzáférjen
+        // az extra mezőkhöz (`slugs`, `errors`, `affectedPublications`,
+        // `unknownSlugs`, stb. — pl. `activate_publication` 409 / 422 ágak).
+        wrapped.response = response;
+        // Gyakran használt mezőket lapított attribútumként is megadjuk a
+        // hívónak — a régi kód `err.slugs` formában olvashatja, anélkül,
+        // hogy `err.response.slugs`-t kéne írni mindenhol.
+        if (response.slugs) wrapped.slugs = response.slugs;
+        if (response.errors) wrapped.errors = response.errors;
+        if (response.unknownSlugs) wrapped.unknownSlugs = response.unknownSlugs;
         throw wrapped;
     }
 
@@ -845,6 +855,54 @@ export function AuthProvider({ children }) {
     }, [user?.$id]);
 
     /**
+     * A.2.2 (ADR 0008) — Publikáció aktiválása szerver-CF action-en át.
+     *
+     * Korábban a Dashboard direkt `databases.updateDocument(publications, ...,
+     * { isActivated: true })` hívást csinált, amitől a `validate-publication-update`
+     * post-event guard reaktívan validált. Az A.2.2 viszont szinkron
+     * `empty_required_groups` 409 választ követel az autoseed után — ezt a
+     * `activate_publication` HTTP CF action adja.
+     *
+     * `expectedUpdatedAt` opcionális TOCTOU guard: a kliens a betöltött pub
+     * `$updatedAt`-jét visszaadja; ha azóta változott, a CF 409
+     * `concurrent_modification`-t ad.
+     *
+     * @param {string} publicationId
+     * @param {string} [expectedUpdatedAt]
+     * @returns {Promise<{ publicationId, workflowId, activatedAt, autoseed, warnings? }>}
+     */
+    const activatePublication = useCallback(async (publicationId, expectedUpdatedAt) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'activate_publication',
+            expectedUpdatedAt
+                ? { publicationId, expectedUpdatedAt }
+                : { publicationId },
+            'activation_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * A.2.3 (ADR 0008) — Workflow hozzárendelése publikációhoz CF-en át.
+     * A `assign_workflow_to_publication` autoseed-eli a hiányzó
+     * `requiredGroupSlugs[]`-t (idempotens, nem követeli meg a min. 1 tagot).
+     *
+     * `expectedUpdatedAt` opcionális TOCTOU guard — két paralel tab cseréje
+     * ellen. A kliens a betöltött pub `$updatedAt`-jét adja át; ha azóta
+     * változott, a CF 409 `concurrent_modification`.
+     */
+    const assignWorkflowToPublication = useCallback(async (publicationId, workflowId, expectedUpdatedAt) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'assign_workflow_to_publication',
+            expectedUpdatedAt
+                ? { publicationId, workflowId, expectedUpdatedAt }
+                : { publicationId, workflowId },
+            'workflow_assign_failed'
+        );
+    }, [user?.$id]);
+
+    /**
      * Fázis 8 — Szervezet kaszkád törlés.
      *
      * A CF `delete_organization` action-jét hívja (owner-only). A CF
@@ -1046,7 +1104,9 @@ export function AuthProvider({ children }) {
         removeGroupMember,
         createGroup,
         renameGroup,
-        deleteGroup
+        deleteGroup,
+        activatePublication,
+        assignWorkflowToPublication
     }), [
         user,
         loading,
@@ -1079,7 +1139,9 @@ export function AuthProvider({ children }) {
         removeGroupMember,
         createGroup,
         renameGroup,
-        deleteGroup
+        deleteGroup,
+        activatePublication,
+        assignWorkflowToPublication
     ]);
 
     return (

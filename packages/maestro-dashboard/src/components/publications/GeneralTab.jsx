@@ -22,7 +22,9 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { validatePublicationActivation } from '@shared/publicationActivation.js';
 import { WORKFLOW_VISIBILITY_DEFAULT, WORKFLOW_VISIBILITY_LABELS } from '@shared/constants.js';
 import { useData } from '../../contexts/DataContext.jsx';
+import { useAuth } from '../../contexts/AuthContext.jsx';
 import { useOrgRole } from '../../hooks/useOrgRole.js';
+import { showAutoseedWarnings } from '../../utils/autoseedWarnings.js';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
 import { useConfirm } from '../ConfirmDialog.jsx';
@@ -42,7 +44,8 @@ function formatActivatedAt(iso) {
 }
 
 export default function GeneralTab({ publication }) {
-    const { workflows, deadlines, articles, databases, updatePublication, deletePublication } = useData();
+    const { workflows, deadlines, articles, databases, updatePublication, deletePublication, applyPublicationPatchLocal } = useData();
+    const { activatePublication, assignWorkflowToPublication } = useAuth();
     const { isOrgAdmin: canDeletePublication } = useOrgRole(publication.organizationId);
     const { openModal, closeModal } = useModal();
     const { showToast } = useToast();
@@ -113,8 +116,36 @@ export default function GeneralTab({ publication }) {
 
     async function handleWorkflowSelect(workflowId) {
         if (!workflowId || workflowId === publication.workflowId) return;
-        await saveField('workflowId', workflowId);
-        showToast('Workflow megváltozott — az új szabályok a következő átmeneteknél lépnek életbe.', 'info');
+        try {
+            // A.2.3 (ADR 0008) — szerver-CF action a direkt
+            // `saveField('workflowId', ...)` helyett. A CF autoseed-eli
+            // a workflow `requiredGroupSlugs[]`-t (idempotens), így a
+            // contributor mátrix a következő Realtime push-ban azonnal
+            // megjelenik. A direkt updateDocument megkerülné az autoseedet.
+            const response = await assignWorkflowToPublication(publication.$id, workflowId, publication.$updatedAt);
+            // Lokális state patch — fresh doc a CF response-ban (autoritatív
+            // `$updatedAt`); ha hiányzik, csak a workflowId-t patcheljük + a
+            // fallback timestampet a helper teszi rá.
+            applyPublicationPatchLocal(publication.$id, response?.publication || { workflowId });
+            const seeded = response?.autoseed?.created || [];
+            const note = seeded.length > 0
+                ? `Workflow megváltozott — új csoportok: ${seeded.join(', ')}.`
+                : 'Workflow megváltozott — az új szabályok a következő átmeneteknél lépnek életbe.';
+            showToast(note, 'info');
+            showAutoseedWarnings(showToast, response?.autoseed?.warnings, 'GeneralTab.assignWorkflow');
+        } catch (err) {
+            console.error('[GeneralTab] Workflow hozzárendelés sikertelen:', err);
+            const reason = err?.code || err?.message || 'ismeretlen hiba';
+            const message =
+                reason === 'publication_active_workflow_locked'
+                    ? 'Aktivált kiadvány workflow-ja nem cserélhető. Deaktiváld előbb.'
+                    : reason === 'workflow_scope_mismatch'
+                        ? 'A workflow scope-ja nem illik a kiadvány szerkesztőségéhez.'
+                        : reason === 'concurrent_modification'
+                            ? 'A kiadvány módosult a betöltés óta. Frissítsd az oldalt.'
+                            : `Workflow hozzárendelés sikertelen: ${reason}`;
+            showToast(message, 'error');
+        }
     }
 
     const isActivated = publication.isActivated === true;
@@ -206,14 +237,38 @@ export default function GeneralTab({ publication }) {
         });
         if (!ok) return;
         try {
-            await updatePublication(publication.$id, {
+            // A.2.2 (ADR 0008) — szinkron CF action. A direkt
+            // `updatePublication({ isActivated: true })` megkerülné az
+            // autoseed + `empty_required_groups` checket.
+            const response = await activatePublication(publication.$id, publication.$updatedAt);
+            // Lokális state patch — a CF response.publication a fresh
+            // doc (autoritatív `$updatedAt`-tel), így a Realtime stale-guard
+            // megvédi a régi push-tól. Fallback: csak az aktiválási mezőkre
+            // patch, ha a CF nem küldte volna a teljes doc-ot.
+            applyPublicationPatchLocal(publication.$id, response?.publication || {
                 isActivated: true,
-                activatedAt: new Date().toISOString()
+                activatedAt: response?.activatedAt || new Date().toISOString()
             });
-            showToast('A kiadvány aktiválva.', 'success');
+            const note = response?.autoseed?.created?.length
+                ? ` (új csoportok: ${response.autoseed.created.join(', ')})`
+                : '';
+            showToast(`A kiadvány aktiválva.${note}`, 'success');
+            showAutoseedWarnings(showToast, response?.autoseed?.warnings, 'GeneralTab.activate');
         } catch (err) {
             console.error('[GeneralTab] Aktiválás sikertelen:', err);
-            showToast(`Aktiválás sikertelen: ${err?.message || 'ismeretlen hiba'}`, 'error');
+            const reason = err?.code || err?.message || 'ismeretlen hiba';
+            // A leggyakoribb ismert reasonöket UI-friendly üzenetté fordítjuk.
+            // A teljes részletes lista (slugs, affectedPublications) a UI A.4
+            // feladat szerint külön modallal jelenik meg.
+            const message =
+                reason === 'empty_required_groups'
+                    ? `Az aktiváláshoz minden csoportnak legalább 1 tagja kell legyen. Hiányzó csoportok: ${(err.slugs || []).join(', ')}`
+                    : reason === 'concurrent_modification'
+                        ? 'A kiadvány módosult a betöltés óta. Frissítsd az oldalt.'
+                        : reason === 'invalid_deadlines'
+                            ? `Érvénytelen határidők: ${(err.errors || []).join('; ')}`
+                            : `Aktiválás sikertelen: ${reason}`;
+            showToast(message, 'error');
         }
     }
 

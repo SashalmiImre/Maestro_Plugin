@@ -6,13 +6,18 @@
  *
  * Fázis 2 / B.2 — A 7 fix Appwrite Team helyett dinamikus, szerkesztőség-
  * szintű csoportok.
- */
-
-/**
- * Alapértelmezett csoportok — bootstrap_organization hozza létre mindegyiket
- * az új szerkesztőséghez. A slug-ok megegyeznek a régi Appwrite Team slug-okkal,
- * így a permission config-ok (STATE_PERMISSIONS) változatlanul működnek.
- * A contributors JSON kulcsai közvetlenül ezek a slug-ok.
+ *
+ * **A.2.8 (ADR 0008, 2026-05-02)**: A `DEFAULT_GROUPS` mostantól csak
+ * UI-rendezési hint, NEM seedelési forrás. A felhasználó-csoportok forrása a
+ * workflow `compiled.requiredGroupSlugs[]`; a CF autoseed (`activate_publication`,
+ * `assign_workflow_to_publication`) hozza létre az `groups` doc-okat. A
+ * frontend hooks (`useContributorGroups`) ezzel a listával rendezi a
+ * legacy/szokásos csoportok sorrendjét — egy office tényleges csoportjait
+ * a DB `groups` collection-ből olvasunk. **Az új csoport-mezők (`description`,
+ * `color`, `isContributorGroup`, `isLeaderGroup`) NEM ebben a listában
+ * vannak — a workflow `requiredGroupSlugs[]`-ből vagy a `groups` doc-ból
+ * olvassuk.** A.4 dashboard refaktor során a `DEFAULT_ORDER` rendezés
+ * helyett a `compiled.requiredGroupSlugs[]` index alapján rendezünk.
  */
 export const DEFAULT_GROUPS = [
     { slug: 'editors',          name: 'Szerkesztők' },
