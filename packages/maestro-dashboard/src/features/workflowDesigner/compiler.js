@@ -375,9 +375,24 @@ export function graphToCompiled(nodes, edges, metadata) {
         contributorGroups: metadata.contributorGroups || [],
         capabilities: metadata.capabilities || {}
     };
-    const requiredGroupSlugs = Array.isArray(metadata.requiredGroupSlugs) && metadata.requiredGroupSlugs.length > 0
+    const baseRequiredGroupSlugs = Array.isArray(metadata.requiredGroupSlugs) && metadata.requiredGroupSlugs.length > 0
         ? normalizeRequiredGroupSlugs(metadata.requiredGroupSlugs)
         : reconstructRequiredGroupSlugs(baseCompiledForReconstruct);
+
+    // A UI a `WorkflowPropertiesEditor.jsx`-ben még a `metadata.leaderGroups`
+    // mezőt szerkeszti (A.4.6 előtti backwards-compat). Ha ez jelen van,
+    // szinkronizáljuk az `isLeaderGroup` flag-be — különben a felhasználó
+    // leader-szerkesztése csendben elveszne, mert a kimeneti `leaderGroups`
+    // a flag-ből autogenerálódik.
+    const requiredGroupSlugs = Array.isArray(metadata.leaderGroups)
+        ? (() => {
+            const editedLeaderSet = new Set(metadata.leaderGroups);
+            return baseRequiredGroupSlugs.map(g => ({
+                ...g,
+                isLeaderGroup: editedLeaderSet.has(g.slug)
+            }));
+        })()
+        : baseRequiredGroupSlugs;
 
     const autoContributorGroups = requiredGroupSlugs
         .filter(g => g.isContributorGroup)
