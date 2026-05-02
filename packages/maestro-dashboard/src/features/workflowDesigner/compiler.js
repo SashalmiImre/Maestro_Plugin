@@ -301,18 +301,25 @@ export function compiledToGraph(compiled, savedGraph = null) {
 
     // A.1.5: a `requiredGroupSlugs` mostantól a kanonikus slug-lista. Ha a
     // compiled-ben van, közvetlenül használjuk; ha nincs (legacy doc), read-time
-    // fallback-ként rekonstruáljuk az összes referencia-mezőből. A meglévő
-    // `contributorGroups` és `leaderGroups` mezőket továbbra is visszaadjuk
-    // a metadata-ba — a UI még ezeket szerkeszti (A.4.6 fogja átállítani a
-    // `requiredGroupSlugs[]` flag-szerkesztésre).
+    // fallback-ként rekonstruáljuk az összes referencia-mezőből.
     const requiredGroupSlugs = Array.isArray(compiled.requiredGroupSlugs)
         ? normalizeRequiredGroupSlugs(compiled.requiredGroupSlugs)
         : reconstructRequiredGroupSlugs(compiled);
 
+    // A `metadata.leaderGroups` és `contributorGroups` a `requiredGroupSlugs`
+    // flag-jeiből DERIVÁLÓDIK — nem a `compiled.leaderGroups` / `contributorGroups`
+    // mirror-ből. Különben egy stale/hiányzó mirror miatt a save-time sync
+    // (graphToCompiled) ki tudná törölni a kanonikus flag-eket. A UI még a
+    // származtatott mezőket szerkeszti (A.4.6 előtti backwards-compat), de a
+    // baseline most már konzisztens a kanonikus formával.
     const metadata = {
         requiredGroupSlugs,
-        contributorGroups: compiled.contributorGroups || [],
-        leaderGroups: compiled.leaderGroups || [],
+        contributorGroups: requiredGroupSlugs
+            .filter(g => g.isContributorGroup)
+            .map(g => ({ slug: g.slug, label: g.label })),
+        leaderGroups: requiredGroupSlugs
+            .filter(g => g.isLeaderGroup)
+            .map(g => g.slug),
         elementPermissions: compiled.elementPermissions || {},
         capabilities: compiled.capabilities || {}
     };
