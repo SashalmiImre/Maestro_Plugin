@@ -30,7 +30,7 @@ import { showAutoseedWarnings } from '../../utils/autoseedWarnings.js';
 const DEFAULT_LAYOUT_NAME = 'A';
 
 export default function CreatePublicationModal() {
-    const { workflows, createLayout, applyPublicationPatchLocal } = useData();
+    const { workflows, createLayout, applyCreatedPublicationLocal } = useData();
     const { createPublicationWithWorkflow } = useAuth();
     const { activeOrganizationId, activeEditorialOfficeId } = useScope();
     const { closeModal } = useModal();
@@ -149,10 +149,12 @@ export default function CreatePublicationModal() {
             if (!publication?.$id) {
                 throw new Error('publication_create_failed: empty response');
             }
-            // A Realtime push beilleszti a state-be; addig is patcheljük
-            // lokálisan, hogy az auto-layout createLayout azonnali
-            // `publicationId`-t kapjon.
-            applyPublicationPatchLocal(publication.$id, publication);
+            // Lokális insert + switchPublication — a régi `createPublication`
+            // (DataContext, direkt-DB) viselkedését reprodukálja: a frissen
+            // létrehozott pub azonnal aktív lesz, így a `createLayout` a
+            // helyes `publicationId`-t kapja, a modal zárása után a UI az
+            // új pubot mutatja. Realtime-pong race-védve (idempotens).
+            await applyCreatedPublicationLocal(publication);
             showAutoseedWarnings(showToast, response?.autoseed?.warnings, 'CreatePublicationModal');
 
             // Automatikus „A" layout — atomic create UTÁN, best-effort.

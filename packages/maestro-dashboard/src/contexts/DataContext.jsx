@@ -570,6 +570,25 @@ export function DataProvider({ children }) {
      * @param {string} id
      * @param {Partial<PublicationDoc>} patch
      */
+    /**
+     * A.2.10 — atomic CF action (`create_publication_with_workflow`) utáni
+     * lokális state-illesztés: insert a `publications` listába (ha még nincs
+     * benne) + `switchPublication` az új doc-ra. A régi `createPublication`
+     * direkt-DB úton csinálta ugyanezt (ld. fenti komment); az új CF flow-t
+     * ide vezetjük át, hogy a UI selection / aktív-pub-állapot ne regresszáljon.
+     *
+     * Idempotens: ha a Realtime push már insertelt (race), nem duplikálunk;
+     * ha a doc már aktív, a `switchPublication` no-op.
+     */
+    const applyCreatedPublicationLocal = useCallback(async (doc) => {
+        if (!doc?.$id) return;
+        setPublications((prev) => {
+            if (prev.some((p) => p.$id === doc.$id)) return prev;
+            return [...prev, doc].sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        });
+        await switchPublication(doc.$id);
+    }, [switchPublication]);
+
     const applyPublicationPatchLocal = useCallback((id, patch) => {
         if (!id || !patch || typeof patch !== 'object') return;
         const patchWithTimestamp = patch.$updatedAt
@@ -824,7 +843,7 @@ export function DataProvider({ children }) {
         fetchAllGroupMembers, getMemberName,
         // Write-through API
         createPublication, updatePublication, deletePublication,
-        applyPublicationPatchLocal,
+        applyPublicationPatchLocal, applyCreatedPublicationLocal,
         createLayout, updateLayout, deleteLayout,
         createDeadline, updateDeadline, deleteDeadline,
         updateArticle
@@ -838,7 +857,7 @@ export function DataProvider({ children }) {
         fetchAllOrgWorkflows,
         fetchAllGroupMembers, getMemberName,
         createPublication, updatePublication, deletePublication,
-        applyPublicationPatchLocal,
+        applyPublicationPatchLocal, applyCreatedPublicationLocal,
         createLayout, updateLayout, deleteLayout,
         createDeadline, updateDeadline, deleteDeadline,
         updateArticle
