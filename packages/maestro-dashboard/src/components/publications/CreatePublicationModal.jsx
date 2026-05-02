@@ -22,6 +22,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useData } from '../../contexts/DataContext.jsx';
 import { useAuth } from '../../contexts/AuthContext.jsx';
+import { useScope } from '../../contexts/ScopeContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
 import { showAutoseedWarnings } from '../../utils/autoseedWarnings.js';
@@ -29,8 +30,9 @@ import { showAutoseedWarnings } from '../../utils/autoseedWarnings.js';
 const DEFAULT_LAYOUT_NAME = 'A';
 
 export default function CreatePublicationModal() {
-    const { workflows, createPublication, createLayout, deletePublication, applyPublicationPatchLocal } = useData();
-    const { assignWorkflowToPublication } = useAuth();
+    const { workflows, createLayout, applyPublicationPatchLocal } = useData();
+    const { createPublicationWithWorkflow } = useAuth();
+    const { activeOrganizationId, activeEditorialOfficeId } = useScope();
     const { closeModal } = useModal();
     const { showToast } = useToast();
 
@@ -119,48 +121,41 @@ export default function CreatePublicationModal() {
         setIsSubmitting(true);
         setSubmitError('');
 
+        if (!activeOrganizationId || !activeEditorialOfficeId) {
+            setSubmitError('Hiányzó scope (szervezet / szerkesztőség). Frissítsd az oldalt.');
+            setIsSubmitting(false);
+            return;
+        }
+
         try {
-            // Üres rootPath esetén a kulcs kimarad, hogy az Appwrite attribútum nullra default-áljon
-            // (empty string más downstream ellenőrzéseket triggerelhetne).
+            // A.2.10 (ADR 0008) — atomic CF action. Egyetlen szerver-oldali
+            // create + autoseed → nincs kliens-oldali tranziens "workflowId
+            // nélkül" ablak. Ha bukik (autoseed/workflow-fetch), a CF maga
+            // rollbackel; itt csak az error toast jelenik meg.
             const trimmedRoot = rootPath.trim();
-            // A.2.3 (ADR 0008) — a workflowId-t NEM tesszük be a create
-            // payload-ba: helyette a create utáni `assign_workflow_to_publication`
-            // CF futtatja az autoseedet. Direkt create + workflowId inline
-            // megkerülné a `requiredGroupSlugs[]` autoseed flow-t.
             const payload = {
+                organizationId: activeOrganizationId,
+                editorialOfficeId: activeEditorialOfficeId,
+                workflowId,
                 name: name.trim(),
                 coverageStart: parseInt(coverageStart, 10),
                 coverageEnd: parseInt(coverageEnd, 10),
-                excludeWeekends,
-                isActivated: false
+                excludeWeekends
             };
             if (trimmedRoot !== '') payload.rootPath = trimmedRoot;
 
-            const publication = await createPublication(payload);
-
-            // Workflow hozzárendelés + autoseed CF-en át — KRITIKUS lépés.
-            // Codex stop-time review: a publikáció NEM maradhat orphan
-            // workflowId nélkül (különben a stack csendben rossz / null
-            // workflow-val futna). Ha az assign bukik → rollback (delete).
-            try {
-                const assignResp = await assignWorkflowToPublication(publication.$id, workflowId);
-                applyPublicationPatchLocal(publication.$id, assignResp?.publication || { workflowId });
-                showAutoseedWarnings(showToast, assignResp?.autoseed?.warnings, 'CreatePublicationModal');
-            } catch (assignErr) {
-                console.warn('[CreatePublicationModal] Workflow assign sikertelen — rollback:', assignErr);
-                try {
-                    await deletePublication(publication.$id);
-                } catch (rollbackErr) {
-                    console.error('[CreatePublicationModal] Rollback (deletePublication) sikertelen — orphan publikáció maradt!', rollbackErr);
-                }
-                const reason = assignErr?.code || assignErr?.message || 'unknown';
-                throw new Error(`workflow_assign_failed: ${reason}`);
+            const response = await createPublicationWithWorkflow(payload);
+            const publication = response?.publication;
+            if (!publication?.$id) {
+                throw new Error('publication_create_failed: empty response');
             }
+            // A Realtime push beilleszti a state-be; addig is patcheljük
+            // lokálisan, hogy az auto-layout createLayout azonnali
+            // `publicationId`-t kapjon.
+            applyPublicationPatchLocal(publication.$id, publication);
+            showAutoseedWarnings(showToast, response?.autoseed?.warnings, 'CreatePublicationModal');
 
-            // Automatikus „A" layout — workflow assign UTÁN, hogy a teljes
-            // happy-path sikerült (autoseed + workflowId). Ha a layout
-            // create bukik, a kiadvány már konzisztens állapotban van —
-            // csak warning toast (a user kézzel létrehozhat layout-ot).
+            // Automatikus „A" layout — atomic create UTÁN, best-effort.
             try {
                 await createLayout({
                     publicationId: publication.$id,
@@ -176,7 +171,8 @@ export default function CreatePublicationModal() {
             closeModal();
         } catch (err) {
             console.error('[CreatePublicationModal] Létrehozás hiba:', err);
-            setSubmitError(err?.message || 'Ismeretlen hiba a kiadvány létrehozásakor.');
+            const reason = err?.code || err?.message || 'Ismeretlen hiba a kiadvány létrehozásakor.';
+            setSubmitError(reason);
         } finally {
             setIsSubmitting(false);
         }

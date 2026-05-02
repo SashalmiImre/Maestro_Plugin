@@ -161,6 +161,7 @@ const VALID_ACTIONS = new Set([
     'archive_workflow', 'restore_workflow',
     // A.2.2/A.2.3 — workflow-driven autoseed + aktiválás
     'activate_publication', 'assign_workflow_to_publication',
+    'create_publication_with_workflow',
     'update_organization',
     'create_editorial_office', 'update_editorial_office',
     'delete_organization', 'delete_editorial_office',
@@ -5516,6 +5517,165 @@ module.exports = async function ({ req, res, log, error }) {
                 visibility: newVisibility,
                 createdBy: callerId,
                 crossTenant: sourceDoc.editorialOfficeId !== editorialOfficeId
+            });
+        }
+
+        // ════════════════════════════════════════════════════════
+        // ACTION = 'create_publication_with_workflow'  (A.2.10)
+        // ════════════════════════════════════════════════════════
+        //
+        // Atomic publikáció-létrehozás workflow-hozzárendeléssel + autoseed.
+        // Codex stop-time review: az utólagos `assign_workflow_to_publication`
+        // call kliens-oldali tranziens ablakot teremt (createPub → assign
+        // között a publikáció workflowId nélkül látható Realtime-on át, más
+        // tab/derived state csendben null/wrong workflow-val futna).
+        //
+        // Auth: caller a target office-ának tagja. A workflow scope (3-way
+        // visibility) szerver-szinten validált. Rollback ha az autoseed
+        // bukik (deleteDocument a frissen létrehozott publikációra).
+        //
+        // Payload: `{ organizationId, editorialOfficeId, workflowId, name,
+        //   coverageStart, coverageEnd, excludeWeekends?, rootPath? }`
+        // Return: `{ success, publication, autoseed }`
+        if (action === 'create_publication_with_workflow') {
+            const {
+                organizationId,
+                editorialOfficeId,
+                workflowId,
+                name,
+                coverageStart,
+                coverageEnd,
+                excludeWeekends,
+                rootPath
+            } = payload;
+
+            if (!organizationId || !editorialOfficeId || !workflowId || !name
+                || coverageStart == null || coverageEnd == null) {
+                return fail(res, 400, 'missing_fields', {
+                    required: ['organizationId', 'editorialOfficeId', 'workflowId', 'name', 'coverageStart', 'coverageEnd']
+                });
+            }
+            if (!publicationsCollectionId) {
+                return fail(res, 500, 'misconfigured', {
+                    missing: ['PUBLICATIONS_COLLECTION_ID']
+                });
+            }
+
+            // 1) Auth: caller office-membership a target office-ban — auth-first
+            //    (workflow-létezést nem szivárogtatjuk nem-tag user-nek).
+            const callerOfficeMembership = await databases.listDocuments(
+                databaseId,
+                officeMembershipsCollectionId,
+                [
+                    sdk.Query.equal('editorialOfficeId', editorialOfficeId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.select(['role', 'organizationId']),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (callerOfficeMembership.documents.length === 0) {
+                return fail(res, 403, 'not_a_member');
+            }
+            const callerOrgId = callerOfficeMembership.documents[0].organizationId;
+            if (callerOrgId && callerOrgId !== organizationId) {
+                return fail(res, 403, 'organization_mismatch');
+            }
+
+            // 2) Workflow fetch + 3-way visibility scope match.
+            let workflowDoc;
+            try {
+                workflowDoc = await databases.getDocument(databaseId, workflowsCollectionId, workflowId);
+            } catch (err) {
+                if (err?.code === 404) return fail(res, 404, 'workflow_not_found');
+                error(`[CreatePubWithWorkflow] workflow fetch hiba: ${err.message}`);
+                return fail(res, 500, 'workflow_fetch_failed');
+            }
+            const wfVisibility = WORKFLOW_VISIBILITY_VALUES.includes(workflowDoc.visibility)
+                ? workflowDoc.visibility
+                : WORKFLOW_VISIBILITY_DEFAULT;
+            let scopeOk = false;
+            if (wfVisibility === 'public') scopeOk = true;
+            else if (wfVisibility === 'organization' && workflowDoc.organizationId === organizationId) scopeOk = true;
+            else if (wfVisibility === 'editorial_office' && workflowDoc.editorialOfficeId === editorialOfficeId) scopeOk = true;
+            if (!scopeOk) {
+                return fail(res, 403, 'workflow_scope_mismatch', {
+                    visibility: wfVisibility
+                });
+            }
+
+            // 3) Compiled parse (ha nem parse-elhető, fail-fast a create előtt).
+            let compiled;
+            try {
+                compiled = typeof workflowDoc.compiled === 'string'
+                    ? JSON.parse(workflowDoc.compiled)
+                    : workflowDoc.compiled;
+            } catch (parseErr) {
+                error(`[CreatePubWithWorkflow] workflow compiled parse hiba: ${parseErr.message}`);
+                return fail(res, 500, 'workflow_compiled_invalid');
+            }
+
+            // 4) Atomic createDocument. A `validate-publication-update` post-event
+            //    CF a scope-mezőket validálja; a workflowId set + isActivated:false
+            //    nem triggereli a aktiválási guardot, így biztonságos.
+            const docPayload = {
+                organizationId,
+                editorialOfficeId,
+                workflowId,
+                name: String(name).trim(),
+                coverageStart: parseInt(coverageStart, 10),
+                coverageEnd: parseInt(coverageEnd, 10),
+                isActivated: false,
+                modifiedByClientId: callerId
+            };
+            if (typeof excludeWeekends === 'boolean') docPayload.excludeWeekends = excludeWeekends;
+            if (typeof rootPath === 'string' && rootPath.trim() !== '') docPayload.rootPath = rootPath.trim();
+
+            let pubDoc;
+            try {
+                pubDoc = await databases.createDocument(
+                    databaseId,
+                    publicationsCollectionId,
+                    sdk.ID.unique(),
+                    docPayload
+                );
+            } catch (err) {
+                error(`[CreatePubWithWorkflow] publikáció create hiba: ${err.message}`);
+                return fail(res, 500, 'publication_create_failed', { error: err.message });
+            }
+
+            // 5) Autoseed — ha bukik, rollback (deleteDocument). A publikáció
+            //    NEM maradhat workflowId-vel DE seedeletlen csoportokkal,
+            //    különben a következő aktiváló-flow `empty_required_groups`-ot
+            //    adna a usernek hibás kontextusban.
+            let autoseed;
+            try {
+                autoseed = await seedGroupsFromWorkflow(
+                    databases,
+                    { databaseId, groupsCollectionId },
+                    compiled,
+                    editorialOfficeId,
+                    organizationId,
+                    callerId,
+                    log,
+                    buildOfficeAclPerms
+                );
+            } catch (seedErr) {
+                error(`[CreatePubWithWorkflow] autoseed hiba — rollback (pub=${pubDoc.$id}): ${seedErr.message}`);
+                try {
+                    await databases.deleteDocument(databaseId, publicationsCollectionId, pubDoc.$id);
+                } catch (rollbackErr) {
+                    error(`[CreatePubWithWorkflow] rollback hiba (pub=${pubDoc.$id}, orphan!): ${rollbackErr.message}`);
+                }
+                return fail(res, 500, 'autoseed_failed', { error: seedErr.message });
+            }
+
+            log(`[CreatePubWithWorkflow] User ${callerId}: pub=${pubDoc.$id} ("${docPayload.name}") létrehozva workflow=${workflowId}-vel, autoseed.created=[${autoseed.created.join(',')}]`);
+
+            return res.json({
+                success: true,
+                action: 'created',
+                publication: pubDoc,
+                autoseed
             });
         }
 

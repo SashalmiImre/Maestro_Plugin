@@ -903,6 +903,26 @@ export function AuthProvider({ children }) {
     }, [user?.$id]);
 
     /**
+     * A.2.10 (ADR 0008) — Atomic publikáció-létrehozás workflow-hozzárendeléssel.
+     * Egyetlen CF call (`create_publication_with_workflow`) — kliens-oldali
+     * tranziens "workflowId nélkül" ablak nélkül. Codex stop-time review
+     * (4. iter) — a két lépéses create+assign Realtime-szempontból más
+     * tab/derivált state-ekben is csendben null-workflow-t mutatott.
+     *
+     * @param {Object} payload — `{ organizationId, editorialOfficeId, workflowId,
+     *   name, coverageStart, coverageEnd, excludeWeekends?, rootPath? }`
+     * @returns {Promise<{ publication, autoseed }>}
+     */
+    const createPublicationWithWorkflow = useCallback(async (payload) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'create_publication_with_workflow',
+            payload,
+            'publication_create_failed'
+        );
+    }, [user?.$id]);
+
+    /**
      * Fázis 8 — Szervezet kaszkád törlés.
      *
      * A CF `delete_organization` action-jét hívja (owner-only). A CF
@@ -1106,7 +1126,8 @@ export function AuthProvider({ children }) {
         renameGroup,
         deleteGroup,
         activatePublication,
-        assignWorkflowToPublication
+        assignWorkflowToPublication,
+        createPublicationWithWorkflow
     }), [
         user,
         loading,
@@ -1141,7 +1162,8 @@ export function AuthProvider({ children }) {
         renameGroup,
         deleteGroup,
         activatePublication,
-        assignWorkflowToPublication
+        assignWorkflowToPublication,
+        createPublicationWithWorkflow
     ]);
 
     return (
