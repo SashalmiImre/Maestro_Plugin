@@ -7,7 +7,7 @@ last_updated: 2026-05-02
 
 # 0008 — Jogosultsági rendszer + workflow-driven felhasználó-csoportok
 
-> **Implementáció állapota (2026-05-02)**: A. blokk (workflow-driven groups) szerver-oldala kész — A.1 (adatmodell + shared validátor + ADR), A.2 (CF actionök) implementálva, deploy-ra vár. UI (A.4) és Plugin-runtime (A.5) hátra van. B. blokk (permissionSets) még nem indult.
+> **Implementáció állapota (2026-05-02)**: A. blokk (workflow-driven groups) szerver-oldala kész — A.1 (adatmodell + shared validátor + ADR), A.2 (CF actionök) implementálva, deploy-ra vár. **A.3 (permissionSets réteg) szerver-oldala kész**: A.3.1-A.3.5 + A.3.7 server-side cache implementálva — `permissions.js` shared modul (38 slug + 8 csoport + 3 default permission set) + CF inline duplikátum (`buildPermissionSnapshot`, `userHasPermission`, `userHasOrgPermission`, `validatePermissionSetSlugs`, `createPermissionContext`); `bootstrap_organization` és `create_editorial_office` automatikusan seedeli a 3 default permission set-et (`owner_base`, `admin_base`, `member_base`) office-onként; új CRUD action-ök: `create_permission_set`, `update_permission_set`, `archive_permission_set`, `restore_permission_set`, `assign_permission_set_to_group`, `unassign_permission_set_from_group`. **Hátra van**: A.3.6 (meglévő CF guardok lecserélése `userHasPermission()`-re — külön commit, iteratív rollout), A.4 (Dashboard UI), A.5 (Plugin runtime).
 
 ## Kontextus
 

@@ -289,7 +289,7 @@ HTTP CF, három `action`-nel — minden tenant management művelet egy helyen. A
 
 **Bemeneti payload**:
 ```json
-{ "action": "bootstrap_organization" | "create_organization" | "create" | "accept" | "list_my_invites" | "decline_invite" | "leave_organization" | "add_group_member" | "remove_group_member" | "create_group" | "rename_group" | "update_group_metadata" | "archive_group" | "restore_group" | "delete_group" | "create_workflow" | "update_workflow" | "update_workflow_metadata" | "delete_workflow" | "duplicate_workflow" | "archive_workflow" | "restore_workflow" | "assign_workflow_to_publication" | "activate_publication" | "bootstrap_workflow_schema" | "bootstrap_publication_schema" | "bootstrap_groups_schema" | "bootstrap_permission_sets_schema" | "delete_organization" | "delete_editorial_office" | "backfill_tenant_acl", ... }
+{ "action": "bootstrap_organization" | "create_organization" | "create" | "accept" | "list_my_invites" | "decline_invite" | "leave_organization" | "add_group_member" | "remove_group_member" | "create_group" | "rename_group" | "update_group_metadata" | "archive_group" | "restore_group" | "delete_group" | "create_workflow" | "update_workflow" | "update_workflow_metadata" | "delete_workflow" | "duplicate_workflow" | "archive_workflow" | "restore_workflow" | "assign_workflow_to_publication" | "activate_publication" | "create_permission_set" | "update_permission_set" | "archive_permission_set" | "restore_permission_set" | "assign_permission_set_to_group" | "unassign_permission_set_from_group" | "bootstrap_workflow_schema" | "bootstrap_publication_schema" | "bootstrap_groups_schema" | "bootstrap_permission_sets_schema" | "delete_organization" | "delete_editorial_office" | "backfill_tenant_acl", ... }
 ```
 
 **Biztonsági megjegyzés**: Korábban létezett egy `organization-membership-guard` trigger CF, amely egy `modifiedByClientId === 'server-guard'` sentinellel engedélyezte az invite-eredetű membership-eket. Ez **kliens-forgeable** volt — bármely hitelesített user beállíthatta a payload-ban. A Codex adversarial review jelezte a kritikus sebezhetőséget, és a javítás ACL-alapú védelemre váltott (B.5 utolsó iteráció, 2026-04-07).
@@ -525,9 +525,56 @@ Két új attribútum a `workflows` collection-ön:
 - `permissionSets` attribútumok: `name`, `slug`, `description`, `permissions[]` (string array), `editorialOfficeId`, `organizationId`, `archivedAt`, `createdByUserId`. Indexek: `office_slug_unique`, `office_idx`, `org_idx`.
 - `groupPermissionSets` (m:n junction) attribútumok: `groupId`, `permissionSetId`, `editorialOfficeId`, `organizationId`. Indexek: `group_set_unique`, `office_idx`, `group_idx`, `set_idx`.
 - Action-szintű env var guard: `PERMISSION_SETS_COLLECTION_ID` + `GROUP_PERMISSION_SETS_COLLECTION_ID` — csak ezen az action-ön kötelezőek; a többi action működése érintetlen.
-- A default permission set-ek (`owner_base`, `admin_base`, `member_base`) seedelése **NEM ennek az action-nek a feladata** — A.3.2 alatt a `bootstrap_organization` kibővítése fogja végezni.
+- A default permission set-ek (`owner_base`, `admin_base`, `member_base`) seedelése **NEM ennek az action-nek a feladata** — A.3.2 implementálta: a `bootstrap_organization` és a `create_editorial_office` automatikusan seedeli őket minden új office-ra (`seedDefaultPermissionSets` helper).
 - Aszinkron Appwrite attribute processing miatt az index-create első futáson 400-zal elbukhat (`indexesPending`) — a user 10s múlva újra futtatja az action-t (idempotens).
 - Deploy után a Console-on ellenőrizendő: a két új collection `rowSecurity` flag-je aktív (különben a doc-szintű ACL nem érvényesül).
+
+### Permission set CRUD action-ök (A.3.3-A.3.4 / ADR 0008)
+
+**ACTION='create_permission_set'** (A.3.3):
+- Payload: `{ editorialOfficeId, name, slug, description?, permissions[] }`.
+- Auth jelenleg org owner/admin (mint `create_group`). A.3.6 retrofitben → `userHasPermission('permissionSet.create', editorialOfficeId)`.
+- Slug regex check (`SLUG_REGEX`), `validatePermissionSetSlugs(permissions)` (`permissions.js`-ből) — 400 `org_scope_slug_not_allowed` ha bármely slug `org.*`-prefixű, 400 `invalid_permissions` egyéb hibára.
+- Slug-ütközés: `office_slug_unique` index → 409 `permission_set_slug_taken`.
+- ACL: `buildOfficeAclPerms(editorialOfficeId)`.
+- Description max 500 char, nullable. `permissions` de-duplikálva.
+
+**ACTION='update_permission_set'** (A.3.3):
+- Payload: `{ permissionSetId, name?, description?, permissions? }`.
+- **Slug immutable**: `payload.slug !== undefined` → 400 `slug_immutable`.
+- Selective update; `name` undefined / `description` undefined / `permissions` undefined = no-op az adott mezőre. Ha mind undefined, success `action: 'noop'`.
+- `permissions[]` validáció ugyanaz, mint a create-nél.
+
+**ACTION='archive_permission_set'** / **'restore_permission_set'** (A.3.3):
+- Payload: `{ permissionSetId }`. Közös handler (`isArchive` flag).
+- `archivedAt` set/null. Idempotens (`already_archived` / `already_active`).
+- **NINCS blocker scan** (Codex review (b) opció): a `groupPermissionSets` junction docok intaktan maradnak. Az archivált permission set-eket a `userHasPermission()` snapshot build a `Query.isNull('archivedAt')` szűrővel hagyja figyelmen kívül; restore esetén automatikusan visszaáll.
+- Schema-missing → 422 `schema_missing` + `bootstrap_permission_sets_schema` hint.
+
+**ACTION='assign_permission_set_to_group'** (A.3.4):
+- Payload: `{ groupId, permissionSetId }`. M:n junction (`groupPermissionSets`) doc create.
+- Cross-office check: 400 `office_mismatch` ha `groupDoc.editorialOfficeId !== setDoc.editorialOfficeId`.
+- Idempotens: `group_set_unique` index → `already_assigned` + a meglévő junction doc.
+- Best-effort warning ha a permission set archivált (`{ code: 'permission_set_archived' }`) — UI banner-rel jelezhető, hogy a hozzárendelés érvényes lesz a restore után.
+- ACL: `buildOfficeAclPerms`.
+
+**ACTION='unassign_permission_set_from_group'** (A.3.4):
+- Payload: `{ groupId, permissionSetId }`. Junction doc lookup + delete.
+- Idempotens: ha nem létezik junction → success `already_unassigned`.
+
+### `permissions.js` modul (A.3.5)
+
+A jogosultsági helper kétféle:
+
+- **[`packages/maestro-shared/permissions.js`](packages/maestro-shared/permissions.js)** (ESM, kliens + szerver): slug-konstansok (38 slug + 8 `PERMISSION_GROUPS`), `DEFAULT_PERMISSION_SETS`, `validatePermissionSetSlugs`, sync helperek (`isOfficeScopeSlug`, `isOrgScopeSlug`, `clientHasPermission`).
+- **[`packages/maestro-server/.../src/permissions.js`](packages/maestro-server/functions/invite-to-organization/src/permissions.js)** (CommonJS, server-only): inline duplikáció + async lookup helperek:
+  - `userHasPermission(databases, env, user, slug, officeId, snapshotsByOffice?, orgRoleByOrg?)` — office-scope (33 slug). 1) global admin label, 2) `organizationMemberships.role === 'owner'/'admin'` → mind a 33 slug, 3) member-path: `groupMemberships` × `groupPermissionSets` × `permissionSets.permissions[]` (`archivedAt === null` szűrt, `OFFICE_SCOPE_PERMISSION_SLUG_SET` defense). Throw `org.*` slugra.
+  - `userHasOrgPermission(databases, env, user, slug, orgId, orgRoleByOrg?)` — org-scope (5 slug). 1) global admin label, 2) `organizationMemberships.role === 'owner'` → mind az 5, `'admin'` → 3 (kivéve `org.delete`/`org.rename`). Throw nem-`org.*` slugra.
+  - `buildPermissionSnapshot()` — egyszer számol per office, `{ userId, editorialOfficeId, organizationId, orgRole, permissionSlugs: Set<string>, hasGlobalAdminLabel }` formátumban.
+  - `createPermissionContext()` — `{ snapshotsByOffice: Map, orgRoleByOrg: Map }` per-request scaffold (A.3.7 server-side cache).
+  - `validatePermissionSetSlugs(slugs)` — write-path validáció (CRUD action-ök).
+
+**Drift kockázat**: a slug-set, `DEFAULT_PERMISSION_SETS` és `validatePermissionSetSlugs` a CF inline-ban duplikált. A két forrás manuálisan szinkronban tartandó (Phase 2 / A.7.1: AST-equality CI test vagy single-source bundle). Ugyanaz a minta, mint a `validateCompiledSlugsInline` (A.2.1).
 
 **Snapshot-preferáló workflow lookup** (CF hardening, #37):
 - `update-article` CF `getWorkflowForPublication()` — ha a publikációnak van `compiledWorkflowSnapshot`-ja, a CF kizárólag azt parse-olja (snap cache kulcs: `snap:${pubId}:${length}`). Csak snapshot hiányában / parse hibánál esik vissza a live `workflowId` lookup-ra. A workflow Dashboard-oldali módosításai így NEM érintik az aktivált publikáció cikk-validációit.

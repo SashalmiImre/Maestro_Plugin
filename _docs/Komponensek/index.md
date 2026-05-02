@@ -32,8 +32,9 @@ Egy fájl = egy domain fogalom. Mély, lefelé linkel a kódra (`fájl:sor`), ol
 ## Hookok
 - [[useOrgRole]] — Dashboard
 
-## Jogosultság (Proposed)
-- [[PermissionTaxonomy]] — permission slug-lista logikai csoportokba
+## Jogosultság
+- [[PermissionTaxonomy]] — permission slug-lista logikai csoportokba (Proposed)
+- [[PermissionHelpers]] — `permissions.js` modul (shared + server-only async lookup) — Implemented (A.3.5)
 - [[CompiledValidator]] — workflow `compiled` JSON hard contract validátor (shared)
 
 ## Útvonal

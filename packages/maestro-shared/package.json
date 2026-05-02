@@ -13,6 +13,7 @@
     "./commandRegistry": "./commandRegistry.js",
     "./pageGapUtils": "./pageGapUtils.js",
     "./groups": "./groups.js",
+    "./permissions": "./permissions.js",
     "./deadlineValidator": "./deadlineValidator.js",
     "./publicationActivation": "./publicationActivation.js"
   }
