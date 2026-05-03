@@ -63,3 +63,11 @@ Részletek: [[Komponensek/DataContext]], [[Komponensek/AuthContext]], [[Döntés
 **Ok**: `DashboardLayout.jsx` scope-effect korai `if (!activeEditorialOfficeId) return;` guard. A `ScopeContext` stale-ID validáció `setActiveOffice(null)`-ra állít, de a guard ezen az ágon blokkolja a `fetchPublications` / `fetchWorkflow` / `switchPublication(null)` clear-elést — `publications.length > 0` miatt az `isOnboarding` (`publications.length === 0`) sose teljesül.
 **Megoldás**: A guard-return eltávolítása. A `fetchPublications()` null office-ra `setPublications([])`-t ad, `fetchWorkflow()` null scope-ra `setWorkflows([])`-t ad, `switchPublication(null)` clearel articles/layouts/deadlines/validations-t — mind null-tolerant, ezért a belső guard redundáns volt.
 Részletek: [[Komponensek/DataContext]] (null-tolerant fetch), Feladatok M. szekció #97.
+
+---
+
+## WS reconnect után stale cache (Dashboard)
+**Tünet**: Egyik tab-on (vagy másik felhasználó) létrehoz/töröl/átnevez egy rekordot, miközben a saját Dashboard WS-e épp megszakadt (laptop alvás, WiFi switch, custom domain backend bounce). A WS visszakapcsolódik, de a Realtime-vezérelt cache-ek (memberships, aktív kiadvány child rekordjai, csoport listák) a régi állapotot mutatják mount-ig vagy scope-váltásig.
+**Ok**: A `client.subscribe()` callback CSAK `event` típusú push-okat lát — a disconnect-ablakban érkezett szerver-mutációk nem érkeznek meg, és a SDK 24.1.1 publikus API-ja nem tesz közzé reconnect signal-t. A Plugin-oldal a [[Döntések/0001-dual-proxy-failover|dual-proxy reconnect-réteg]]-gel védve van; a Dashboard közvetlenül beszél az Appwrite Cloud-dal, így saját reconnect-detektálás kell.
+**Megoldás**: `subscribeRealtime(channels, callback, { onReconnect: resync })` — a bus a `client.realtime.createSocket`-et monkey-patch-eli, hogy minden új socket `open` event-jén (kivéve az első kapcsolódást) meghívja a regisztrált `onReconnect` callback-eket. Bekötött fogyasztók (2026-05-03): `AuthContext` (silent membership reload), `DataContext` (`resyncRealtimeData` — publikációk + aktív pub child + workflow listák), `useTenantRealtimeRefresh` (debounce nélküli `reload()`).
+Részletek: [[Komponensek/RealtimeBus]] (5. pont: Reconnect-detect), [[Döntések/0004-dashboard-realtime-bus]] (2026-05-03 záradék).

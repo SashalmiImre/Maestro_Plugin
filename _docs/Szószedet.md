@@ -41,6 +41,8 @@ tags: [referencia]
 | **`useOrgRole(orgId)`** | Központi callerOrgRole hook (active-org / owner-org / pub-org variánsok) — [[Komponensek/useOrgRole]] |
 | **`getDatabases()` / `getFunctions()`** | [[Komponensek/AuthContext]] modul-szintű singleton — DataProvider-en KÍVÜLI használathoz |
 | **`workflowLatestUpdatedAtRef`** | Globális `$updatedAt` Map a workflow Realtime out-of-order védelemhez ([[Komponensek/DataContext]]) |
+| **`subscribeRealtime(channels, callback, options)`** | Dashboard megosztott Realtime bus belépési pont ([[Komponensek/RealtimeBus]]) — `options.onReconnect` callback opcióval reconnect-time resync-re. Tilos közvetlen `client.subscribe()` a dashboardon. |
+| **Reconnect-time resync** | A WS megszakadás-és-újrakapcsolódás ablakában érkezett szerver-mutációk nem érkeznek push-ként → a Realtime-vezérelt cache-ek stale-ben ragadnak. A bus a `client.realtime.createSocket`-et monkey-patch-eli, hogy minden új WS `open` event-jén (kivéve az elsőt) meghívja a regisztrált `onReconnect` callback-eket ([[Döntések/0004-dashboard-realtime-bus]] 2026-05-03 záradék). |
 
 ## Útvonalkezelés
 

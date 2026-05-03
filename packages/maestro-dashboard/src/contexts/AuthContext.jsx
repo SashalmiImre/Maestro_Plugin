@@ -415,7 +415,20 @@ export function AuthProvider({ children }) {
             }, 300);
         };
 
-        const unsubscribe = subscribeRealtime(channels, scheduleReload);
+        // WS reconnect után silent resync — a disconnect-ablakban érkező
+        // tenant rename / membership add változások nem érkeznének push-ként.
+        // Silent: tranziens hiba ne ürítse a már érvényes scope state-et
+        // (a hálózat reconnect után eleve flaky lehet, pl. WiFi switch).
+        // Destructive eseteket (saját kizárás) a következő CRUD 403-as válasza
+        // vagy egy tényleges Realtime delete event fogja jelezni — fail-closed
+        // viselkedést ott alkalmazunk, nem feltételezzük itt vakon.
+        const onReconnect = () => {
+            loadAndSetMemberships(userId, { silent: true }).catch(err =>
+                console.warn('[AuthContext] Reconnect-time memberships resync sikertelen:', err?.message)
+            );
+        };
+
+        const unsubscribe = subscribeRealtime(channels, scheduleReload, { onReconnect });
 
         return () => {
             if (timer) clearTimeout(timer);
