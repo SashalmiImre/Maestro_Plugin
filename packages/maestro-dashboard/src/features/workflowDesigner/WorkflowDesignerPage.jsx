@@ -988,6 +988,7 @@ export default function WorkflowDesignerPage() {
                     stateLabels={stateLabels}
                     isCollapsed={isSidebarCollapsed}
                     onToggleCollapsed={toggleSidebarCollapsed}
+                    isReadOnly={isReadOnly}
                 />
             </div>
 

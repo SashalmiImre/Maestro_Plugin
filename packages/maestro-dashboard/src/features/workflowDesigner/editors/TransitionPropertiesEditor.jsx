@@ -21,8 +21,9 @@ const DIRECTIONS = [
  * @param {string[]} props.availableGroups - Elérhető csoport slug-ok
  * @param {Function} props.onDelete - Edge törlés callback
  * @param {Object<string,string>} [props.stateLabels] - State slug → human label map (#65)
+ * @param {boolean} [props.isReadOnly] - Olvasásra korlátozott mód — letiltja az interaktív vezérlőket
  */
-export default function TransitionPropertiesEditor({ edge, onDataChange, availableGroups, onDelete, stateLabels }) {
+export default function TransitionPropertiesEditor({ edge, onDataChange, availableGroups, onDelete, stateLabels, isReadOnly = false }) {
     const { data } = edge;
 
     const update = useCallback((key, value) => {
@@ -70,6 +71,7 @@ export default function TransitionPropertiesEditor({ edge, onDataChange, availab
                     value={data.label || ''}
                     onChange={e => update('label', e.target.value)}
                     placeholder="Átmenet neve (gomb felirat)"
+                    disabled={isReadOnly}
                 />
             </div>
 
@@ -93,6 +95,7 @@ export default function TransitionPropertiesEditor({ edge, onDataChange, availab
                                 aria-checked={isActive}
                                 className={`designer-chip ${isActive ? 'designer-chip--active' : ''}`}
                                 onClick={() => update('direction', d.value)}
+                                disabled={isReadOnly}
                             >
                                 {d.label}
                             </button>
@@ -107,14 +110,16 @@ export default function TransitionPropertiesEditor({ edge, onDataChange, availab
                 value={data.allowedGroups || []}
                 availableGroups={availableGroups}
                 onChange={v => update('allowedGroups', v)}
+                disabled={isReadOnly}
             />
 
-            {/* Törlés gomb */}
+            {/* Törlés gomb — read-only módban letiltva (#A.4.6 follow-up). */}
             <div className="properties-editor__footer">
                 <button
                     type="button"
                     className="danger-action danger-action--block"
                     onClick={onDelete}
+                    disabled={isReadOnly}
                 >
                     Átmenet törlése
                 </button>

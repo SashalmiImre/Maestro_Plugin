@@ -13,8 +13,9 @@ import React, { useCallback } from 'react';
  * @param {string[]} props.value - Kiválasztott slug-ok
  * @param {string[]} props.availableGroups - Elérhető csoport slug-ok
  * @param {Function} props.onChange - (string[]) => void
+ * @param {boolean} [props.disabled] - Letiltott módban a chip-ek nem kattinthatók
  */
-export default function GroupMultiSelectField({ label, value = [], availableGroups = [], onChange }) {
+export default function GroupMultiSelectField({ label, value = [], availableGroups = [], onChange, disabled = false }) {
     const selected = new Set(value);
 
     const handleToggle = useCallback((slug) => {
@@ -31,7 +32,7 @@ export default function GroupMultiSelectField({ label, value = [], availableGrou
             {label && <label className="designer-field__label">{label}</label>}
             {/* #71: empty state hint — a chip-grid kontextust ad, a hint
                 explicit használati útmutató („kattints a hozzáadáshoz"). */}
-            {isEmpty && availableGroups.length > 0 && (
+            {isEmpty && availableGroups.length > 0 && !disabled && (
                 <p className="designer-field__empty-hint">
                     Kattints egy csoportra a hozzáadáshoz.
                 </p>
@@ -43,6 +44,7 @@ export default function GroupMultiSelectField({ label, value = [], availableGrou
                         type="button"
                         className={`designer-chip ${selected.has(slug) ? 'designer-chip--active' : ''}`}
                         onClick={() => handleToggle(slug)}
+                        disabled={disabled}
                     >
                         {slug}
                     </button>

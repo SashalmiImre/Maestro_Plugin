@@ -6,7 +6,7 @@
 
 import React, { useCallback } from 'react';
 
-export default function ColorPickerField({ label, value, onChange }) {
+export default function ColorPickerField({ label, value, onChange, disabled = false }) {
     const handleColorInput = useCallback((e) => {
         onChange(e.target.value);
     }, [onChange]);
@@ -28,6 +28,7 @@ export default function ColorPickerField({ label, value, onChange }) {
                     value={value || '#888888'}
                     onChange={handleColorInput}
                     className="designer-field__color-swatch"
+                    disabled={disabled}
                 />
                 <input
                     type="text"
@@ -36,6 +37,7 @@ export default function ColorPickerField({ label, value, onChange }) {
                     placeholder="#FFFFFF"
                     maxLength={7}
                     className="designer-field__input designer-field__input--mono"
+                    disabled={disabled}
                 />
             </div>
         </div>

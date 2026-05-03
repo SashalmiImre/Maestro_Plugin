@@ -18,8 +18,9 @@ import CommandListField from '../fields/CommandListField.jsx';
  * @param {Function} props.onDataChange - (newData) => void
  * @param {string[]} props.availableGroups - Elérhető csoport slug-ok
  * @param {Function} props.onDelete - Node törlés callback
+ * @param {boolean} [props.isReadOnly] - Olvasásra korlátozott mód — letiltja az interaktív vezérlőket
  */
-export default function StatePropertiesEditor({ node, onDataChange, availableGroups, onDelete }) {
+export default function StatePropertiesEditor({ node, onDataChange, availableGroups, onDelete, isReadOnly = false }) {
     const { data } = node;
     // #64: minden szekció ZÁRVA alapból — szimmetria + a Mozgatási jogosultság
     // (kritikus policy) sem ragad „rejtett"-ben az aszimmetrikus default miatt.
@@ -74,6 +75,7 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                     value={data.label || ''}
                     onChange={e => update('label', e.target.value)}
                     placeholder="Állapot neve"
+                    disabled={isReadOnly}
                 />
             </div>
 
@@ -82,6 +84,7 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                 label="Szín"
                 value={data.color}
                 onChange={c => update('color', c)}
+                disabled={isReadOnly}
             />
 
             {/* Duration */}
@@ -97,6 +100,7 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                             ...data.duration,
                             perPage: parseInt(e.target.value) || 0
                         })}
+                        disabled={isReadOnly}
                     />
                 </div>
                 <div className="designer-field">
@@ -110,6 +114,7 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                             ...data.duration,
                             fixed: parseInt(e.target.value) || 0
                         })}
+                        disabled={isReadOnly}
                     />
                 </div>
             </div>
@@ -121,6 +126,7 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                         type="checkbox"
                         checked={data.isInitial || false}
                         onChange={e => update('isInitial', e.target.checked)}
+                        disabled={isReadOnly}
                     />
                     Kezdőállapot
                 </label>
@@ -129,6 +135,7 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                         type="checkbox"
                         checked={data.isTerminal || false}
                         onChange={e => update('isTerminal', e.target.checked)}
+                        disabled={isReadOnly}
                     />
                     Végállapot
                 </label>
@@ -156,18 +163,21 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                             helpText="Az állapotba lépés pillanatában lefutó művelet (pl. preflight). Nem blokkolja a belépést."
                             value={data.validations?.onEntry || []}
                             onChange={v => updateValidation('onEntry', v)}
+                            disabled={isReadOnly}
                         />
                         <ValidationListField
                             label="Ellenőrzés: belépés feltétele"
                             helpText="Az állapotba lépés ELŐTT futó kapu — ha bukik, az átmenet blokkolva."
                             value={data.validations?.requiredToEnter || []}
                             onChange={v => updateValidation('requiredToEnter', v)}
+                            disabled={isReadOnly}
                         />
                         <ValidationListField
                             label="Ellenőrzés: kilépés feltétele"
                             helpText="Az állapotból kilépés ELŐTT futó kapu — ha bukik, az átmenet blokkolva."
                             value={data.validations?.requiredToExit || []}
                             onChange={v => updateValidation('requiredToExit', v)}
+                            disabled={isReadOnly}
                         />
                     </div>
                 )}
@@ -191,6 +201,7 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                             value={data.commands || []}
                             availableGroups={availableGroups}
                             onChange={v => update('commands', v)}
+                            disabled={isReadOnly}
                         />
                     </div>
                 )}
@@ -218,17 +229,19 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                             value={data.statePermissions || []}
                             availableGroups={availableGroups}
                             onChange={v => update('statePermissions', v)}
+                            disabled={isReadOnly}
                         />
                     </div>
                 )}
             </div>
 
-            {/* Törlés gomb */}
+            {/* Törlés gomb — read-only módban letiltva (#A.4.6 follow-up). */}
             <div className="properties-editor__footer">
                 <button
                     type="button"
                     className="danger-action danger-action--block"
                     onClick={onDelete}
+                    disabled={isReadOnly}
                 >
                     Állapot törlése
                 </button>
