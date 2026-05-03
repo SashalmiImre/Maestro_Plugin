@@ -26,7 +26,10 @@ export const COLLECTIONS = {
     ORGANIZATION_INVITES: 'organizationInvites',
     GROUPS: 'groups',
     GROUP_MEMBERSHIPS: 'groupMemberships',
-    WORKFLOWS: 'workflows'
+    WORKFLOWS: 'workflows',
+    // ADR 0008 / A.3 — Jogosultság-csoportok (permission sets)
+    PERMISSION_SETS: 'permissionSets',
+    GROUP_PERMISSION_SETS: 'groupPermissionSets'
 };
 
 /**

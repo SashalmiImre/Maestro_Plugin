@@ -10,18 +10,52 @@
  * értéke még null.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import { useData } from '../../contexts/DataContext.jsx';
 import { useContributorGroups } from '../../hooks/useContributorGroups.js';
 import { useToast } from '../../contexts/ToastContext.jsx';
 import { useConfirm } from '../ConfirmDialog.jsx';
 import { getContributor, setContributor } from '@shared/contributorHelpers.js';
+import { resolvePublicationCompiled } from '@shared/parseCompiledWorkflow.js';
 
 export default function ContributorsTab({ publication }) {
-    const { groups, membersBySlug, loading } = useContributorGroups();
+    // A.4.9 (ADR 0008): a kiadvány `compiledWorkflowSnapshot.requiredGroupSlugs[]`
+    // sorrendje a kanonikus rendezés a contributor dropdown-okhoz. Ha nincs
+    // snapshot (nem-aktivált pub), fallback a `useData().workflows`-ben tárolt
+    // `compiled.requiredGroupSlugs[]` az aktuálisan hozzárendelt workflow-ból.
+    const { workflows } = useData();
+    const orderingSlugs = useMemo(() => {
+        const compiled = resolvePublicationCompiled(publication, workflows);
+        if (!compiled || !Array.isArray(compiled.requiredGroupSlugs)) return undefined;
+        return compiled.requiredGroupSlugs.map((g) => g?.slug).filter(Boolean);
+    }, [publication, workflows]);
+
+    const { groups, membersBySlug, loading } = useContributorGroups({ orderingSlugs });
     const { articles, updatePublication, updateArticle } = useData();
     const { showToast } = useToast();
     const confirm = useConfirm();
+
+    // A.4.9 — szűrés contributor dropdown-okhoz:
+    //   - csak `isContributorGroup === true` csoportok ajánlhatóak hozzárendelésre
+    //   - DE: ha az adott slug-hoz már van meglévő `defaultContributors[slug]`
+    //     hozzárendelés (akár archived, akár `isContributorGroup: false`), azt
+    //     mutassuk, hogy a felhasználó el tudja távolítani.
+    const visibleGroups = useMemo(() => {
+        const assignedSlugs = new Set();
+        try {
+            const dc = publication.defaultContributors
+                ? (typeof publication.defaultContributors === 'string'
+                    ? JSON.parse(publication.defaultContributors)
+                    : publication.defaultContributors)
+                : null;
+            if (dc && typeof dc === 'object') {
+                for (const [k, v] of Object.entries(dc)) {
+                    if (v) assignedSlugs.add(k);
+                }
+            }
+        } catch { /* parse failure → only flag-based filter */ }
+        return groups.filter((g) => g.isContributorGroup || assignedSlugs.has(g.slug));
+    }, [groups, publication.defaultContributors]);
 
     const [busySlug, setBusySlug] = useState(null);
 
@@ -85,11 +119,13 @@ export default function ContributorsTab({ publication }) {
         );
     }
 
-    if (groups.length === 0) {
+    if (visibleGroups.length === 0) {
         return (
             <div className="publication-form">
                 <div className="form-empty-state">
-                    Nincs csoport ebben a szerkesztőségben.
+                    Nincs olyan közreműködő csoport ebben a szerkesztőségben (a workflow
+                    <code>requiredGroupSlugs</code> szerint <code>isContributorGroup: true</code>
+                    flag-gel jelölt csoportok jelennek meg itt).
                 </div>
             </div>
         );
@@ -97,12 +133,30 @@ export default function ContributorsTab({ publication }) {
 
     return (
         <div className="publication-form">
-            {groups.map((group) => {
+            {visibleGroups.map((group) => {
                 const members = membersBySlug[group.slug] || [];
                 const value = getContributor(publication.defaultContributors, group.slug) || '';
+                const isArchived = !!group.archivedAt;
+                const isLegacy = !group.isContributorGroup; // hozzárendelve van, de a flag már nincs
                 return (
-                    <div key={group.slug} className="form-group">
-                        <label htmlFor={`ct-${group.slug}`}>{group.name}</label>
+                    <div key={group.slug} className="form-group" style={{ opacity: isArchived ? 0.7 : 1 }}>
+                        <label htmlFor={`ct-${group.slug}`} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <span>{group.name}</span>
+                            {isArchived && (
+                                <span style={{
+                                    fontSize: 10, color: 'var(--text-muted)',
+                                    background: 'var(--bg-base)', padding: '1px 6px',
+                                    borderRadius: 3
+                                }}>archivált</span>
+                            )}
+                            {!isArchived && isLegacy && (
+                                <span title="Ez a csoport már nincs `isContributorGroup: true` flag-gel a workflow-ban — csak azért látszik, mert van hozzárendelt érték." style={{
+                                    fontSize: 10, color: '#FFB85C',
+                                    background: 'rgba(255, 184, 92, 0.15)',
+                                    padding: '1px 6px', borderRadius: 3
+                                }}>nem-contributor</span>
+                            )}
+                        </label>
                         <select
                             id={`ct-${group.slug}`}
                             className="form-select"

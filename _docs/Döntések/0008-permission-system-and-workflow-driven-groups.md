@@ -2,8 +2,57 @@
 tags: [adr, jogosultság, csoportok, workflow, permission-sets]
 status: Partially-Implemented
 date: 2026-05-01
-last_updated: 2026-05-02
+last_updated: 2026-05-03
 ---
+
+> **A.4 Dashboard UI záradék (2026-05-03)**:
+>
+> Az A.4 alpontok (1-9) implementálva — Vite production build clean, Codex
+> stop-time review minden iterációban. Új komponensek:
+>
+> - `GroupRow.jsx` (~360 sor) — kibontható csoport-sor: slug immutable +
+>   label/description/color/flags edit + permission set assign multi-select +
+>   workflow refs panel (parse-error worst-case jelzés) + archive/restore/delete.
+> - `PermissionSetsTab.jsx` (~290 sor) — lista + create/edit/archive/restore +
+>   csoport-hozzárendelés-számláló + assigned group-name chips.
+> - `PermissionSetEditor.jsx` (~330 sor) — modal: 8 collapsible csoport-fa +
+>   38 checkbox + org-scope disabled + tooltip + slug auto-suggest létrehozáskor +
+>   `expectedUpdatedAt` TOCTOU + legacy `org.*` slug warning + szűrés mentésnél.
+> - `RequiredGroupSlugsField.jsx` (~290 sor) — workflow Designer
+>   `requiredGroupSlugs[]` szerkesztő (sor-szintű slug+label+color+flags+description).
+> - `EmptyRequiredGroupsDialog.jsx` (~95 sor) — `empty_required_groups` 409
+>   modal + slug → label feloldás + "Tagok hozzáadása" CTA → `EditorialOfficeSettingsModal`.
+>
+> Frissített komponensek:
+>
+> - `EditorialOfficeGroupsTab.jsx` — teljes rewrite, `GroupRow.jsx` integráció.
+> - `EditorialOfficeSettingsModal.jsx` — `permission-sets` tab + szelektív
+>   `fallbackOnMissingSchema` fetch.
+> - `WorkflowPropertiesEditor.jsx` — régi `leaderGroups` MultiSelect + read-only
+>   `contributorGroups` listázás eltávolítva, `RequiredGroupSlugsField`
+>   integrálva.
+> - `WorkflowDesignerPage.availableGroups` — source-csere
+>   `metadata.requiredGroupSlugs[].map(g => g.slug)`-ra.
+> - `compiler.js graphToCompiled()` — a `metadata.leaderGroups` backwards-compat
+>   overwrite ág megszűnt (Codex P1 fix).
+> - `useContributorGroups.js` — `DEFAULT_GROUPS` eltávolítva, `orderingSlugs`
+>   paraméter, Realtime invalidáció, `archivedAt` mező.
+> - `ContributorsTab.jsx` — `isContributorGroup` szűrés + legacy/archived
+>   visibility a meglévő hozzárendelésekhez.
+> - `useTenantRealtimeRefresh.js` — `CHANNELS` 5-re bővítve.
+> - `AuthContext.jsx` — 9 új useCallback (permission set CRUD + group metadata +
+>   archive/restore + assign/unassign).
+> - `appwriteIds.js` — `COLLECTIONS.PERMISSION_SETS`, `COLLECTIONS.GROUP_PERMISSION_SETS`.
+>
+> **Halasztott (külön spawn task)**:
+>
+> 1. `isReadOnly` UX kiterjesztése a state/transition editor-okra (jelenleg
+>    csak no-op page-level callback véd, a UI vizuálisan szerkeszthetőnek tűnik).
+> 2. RealtimeBus reconnect resync handler — a WS-disconnect alatt elveszett
+>    event-eket nem kompenzálja a meglévő bus.
+>
+> **Hátra van**: A.5 (Plugin runtime — `enrichUserWithGroups` + `useElementPermission`
+> + plugin `useContributorGroups`), A.6 (smoke teszt).
 
 > **A.3.6 záradék (2026-05-02 — Codex final review fix-ekkel)**:
 >
@@ -118,7 +167,7 @@ last_updated: 2026-05-02
 
 # 0008 — Jogosultsági rendszer + workflow-driven felhasználó-csoportok
 
-> **Implementáció állapota (2026-05-02)**: A. blokk (workflow-driven groups) szerver-oldala kész — A.1 (adatmodell + shared validátor + ADR), A.2 (CF actionök) implementálva, deploy-ra vár. **A.3 (permissionSets réteg) szerver-oldala teljesen kész**: A.3.1-A.3.7 implementálva — `permissions.js` shared modul (38 slug + 8 csoport + 3 default permission set) + CF inline duplikátum (`buildPermissionSnapshot`, `userHasPermission`, `userHasOrgPermission`, `validatePermissionSetSlugs`, `createPermissionContext`); `bootstrap_organization` és `create_editorial_office` automatikusan seedeli a 3 default permission set-et (`owner_base`, `admin_base`, `member_base`) office-onként; új CRUD action-ök: `create_permission_set`, `update_permission_set`, `archive_permission_set`, `restore_permission_set`, `assign_permission_set_to_group`, `unassign_permission_set_from_group`. **A.3.6 retrofit kész** (2026-05-02): 28 CF-action guard lecserélve `userHasPermission()` (23 office-scope) / `userHasOrgPermission()` (3 org-scope) hívásra; régi `403 not_a_member` / `insufficient_role` → új `403 insufficient_permission` + `{slug, scope}` mező; **2 BREAKING change**: (a) `update_organization` → `org.rename` admin elveszti, csak owner; (b) frontend toast-ok generic-be esnek vissza, amíg az A.4 dashboard frontend nem áll át. **Hátra van**: A.4 (Dashboard UI), A.5 (Plugin runtime).
+> **Implementáció állapota (2026-05-02)**: A. blokk (workflow-driven groups) szerver-oldala kész — A.1 (adatmodell + shared validátor + ADR), A.2 (CF actionök) implementálva, deploy-ra vár. **A.3 (permissionSets réteg) szerver-oldala teljesen kész**: A.3.1-A.3.7 implementálva — `permissions.js` shared modul (38 slug + 8 csoport + 3 default permission set) + CF inline duplikátum (`buildPermissionSnapshot`, `userHasPermission`, `userHasOrgPermission`, `validatePermissionSetSlugs`, `createPermissionContext`); `bootstrap_organization` és `create_editorial_office` automatikusan seedeli a 3 default permission set-et (`owner_base`, `admin_base`, `member_base`) office-onként; új CRUD action-ök: `create_permission_set`, `update_permission_set`, `archive_permission_set`, `restore_permission_set`, `assign_permission_set_to_group`, `unassign_permission_set_from_group`. **A.3.6 retrofit kész** (2026-05-02): 28 CF-action guard lecserélve `userHasPermission()` (23 office-scope) / `userHasOrgPermission()` (3 org-scope) hívásra; régi `403 not_a_member` / `insufficient_role` → új `403 insufficient_permission` + `{slug, scope}` mező; **2 BREAKING change**: (a) `update_organization` → `org.rename` admin elveszti, csak owner; (b) frontend toast-ok generic-be esnek vissza, amíg az A.4 dashboard frontend nem áll át. **A.4 Dashboard UI kész** (2026-05-03): 5 új komponens (`GroupRow`, `PermissionSetsTab`, `PermissionSetEditor`, `RequiredGroupSlugsField`, `EmptyRequiredGroupsDialog`); `EditorialOfficeGroupsTab` rewrite + permission-sets tab; Workflow Designer kanonikus `requiredGroupSlugs[]` szerkesztő + source-csere; `useContributorGroups` workflow-snapshot ordering + Realtime invalidáció + isContributorGroup szűrés. Vite build clean, Codex sign-off minden iterációban. **Hátra van**: A.5 (Plugin runtime), A.6 (smoke teszt).
 
 ## Kontextus
 

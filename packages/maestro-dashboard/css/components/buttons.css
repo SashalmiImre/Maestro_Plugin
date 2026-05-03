@@ -1,0 +1,87 @@
+/* ─── Kis méretű inline akció gombok ─────────────────────────────────────── */
+
+/**
+ * Kompakt gomb-variánsok in-row CRUD UI-okhoz (permission set / csoport sorok,
+ * workflow designer mezők). Eltérnek a moderált `.btn-primary` / `.btn-secondary`
+ * modal-akció gomboktól (lásd `components/modal.css`) a kisebb pad-ben + 11px
+ * szöveg-méretben.
+ *
+ * Használat: a JSX `disabled` HTML attribútumot rakjon a gombra — a stílust
+ * a `:disabled` pszeudo-osztály adja, NEM JS factory.
+ */
+
+.btn-primary-sm,
+.btn-secondary-sm,
+.btn-ghost-sm,
+.btn-danger-outline-sm {
+    font-family: inherit;
+    font-weight: 500;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s, filter 0.15s;
+}
+
+.btn-primary-sm,
+.btn-secondary-sm,
+.btn-danger-outline-sm {
+    font-size: 11px;
+    padding: 4px 10px;
+}
+
+.btn-secondary-sm {
+    padding: 4px 8px;
+}
+
+.btn-primary-sm {
+    background: var(--accent-solid);
+    color: #fff;
+    border: none;
+}
+
+.btn-secondary-sm {
+    background: none;
+    color: var(--text-secondary);
+    border: 1px solid var(--outline-variant);
+}
+
+.btn-danger-outline-sm {
+    background: none;
+    color: var(--c-danger, #ef6060);
+    border: 1px solid var(--c-danger-border, #7a2d2d);
+}
+
+/* Ghost: tovább szűkített variáns (10px, padding 2px 8px) — kompakt
+   sorvégi akciósávhoz (PermissionSetsTab card-actions, PermissionSetEditor
+   "Mind be / Mind kikapcs" toggle). */
+.btn-ghost-sm {
+    font-size: 10px;
+    padding: 2px 8px;
+    background: none;
+    color: var(--text-secondary);
+    border: 1px solid var(--outline-variant);
+    border-radius: 3px;
+}
+
+/* Hover */
+.btn-primary-sm:hover:not(:disabled) {
+    filter: brightness(1.1);
+}
+
+.btn-secondary-sm:hover:not(:disabled),
+.btn-ghost-sm:hover:not(:disabled) {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+.btn-danger-outline-sm:hover:not(:disabled) {
+    background: rgb(from var(--c-error) r g b / 0.1);
+}
+
+/* Disabled */
+.btn-primary-sm:disabled,
+.btn-secondary-sm:disabled,
+.btn-ghost-sm:disabled,
+.btn-danger-outline-sm:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}

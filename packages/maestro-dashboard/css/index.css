@@ -33,12 +33,14 @@
 @import './components/danger.css';
 @import './components/badge.css';
 @import './components/segmented-toggle.css';
+@import './components/buttons.css';
 
 /* ─── Features ─────────────────────────────────────────────────────────────── */
 @import './features/article-table.css';
 @import './features/flatplan.css';
 @import './features/publication-settings.css';
 @import './features/workflow-library.css';
+@import './features/editorial-office-settings.css';
 
 /* ─── Responsive overrides ─────────────────────────────────────────────────── */
 /* Utoljára importálva: azonos specifikitású @media szabályok felülírják a fenti

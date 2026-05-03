@@ -21,11 +21,14 @@ import Tabs from '../Tabs.jsx';
 import AnimatedAutoHeight from '../AnimatedAutoHeight.jsx';
 import EditorialOfficeGeneralTab from './EditorialOfficeGeneralTab.jsx';
 import EditorialOfficeGroupsTab from './EditorialOfficeGroupsTab.jsx';
+import PermissionSetsTab from './PermissionSetsTab.jsx';
 import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 
+// ADR 0008 / A.4.3 — új tab a permission set CRUD-hoz.
 const TAB_DEFS = [
     { id: 'general', label: 'Általános' },
-    { id: 'groups', label: 'Csoportok' }
+    { id: 'groups', label: 'Csoportok' },
+    { id: 'permission-sets', label: 'Jogosultság-csoportok' }
 ];
 
 const ACTIVE_TAB_STORAGE_KEY = 'maestro.editorialOfficeSettingsActiveTab';
@@ -36,6 +39,33 @@ function getStoredTab() {
         if (value && TAB_DEFS.some(t => t.id === value)) return value;
     } catch { /* SSR / quota / parse */ }
     return 'general';
+}
+
+/**
+ * A.4 / ADR 0008 — szelektív fetch fallback. Csak a collection-not-found
+ * jellegű hibát nyeli el (Appwrite 404 vagy `collection_not_found` reason),
+ * minden mást továbbdob — különben a hálózati / ACL hiba némán üres listának
+ * látszana és a UI hamis "nincs adat" állapotot mutatna.
+ *
+ * @param {*} err - eldobott Appwrite Exception (vagy fetch error)
+ * @param {string} label - debug címke (`'permissionSets'`, `'groupPermissionSets'`)
+ * @returns {{ documents: [] }} ha a hiba schema-hiány; egyébként throw
+ */
+function fallbackOnMissingSchema(err, label) {
+    const code = err?.code;
+    const type = err?.type;
+    const message = err?.message || '';
+    const isMissing =
+        code === 404 ||
+        type === 'collection_not_found' ||
+        type === 'database_not_found' ||
+        message.toLowerCase().includes('collection_not_found') ||
+        message.toLowerCase().includes('collection with the requested id could not be found');
+    if (isMissing) {
+        console.warn(`[EditorialOfficeSettingsModal] ${label} schema nincs bootstrap-elve — üres listára esünk.`);
+        return { documents: [] };
+    }
+    throw err;
 }
 
 /**
@@ -54,10 +84,15 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
 
     const [activeTab, setActiveTab] = useState(() => initialTab || getStoredTab());
 
-    // --- Groups tab adata (a shell tölti, a tab propon kapja) ---
+    // --- Groups + Permission Sets tab adata (a shell tölti, a tab propon kapja) ---
+    // ADR 0008 (A.4): a permissionSets / groupPermissionSets-et is itt töltjük,
+    // mert mind a `groups` tab (csoport-permissionSet hozzárendelés / A.4.5),
+    // mind a jövőbeli `permission-sets` tab (A.4.3) ugyanezt használja.
     const [groups, setGroups] = useState([]);
     const [groupMemberships, setGroupMemberships] = useState([]);
     const [officeMembers, setOfficeMembers] = useState([]);
+    const [permissionSets, setPermissionSets] = useState([]);
+    const [groupPermissionSets, setGroupPermissionSets] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [loadError, setLoadError] = useState('');
 
@@ -85,7 +120,13 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
         if (gen === 1) setIsLoading(true);
 
         try {
-            const [groupsResult, membershipsResult, officeMembersResult] = await Promise.all([
+            const [
+                groupsResult,
+                membershipsResult,
+                officeMembersResult,
+                permissionSetsResult,
+                groupPermissionSetsResult
+            ] = await Promise.all([
                 databases.listDocuments({
                     databaseId: DATABASE_ID,
                     collectionId: COLLECTIONS.GROUPS,
@@ -109,7 +150,30 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
                         Query.equal('editorialOfficeId', editorialOfficeId),
                         Query.limit(200)
                     ]
-                })
+                }),
+                // A.4 / ADR 0008 — szelektív fallback: csak akkor fallback-elünk
+                // üres tömbre, ha a collection NEM létezik (`schema_missing`
+                // szerű hiba — Appwrite 404). Hálózati / ACL / egyéb tranziens
+                // hiba dobódjon tovább, hogy a fő catch-ágban a felhasználó
+                // értelmes "Hiba az adatok betöltésekor" üzenetet kapjon —
+                // különben a UI némán "nincs jogosultság-csoport"-ot mutatna
+                // (Codex review).
+                databases.listDocuments({
+                    databaseId: DATABASE_ID,
+                    collectionId: COLLECTIONS.PERMISSION_SETS,
+                    queries: [
+                        Query.equal('editorialOfficeId', editorialOfficeId),
+                        Query.limit(100)
+                    ]
+                }).catch((err) => fallbackOnMissingSchema(err, 'permissionSets')),
+                databases.listDocuments({
+                    databaseId: DATABASE_ID,
+                    collectionId: COLLECTIONS.GROUP_PERMISSION_SETS,
+                    queries: [
+                        Query.equal('editorialOfficeId', editorialOfficeId),
+                        Query.limit(500)
+                    ]
+                }).catch((err) => fallbackOnMissingSchema(err, 'groupPermissionSets'))
             ]);
 
             if (gen !== loadGenRef.current) return;
@@ -117,6 +181,8 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
             setGroups(groupsResult.documents);
             setGroupMemberships(membershipsResult.documents);
             setOfficeMembers(officeMembersResult.documents);
+            setPermissionSets(permissionSetsResult.documents);
+            setGroupPermissionSets(groupPermissionSetsResult.documents);
         } catch (err) {
             if (gen !== loadGenRef.current) return;
             console.error('[EditorialOfficeSettingsModal] Adatok betöltése sikertelen:', err);
@@ -180,6 +246,20 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
                             groups={groups}
                             groupMemberships={groupMemberships}
                             officeMembers={officeMembers}
+                            permissionSets={permissionSets}
+                            groupPermissionSets={groupPermissionSets}
+                            isLoading={isLoading}
+                            isOrgAdmin={isOrgAdmin}
+                            onReload={loadData}
+                        />
+                    )}
+
+                    {activeTab === 'permission-sets' && (
+                        <PermissionSetsTab
+                            office={office}
+                            permissionSets={permissionSets}
+                            groupPermissionSets={groupPermissionSets}
+                            groups={groups}
                             isLoading={isLoading}
                             isOrgAdmin={isOrgAdmin}
                             onReload={loadData}

@@ -23,10 +23,17 @@ import { useEffect } from 'react';
 import { subscribeRealtime, collectionChannel } from '../contexts/realtimeBus.js';
 import { COLLECTIONS } from '../config.js';
 
+// A.4.7 (ADR 0008): a `permissionSets` és `groupPermissionSets` Realtime
+// csatornákat a 3 eredeti mellé felvesszük, hogy az `EditorialOfficeSettingsModal`
+// (és más fogyasztók) automatikusan reload-oljanak, ha más tab / másik user
+// permission set-et módosít. A scope-szűrés ugyanazon `editorialOfficeId`
+// payload-mezőn megy, így nincs cross-tenant zaj.
 const CHANNELS = [
     collectionChannel(COLLECTIONS.GROUPS),
     collectionChannel(COLLECTIONS.GROUP_MEMBERSHIPS),
-    collectionChannel(COLLECTIONS.ORGANIZATION_INVITES)
+    collectionChannel(COLLECTIONS.ORGANIZATION_INVITES),
+    collectionChannel(COLLECTIONS.PERMISSION_SETS),
+    collectionChannel(COLLECTIONS.GROUP_PERMISSION_SETS)
 ];
 
 const DEBOUNCE_MS = 300;

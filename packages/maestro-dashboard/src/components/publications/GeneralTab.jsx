@@ -31,6 +31,8 @@ import { useConfirm } from '../ConfirmDialog.jsx';
 import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 import DangerZone from '../DangerZone.jsx';
 import WorkflowLibraryPanel from '../workflows/WorkflowLibraryPanel.jsx';
+import EmptyRequiredGroupsDialog from './EmptyRequiredGroupsDialog.jsx';
+import { parseCompiledWorkflow } from '@shared/parseCompiledWorkflow.js';
 
 function formatActivatedAt(iso) {
     if (!iso) return '';
@@ -257,17 +259,28 @@ export default function GeneralTab({ publication }) {
         } catch (err) {
             console.error('[GeneralTab] Aktiválás sikertelen:', err);
             const reason = err?.code || err?.message || 'ismeretlen hiba';
-            // A leggyakoribb ismert reasonöket UI-friendly üzenetté fordítjuk.
-            // A teljes részletes lista (slugs, affectedPublications) a UI A.4
-            // feladat szerint külön modallal jelenik meg.
-            const message =
-                reason === 'empty_required_groups'
-                    ? `Az aktiváláshoz minden csoportnak legalább 1 tagja kell legyen. Hiányzó csoportok: ${(err.slugs || []).join(', ')}`
-                    : reason === 'concurrent_modification'
-                        ? 'A kiadvány módosult a betöltés óta. Frissítsd az oldalt.'
-                        : reason === 'invalid_deadlines'
-                            ? `Érvénytelen határidők: ${(err.errors || []).join('; ')}`
-                            : `Aktiválás sikertelen: ${reason}`;
+
+            // A.4.8 (ADR 0008): a `empty_required_groups` 409-re modal-lal
+            // jelezzük a hiányzó csoportokat + "Tagok hozzáadása" CTA. A többi
+            // reasonre rövid toast marad — azok atomic UI-üzenetek.
+            if (reason === 'empty_required_groups') {
+                const wfDoc = workflows.find((w) => w.$id === publication.workflowId);
+                openModal(
+                    <EmptyRequiredGroupsDialog
+                        publication={publication}
+                        missingSlugs={err.slugs || err.response?.slugs || []}
+                        workflowCompiled={parseCompiledWorkflow(wfDoc?.compiled)}
+                    />,
+                    { size: 'md', title: 'Aktiválás blokkolva — üres csoportok' }
+                );
+                return;
+            }
+
+            const message = reason === 'concurrent_modification'
+                ? 'A kiadvány módosult a betöltés óta. Frissítsd az oldalt.'
+                : reason === 'invalid_deadlines'
+                    ? `Érvénytelen határidők: ${(err.errors || []).join('; ')}`
+                    : `Aktiválás sikertelen: ${reason}`;
             showToast(message, 'error');
         }
     }

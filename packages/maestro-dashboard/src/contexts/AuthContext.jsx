@@ -1076,10 +1076,12 @@ export function AuthProvider({ children }) {
     }, [user?.$id]);
 
     /**
-     * Csoport törlése (org owner/admin). DEFAULT_GROUPS-ot nem lehet törölni.
-     * Ha bármely workflow compiled JSON-ja, publikáció defaultContributors-e
-     * vagy cikk contributors-a hivatkozza a slug-ot, a CF `group_in_use`
-     * hibát ad vissza a hivatkozó rekordok listájával.
+     * Csoport végleges törlése (org owner/admin). A.2.8 óta nincs kliens-oldali
+     * DEFAULT_GROUPS védelem — a CF `delete_group` blocker-set ugyanazt veti
+     * össze, mint az `archive_group`: nem-archivált workflow `requiredGroupSlugs`-ban,
+     * aktív pub `compiledWorkflowSnapshot`-ban, vagy `articles.contributors` /
+     * `publications.defaultContributors` JSON kulcsában szerepel-e a slug.
+     * Ha igen, `group_in_use` 409 + a hivatkozó rekordok listája.
      *
      * @param {string} groupId
      */
@@ -1089,6 +1091,162 @@ export function AuthProvider({ children }) {
             'delete_group',
             { groupId },
             'group_delete_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * Csoport metadata frissítése (A.2.6, ADR 0008). A `slug` immutable —
+     * csak `label`, `description`, `color`, `isContributorGroup`,
+     * `isLeaderGroup` szerkeszthető. A CF a payload-ban hiányzó mezőket
+     * érintetlenül hagyja (selective update).
+     *
+     * @param {string} groupId
+     * @param {{ label?: string, description?: string|null, color?: string|null, isContributorGroup?: boolean, isLeaderGroup?: boolean }} patch
+     */
+    const updateGroupMetadata = useCallback(async (groupId, patch) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'update_group_metadata',
+            { groupId, ...patch },
+            'group_update_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * Csoport archiválása (A.2.7, ADR 0008). Soft-delete `archivedAt`-tel.
+     * A `delete_group`-mal azonos blocker-set-et használja (workflow
+     * `requiredGroupSlugs` / aktív pub `compiledWorkflowSnapshot` /
+     * `articles.contributors` / `publications.defaultContributors`); ha
+     * használatban van → 409 `group_in_use`.
+     *
+     * @param {string} groupId
+     */
+    const archiveGroup = useCallback(async (groupId) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'archive_group',
+            { groupId },
+            'group_archive_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * Archivált csoport visszaállítása (A.2.7). Reverzibilis művelet,
+     * blocker-scan nem fut.
+     *
+     * @param {string} groupId
+     */
+    const restoreGroup = useCallback(async (groupId) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'restore_group',
+            { groupId },
+            'group_restore_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * Új permission set létrehozása (A.3.3, ADR 0008). A `permissions[]`
+     * mezőben minden slug office-scope kell legyen — `org.*` slug-ot a
+     * CF 400 `org_scope_slug_not_allowed` errorral utasít vissza. A slug
+     * regex: `/^[a-z0-9]+(?:-[a-z0-9]+)*$/`.
+     *
+     * @param {{ editorialOfficeId: string, name: string, slug: string, description?: string|null, permissions: string[] }} payload
+     */
+    const createPermissionSet = useCallback(async (payload) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'create_permission_set',
+            payload,
+            'permission_set_create_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * Permission set szerkesztése (A.3.3). A `slug` immutable — csak
+     * `name`, `description`, `permissions` szerkeszthető. Opcionális
+     * `expectedUpdatedAt` TOCTOU guard (concurrent_modification 409).
+     *
+     * @param {string} permissionSetId
+     * @param {{ name?: string, description?: string|null, permissions?: string[] }} patch
+     * @param {string} [expectedUpdatedAt] - opcionális TOCTOU guard
+     */
+    const updatePermissionSet = useCallback(async (permissionSetId, patch, expectedUpdatedAt) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        const payload = { permissionSetId, ...patch };
+        if (expectedUpdatedAt) payload.expectedUpdatedAt = expectedUpdatedAt;
+        return callInviteFunction(
+            'update_permission_set',
+            payload,
+            'permission_set_update_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * Permission set archiválása (A.3.3). Soft-delete `archivedAt`-tel;
+     * a junction `groupPermissionSets` rekordok intaktan maradnak, az
+     * `userHasPermission()` az archivált set-eket skip-eli.
+     *
+     * @param {string} permissionSetId
+     * @param {string} [expectedUpdatedAt] - opcionális TOCTOU guard
+     */
+    const archivePermissionSet = useCallback(async (permissionSetId, expectedUpdatedAt) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        const payload = { permissionSetId };
+        if (expectedUpdatedAt) payload.expectedUpdatedAt = expectedUpdatedAt;
+        return callInviteFunction(
+            'archive_permission_set',
+            payload,
+            'permission_set_archive_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * Archivált permission set visszaállítása (A.3.3).
+     *
+     * @param {string} permissionSetId
+     * @param {string} [expectedUpdatedAt] - opcionális TOCTOU guard
+     */
+    const restorePermissionSet = useCallback(async (permissionSetId, expectedUpdatedAt) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        const payload = { permissionSetId };
+        if (expectedUpdatedAt) payload.expectedUpdatedAt = expectedUpdatedAt;
+        return callInviteFunction(
+            'restore_permission_set',
+            payload,
+            'permission_set_restore_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * Permission set hozzárendelése csoporthoz (A.3.4). Cross-office check
+     * (400 `office_mismatch`); idempotens (`already_assigned`).
+     *
+     * @param {string} groupId
+     * @param {string} permissionSetId
+     */
+    const assignPermissionSetToGroup = useCallback(async (groupId, permissionSetId) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'assign_permission_set_to_group',
+            { groupId, permissionSetId },
+            'permission_set_assign_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * Permission set hozzárendelés visszavonása (A.3.4). Idempotens
+     * (`already_unassigned`).
+     *
+     * @param {string} groupId
+     * @param {string} permissionSetId
+     */
+    const unassignPermissionSetFromGroup = useCallback(async (groupId, permissionSetId) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'unassign_permission_set_from_group',
+            { groupId, permissionSetId },
+            'permission_set_unassign_failed'
         );
     }, [user?.$id]);
 
@@ -1125,6 +1283,15 @@ export function AuthProvider({ children }) {
         createGroup,
         renameGroup,
         deleteGroup,
+        updateGroupMetadata,
+        archiveGroup,
+        restoreGroup,
+        createPermissionSet,
+        updatePermissionSet,
+        archivePermissionSet,
+        restorePermissionSet,
+        assignPermissionSetToGroup,
+        unassignPermissionSetFromGroup,
         activatePublication,
         assignWorkflowToPublication,
         createPublicationWithWorkflow
@@ -1161,6 +1328,15 @@ export function AuthProvider({ children }) {
         createGroup,
         renameGroup,
         deleteGroup,
+        updateGroupMetadata,
+        archiveGroup,
+        restoreGroup,
+        createPermissionSet,
+        updatePermissionSet,
+        archivePermissionSet,
+        restorePermissionSet,
+        assignPermissionSetToGroup,
+        unassignPermissionSetFromGroup,
         activatePublication,
         assignWorkflowToPublication,
         createPublicationWithWorkflow

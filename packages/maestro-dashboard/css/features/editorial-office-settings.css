@@ -1,0 +1,769 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Editorial Office Settings — Csoportok / Jogosultság-csoportok
+   ═══════════════════════════════════════════════════════════════════════════
+   ADR 0008 / A.4 — permission set + group management UI
+   - GroupRow.jsx (csoport sor + kibontható panel)
+   - PermissionSetsTab.jsx (jogosultság-csoport lista)
+   - PermissionSetEditor.jsx (jogosultság-csoport modal-form)
+   - EmptyRequiredGroupsDialog.jsx (üres-csoport aktiválási dialógus)
+   - RequiredGroupSlugsField.jsx (workflow designer mező)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+
+/* ─── Megosztott primitivek ────────────────────────────────────────────── */
+
+/* Inline mini-input (12px) — szerkesztő form mezők */
+.eo-input {
+    font-family: inherit;
+    font-size: 12px;
+    padding: 4px 6px;
+    background: var(--bg-base);
+    color: var(--text-primary);
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    outline: none;
+}
+
+.eo-input:focus {
+    border-color: rgb(from var(--accent) r g b / 0.5);
+}
+
+.eo-input--textarea {
+    resize: vertical;
+    min-height: 38px;
+}
+
+.eo-input--readonly,
+.eo-input[readonly] {
+    background: var(--bg-elevated);
+    cursor: not-allowed;
+}
+
+/* Mini status chip (10px szöveg, 1×6 pad) — csoport-sor / permission-set sor jelzői */
+.eo-chip {
+    display: inline-flex;
+    align-items: center;
+    font-size: 10px;
+    padding: 1px 6px;
+    border-radius: 3px;
+    color: var(--text-muted);
+    background: var(--bg-base);
+    border: 1px solid transparent;
+}
+
+.eo-chip--contrib {
+    color: var(--accent);
+    background: rgb(from var(--accent-solid) r g b / 0.15);
+}
+
+.eo-chip--leader {
+    color: #FFB85C;
+    background: rgba(255, 184, 92, 0.15);
+}
+
+.eo-chip--empty,
+.eo-chip--zero-tag {
+    color: #FF8B8B;
+    background: rgba(255, 139, 139, 0.15);
+}
+
+.eo-chip--outlined {
+    color: var(--text-secondary);
+    background: var(--bg-base);
+    border-color: var(--outline-variant);
+}
+
+/* Form column-stack — `<label>` wrapper kis form mezőkhöz */
+.eo-form-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+}
+
+.eo-form-stack__label {
+    color: var(--text-secondary);
+}
+
+.eo-form-stack__label--upper {
+    text-transform: uppercase;
+    font-size: 10px;
+    letter-spacing: 0.4px;
+    font-weight: 600;
+}
+
+.eo-form-stack__required {
+    color: #FF8B8B;
+}
+
+.eo-form-stack__hint {
+    color: var(--text-muted);
+    margin-left: 6px;
+    font-weight: 400;
+    font-size: 10px;
+}
+
+/* Subheading (UPPERCASE letter-spacing) — kibontott panel-szekciók fejléce */
+.eo-subheading {
+    margin: 0 0 6px 0;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+/* Empty hint (italic muted) — szekció üres állapotok */
+.eo-empty-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin: 4px 0;
+    font-style: italic;
+}
+
+.eo-empty-hint--warning {
+    color: #FF8B8B;
+    margin-top: 6px;
+}
+
+/* Color swatch — 12×12 dot, csoport-sor előtti szín-pötty */
+.eo-color-swatch {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--outline-variant);
+    vertical-align: middle;
+}
+
+
+/* ─── GroupRow.jsx ───────────────────────────────────────────────────────── */
+
+.group-row {
+    list-style: none;
+    border-radius: 4px;
+    border: 1px solid transparent;
+    margin-bottom: 4px;
+}
+
+.group-row--archived {
+    opacity: 0.6;
+}
+
+.group-row--expanded {
+    border-color: var(--outline-variant);
+    background: var(--bg-elevated);
+}
+
+.group-row__header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    padding: 6px 8px;
+    cursor: pointer;
+}
+
+.group-row__name {
+    font-weight: 500;
+}
+
+.group-row__slug {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.group-row__caret {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.group-row__panel {
+    padding: 4px 12px 12px;
+    border-top: 1px solid var(--border);
+}
+
+.group-row__edit-trigger {
+    margin-top: 8px;
+}
+
+.group-row__edit-form {
+    margin-top: 8px;
+    display: grid;
+    gap: 8px;
+    max-width: 480px;
+}
+
+.group-row__edit-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.group-row__color-row {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    font-size: 12px;
+}
+
+.group-row__color-input {
+    width: 32px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    cursor: pointer;
+    background: transparent;
+}
+
+.group-row__color-input:disabled {
+    cursor: not-allowed;
+}
+
+.group-row__color-text {
+    width: 96px;
+}
+
+.group-row__color-clear {
+    background: none;
+    color: var(--text-secondary);
+    border: 1px solid var(--outline-variant);
+    padding: 2px 6px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 10px;
+}
+
+.group-row__color-clear:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+}
+
+.group-row__color-presets {
+    display: flex;
+    gap: 4px;
+    margin-left: auto;
+}
+
+.group-row__color-preset {
+    width: 16px;
+    height: 16px;
+    border-radius: 3px;
+    cursor: pointer;
+    border: 1px solid var(--outline-variant);
+}
+
+.group-row__inline-flag {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+}
+
+.group-row__edit-section {
+    margin-top: 16px;
+}
+
+.group-row__perm-set-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.group-row__perm-set-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+}
+
+.group-row__perm-set-row--archived {
+    opacity: 0.55;
+}
+
+.group-row__perm-set-row--locked {
+    cursor: not-allowed;
+}
+
+.group-row__perm-set-pending {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+.group-row__workflow-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
+.group-row__workflow-item {
+    font-size: 11px;
+    color: var(--text-secondary);
+    background: var(--bg-base);
+    padding: 2px 8px;
+    border-radius: 3px;
+    border: 1px solid var(--outline-variant);
+}
+
+.group-row__workflow-visibility {
+    color: var(--text-muted);
+    margin-left: 4px;
+}
+
+.group-row__danger-zone {
+    margin-top: 16px;
+    padding-top: 12px;
+    border-top: 1px dashed var(--border);
+}
+
+.group-row__danger-actions {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.group-row__danger-hint {
+    font-size: 10px;
+    color: var(--text-muted);
+    margin-top: 6px;
+}
+
+
+/* ─── PermissionSetsTab.jsx ─────────────────────────────────────────────── */
+
+.permission-sets-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    flex-wrap: wrap;
+}
+
+.permission-sets-toolbar__title {
+    margin: 0;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.permission-sets-toolbar__count {
+    color: var(--text-muted);
+    font-weight: 400;
+    font-size: 12px;
+}
+
+.permission-sets-toolbar__archived-toggle {
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    cursor: pointer;
+}
+
+.permission-sets-toolbar__add {
+    margin-left: auto;
+}
+
+.permission-sets-empty {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin: 4px 0;
+}
+
+.permission-sets-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.permission-sets-row {
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    padding: 8px 10px;
+    background: var(--bg-elevated);
+}
+
+.permission-sets-row--archived {
+    opacity: 0.6;
+}
+
+.permission-sets-row__header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.permission-sets-row__name {
+    font-weight: 600;
+    font-size: 13px;
+}
+
+.permission-sets-row__slug {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.permission-sets-row__actions {
+    margin-left: auto;
+    display: flex;
+    gap: 6px;
+}
+
+.permission-sets-row__description {
+    font-size: 11px;
+    color: var(--text-secondary);
+    margin: 4px 0 0 0;
+}
+
+.permission-sets-row__assigned {
+    margin-top: 4px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}
+
+.permission-sets-row__assigned-name {
+    font-size: 10px;
+    color: var(--text-secondary);
+    background: var(--bg-base);
+    padding: 1px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--outline-variant);
+}
+
+.permission-sets-non-admin-hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 8px;
+    font-style: italic;
+}
+
+
+/* ─── PermissionSetEditor.jsx ───────────────────────────────────────────── */
+
+.permission-set-editor {
+    /* Desktop-en kényelmes 520px alapszélesség, de szűk modal-card-on
+       (max-width: 480px viewport → modal-lg ~432px) ne okozzon vízszintes
+       túlcsordulást. min(520px, 100%) miatt mobilon a tartalom a modal
+       szélességére zsugorodik. */
+    min-width: min(520px, 100%);
+}
+
+.permission-set-editor__error {
+    margin-bottom: 12px;
+}
+
+.permission-set-editor__row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.permission-set-editor__row > .eo-form-stack {
+    flex: 1;
+}
+
+.permission-set-editor__warning {
+    border-radius: 4px;
+    padding: 6px 10px;
+    margin-bottom: 8px;
+    font-size: 11px;
+    color: var(--text-secondary);
+}
+
+.permission-set-editor__warning--error {
+    background: rgba(255, 139, 139, 0.10);
+    border: 1px solid rgba(255, 139, 139, 0.4);
+}
+
+.permission-set-editor__warning--info {
+    background: rgba(255, 184, 92, 0.10);
+    border: 1px solid rgba(255, 184, 92, 0.4);
+}
+
+.permission-set-editor__warning code {
+    margin-right: 4px;
+}
+
+.permission-set-editor__heading {
+    margin: 0 0 8px;
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.permission-set-editor__description {
+    margin-bottom: 12px;
+}
+
+.permission-set-editor__permissions {
+    margin-bottom: 16px;
+}
+
+.permission-set-editor__groups {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.permission-set-editor__actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}
+
+
+/* ─── PermissionGroupSection (PermissionSetEditor segéd) ─────────────────── */
+
+.permission-set-group {
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    background: var(--bg-elevated);
+}
+
+.permission-set-group--org-scope {
+    background: rgba(255, 184, 92, 0.06);
+}
+
+.permission-set-group__header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 10px;
+    cursor: pointer;
+    user-select: none;
+}
+
+.permission-set-group__title {
+    font-weight: 600;
+    font-size: 12px;
+}
+
+.permission-set-group__toggle-all {
+    margin-left: auto;
+}
+
+.permission-set-group__caret {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.permission-set-group__caret--align-right {
+    margin-left: auto;
+}
+
+.permission-set-group__body {
+    padding: 4px 12px 10px;
+}
+
+.permission-set-group__description {
+    font-size: 11px;
+    color: var(--text-muted);
+    margin: 0 0 6px 0;
+    font-style: italic;
+}
+
+.permission-set-group__slug-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    padding: 2px 0;
+    cursor: pointer;
+}
+
+.permission-set-group__slug-row--locked {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+.permission-set-group__slug-code {
+    font-size: 11px;
+}
+
+
+/* ─── EmptyRequiredGroupsDialog.jsx ─────────────────────────────────────── */
+
+.empty-required-groups {
+    /* Desktop-en olvasható 420px alapszélesség; szűk modal-on (≤ 480px
+       viewport, modal-md ~432px wide) ne lógjon túl. */
+    min-width: min(420px, 100%);
+}
+
+.empty-required-groups__list {
+    list-style: none;
+    padding: 0;
+    margin: 8px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.empty-required-groups__item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 13px;
+    padding: 4px 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+}
+
+.empty-required-groups__name {
+    font-weight: 500;
+}
+
+.empty-required-groups__slug {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+.empty-required-groups__zero-tag {
+    margin-left: auto;
+}
+
+.empty-required-groups__placeholder {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.empty-required-groups__hint {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-style: italic;
+    margin-top: 4px;
+}
+
+.empty-required-groups__actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+    margin-top: 12px;
+}
+
+
+/* ─── RequiredGroupSlugsField.jsx ───────────────────────────────────────── */
+
+.required-group-slugs-field__error {
+    margin-bottom: 8px;
+}
+
+.required-group-slugs-field__empty {
+    margin-top: 4px;
+}
+
+.required-group-slugs-field__list {
+    list-style: none;
+    padding: 0;
+    margin: 8px 0;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.required-group-slugs-field__row {
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    background: var(--bg-elevated);
+    padding: 6px 8px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+}
+
+.required-group-slugs-field__swatch {
+    display: inline-block;
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    background: var(--bg-base);
+    border: 1px solid var(--outline-variant);
+}
+
+.required-group-slugs-field__label-input {
+    flex: 1 1 140px;
+    min-width: 100px;
+}
+
+.required-group-slugs-field__slug-display {
+    font-size: 11px;
+    color: var(--text-muted);
+    background: var(--bg-base);
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid var(--outline-variant);
+}
+
+.required-group-slugs-field__color-input {
+    width: 28px;
+    height: 22px;
+    padding: 0;
+    border: 1px solid var(--outline-variant);
+    border-radius: 4px;
+    cursor: pointer;
+    background: transparent;
+}
+
+.required-group-slugs-field__color-input:disabled {
+    cursor: not-allowed;
+}
+
+.required-group-slugs-field__flag {
+    display: flex;
+    align-items: center;
+    gap: 3px;
+    font-size: 11px;
+}
+
+.required-group-slugs-field__remove {
+    margin-left: auto;
+}
+
+.required-group-slugs-field__description-input {
+    flex: 1 1 100%;
+    margin-top: 4px;
+}
+
+.required-group-slugs-field__color-presets {
+    display: flex;
+    gap: 4px;
+    margin-top: 2px;
+    flex-wrap: wrap;
+}
+
+.required-group-slugs-field__color-preset {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    cursor: pointer;
+    border: 1px solid var(--outline-variant);
+}
+
+.required-group-slugs-field__color-preset[aria-disabled="true"] {
+    cursor: not-allowed;
+}
+
+.required-group-slugs-field__add-form {
+    border: 1px dashed var(--outline-variant);
+    border-radius: 4px;
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.required-group-slugs-field__add-actions {
+    display: flex;
+    gap: 6px;
+}

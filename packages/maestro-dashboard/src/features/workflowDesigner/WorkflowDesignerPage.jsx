@@ -383,10 +383,15 @@ export default function WorkflowDesignerPage() {
         [edges, selectedEdgeId]
     );
 
-    // Elérhető csoportok: a metadata.contributorGroups slug-jaiból
+    // A.4.6 / ADR 0008: az elérhető csoportok a kanonikus
+    // `requiredGroupSlugs[]`-ből származnak — NEM a derived
+    // `metadata.contributorGroups`-ból. Így a designer minden slug-selector-ja
+    // (state-permission, transition-allowedGroups, command-allowedGroups stb.)
+    // a kanonikus listából választ; mentéskor az `unknown_group_slug` hard
+    // contract validátor (`compiledValidator.js`) garantálja a konzisztenciát.
     const availableGroups = useMemo(
-        () => (metadata.contributorGroups || []).map(cg => cg.slug),
-        [metadata.contributorGroups]
+        () => (metadata.requiredGroupSlugs || []).map(g => g.slug),
+        [metadata.requiredGroupSlugs]
     );
 
     // A canvason már használt színek (NodePalette next-color logikájához, #61)
@@ -988,6 +993,7 @@ export default function WorkflowDesignerPage() {
                     stateLabels={stateLabels}
                     isCollapsed={isSidebarCollapsed}
                     onToggleCollapsed={toggleSidebarCollapsed}
+                    isReadOnly={isReadOnly}
                 />
             </div>
 

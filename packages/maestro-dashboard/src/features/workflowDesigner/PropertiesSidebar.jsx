@@ -25,6 +25,7 @@ import WorkflowPropertiesEditor from './editors/WorkflowPropertiesEditor.jsx';
  * @param {Object<string,string>} [props.stateLabels] - State slug → label térkép (TransitionPropertiesEditor #65)
  * @param {boolean} [props.isCollapsed] - Összecsukott állapot (#73)
  * @param {Function} [props.onToggleCollapsed] - Toggle callback (#73)
+ * @param {boolean} [props.isReadOnly=false] - Foreign workflow / nincs jogosultság — disabled UI (A.4.6)
  */
 export default function PropertiesSidebar({
     selectedNode, selectedEdge,
@@ -34,7 +35,8 @@ export default function PropertiesSidebar({
     version, metadata, onMetadataChange,
     stateLabels,
     isCollapsed = false,
-    onToggleCollapsed
+    onToggleCollapsed,
+    isReadOnly = false
 }) {
     // #73: összecsukott módban csak a toggle gomb + vertikális címke.
     // A panel content render is le van kapcsolva — nem renderelünk (felesleges work).
@@ -97,7 +99,7 @@ export default function PropertiesSidebar({
                     version={version}
                     metadata={metadata}
                     onMetadataChange={onMetadataChange}
-                    availableGroups={availableGroups}
+                    isReadOnly={isReadOnly}
                 />
             )}
         </div>

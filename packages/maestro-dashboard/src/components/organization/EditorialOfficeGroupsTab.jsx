@@ -1,57 +1,68 @@
 /**
  * Maestro Dashboard — EditorialOfficeSettings / GroupsTab
  *
- * A szerkesztőség „Csoportok" füle:
- *   - Csoport CRUD (inline create, inline rename, delete megerősítéssel).
- *     A slug rename-kor nem változik — a workflow compiled JSON a slug-okra
- *     hivatkozik, slug változás kaszkád-patch-et igényelne.
- *   - Tag × csoport mátrix (meglévő logika) — minden office-tag minden csoporthoz
- *     togggle badge-dzsel.
- *   - Jogosultság-sablon placeholder szekció (a jövőbeli workflow-permission
- *     editor helye).
+ * A szerkesztőség „Csoportok" füle (ADR 0008 / A.4.1, A.4.2, A.4.5):
+ *   - Csoport-lista — minden sor `GroupRow` (kibontható szerkesztő panel:
+ *     `label` / `description` / `color` / `isContributorGroup` /
+ *     `isLeaderGroup` szerkesztés, permission set hozzárendelés,
+ *     workflow-hivatkozások listája, archive/restore/delete).
+ *   - Új csoport létrehozás (manuális — workflow-driven autoseed mellett).
+ *     A `slug` immutable, csak a `name` / DB-`name` mezőt vesszük új
+ *     csoport létrehozásakor (a CF generálja a slug-ot).
+ *   - Tag × csoport mátrix (változatlan inline toggle).
+ *
+ * **Slug immutable** (ADR 0008 A.4): a `slug` mező nem szerkeszthető —
+ * a workflow `compiled.requiredGroupSlugs[]` slug-okra hivatkozik.
+ *
+ * **Default csoport-védelem eltávolítva** (Codex A.4 roast): a régi
+ * kliens-oldali `DEFAULT_GROUP_SLUGS` blokk eltűnt — a CF `delete_group` /
+ * `archive_group` blocker-set-je (workflow / aktív pub / cikk hivatkozás)
+ * a kanonikus forrás. A.2.7 szerinti `group_in_use` 409 a UI-ban
+ * `errorMessage()` mappinggel jelenik meg.
  */
 
 import React, { useState, useMemo } from 'react';
+import { parseCompiledWorkflow } from '@shared/parseCompiledWorkflow.js';
 import { useAuth } from '../../contexts/AuthContext.jsx';
+import { useData } from '../../contexts/DataContext.jsx';
 import { useConfirm } from '../ConfirmDialog.jsx';
-import { DEFAULT_GROUPS } from '@shared/groups.js';
+import { mapErrorReason } from '../../utils/inviteFunctionErrorMessages.js';
+import GroupRow from './GroupRow.jsx';
 
-const DEFAULT_GROUP_SLUGS = new Set(DEFAULT_GROUPS.map(g => g.slug));
+const GROUP_ERROR_OVERRIDES = {
+    invalid_label: 'A csoport neve nem lehet üres és nem haladhatja meg a 128 karaktert.',
+    invalid_name: 'A csoport neve nem lehet üres és nem haladhatja meg a 128 karaktert.',
+    name_empty: 'A csoport neve nem lehet üres és nem haladhatja meg a 128 karaktert.',
+    name_too_short: 'A csoport neve nem lehet üres és nem haladhatja meg a 128 karaktert.',
+    name_taken: 'Ezen a néven már létezik csoport a szerkesztőségben.',
+    group_slug_taken: 'A generált slug foglalt — próbáld meg kicsit eltérő névvel.',
+    group_in_use:
+        'Ez a csoport használatban van (workflow, publikáció vagy cikk hivatkozik rá) — előbb távolítsd el a hivatkozásokat.',
+    group_not_found: 'A csoport nem található (talán közben törölték).',
+    user_not_office_member: 'A felhasználó nem tagja a szerkesztőségnek.',
+    target_user_not_office_member: 'A felhasználó nem tagja a szerkesztőségnek.',
+    cascade_delete_failed: 'A csoport tagságainak törlése sikertelen. Próbáld újra.',
+    office_mismatch: 'A jogosultság-csoport másik szerkesztőséghez tartozik.',
+    group_create_failed: 'A művelet sikertelen. Próbáld újra.',
+    group_update_failed: 'A művelet sikertelen. Próbáld újra.',
+    group_delete_failed: 'A művelet sikertelen. Próbáld újra.',
+    group_archive_failed: 'A művelet sikertelen. Próbáld újra.',
+    group_restore_failed: 'A művelet sikertelen. Próbáld újra.',
+    group_member_add_failed: 'A művelet sikertelen. Próbáld újra.',
+    group_member_remove_failed: 'A művelet sikertelen. Próbáld újra.',
+    permission_set_assign_failed: 'A művelet sikertelen. Próbáld újra.',
+    permission_set_unassign_failed: 'A művelet sikertelen. Próbáld újra.'
+};
 
 function errorMessage(reason) {
-    if (typeof reason !== 'string') return 'Ismeretlen hiba történt.';
-    if (reason.includes('missing_fields')) return 'Tölts ki minden kötelező mezőt.';
-    if (reason.includes('invalid_name') || reason.includes('name_empty') || reason.includes('name_too_short')) {
-        return 'A csoport neve nem lehet üres és nem haladhatja meg a 128 karaktert.';
-    }
-    if (reason.includes('name_taken')) return 'Ezen a néven már létezik csoport a szerkesztőségben.';
-    if (reason.includes('group_slug_taken')) return 'A generált slug foglalt — próbáld meg kicsit eltérő névvel.';
-    if (reason.includes('default_group_protected')) {
-        return 'Az alapértelmezett csoportok nem törölhetők.';
-    }
-    if (reason.includes('group_in_use')) return 'Ez a csoport használatban van (workflow, publikáció vagy cikk hivatkozik rá) — előbb távolítsd el a hivatkozásokat.';
-    if (reason.includes('group_not_found')) return 'A csoport nem található (talán közben törölték).';
-    if (reason.includes('insufficient_role')) return 'Nincs jogosultságod ehhez a művelethez.';
-    if (reason.includes('not_a_member')) return 'Nem vagy tagja ennek a szervezetnek.';
-    if (reason.includes('user_not_office_member') || reason.includes('target_user_not_office_member')) {
-        return 'A felhasználó nem tagja a szerkesztőségnek.';
-    }
-    if (reason.includes('cascade_delete_failed')) {
-        return 'A csoport tagságainak törlése sikertelen. Próbáld újra.';
-    }
-    if (reason.includes('group_create_failed') || reason.includes('group_update_failed') || reason.includes('group_delete_failed') || reason.includes('group_member_add_failed') || reason.includes('group_member_remove_failed')) {
-        return 'A művelet sikertelen. Próbáld újra.';
-    }
-    if (reason.includes('Failed to fetch') || reason.includes('NetworkError')) {
-        return 'Hálózati hiba. Ellenőrizd a kapcsolatot, és próbáld újra.';
-    }
-    return reason;
+    return mapErrorReason(reason, GROUP_ERROR_OVERRIDES);
 }
 
 /**
- * Toggle badge egy csoporthoz — színes ha aktív, szürke ha nem.
+ * Toggle badge egy csoporthoz a tag×csoport mátrixban — színes ha aktív, szürke ha nem.
  */
-function GroupBadge({ label, isActive, isPending, canEdit, onToggle }) {
+function GroupBadge({ label, color, isActive, isPending, canEdit, onToggle }) {
+    const accentBg = color || 'var(--accent-solid)';
     return (
         <span
             onClick={canEdit && !isPending ? onToggle : undefined}
@@ -63,9 +74,11 @@ function GroupBadge({ label, isActive, isPending, canEdit, onToggle }) {
                 cursor: canEdit && !isPending ? 'pointer' : 'default',
                 marginRight: 4,
                 marginBottom: 2,
-                border: isActive ? '1px solid var(--accent-solid)' : '1px solid var(--outline-variant)',
-                background: isActive ? 'rgb(from var(--accent-solid) r g b / 0.15)' : 'var(--bg-elevated)',
-                color: isActive ? 'var(--accent)' : 'var(--text-muted)',
+                border: isActive ? `1px solid ${accentBg}` : '1px solid var(--outline-variant)',
+                background: isActive
+                    ? (color ? `rgb(from ${color} r g b / 0.18)` : 'rgb(from var(--accent-solid) r g b / 0.15)')
+                    : 'var(--bg-elevated)',
+                color: isActive ? (color ? 'var(--text-primary)' : 'var(--accent)') : 'var(--text-muted)',
                 opacity: isPending ? 0.5 : 1,
                 transition: 'all 0.15s ease',
                 userSelect: 'none'
@@ -79,9 +92,11 @@ function GroupBadge({ label, isActive, isPending, canEdit, onToggle }) {
 /**
  * @param {Object} props
  * @param {Object} props.office — a szerkesztőség rekord
- * @param {Array} props.groups — groups collection dokumentumok (az office-ban)
+ * @param {Array} props.groups — groups collection dokumentumok (az office-ban, archivált is)
  * @param {Array} props.groupMemberships — groupMemberships dokumentumok
  * @param {Array} props.officeMembers — editorialOfficeMemberships dokumentumok
+ * @param {Array} props.permissionSets — permissionSets dokumentumok az office-ban (archivált is)
+ * @param {Array} props.groupPermissionSets — groupPermissionSets junction rekordok
  * @param {boolean} props.isLoading — adat betöltés folyamatban
  * @param {boolean} props.isOrgAdmin — caller org owner/admin
  * @param {() => Promise<void>} props.onReload — shell data reload callback
@@ -91,11 +106,24 @@ export default function EditorialOfficeGroupsTab({
     groups,
     groupMemberships,
     officeMembers,
+    permissionSets,
+    groupPermissionSets,
     isLoading,
     isOrgAdmin,
     onReload
 }) {
-    const { addGroupMember, removeGroupMember, createGroup, renameGroup, deleteGroup } = useAuth();
+    const {
+        addGroupMember,
+        removeGroupMember,
+        createGroup,
+        updateGroupMetadata,
+        archiveGroup,
+        restoreGroup,
+        deleteGroup,
+        assignPermissionSetToGroup,
+        unassignPermissionSetFromGroup
+    } = useAuth();
+    const { workflows } = useData();
     const confirm = useConfirm();
 
     const [actionPending, setActionPending] = useState(null);
@@ -104,8 +132,7 @@ export default function EditorialOfficeGroupsTab({
     const [isCreatingGroup, setIsCreatingGroup] = useState(false);
     const [newGroupName, setNewGroupName] = useState('');
 
-    const [editingGroupId, setEditingGroupId] = useState(null);
-    const [editDraft, setEditDraft] = useState('');
+    const [showArchived, setShowArchived] = useState(false);
 
     // --- Derived struktúrák ---
 
@@ -134,6 +161,51 @@ export default function EditorialOfficeGroupsTab({
         }
         return counts;
     }, [groupMemberships]);
+
+    const visibleGroups = useMemo(() => {
+        return groups.filter((g) => showArchived || !g.archivedAt);
+    }, [groups, showArchived]);
+
+    // A workflow `compiled.requiredGroupSlugs[]` parse-olását egyszer csináljuk
+    // workflow-listánként (NEM sor-render-enként): `slugToWorkflows` Map adja
+    // O(1) lookup-pal a hivatkozó workflow-kat. A parse-failed workflow-k
+    // külön gyűjtve a worst-case `group_in_use` blocker UI-jához.
+    // (Simplify pass: GroupRow-ról emelve N×M JSON.parse storm csökkentésére.)
+    const { slugToWorkflows, parseErrorWorkflows } = useMemo(() => {
+        const map = new Map();
+        const broken = [];
+        if (!Array.isArray(workflows)) return { slugToWorkflows: map, parseErrorWorkflows: broken };
+        for (const wf of workflows) {
+            const compiled = parseCompiledWorkflow(wf?.compiled);
+            if (!compiled) {
+                broken.push({ id: wf.$id, name: wf.name || wf.slug });
+                continue;
+            }
+            const refs = Array.isArray(compiled.requiredGroupSlugs) ? compiled.requiredGroupSlugs : [];
+            for (const r of refs) {
+                if (!r?.slug) continue;
+                if (!map.has(r.slug)) map.set(r.slug, []);
+                map.get(r.slug).push({
+                    id: wf.$id,
+                    name: wf.name || wf.slug,
+                    visibility: wf.visibility
+                });
+            }
+        }
+        return { slugToWorkflows: map, parseErrorWorkflows: broken };
+    }, [workflows]);
+
+    const archivedCount = useMemo(
+        () => groups.reduce((acc, g) => acc + (g.archivedAt ? 1 : 0), 0),
+        [groups]
+    );
+
+    // A mátrixban csak a NEM-archivált csoportokat mutatjuk (toggle nem értelmes
+    // archivált csoportra, és vizuálisan zsúfolt lenne).
+    const matrixGroups = useMemo(
+        () => groups.filter((g) => !g.archivedAt),
+        [groups]
+    );
 
     // --- Handlers ---
 
@@ -173,70 +245,96 @@ export default function EditorialOfficeGroupsTab({
         }
     }
 
-    async function handleSaveRename(group) {
-        const trimmed = editDraft.trim();
-        if (!trimmed || trimmed === group.name) {
-            setEditingGroupId(null);
-            return;
+    /**
+     * Egy `GroupRow`-ból érkező action-handler. A `kind` szerinti `actionPending`
+     * kulcsot állítjuk be (`group:${groupId}:${kind}` formátumban — a sorban
+     * a per-button "..." spinner-hez), majd hívjuk a megfelelő AuthContext
+     * callback-et és reload-olunk.
+     *
+     * **Visszatérési érték**: `true` siker esetén, `false` ha a műveletet a user
+     * megszakította (confirm), `false` hiba esetén (a `setActionError` kapja
+     * a részletet). A `GroupRow` ezzel dönti el, hogy a draft form-ot bezárja-e
+     * (a sikeres mentés után tisztul, hibás esetén marad a draft + látszik az
+     * error). Codex review fix.
+     */
+    async function handleGroupAction(group, kind, payload) {
+        let pendingKey = `group:${group.$id}:${kind}`;
+        if (kind === 'assignPermSet' || kind === 'unassignPermSet') {
+            pendingKey = `${pendingKey}:${payload?.permissionSetId}`;
         }
-
-        setActionPending(`rename:${group.$id}`);
+        setActionPending(pendingKey);
         setActionError('');
+
         try {
-            await renameGroup(group.$id, trimmed);
-            setEditingGroupId(null);
+            if (kind === 'updateMetadata') {
+                await updateGroupMetadata(group.$id, payload);
+            } else if (kind === 'archive') {
+                const ok = await confirm({
+                    title: 'Csoport archiválása',
+                    message: (
+                        <>
+                            <p>
+                                A(z) <strong>„{group.name}"</strong> csoport <strong>archiválódik</strong>.
+                                Az aktív kiadványok snapshot-ja védi a futó munkát, de új
+                                workflow-hozzárendelésnél már nem fog felajánlódni.
+                            </p>
+                            <p style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+                                A csoport visszaállítható az „Archivált csoportok megjelenítése" listából.
+                            </p>
+                        </>
+                    ),
+                    confirmLabel: 'Archiválás',
+                    cancelLabel: 'Mégse',
+                    variant: 'danger'
+                });
+                if (!ok) {
+                    setActionPending(null);
+                    return false;
+                }
+                await archiveGroup(group.$id);
+            } else if (kind === 'restore') {
+                await restoreGroup(group.$id);
+            } else if (kind === 'delete') {
+                const memberCount = groupMemberCounts.get(group.$id) || 0;
+                const ok = await confirm({
+                    title: 'Csoport végleges törlése',
+                    message: (
+                        <>
+                            <p>
+                                A(z) <strong>„{group.name}"</strong> csoport <strong>végleg törlődik</strong>
+                                {memberCount > 0 && (
+                                    <> az összes <strong>{memberCount} csoporttagsággal</strong> együtt</>
+                                )}.
+                            </p>
+                            <p>Ez a művelet nem visszavonható.</p>
+                            <p style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+                                Ha a csoport workflow-hivatkozott vagy aktív kiadványban van,
+                                a szerver <code>group_in_use</code> hibával válaszol.
+                            </p>
+                        </>
+                    ),
+                    confirmLabel: 'Végleges törlés',
+                    cancelLabel: 'Mégse',
+                    variant: 'danger'
+                });
+                if (!ok) {
+                    setActionPending(null);
+                    return false;
+                }
+                await deleteGroup(group.$id);
+            } else if (kind === 'assignPermSet') {
+                await assignPermissionSetToGroup(group.$id, payload.permissionSetId);
+            } else if (kind === 'unassignPermSet') {
+                await unassignPermissionSetFromGroup(group.$id, payload.permissionSetId);
+            }
             await onReload();
+            return true;
         } catch (err) {
             setActionError(errorMessage(err.message || err.code || ''));
+            return false;
         } finally {
             setActionPending(null);
         }
-    }
-
-    async function handleDeleteGroup(group) {
-        const memberCount = groupMemberCounts.get(group.$id) || 0;
-        const confirmMessage = (
-            <>
-                <p>
-                    A(z) <strong>„{group.name}"</strong> csoport törlődik
-                    {memberCount > 0 && (
-                        <> az összes <strong>{memberCount} csoporttagsággal</strong> együtt</>
-                    )}.
-                </p>
-                <p>Ez a művelet nem visszavonható.</p>
-            </>
-        );
-
-        const ok = await confirm({
-            title: 'Csoport törlése',
-            message: confirmMessage,
-            confirmLabel: 'Törlés',
-            cancelLabel: 'Mégse',
-            variant: 'danger'
-        });
-        if (!ok) return;
-
-        setActionPending(`delete:${group.$id}`);
-        setActionError('');
-        try {
-            await deleteGroup(group.$id);
-            await onReload();
-        } catch (err) {
-            setActionError(errorMessage(err.message || err.code || ''));
-        } finally {
-            setActionPending(null);
-        }
-    }
-
-    function beginRename(group) {
-        setEditingGroupId(group.$id);
-        setEditDraft(group.name);
-        setActionError('');
-    }
-
-    function cancelRename() {
-        setEditingGroupId(null);
-        setEditDraft('');
     }
 
     // --- Render ---
@@ -253,13 +351,23 @@ export default function EditorialOfficeGroupsTab({
 
             {/* ═══ Csoportok lista + CRUD ═══ */}
             <div style={{ marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8, flexWrap: 'wrap' }}>
                     <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>
                         Csoportok{' '}
                         <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 12 }}>
-                            ({groups.length})
+                            ({visibleGroups.length}{archivedCount > 0 ? ` / ${groups.length}` : ''})
                         </span>
                     </h3>
+                    {archivedCount > 0 && (
+                        <label style={{ fontSize: 11, color: 'var(--text-muted)', display: 'flex', alignItems: 'center', gap: 4, cursor: 'pointer' }}>
+                            <input
+                                type="checkbox"
+                                checked={showArchived}
+                                onChange={(e) => setShowArchived(e.target.checked)}
+                            />
+                            Archiváltak megjelenítése ({archivedCount})
+                        </label>
+                    )}
                     {isOrgAdmin && !isCreatingGroup && (
                         <button
                             type="button"
@@ -282,115 +390,29 @@ export default function EditorialOfficeGroupsTab({
                     )}
                 </div>
 
-                {groups.length === 0 && !isCreatingGroup ? (
+                {visibleGroups.length === 0 && !isCreatingGroup ? (
                     <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0' }}>
-                        Nincsenek csoportok.
+                        Nincsenek csoportok. (Workflow aktiválásakor / hozzárendelésekor a hiányzó <code>requiredGroupSlugs</code>
+                        autoseed-elnek — manuálisan is létrehozható a „+ Új csoport" gombbal.)
                     </p>
                 ) : (
                     <ul style={{ listStyle: 'none', padding: 0, margin: '4px 0 8px 0' }}>
-                        {groups.map(group => {
-                            const isEditing = editingGroupId === group.$id;
-                            const isRenamePending = actionPending === `rename:${group.$id}`;
-                            const isDeletePending = actionPending === `delete:${group.$id}`;
-                            const memberCount = groupMemberCounts.get(group.$id) || 0;
-                            const isDefault = group.isDefault === true || DEFAULT_GROUP_SLUGS.has(group.slug);
-
-                            return (
-                                <li key={group.$id} style={{
-                                    display: 'flex', alignItems: 'center', gap: 8,
-                                    fontSize: 13, padding: '4px 0'
-                                }}>
-                                    {isEditing && isOrgAdmin ? (
-                                        <>
-                                            <input
-                                                type="text"
-                                                value={editDraft}
-                                                onChange={e => setEditDraft(e.target.value)}
-                                                disabled={isRenamePending}
-                                                maxLength={128}
-                                                autoFocus
-                                                style={{
-                                                    flex: 1, fontSize: 12, padding: '4px 6px',
-                                                    background: 'var(--bg-base)', color: 'var(--text-primary)',
-                                                    border: '1px solid var(--outline-variant)', borderRadius: 4
-                                                }}
-                                                onKeyDown={e => {
-                                                    if (e.key === 'Enter') handleSaveRename(group);
-                                                    if (e.key === 'Escape') cancelRename();
-                                                }}
-                                            />
-                                            <button
-                                                onClick={() => handleSaveRename(group)}
-                                                disabled={!!actionPending}
-                                                style={{
-                                                    background: 'var(--accent-solid)', color: '#fff', border: 'none',
-                                                    padding: '4px 10px', borderRadius: 4,
-                                                    cursor: 'pointer', fontSize: 11
-                                                }}
-                                            >
-                                                {isRenamePending ? '...' : 'Mentés'}
-                                            </button>
-                                            <button
-                                                onClick={cancelRename}
-                                                disabled={!!actionPending}
-                                                style={{
-                                                    background: 'none', color: 'var(--text-secondary)',
-                                                    border: '1px solid var(--outline-variant)', padding: '4px 8px',
-                                                    borderRadius: 4, cursor: 'pointer', fontSize: 11
-                                                }}
-                                            >
-                                                Mégse
-                                            </button>
-                                        </>
-                                    ) : (
-                                        <>
-                                            <span>{group.name}</span>
-                                            <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>({group.slug})</span>
-                                            <span style={{
-                                                fontSize: 10, color: 'var(--text-muted)', background: 'var(--bg-elevated)',
-                                                padding: '1px 6px', borderRadius: 3
-                                            }}>
-                                                {memberCount} tag
-                                            </span>
-                                            {isOrgAdmin && (
-                                                <div style={{ marginLeft: 'auto', display: 'flex', gap: 6 }}>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => beginRename(group)}
-                                                        disabled={!!actionPending}
-                                                        style={{
-                                                            background: 'none', color: 'var(--text-secondary)',
-                                                            border: '1px solid var(--outline-variant)', padding: '2px 8px',
-                                                            borderRadius: 4, cursor: 'pointer', fontSize: 10
-                                                        }}
-                                                    >
-                                                        Átnevezés
-                                                    </button>
-                                                    <button
-                                                        type="button"
-                                                        onClick={() => handleDeleteGroup(group)}
-                                                        disabled={!!actionPending || isDefault}
-                                                        title={isDefault
-                                                            ? 'Az alapértelmezett csoportok nem törölhetők.'
-                                                            : undefined}
-                                                        style={{
-                                                            background: 'none',
-                                                            color: isDefault ? 'var(--text-muted)' : 'var(--c-danger, #ef6060)',
-                                                            border: `1px solid ${isDefault ? 'var(--border)' : 'var(--c-danger-border, #7a2d2d)'}`,
-                                                            padding: '2px 8px', borderRadius: 4,
-                                                            cursor: (actionPending || isDefault) ? 'not-allowed' : 'pointer',
-                                                            fontSize: 10
-                                                        }}
-                                                    >
-                                                        {isDeletePending ? '...' : 'Törlés'}
-                                                    </button>
-                                                </div>
-                                            )}
-                                        </>
-                                    )}
-                                </li>
-                            );
-                        })}
+                        {visibleGroups.map((group) => (
+                            <GroupRow
+                                key={group.$id}
+                                group={group}
+                                memberCount={groupMemberCounts.get(group.$id) || 0}
+                                permissionSets={permissionSets}
+                                groupPermissionSets={groupPermissionSets}
+                                slugToWorkflows={slugToWorkflows}
+                                parseErrorWorkflows={parseErrorWorkflows}
+                                isOrgAdmin={isOrgAdmin}
+                                canEdit={!actionPending}
+                                actionPending={actionPending}
+                                onAction={(kind, payload) => handleGroupAction(group, kind, payload)}
+                                setError={setActionError}
+                            />
+                        ))}
                     </ul>
                 )}
 
@@ -442,7 +464,7 @@ export default function EditorialOfficeGroupsTab({
             </div>
 
             {/* ═══ Tagok és csoportok mátrix ═══ */}
-            <div style={{ marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
+            <div style={{ marginBottom: 8 }}>
                 <h3 style={{ margin: '0 0 8px 0', fontSize: 14, fontWeight: 600 }}>
                     Tagok és csoportok{' '}
                     <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 12 }}>
@@ -454,7 +476,7 @@ export default function EditorialOfficeGroupsTab({
                     <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0' }}>
                         Nincsenek tagok a szerkesztőségben.
                     </p>
-                ) : groups.length === 0 ? (
+                ) : matrixGroups.length === 0 ? (
                     <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0' }}>
                         Hozz létre csoportot, hogy tagokat tudj hozzárendelni.
                     </p>
@@ -481,7 +503,7 @@ export default function EditorialOfficeGroupsTab({
                                     </div>
 
                                     <div style={{ display: 'flex', flexWrap: 'wrap' }}>
-                                        {groups.map(group => {
+                                        {matrixGroups.map(group => {
                                             const key = `${member.userId}:${group.$id}`;
                                             const isActive = membershipLookup.has(key);
                                             const isPending = actionPending === `toggle:${member.userId}:${group.$id}`;
@@ -490,6 +512,7 @@ export default function EditorialOfficeGroupsTab({
                                                 <GroupBadge
                                                     key={group.$id}
                                                     label={group.name}
+                                                    color={group.color}
                                                     isActive={isActive}
                                                     isPending={isPending}
                                                     canEdit={isOrgAdmin && !actionPending}
@@ -509,18 +532,6 @@ export default function EditorialOfficeGroupsTab({
                         Csoporttagság módosításához szervezeti admin jogosultság szükséges.
                     </p>
                 )}
-            </div>
-
-            {/* ═══ Jogosultság-sablon placeholder ═══ */}
-            <div style={{ marginBottom: 8 }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: 14, fontWeight: 600 }}>
-                    Jogosultság-sablonok
-                </h3>
-                <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0', fontStyle: 'italic' }}>
-                    A csoportokhoz rendelt jogosultság-sablonok a jövőben itt lesznek
-                    szerkeszthetők. Jelenleg a workflow-specifikus jogosultságokat a
-                    Workflow Designer kezeli.
-                </p>
             </div>
         </>
     );

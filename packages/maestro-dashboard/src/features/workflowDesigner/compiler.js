@@ -382,24 +382,21 @@ export function graphToCompiled(nodes, edges, metadata) {
         contributorGroups: metadata.contributorGroups || [],
         capabilities: metadata.capabilities || {}
     };
-    const baseRequiredGroupSlugs = Array.isArray(metadata.requiredGroupSlugs) && metadata.requiredGroupSlugs.length > 0
+    // A.4.6 (ADR 0008): a `requiredGroupSlugs[]` mostantól a kanonikus forrás
+    // — a `WorkflowPropertiesEditor` `RequiredGroupSlugsField`-en át közvetlenül
+    // szerkeszti a flag-eket. Ha jelen van a kanonikus
+    // `metadata.requiredGroupSlugs[]`, azt használjuk fenntartás nélkül; csak a
+    // teljesen legacy compiled (sem `requiredGroupSlugs`, sem szerkesztett UI
+    // által írt mező) esetén rekonstruálunk a `metadata.leaderGroups` /
+    // `contributorGroups`-ból.
+    //
+    // Codex review fix: a korábbi backwards-compat ág, amely a stale
+    // `metadata.leaderGroups`-ből (compiledToGraph-ben derived, de a UI nem
+    // szerkeszti) írta felül az `isLeaderGroup` flag-eket, MEGSZŰNT — különben
+    // a felhasználó leader/contributor flag-szerkesztése csendben elveszett.
+    const requiredGroupSlugs = Array.isArray(metadata.requiredGroupSlugs) && metadata.requiredGroupSlugs.length > 0
         ? normalizeRequiredGroupSlugs(metadata.requiredGroupSlugs)
         : reconstructRequiredGroupSlugs(baseCompiledForReconstruct);
-
-    // A UI a `WorkflowPropertiesEditor.jsx`-ben még a `metadata.leaderGroups`
-    // mezőt szerkeszti (A.4.6 előtti backwards-compat). Ha ez jelen van,
-    // szinkronizáljuk az `isLeaderGroup` flag-be — különben a felhasználó
-    // leader-szerkesztése csendben elveszne, mert a kimeneti `leaderGroups`
-    // a flag-ből autogenerálódik.
-    const requiredGroupSlugs = Array.isArray(metadata.leaderGroups)
-        ? (() => {
-            const editedLeaderSet = new Set(metadata.leaderGroups);
-            return baseRequiredGroupSlugs.map(g => ({
-                ...g,
-                isLeaderGroup: editedLeaderSet.has(g.slug)
-            }));
-        })()
-        : baseRequiredGroupSlugs;
 
     const autoContributorGroups = requiredGroupSlugs
         .filter(g => g.isContributorGroup)
