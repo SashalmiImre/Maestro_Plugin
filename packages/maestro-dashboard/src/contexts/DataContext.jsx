@@ -209,7 +209,12 @@ export function DataProvider({ children }) {
             // Stale generation védelem: ha közben másik switch / resync futott,
             // dobjuk el a régebbi választ — különben az új scope cikkjeit
             // felülírná a stale articles/layouts/deadlines tömb.
-            if (gen !== switchPublicationGenRef.current) return;
+            // Defense-in-depth: a generation-check mellett az activePublicationIdRef
+            // identitását is ellenőrizzük — ha a `resyncRealtimeData` `null`-ra
+            // állította (törölt aktív pub észlelése), a stale fetch eredménye
+            // ne repopuláljon egy törölt pub cikkjeivel.
+            if (gen !== switchPublicationGenRef.current ||
+                activePublicationIdRef.current !== publicationId) return;
 
             setArticles(articlesResult.documents);
             setLayouts(layoutsResult.documents);
@@ -264,7 +269,8 @@ export function DataProvider({ children }) {
             }
 
             // Második stale-check a validáció-fetch UTÁN — a 2. fázis is hosszú lehet.
-            if (gen !== switchPublicationGenRef.current) return;
+            if (gen !== switchPublicationGenRef.current ||
+                activePublicationIdRef.current !== publicationId) return;
 
             setValidations(allValidations);
         } finally {
@@ -783,6 +789,12 @@ export function DataProvider({ children }) {
             const stillExists = activeId && pubs.some(p => p.$id === activeId);
 
             if (activeId && !stillExists) {
+                // Bump-eljük a switchPublication generation-t: ha közben futott
+                // egy `switchPublication(activeId)` (pl. user-kattintás reconnect
+                // előtt), az await befejeztével a stale-check eldobja a választ
+                // ahelyett, hogy a clear-elt state-et felülírná a törölt pub
+                // cikkjeivel.
+                switchPublicationGenRef.current += 1;
                 activePublicationIdRef.current = null;
                 setActivePublicationIdState(null);
                 setArticles([]);
