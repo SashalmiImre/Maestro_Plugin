@@ -8,5 +8,9 @@
     "nohoist": [
       "**/Maestro/**"
     ]
+  },
+  "scripts": {
+    "build:cf-validator": "node scripts/build-cf-validator.mjs",
+    "check:cf-validator": "node scripts/build-cf-validator.mjs --check"
   }
 }

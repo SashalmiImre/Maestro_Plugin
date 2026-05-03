@@ -1,26 +1,29 @@
 /**
- * Maestro Server — Workflow compiled JSON validátor (Fázis 1 helper-extract, 2026-05-02).
+ * Maestro Server — Workflow compiled JSON validátor (Fázis 1 helper-extract, 2026-05-02;
+ * A.7.1 single-source refactor 2026-05-03).
  *
- * Két különálló célú helper:
+ * Három felelősség:
  *
  * 1. `workflowReferencesSlug` / `contributorJsonReferencesSlug` — referencia-
  *    detektálás a `delete_group` / `archive_group` blocker-scan-jéhez.
  *    A workflow compiled JSON sok mezőjében (statePermissions, transitions,
  *    commands, elementPermissions, leaderGroups, contributorGroups, capabilities,
  *    requiredGroupSlugs) hivatkozhat csoport slug-okra; ez a két helper
- *    kanonikusan végigjárja őket.
+ *    kanonikusan végigjárja őket. CF-only logika.
  *
- * 2. `validateCompiledSlugsInline` — A.2.1 szerinti hard-contract: a workflow
+ * 2. `validateCompiledSlugs` — A.2.1 szerinti hard-contract: a workflow
  *    save-time (CF write-path) hibát dob, ha a workflow összes slug-mezőjének
- *    uniója nem subset-je a `requiredGroupSlugs[].slug`-nak. CommonJS másolat
- *    a `packages/maestro-shared/compiledValidator.js`-ből (drift-rizikó —
- *    Phase 2 / A.7.1: AST-equality CI test).
+ *    uniója nem subset-je a `requiredGroupSlugs[].slug`-nak. **Single-source**:
+ *    a `packages/maestro-shared/compiledValidator.js` (ESM) a kanonikus forrás,
+ *    és a `_generated_compiledValidator.js` egy automatikusan generált CJS
+ *    pillanatkép. Itt csak re-export. Részletek: A.7.1 / ADR 0008.
  *
- * 3. `buildCompiledValidationFailure` — `validateCompiledSlugsInline` eredmény
+ * 3. `buildCompiledValidationFailure` — `validateCompiledSlugs` eredmény
  *    transzformációja CF response-payload-dá.
  */
 
 const { PARSE_ERROR } = require('./constants.js');
+const { validateCompiledSlugs } = require('./_generated_compiledValidator.js');
 
 /**
  * Workflow compiled JSON slug-hivatkozás ellenőrzés a `delete_group` action-höz.
@@ -158,164 +161,7 @@ function contributorJsonReferencesSlug(contributorsJson, targetSlug) {
 }
 
 /**
- * A.2.1 hard-contract — a workflow összes slug-hivatkozó mezőjének (transitions,
- * commands, elementPermissions, leaderGroups, statePermissions, contributorGroups,
- * capabilities) minden slug-ja szerepeljen a `requiredGroupSlugs[].slug` halmazban.
- *
- * CommonJS másolat a `packages/maestro-shared/compiledValidator.js`-ből —
- * drift-rizikó (Phase 2 / A.7.1: AST-equality CI test vagy single-source build).
- *
- * @param {Object} compiled
- * @returns {{ valid: boolean, errors: Array<{ code, slug?, location?, message }> }}
- */
-function validateCompiledSlugsInline(compiled) {
-    const errors = [];
-
-    if (!compiled || typeof compiled !== 'object') {
-        errors.push({ code: 'invalid_compiled', message: 'A compiled JSON üres vagy érvénytelen.' });
-        return { valid: false, errors };
-    }
-
-    let requiredGroupSlugs = [];
-    if (compiled.requiredGroupSlugs != null) {
-        if (Array.isArray(compiled.requiredGroupSlugs)) {
-            requiredGroupSlugs = compiled.requiredGroupSlugs;
-        } else {
-            errors.push({
-                code: 'invalid_field_type',
-                location: 'requiredGroupSlugs',
-                message: `A "requiredGroupSlugs" mezőnek tömbnek kell lennie (kapott: ${typeof compiled.requiredGroupSlugs === 'object' ? 'objektum' : typeof compiled.requiredGroupSlugs}).`
-            });
-        }
-    }
-
-    const allowed = new Set();
-    const duplicates = new Set();
-    for (let i = 0; i < requiredGroupSlugs.length; i++) {
-        const entry = requiredGroupSlugs[i];
-        if (!entry?.slug || typeof entry.slug !== 'string') {
-            errors.push({
-                code: 'invalid_required_group_entry',
-                location: `requiredGroupSlugs[${i}]`,
-                message: `A requiredGroupSlugs[${i}] elemnek hiányzik vagy érvénytelen a slug mezője.`
-            });
-            continue;
-        }
-        if (allowed.has(entry.slug)) {
-            duplicates.add(entry.slug);
-        } else {
-            allowed.add(entry.slug);
-        }
-    }
-    for (const slug of duplicates) {
-        errors.push({
-            code: 'duplicate_required_group_slug',
-            slug,
-            location: 'requiredGroupSlugs',
-            message: `A requiredGroupSlugs többször tartalmazza a "${slug}" slug-ot.`
-        });
-    }
-
-    function asSlugArray(value, location) {
-        if (value == null) return [];
-        if (Array.isArray(value)) return value;
-        errors.push({
-            code: 'invalid_field_type',
-            location,
-            message: `A "${location}" mezőnek tömbnek kell lennie (kapott: ${typeof value === 'object' ? 'objektum' : typeof value}).`
-        });
-        return [];
-    }
-
-    function asObject(value, location) {
-        if (value == null) return {};
-        if (typeof value === 'object' && !Array.isArray(value)) return value;
-        errors.push({
-            code: 'invalid_field_type',
-            location,
-            message: `A "${location}" mezőnek objektumnak kell lennie (kapott: ${Array.isArray(value) ? 'tömb' : typeof value}).`
-        });
-        return {};
-    }
-
-    function pushUnknown(slug, location, message) {
-        errors.push({ code: 'unknown_group_slug', slug, location, message });
-    }
-
-    // transitions[].allowedGroups
-    for (const t of asSlugArray(compiled.transitions, 'transitions')) {
-        const loc = `transitions["${t?.from}"->"${t?.to}"].allowedGroups`;
-        for (const slug of asSlugArray(t?.allowedGroups, loc)) {
-            if (!allowed.has(slug)) {
-                pushUnknown(slug, loc, `Az átmenet ("${t?.from}" → "${t?.to}") engedélyezett csoportja nem szerepel a workflow felhasználó-csoport listájában: "${slug}".`);
-            }
-        }
-    }
-
-    // commands[stateId][*].allowedGroups
-    for (const [stateId, cmds] of Object.entries(asObject(compiled.commands, 'commands'))) {
-        for (const cmd of asSlugArray(cmds, `commands["${stateId}"]`)) {
-            const loc = `commands["${stateId}"]["${cmd?.id}"].allowedGroups`;
-            for (const slug of asSlugArray(cmd?.allowedGroups, loc)) {
-                if (!allowed.has(slug)) {
-                    pushUnknown(slug, loc, `A "${stateId}" állapot "${cmd?.id}" parancsának engedélyezett csoportja nem szerepel a workflow felhasználó-csoport listájában: "${slug}".`);
-                }
-            }
-        }
-    }
-
-    // elementPermissions[scope][element].groups (csak ha type === 'groups')
-    for (const [scope, elems] of Object.entries(asObject(compiled.elementPermissions, 'elementPermissions'))) {
-        for (const [elemKey, perm] of Object.entries(asObject(elems, `elementPermissions.${scope}`))) {
-            if (perm?.type !== 'groups') continue;
-            const loc = `elementPermissions.${scope}.${elemKey}.groups`;
-            for (const slug of asSlugArray(perm.groups, loc)) {
-                if (!allowed.has(slug)) {
-                    pushUnknown(slug, loc, `Az "${scope}.${elemKey}" elem-jogosultság csoportja nem szerepel a workflow felhasználó-csoport listájában: "${slug}".`);
-                }
-            }
-        }
-    }
-
-    // leaderGroups[]
-    for (const slug of asSlugArray(compiled.leaderGroups, 'leaderGroups')) {
-        if (!allowed.has(slug)) {
-            pushUnknown(slug, 'leaderGroups', `A vezető csoport nem szerepel a workflow felhasználó-csoport listájában: "${slug}".`);
-        }
-    }
-
-    // statePermissions[stateId][]
-    for (const [stateId, slugList] of Object.entries(asObject(compiled.statePermissions, 'statePermissions'))) {
-        const loc = `statePermissions["${stateId}"]`;
-        for (const slug of asSlugArray(slugList, loc)) {
-            if (!allowed.has(slug)) {
-                pushUnknown(slug, loc, `A "${stateId}" állapot mozgatás-engedélyezett csoportja nem szerepel a workflow felhasználó-csoport listájában: "${slug}".`);
-            }
-        }
-    }
-
-    // contributorGroups[].slug
-    for (const cg of asSlugArray(compiled.contributorGroups, 'contributorGroups')) {
-        if (cg?.slug && !allowed.has(cg.slug)) {
-            pushUnknown(cg.slug, 'contributorGroups', `A contributor csoport nem szerepel a workflow felhasználó-csoport listájában: "${cg.slug}".`);
-        }
-    }
-
-    // capabilities[name][]
-    for (const [name, slugList] of Object.entries(asObject(compiled.capabilities, 'capabilities'))) {
-        const loc = `capabilities["${name}"]`;
-        for (const slug of asSlugArray(slugList, loc)) {
-            if (!allowed.has(slug)) {
-                pushUnknown(slug, loc, `A "${name}" képesség csoportja nem szerepel a workflow felhasználó-csoport listájában: "${slug}".`);
-            }
-        }
-    }
-
-    return { valid: errors.length === 0, errors };
-}
-
-/**
- * `validateCompiledSlugsInline` eredményéből 4xx CF response-t épít.
+ * `validateCompiledSlugs` eredményéből 4xx CF response-t épít.
  * Az egyedi slug-okat dedupolja, location listát ad a debugoláshoz.
  *
  * @param {{ valid: boolean, errors: Array }} result
@@ -336,6 +182,6 @@ function buildCompiledValidationFailure(result) {
 module.exports = {
     workflowReferencesSlug,
     contributorJsonReferencesSlug,
-    validateCompiledSlugsInline,
+    validateCompiledSlugs,
     buildCompiledValidationFailure
 };

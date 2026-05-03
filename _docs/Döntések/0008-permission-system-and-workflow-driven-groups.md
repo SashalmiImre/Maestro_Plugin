@@ -132,7 +132,12 @@ last_updated: 2026-05-03
 > - **Slug-katalógus drift**: a CF inline `OFFICE_SCOPE_PERMISSION_SLUGS` /
 >   `DEFAULT_PERMISSION_SETS` és a shared ESM modul manuális szinkron alatt
 >   állnak; az A.3.6 retrofit során egyszer már materializálódott a drift
->   (`workflow.share` halott kód). Phase 2 (A.7.1): AST-equality CI test.
+>   (`workflow.share` halott kód). **A.7.1 részmegoldás (2026-05-03)**: a
+>   `compiledValidator.js`-re build-step generated single-source került
+>   ([[Komponensek/CompiledValidator]] sor 51, `scripts/build-cf-validator.mjs`,
+>   `yarn check:cf-validator` drift-detect). A `permissions.js`-re ugyanezt a
+>   mintát kell alkalmazni egy hasonló `scripts/build-cf-permissions.mjs`-szal —
+>   ez maradt nyitott (A.7.1 follow-up).
 > - **Member-path authority**: a `buildPermissionSnapshot` member-pathon a
 >   `groupMemberships` collection-en alapul (NEM az `editorialOfficeMemberships`-en).
 >   A jelenlegi write-path kollekció-ACL-jei védik az integritást, de

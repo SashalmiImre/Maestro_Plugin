@@ -97,7 +97,8 @@ maestro-server/
     │       └── helpers/                ← Fázis 1 helper-extract (2026-05-03)
     │           ├── constants.js        (CASCADE_BATCH_LIMIT, MAX_REFERENCES_PER_SCAN, WORKFLOW_VISIBILITY_*, PARSE_ERROR)
     │           ├── cascade.js          (deleteByQuery, cascadeDeleteOffice)
-    │           ├── compiledValidator.js (workflowReferencesSlug, contributorJsonReferencesSlug, validateCompiledSlugsInline, buildCompiledValidationFailure)
+    │           ├── compiledValidator.js (workflowReferencesSlug, contributorJsonReferencesSlug, validateCompiledSlugs re-export, buildCompiledValidationFailure)
+    │           ├── _generated_compiledValidator.js (AUTO-GENERATED: scripts/build-cf-validator.mjs by A.7.1, kanonikus forrás packages/maestro-shared/compiledValidator.js)
     │           ├── workflowDoc.js      (createWorkflowDoc — schema-safe fallback)
     │           ├── groupSeed.js       (seedGroupsFromWorkflow, findEmptyRequiredGroupSlugs, seedDefaultPermissionSets)
     │           └── deadlineValidator.js (validateDeadlinesInline)
@@ -586,7 +587,7 @@ A jogosultsági helper kétféle:
   - `createPermissionContext()` — `{ snapshotsByOffice: Map, orgRoleByOrg: Map }` per-request scaffold (A.3.7 server-side cache). **Request-snapshot consistency**: a memoizált snapshot a CF-call lifecycle-ja alatt él — egy mid-request permission-változás NEM látszik a request belül (szándékos elv).
   - `validatePermissionSetSlugs(slugs)` — write-path validáció (CRUD action-ök).
 
-**Drift kockázat**: a slug-set, `DEFAULT_PERMISSION_SETS` és `validatePermissionSetSlugs` a CF inline-ban duplikált. A két forrás manuálisan szinkronban tartandó (Phase 2 / A.7.1: AST-equality CI test vagy single-source bundle). Ugyanaz a minta, mint a `validateCompiledSlugsInline` (A.2.1).
+**Drift kockázat**: a slug-set, `DEFAULT_PERMISSION_SETS` és `validatePermissionSetSlugs` a CF inline-ban duplikált. A két forrás manuálisan szinkronban tartandó (Phase 2: ugyanaz a minta, mint a `validateCompiledSlugs` (A.2.1) — **A.7.1 megoldotta** a `compiledValidator.js`-re a `scripts/build-cf-validator.mjs` generátorral; ezt a `permissions.js`-re is meg kell ismételni egy hasonló `scripts/build-cf-permissions.mjs` script-tel).
 
 **Snapshot-preferáló workflow lookup** (CF hardening, #37):
 - `update-article` CF `getWorkflowForPublication()` — ha a publikációnak van `compiledWorkflowSnapshot`-ja, a CF kizárólag azt parse-olja (snap cache kulcs: `snap:${pubId}:${length}`). Csak snapshot hiányában / parse hibánál esik vissza a live `workflowId` lookup-ra. A workflow Dashboard-oldali módosításai így NEM érintik az aktivált publikáció cikk-validációit.

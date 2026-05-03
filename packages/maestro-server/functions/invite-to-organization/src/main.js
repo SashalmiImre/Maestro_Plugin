@@ -31,7 +31,7 @@ const { deleteByQuery, cascadeDeleteOffice } = require("./helpers/cascade.js");
 const {
     workflowReferencesSlug,
     contributorJsonReferencesSlug,
-    validateCompiledSlugsInline,
+    validateCompiledSlugs,
     buildCompiledValidationFailure
 } = require("./helpers/compiledValidator.js");
 const { createWorkflowDoc } = require("./helpers/workflowDoc.js");
@@ -282,7 +282,7 @@ const VALID_ACTIONS = new Set([
 // `CASCADE_BATCH_LIMIT`, `MAX_REFERENCES_PER_SCAN`, `PARSE_ERROR` konstansok
 // a `helpers/constants.js` modulba kerültek és a fájl tetején a require-blokk
 // hozza vissza őket. A `createWorkflowDoc`, `deleteByQuery`, `cascadeDeleteOffice`,
-// `workflowReferencesSlug`, `contributorJsonReferencesSlug`, `validateCompiledSlugsInline`,
+// `workflowReferencesSlug`, `contributorJsonReferencesSlug`, `validateCompiledSlugs`,
 // `buildCompiledValidationFailure`, `seedGroupsFromWorkflow`,
 // `findEmptyRequiredGroupSlugs`, `seedDefaultPermissionSets`,
 // `validateDeadlinesInline` szintén külön modulokban — a `helpers/cascade.js`,
@@ -4277,7 +4277,7 @@ module.exports = async function ({ req, res, log, error }) {
             // Defense-in-depth: a default workflow JSON garantáltan
             // konzisztens (a build pipeline nem ellenőrzi), de ha valaki
             // hibás default-ot commit-ol, itt fail-fast a `create_workflow`.
-            const createValidation = validateCompiledSlugsInline(compiledClone);
+            const createValidation = validateCompiledSlugs(compiledClone);
             if (!createValidation.valid) {
                 error(`[CreateWorkflow] DEFAULT_WORKFLOW invariáns sértés: ${JSON.stringify(createValidation.errors)}`);
                 return fail(res, 500, 'invalid_default_workflow', buildCompiledValidationFailure(createValidation));
@@ -4708,7 +4708,7 @@ module.exports = async function ({ req, res, log, error }) {
             // A kliens-oldali `validateCompiledSlugs` (Designer save flow)
             // garantálja az invariánst, de DevTools-ból vagy direkt CF
             // hívásból is lehet érvénytelen compiled-et küldeni → 400 fail-fast.
-            const slugValidation = validateCompiledSlugsInline(updatedCompiled);
+            const slugValidation = validateCompiledSlugs(updatedCompiled);
             if (!slugValidation.valid) {
                 log(`[UpdateWorkflow] Hard contract sértés (workflow=${workflowDoc.$id}, by ${callerId}): ${slugValidation.errors.length} hiba.`);
                 return fail(res, 400, 'unknown_group_slug', buildCompiledValidationFailure(slugValidation));
@@ -5530,7 +5530,7 @@ module.exports = async function ({ req, res, log, error }) {
             // mentés-time validált, de futás közben sérülhetett (manuális
             // Console-edit, legacy import). Defense-in-depth: ne másoljunk
             // tovább érvénytelen compiled-et.
-            const dupValidation = validateCompiledSlugsInline(compiledClone);
+            const dupValidation = validateCompiledSlugs(compiledClone);
             if (!dupValidation.valid) {
                 error(`[DuplicateWorkflow] forrás workflow ${workflowId} hard contract sértést tartalmaz: ${dupValidation.errors.length} hiba.`);
                 return fail(res, 422, 'source_compiled_invalid_slugs', buildCompiledValidationFailure(dupValidation));

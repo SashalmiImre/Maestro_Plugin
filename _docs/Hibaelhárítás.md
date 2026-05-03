@@ -66,6 +66,14 @@ Részletek: [[Komponensek/DataContext]] (null-tolerant fetch), Feladatok M. szek
 
 ---
 
+## CF compiledValidator drift (`yarn check:cf-validator` exit 1)
+**Tünet**: A `yarn check:cf-validator` script `[build-cf-validator] DRIFT — a generált fájl eltér a forrásból generálttól.` üzenettel exit 1-gyel kilép. A deploy-flow-ban (vagy commit előtti manuális ellenőrzéskor) blokkolja a továbbhaladást.
+**Ok**: Valaki módosította a `packages/maestro-shared/compiledValidator.js`-t (kanonikus ESM forrás), de nem futtatta a regenerálást — a `packages/maestro-server/functions/invite-to-organization/src/helpers/_generated_compiledValidator.js` (auto-generated CommonJS pillanatkép) elszállt a forrástól. A CF deploy a régi validátorral menne ki, ami legrosszabb esetben security-kritikus drift (pl. új `unknown_group_slug` típuscsoport, amit a régi pillanatkép nem ellenőriz).
+**Megoldás**: Futtasd `yarn build:cf-validator`-t — regenerálja az `_generated_compiledValidator.js`-t. Commitold mind a forrást, mind a generált fájlt. Másik lehetséges hiba a `[build-cf-validator] A forrásban nem található "export function <name>"` — ekkor a shared modul export-szignatúrája megváltozott, és a `scripts/build-cf-validator.mjs` `EXPORTED_NAMES` array-t kell frissíteni. Ha a transzform után ESM-token marad (`import` / `export` / `import.meta` / dynamic `import()` / top-level `await`), a generátor fail-closed dob — a shared modulnak vanilla ES-szintaxisúnak kell maradnia (csak `export function`-nel).
+Részletek: [[Komponensek/CompiledValidator]] (Becsatornázás táblázat), `scripts/build-cf-validator.mjs`, [[Naplók/2026-05-03]] (Ötödik session).
+
+---
+
 ## WS reconnect után stale cache (Dashboard)
 **Tünet**: Egyik tab-on (vagy másik felhasználó) létrehoz/töröl/átnevez egy rekordot, miközben a saját Dashboard WS-e épp megszakadt (laptop alvás, WiFi switch, custom domain backend bounce). A WS visszakapcsolódik, de a Realtime-vezérelt cache-ek (memberships, aktív kiadvány child rekordjai, csoport listák) a régi állapotot mutatják mount-ig vagy scope-váltásig.
 **Ok**: A `client.subscribe()` callback CSAK `event` típusú push-okat lát — a disconnect-ablakban érkezett szerver-mutációk nem érkeznek meg, és a SDK 24.1.1 publikus API-ja nem tesz közzé reconnect signal-t. A Plugin-oldal a [[Döntések/0001-dual-proxy-failover|dual-proxy reconnect-réteg]]-gel védve van; a Dashboard közvetlenül beszél az Appwrite Cloud-dal, így saját reconnect-detektálás kell.
