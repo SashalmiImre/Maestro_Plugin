@@ -41,8 +41,40 @@ A bus union-diff guarddal ragadja meg a no-op rebuild-eket, és 50ms debounce-sz
 | `useTenantRealtimeRefresh.js` | 3 group/invite collection | scope-szűrt 300ms debounce reload |
 | `WorkflowDesignerPage.jsx` | 1 doc-szintű channel | remote version-ütközés warning |
 
+## 2026-05-03 záradék — Reconnect-time resync (A.4.9 review fix)
+
+### Probléma
+A bus a SLOT 0 bug-ot megoldja, de a WS megszakadás-és-újrakapcsolódás ablakában érkező szerver-mutációk nem érkeznek push-ként. A Realtime-vezérelt cache-ek (AuthContext memberships, DataContext aktív kiadvány child rekordok, `useTenantRealtimeRefresh` fogyasztói modálok) néma stale-ben ragadnak a következő mount-ig vagy scope-váltásig. A Plugin-oldal a [[Döntések/0001-dual-proxy-failover|dual-proxy failover]] proxy reconnect-rétegével védve van, a Dashboard közvetlenül beszél az Appwrite Cloud-dal, ezért szimmetrikusan szüksége van saját reconnect-detektálásra.
+
+### SDK ellenőrzés
+Az Appwrite Web SDK 24.1.1 `client.subscribe(channels, callback)` **szinkron unsubscribe függvényt** ad vissza — NEM promise-t (a feladatleírás feltételezte). A subscribe callback CSAK `event` típusú push-okat lát; az SDK belső `connected` üzenete és a WS `open`/`close` eventek nincsenek kitéve a publikus API-n. Az egyetlen alacsony szintű hookpont a `client.realtime.socket` WebSocket példány — viszont ez minden reconnect-nél új instance, így nem elég egyszer feliratkozni.
+
+### Döntés
+A `subscribeRealtime(channels, callback, options)` kapott egy opcionális `options.onReconnect` callback-et. A bus egyszer (lazy, az első `doRebuild()`-nél) monkey-patch-eli a `client.realtime.createSocket`-et: minden új socket-példányra `open`/`close` listener-t aggat, és a MÁSODIK (vagy későbbi) sikeres `open` után meghívja a regisztrált `onReconnect` callback-eket. Az első `open` (kezdeti kapcsolódás) NEM trigger-eli — a fogyasztók mount-effect-je úgyis lekérte az adatot, fals duplikált fetch-et kerülünk.
+
+Idempotens, fail-safe: ha az SDK `realtime.createSocket` API eltűnik (upgrade), warn-t logolunk és reconnect-detection inaktív marad — a meglévő subscribe továbbra is működik.
+
+### Fogyasztók wiring (2026-05-03)
+| Modul | onReconnect viselkedés |
+|---|---|
+| `AuthContext.jsx` | `loadAndSetMemberships(userId, { silent: true })` — tranziens hiba ne ürítse a már érvényes scope-ot |
+| `DataContext.jsx` | `resyncRealtimeData()` — publikációk + aktív pub child rekordok + workflow listák, törölt aktív pub észlelése |
+| `useTenantRealtimeRefresh.js` | `reload()` debounce nélkül |
+| `WorkflowDesignerPage.jsx` | NINCS (single-doc, az auto-resync letörölné a felhasználó nem mentett változtatásait) |
+
+### Alternatívák (mérlegelt)
+| Opció | Mellette | Ellene |
+|---|---|---|
+| Monkey-patch `createSocket` (választott) | Reaktív, 0 polling overhead, pontosan a WS lifecycle-höz kötve | Az SDK belső API-tól függ — fail-safe csökkenti a kockázatot |
+| Polling `client.realtime.socket.readyState` | Nem touch-ol SDK belsőt | 1–2s interval = állandó wakeup; a transition-t könnyű elszalasztani |
+| Browser `online` event | Nincs SDK-függés | Coarse signal — nem fed le minden reconnect-okot (heartbeat-fail, 1006) |
+| Module-level `realtimeBus.onReconnect()` API | Independent registration, nem subscription-bound | Külön cleanup útvonal, nem természetes a fogyasztó szempontból |
+
+### Nyitva hagyott (jövőbeli munka)
+A `useContributorGroups` hook 5 perces module-szintű cache-t tart, de NEM iratkozik fel Realtime-ra (az A.4.9 review feltevése volt — valójában nincs ilyen kód). Ha utólag bekerül a Realtime listening, az `onReconnect` opcióval invalidate + refetch-et kell beállítani. Addig a stale ablak a TTL (5 perc) vagy scope-váltás.
+
 ## Kapcsolódó
-- Memory: `dashboard-realtime-bus.md` (2026-04-19)
+- Memory: `dashboard-realtime-bus.md` (2026-04-19, frissítve 2026-05-03)
 - Komponens: [[Komponensek/RealtimeBus]]
-- ADR-ek: [[0005-dashboard-custom-domain]], [[0003-tenant-team-acl]]
-- Hibaelhárítás: [[Hibaelhárítás#Realtime SLOT 0 routing bug Dashboard]]
+- ADR-ek: [[0001-dual-proxy-failover]] (Plugin reconnect-réteg, aszimmetria-magyarázat), [[0005-dashboard-custom-domain]], [[0003-tenant-team-acl]]
+- Hibaelhárítás: [[Hibaelhárítás#Realtime SLOT 0 routing bug Dashboard]], [[Hibaelhárítás#WS reconnect után stale cache Dashboard]]

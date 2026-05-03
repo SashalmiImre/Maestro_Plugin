@@ -61,7 +61,19 @@ export function useTenantRealtimeRefresh({ scopeField, scopeId, reload }) {
             }, DEBOUNCE_MS);
         };
 
-        const unsubscribe = subscribeRealtime(CHANNELS, handler);
+        // WS reconnect után reload — a disconnect-ablakban érkezett
+        // groups / membership / invite változások nem jönnének push-ként,
+        // így a fogyasztó modal listája (pl. Csoportok tab, Felhasználók tab)
+        // stale-ben ragadna a következő mount-ig vagy scope-váltásig.
+        // Itt nem szűrünk scope-ra, mert a `reload()` fogyasztó-szinten kérdezi
+        // le a saját scope-ját (a stale ablak alatt akár új scope is lehet).
+        const onReconnect = () => {
+            if (debounceId) clearTimeout(debounceId);
+            debounceId = null;
+            reload();
+        };
+
+        const unsubscribe = subscribeRealtime(CHANNELS, handler, { onReconnect });
 
         return () => {
             if (debounceId) clearTimeout(debounceId);

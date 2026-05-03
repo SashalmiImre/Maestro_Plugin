@@ -749,6 +749,38 @@ export function DataProvider({ children }) {
 
     // ─── Realtime feliratkozás ──────────────────────────────────────────────
 
+    // WS reconnect után resync: a disconnect-ablakban érkezett mutációk
+    // (cikk létrehozás/törlés, layout/határidő szerkesztés, workflow archiválás
+    // stb.) nem érkeznének push-ként, és a UI a következő scope-váltásig vagy
+    // mount-ig stale-ben maradna. Reconnect-kor egyszerre frissítjük az aktív
+    // scope összes Realtime-vezérelt listáját. Ha az aktív kiadvány közben
+    // törlődött, a `fetchPublications()` után észleljük és tisztítjuk a
+    // derived state-et — különben a `switchPublication()` egy nem létező doc
+    // child rekordjait kérné le (üres válasz, nem hibás, csak felesleges).
+    const resyncRealtimeData = useCallback(async () => {
+        try {
+            const pubs = await fetchPublications();
+            const activeId = activePublicationIdRef.current;
+            const stillExists = activeId && pubs.some(p => p.$id === activeId);
+
+            if (activeId && !stillExists) {
+                activePublicationIdRef.current = null;
+                setActivePublicationIdState(null);
+                setArticles([]);
+                setLayouts([]);
+                setDeadlines([]);
+                setValidations([]);
+                articleIdsRef.current = new Set();
+            } else if (activeId && stillExists) {
+                await switchPublication(activeId);
+            }
+
+            await Promise.all([fetchWorkflow(), fetchArchivedWorkflows()]);
+        } catch (err) {
+            console.warn('[DataContext] Reconnect-time resync sikertelen:', err?.message);
+        }
+    }, [fetchPublications, switchPublication, fetchWorkflow, fetchArchivedWorkflows]);
+
     useEffect(() => {
         const dataChannels = [
             collectionChannel(COLLECTIONS.ARTICLES),
@@ -820,10 +852,10 @@ export function DataProvider({ children }) {
                     error: error?.message || error
                 });
             }
-        });
+        }, { onReconnect: resyncRealtimeData });
 
         return () => unsubscribe();
-    }, []);
+    }, [resyncRealtimeData]);
 
     // Minden mező memoizált — a state-ek / useCallback-ek maguk stabilak, itt
     // a külső consumer-ek miatt biztosítunk identitás-stabilitást: a Provider

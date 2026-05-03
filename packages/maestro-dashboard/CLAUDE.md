@@ -325,9 +325,17 @@ A custom domain migráció után kiderült: az Appwrite Web SDK 24.1.1 per-subsc
 
 **Megoldás**: minden `client.subscribe()` hívás konszolidálva egyetlen megosztott subscription-re a `src/contexts/realtimeBus.js`-ben.
 
-- **API**: `subscribeRealtime(channels, callback)` — `string | string[]` input, visszaad unsubscribe-ot. Plusz `collectionChannel(col)` / `documentChannel(col, id)` helperek.
+- **API**: `subscribeRealtime(channels, callback, options?)` — `string | string[]` input, visszaad unsubscribe-ot. Plusz `collectionChannel(col)` / `documentChannel(col, id)` helperek.
 - **Belül**: handlers Map (modul-scope), union-diff guard (setsEqual → no-op rebuild), 50ms debounce a StrictMode dupla mount / gyors útvonalváltás burst-öknek.
 - **Fogyasztók**: `AuthContext` (tenant sync), `DataContext` (adat sync), `useTenantRealtimeRefresh` (group/invite sync), `WorkflowDesignerPage` (remote version warning).
 - **Tilos**: közvetlen `client.subscribe()` hívás a dashboardon. Új Realtime fogyasztó mindig a bus-on át.
 
-Részletes doc: `~/.claude/projects/-Users-imre-sashalmi-Documents-Maestro-Plugin/memory/dashboard-realtime-bus.md`.
+### Reconnect-time resync (2026-05-03, A.4.9 review fix)
+
+A SDK 24.1.1 `client.subscribe()` szinkron unsubscribe-ot ad vissza, és a callback CSAK `event` push-okat lát — a WS megszakadás-és-újrakapcsolódás ablakában érkezett szerver-mutációk nem jönnek át push-ként. A Realtime-vezérelt cache-ek néma stale-ben ragadnának a következő mount-ig (a Plugin a [[_docs/Döntések/0001-dual-proxy-failover|dual-proxy reconnect-réteggel]] védve van; a Dashboard közvetlenül beszél az Appwrite Cloud-dal).
+
+- **API bővítés**: `subscribeRealtime(channels, callback, { onReconnect: () => void })` — opcionális, a WS sikeres ÚJRAkapcsolódásakor (NEM az elsőnél) hívódik. Az unsubscribe-bal automatikusan eltávolítódik.
+- **Belül**: `installSocketHook()` egyszer monkey-patch-eli a `client.realtime.createSocket`-et, hogy minden új socket-példányra `open`/`close` listener-t aggasson. Az SDK belső API-ja az egyetlen kontrollált hookpoint, mert a `client.realtime.socket` minden reconnect-nél új instance. Fail-safe: ha az SDK API eltűnik, warn + skip — a normál subscribe továbbra is működik.
+- **Fogyasztók (wired 2026-05-03)**: `AuthContext` (silent membership reload), `DataContext` (`resyncRealtimeData` — publikációk + aktív pub child rekordok + workflow listák, törölt aktív pub észlelése), `useTenantRealtimeRefresh` (debounce nélküli `reload()`). `WorkflowDesignerPage` szándékosan KIMARAD — single-doc, az auto-resync letörölné a felhasználó nem mentett változtatásait.
+
+Részletes doc: [[_docs/Döntések/0004-dashboard-realtime-bus]] + 2026-05-03 záradék, memory `dashboard-realtime-bus.md`.
