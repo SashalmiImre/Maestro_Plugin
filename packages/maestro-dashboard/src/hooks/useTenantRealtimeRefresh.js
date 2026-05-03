@@ -23,17 +23,26 @@ import { useEffect } from 'react';
 import { subscribeRealtime, collectionChannel } from '../contexts/realtimeBus.js';
 import { COLLECTIONS } from '../config.js';
 
-// A.4.7 (ADR 0008): a `permissionSets` és `groupPermissionSets` Realtime
-// csatornákat a 3 eredeti mellé felvesszük, hogy az `EditorialOfficeSettingsModal`
-// (és más fogyasztók) automatikusan reload-oljanak, ha más tab / másik user
-// permission set-et módosít. A scope-szűrés ugyanazon `editorialOfficeId`
-// payload-mezőn megy, így nincs cross-tenant zaj.
-const CHANNELS = [
+// Office-szintű fogyasztók (`scopeField: 'editorialOfficeId'`) az 5 collection-re
+// iratkoznak: a `permissionSets` és `groupPermissionSets` (A.4.7) az
+// `EditorialOfficeSettingsModal` Permission set tabjához kell.
+const OFFICE_CHANNELS = [
     collectionChannel(COLLECTIONS.GROUPS),
     collectionChannel(COLLECTIONS.GROUP_MEMBERSHIPS),
     collectionChannel(COLLECTIONS.ORGANIZATION_INVITES),
     collectionChannel(COLLECTIONS.PERMISSION_SETS),
     collectionChannel(COLLECTIONS.GROUP_PERMISSION_SETS)
+];
+
+// Org-szintű fogyasztók (`scopeField: 'organizationId'`) csak a 3 alapcsatornán.
+// A `permissionSets` / `groupPermissionSets` payload-jában ugyan szerepel
+// `organizationId` (denormalizált index-mező), de az org-szintű `OrganizationSettingsModal`
+// nem mutat permission set adatot — feleslegesen reagáltatná a child office
+// permission-set változásokra (`loadData()` = members + offices fetch).
+const ORG_CHANNELS = [
+    collectionChannel(COLLECTIONS.GROUPS),
+    collectionChannel(COLLECTIONS.GROUP_MEMBERSHIPS),
+    collectionChannel(COLLECTIONS.ORGANIZATION_INVITES)
 ];
 
 const DEBOUNCE_MS = 300;
@@ -48,6 +57,8 @@ const DEBOUNCE_MS = 300;
 export function useTenantRealtimeRefresh({ scopeField, scopeId, reload }) {
     useEffect(() => {
         if (!scopeField || !scopeId) return undefined;
+
+        const channels = scopeField === 'organizationId' ? ORG_CHANNELS : OFFICE_CHANNELS;
 
         let debounceId = null;
 
@@ -73,7 +84,7 @@ export function useTenantRealtimeRefresh({ scopeField, scopeId, reload }) {
             reload();
         };
 
-        const unsubscribe = subscribeRealtime(CHANNELS, handler, { onReconnect });
+        const unsubscribe = subscribeRealtime(channels, handler, { onReconnect });
 
         return () => {
             if (debounceId) clearTimeout(debounceId);

@@ -123,13 +123,17 @@ function handleSocketClose() {
  */
 function installSocketHook() {
     if (socketHookInstalled) return;
-    socketHookInstalled = true;
 
     const realtime = getClient()?.realtime;
     if (!realtime || typeof realtime.createSocket !== 'function') {
-        console.warn('[realtimeBus] Appwrite SDK realtime API nem elérhető — reconnect detection inaktív');
+        // Az SDK API hiányzik — `socketHookInstalled` szándékosan `false`
+        // marad, hogy egy következő `doRebuild()` (pl. lazy auth init után)
+        // újrapróbálja. SDK-frissítéskor sem ragadunk béna állapotban.
+        console.warn('[realtimeBus] Appwrite SDK realtime API nem elérhető — reconnect detection deferred');
         return;
     }
+
+    socketHookInstalled = true;
 
     const original = realtime.createSocket;
     realtime.createSocket = function patchedCreateSocket(...args) {

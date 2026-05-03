@@ -214,6 +214,12 @@ export function useContributorGroups(options = {}) {
     // collection scope-on belüli változására kiürítjük a cache-t és reload-ot
     // futtatunk. A `realtimeBus` 50ms debounce-ot ad ingyenesen, így a burst-ök
     // (autoseed több slug egyszerre) egyetlen reload-ban összefutnak.
+    //
+    // Reconnect-time resync (ADR 0004 2026-05-03 záradék): a WS megszakadás-
+    // és-újrakapcsolódás ablakában érkezett group / membership event-ek nem
+    // jönnek át push-ként. Az `onReconnect` callback ilyenkor invalidálja a
+    // cache-t és újrafetchel — különben a Közreműködők dropdown-ok és a
+    // `RequiredGroupSlugsField` lista a következő scope-váltásig stale maradna.
     useEffect(() => {
         if (!activeEditorialOfficeId) return undefined;
         const handler = (response) => {
@@ -223,10 +229,14 @@ export function useContributorGroups(options = {}) {
             invalidateContributorGroupsCache();
             fetchData();
         };
+        const onReconnect = () => {
+            invalidateContributorGroupsCache();
+            fetchData();
+        };
         const unsubscribe = subscribeRealtime([
             collectionChannel(COLLECTIONS.GROUPS),
             collectionChannel(COLLECTIONS.GROUP_MEMBERSHIPS)
-        ], handler);
+        ], handler, { onReconnect });
         return unsubscribe;
     }, [activeEditorialOfficeId, fetchData]);
 

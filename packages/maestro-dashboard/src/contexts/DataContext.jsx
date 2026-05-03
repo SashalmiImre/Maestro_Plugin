@@ -88,6 +88,13 @@ export function DataProvider({ children }) {
     // az L-103 task (pre-existing race, kis valószínűségű) halasztva — ha egyszer
     // elővesszük, ugyanezt a gen-refet post-await ellenőrzéssel bővíteni kell.
     const fetchWorkflowGenRef = useRef(0);
+    // `switchPublication` generáció-számláló — A→B vagy reconnect-resync race
+    // védelem: gyors váltás vagy `resyncRealtimeData` közbeni manuális kattintás
+    // esetén a régebbi fetch eredménye ne írja felül a frissebb scope cikkjeit.
+    // Az ADR 0004 2026-05-03 záradék növelte a hit-rate-et (reconnect-időben
+    // két párhuzamos switchPublication hívás), ezért a régebbi pre-existing
+    // race-et most lezárjuk.
+    const switchPublicationGenRef = useRef(0);
 
     // Scope refek — a create metódusok olvassák, hogy callback closure-ök nélkül mindig
     // a legfrissebb aktív organization/office ID-ra injektáljanak scope mezőket.
@@ -150,6 +157,7 @@ export function DataProvider({ children }) {
     // ─── Kiadvány váltás ────────────────────────────────────────────────────
 
     const switchPublication = useCallback(async (publicationId) => {
+        const gen = ++switchPublicationGenRef.current;
         activePublicationIdRef.current = publicationId;
         setActivePublicationIdState(publicationId);
 
@@ -197,6 +205,11 @@ export function DataProvider({ children }) {
                     ]
                 }).catch(() => ({ documents: [] }))
             ]);
+
+            // Stale generation védelem: ha közben másik switch / resync futott,
+            // dobjuk el a régebbi választ — különben az új scope cikkjeit
+            // felülírná a stale articles/layouts/deadlines tömb.
+            if (gen !== switchPublicationGenRef.current) return;
 
             setArticles(articlesResult.documents);
             setLayouts(layoutsResult.documents);
@@ -250,9 +263,15 @@ export function DataProvider({ children }) {
                 allValidations = [];
             }
 
+            // Második stale-check a validáció-fetch UTÁN — a 2. fázis is hosszú lehet.
+            if (gen !== switchPublicationGenRef.current) return;
+
             setValidations(allValidations);
         } finally {
-            setIsLoading(false);
+            // A loading flag csak akkor kerüljön false-ra, ha mi vagyunk a friss
+            // generation — különben egy stale finally letörölné egy aktív frissebb
+            // switch loading-spinnerét.
+            if (gen === switchPublicationGenRef.current) setIsLoading(false);
         }
     }, [databases]);
 
