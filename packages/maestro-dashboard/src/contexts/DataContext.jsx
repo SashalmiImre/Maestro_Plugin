@@ -802,6 +802,10 @@ export function DataProvider({ children }) {
                 setDeadlines([]);
                 setValidations([]);
                 articleIdsRef.current = new Set();
+                // A futó switchPublication finally-je a generation-bump miatt
+                // skip-eli a `setIsLoading(false)`-t (frissebb gen lett);
+                // ezt a clear-ág veszi át, különben a spinner stuck-true marad.
+                setIsLoading(false);
             } else if (activeId && stillExists) {
                 await switchPublication(activeId);
             }
