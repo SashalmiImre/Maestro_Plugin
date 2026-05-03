@@ -57,6 +57,14 @@ export const MaestroEvent = Object.freeze({
     /** Csoporttagság megváltozott (tag hozzáadva/eltávolítva). Detail: { groupId } */
     groupMembershipChanged: 'maestro:group-membership-changed',
 
+    /**
+     * Permission-set rendszer (ADR 0008) változás — `permissionSets` /
+     * `groupPermissionSets` collection Realtime push. A UserContext erre
+     * triggereli a `user.permissions` snapshot rebuildet. Detail: { source }
+     * ahol source ∈ { 'permissionSets', 'groupPermissionSets', 'reconnect' }.
+     */
+    permissionSetsChanged: 'maestro:permission-sets-changed',
+
     /** Scope (szerkesztőség) megváltozott. Detail: { editorialOfficeId } */
     scopeChanged: 'maestro:scope-changed',
 

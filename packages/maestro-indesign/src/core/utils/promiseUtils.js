@@ -115,3 +115,51 @@ export const withRetry = async (fn, options = {}) => {
     // Biztonsági háló (elméletileg ide nem jutunk)
     throw lastError;
 };
+
+/**
+ * Cursor-alapú lapozás kanonikus 100-as oldalmérettel és 10-lap cap-pel
+ * (1000 doc max). Ha a cap-et elérjük, `logWarn` szól — pathologikus
+ * adathalmaz (nem valós szerkesztőség), nem hiba, nem dob.
+ *
+ * @template T
+ * @param {(queries: any[]) => Promise<{documents?: T[], rows?: T[]}>} listFn
+ *   List-callback ami a befejezett `queries`-t kapja és az Appwrite SDK
+ *   `listDocuments` / `listRows` formátumában ad vissza választ. A cursor
+ *   query-t és a limit-et a `paginateAll` adja hozzá — a hívó csak a
+ *   szűrőit (`Query.equal(...)`, `Query.isNull(...)`) adja meg `baseQueries`-ben.
+ * @param {Object} options
+ * @param {any[]} options.baseQueries - a hívó szűrői (cursor + limit nélkül).
+ *   A `paginateAll` mindig hozzáfűz `Query.limit(pageSize)`-t és (ha van)
+ *   `Query.cursorAfter(...)`-t.
+ * @param {(query: any) => any} options.cursorAfterFn - `Query.cursorAfter`
+ *   builder (pl. az appwrite SDK `Query.cursorAfter` hivása). A hívó adja át,
+ *   mert nem akarjuk hard-kódolni a `Query`-t a util-ba.
+ * @param {(limit: number) => any} options.limitFn - `Query.limit` builder.
+ * @param {string} options.operationName - log üzenetekhez.
+ * @param {number} [options.pageSize=100]
+ * @param {number} [options.pageCap=10]
+ * @returns {Promise<T[]>} az összes dokumentum egy lapos array-ben
+ */
+export const paginateAll = async (listFn, {
+    baseQueries,
+    cursorAfterFn,
+    limitFn,
+    operationName,
+    pageSize = 100,
+    pageCap = 10
+}) => {
+    const docs = [];
+    let cursor = null;
+    let page = 0;
+    for (; page < pageCap; page++) {
+        const queries = [...baseQueries, limitFn(pageSize)];
+        if (cursor) queries.push(cursorAfterFn(cursor));
+        const result = await listFn(queries);
+        const rows = result.rows || result.documents || [];
+        docs.push(...rows);
+        if (rows.length < pageSize) return docs;
+        cursor = rows[rows.length - 1].$id;
+    }
+    logWarn(`[paginateAll] ${operationName} ${pageCap * pageSize}+ — cap-et elértük, snapshot levághat.`);
+    return docs;
+};

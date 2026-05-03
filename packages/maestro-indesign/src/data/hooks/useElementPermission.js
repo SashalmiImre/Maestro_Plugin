@@ -21,6 +21,7 @@ import {
     canEditContributorDropdown,
     canUserAccessInState
 } from "maestro-shared/workflowRuntime.js";
+import { clientHasPermission } from "maestro-shared/permissions.js";
 
 /**
  * Egyetlen UI elem jogosultsági állapotát adja vissza.
@@ -126,4 +127,75 @@ export function useStateAccessPermission(stateId) {
         const userGroups = user?.groupSlugs || [];
         return canUserAccessInState(workflow, userGroups, stateId);
     }, [workflow, user?.groupSlugs, stateId]);
+}
+
+// ── Office-scope permission slug hookok (A.5.2, ADR 0008) ──────────────────
+//
+// A `useUserPermission(slug)` és `useUserPermissions(slugs[])` a 33 office-scope
+// slug egyikére (`publication.create`, `workflow.edit`, stb.) ad UI-rétegű
+// választ. **NEM helyettesíti a server-side guardot** — a végleges authority
+// a CF `userHasPermission()`. A `user.permissions` egy snapshot, ami stale
+// lehet (Realtime push előtt) — ezért a hívók fail-closed-ot kapnak loading
+// (`null`) állapotban (a `clientHasPermission(null, slug) === false`).
+//
+// A `useElementPermission` továbbra is a workflow-runtime `groupSlugs` ágon
+// működik (cikk-szintű elem-engedélyek) — a két réteg AND-elve használandó:
+//   const elementPerm = useElementPermission('publicationLayouts');
+//   const userPerm    = useUserPermission('publication.settings.edit');
+//   const allowed     = elementPerm.allowed && userPerm.allowed;
+
+/**
+ * Egyetlen office-scope permission slug ellenőrzése.
+ *
+ * @param {string} slug - 33 office-scope slug egyike (pl. `'publication.create'`)
+ * @returns {{ allowed: boolean, loading: boolean }}
+ */
+export function useUserPermission(slug) {
+    const { user } = useUser();
+
+    return useMemo(() => {
+        const loading = user?.permissions === null || user?.permissions === undefined;
+        if (loading) return { allowed: false, loading: true };
+        try {
+            return { allowed: clientHasPermission(user.permissions, slug), loading: false };
+        } catch (err) {
+            // A `clientHasPermission` throw-ol, ha a slug nem office-scope (org.* vagy
+            // ismeretlen). Fail-closed UI-szinten — fejlesztési hiba, ne crashítsuk
+            // a komponenst.
+            return { allowed: false, loading: false };
+        }
+    }, [user?.permissions, slug]);
+}
+
+/**
+ * Több office-scope permission slug ellenőrzése egyszerre.
+ *
+ * A `slugs` array referencia-stabilizáció: a join-jét string kulcsként
+ * használjuk a memo-ban, hogy a hívó inline literal `[a, b]` (új ref minden
+ * render-en) ne triggereljen felesleges újraszámolást.
+ *
+ * @param {string[]} slugs - 33 office-scope slug részhalmaza
+ * @returns {{ permissions: Object.<string, boolean>, loading: boolean }}
+ */
+export function useUserPermissions(slugs) {
+    const { user } = useUser();
+    const slugsKey = Array.isArray(slugs) ? slugs.join('|') : '';
+
+    return useMemo(() => {
+        const loading = user?.permissions === null || user?.permissions === undefined;
+        const result = {};
+        for (const slug of (slugs || [])) {
+            if (loading) {
+                result[slug] = false;
+                continue;
+            }
+            try {
+                result[slug] = clientHasPermission(user.permissions, slug);
+            } catch (err) {
+                result[slug] = false;
+            }
+        }
+        return { permissions: result, loading };
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [user?.permissions, slugsKey]);
 }

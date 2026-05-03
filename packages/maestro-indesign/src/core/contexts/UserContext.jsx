@@ -12,10 +12,11 @@ import { useConnection } from "../contexts/ConnectionContext.jsx";
 import { account, databases, executeLogin, handleSignOut, clearLocalSession, ID, VERIFICATION_URL } from "../config/appwriteConfig.js";
 import { DATABASE_ID, COLLECTIONS } from "maestro-shared/appwriteIds.js";
 import { resolveGroupSlugs } from "maestro-shared/groups.js";
+import { OFFICE_SCOPE_PERMISSION_SLUGS } from "maestro-shared/permissions.js";
 import { realtime } from "../config/realtimeClient.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../config/maestroEvents.js";
 import { log, logWarn, logError } from "../utils/logger.js";
-import { withRetry, withTimeout } from "../utils/promiseUtils.js";
+import { withRetry, withTimeout, paginateAll } from "../utils/promiseUtils.js";
 import { FETCH_TIMEOUT_CONFIG, STORAGE_ORG_KEY, STORAGE_OFFICE_KEY } from "../utils/constants.js";
 
 /**
@@ -116,6 +117,211 @@ async function fetchGroupSlugsForUser(userId, editorialOfficeId) {
     return slugs;
 }
 
+// ── Permission-set snapshot (A.5.1, ADR 0008) ──────────────────────────────
+//
+// A `user.permissions` mező a kliens-oldali office-scope cache (33 slug max).
+// A server `buildPermissionSnapshot` (CF `permissions.js`) replikája — DB
+// query-szinten azonos lépéssorozat, hogy a dashboard guardok és a CF authority
+// egyező döntést hozzon ugyanazon `(userId, officeId)` párra.
+//
+// **Drift-rizikó (A.7.1, Phase 2)**: a snapshot logika 3 helyen él (server CF,
+// shared sync helpers, plugin lookup itt). Single-source bundle vagy AST-equality
+// CI test rendezné — addig manuális szinkron a `permissions.js`-szel.
+//
+// **Tri-state**: a hívók a `user.permissions === null` értéken (még hydratáláson)
+// fail-closed-ot kapnak (`clientHasPermission(null, slug) === false`), vagyis
+// loading közben semmi UI elem nem engedi az új réteg ellen — ez konzervatív,
+// de a `groupSlugs` (workflow-runtime) független és jellemzően a UI-elemek
+// guardja, ezért a Plugin happy path nem észlel funkcionális regressziót.
+
+/**
+ * `editorialOfficeMemberships` cross-check egyetlen `(userId, officeId)` párra.
+ * Defense-in-depth a member-pathon: ha a user nincs az office tagjai közt,
+ * a permission set lookup eredménye fail-closed üres set (ld. server
+ * `isStillOfficeMember`).
+ *
+ * **DB-hiba dob** — a hívó (`fetchUserPermissionSlugs`) propagálja, hogy az
+ * `enrichUserWithPermissions` / `refreshPermissions` "őrizd meg a régit"
+ * mintába kerüljön. A "0 dokumentum" eredmény legitim `false` (= nem tag).
+ */
+async function isUserOfficeMember(userId, editorialOfficeId) {
+    if (!userId || !editorialOfficeId) return false;
+    const result = await listWithResilience({
+        databaseId: DATABASE_ID,
+        collectionId: COLLECTIONS.EDITORIAL_OFFICE_MEMBERSHIPS,
+        queries: [
+            Query.equal('userId', userId),
+            Query.equal('editorialOfficeId', editorialOfficeId),
+            Query.limit(1)
+        ]
+    }, 'fetchOfficeMembershipForPermission');
+    return result.documents.length > 0;
+}
+
+/**
+ * Egy `(userId, organizationId)` pár org-role-jét keresi.
+ * Visszaad `'owner' | 'admin' | 'member' | null`. A "0 dokumentum" eredmény
+ * legitim `null` (= nem tag az orgban). DB-hiba **dob** — a hívó propagálja.
+ */
+async function fetchOrgRoleForUser(userId, organizationId) {
+    if (!userId || !organizationId) return null;
+    const result = await listWithResilience({
+        databaseId: DATABASE_ID,
+        collectionId: COLLECTIONS.ORGANIZATION_MEMBERSHIPS,
+        queries: [
+            Query.equal('userId', userId),
+            Query.equal('organizationId', organizationId),
+            Query.limit(1)
+        ]
+    }, 'fetchOrgRoleForPermission');
+    const doc = result.documents[0];
+    return doc?.role || null;
+}
+
+/**
+ * Office → organizationId resolver. Az office doc-ot vagy a már letöltött
+ * `editorialOffices` state-ből kapja (gyors path), vagy DB-ből (fallback).
+ *
+ * 404 → `null` (legitim "nincs ilyen office"); egyéb hibára **dob**, hogy a
+ * hívó "őrizd meg a régit" mintába kerüljön.
+ */
+async function resolveOrgIdForOffice(editorialOfficeId, offices) {
+    if (!editorialOfficeId) return null;
+    const cached = Array.isArray(offices)
+        ? offices.find(o => o.$id === editorialOfficeId)
+        : null;
+    if (cached?.organizationId) return cached.organizationId;
+    try {
+        const office = await withRetry(
+            () => withTimeout(
+                databases.getDocument({
+                    databaseId: DATABASE_ID,
+                    collectionId: COLLECTIONS.EDITORIAL_OFFICES,
+                    documentId: editorialOfficeId
+                }),
+                FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
+                'fetchOfficeForPermission'
+            ),
+            { operationName: 'fetchOfficeForPermission' }
+        );
+        return office?.organizationId || null;
+    } catch (err) {
+        if (err?.code === 404) return null;
+        throw err;
+    }
+}
+
+/**
+ * Member-path permission-slug lookup. 3 paginált DB hívás:
+ *   1. `groupMemberships` az office-ban → `groupId`-list
+ *   2. `groupPermissionSets` (m:n junction) chunkolt `Query.equal('groupId', chunk)`
+ *      → `permissionSetId`-list
+ *   3. `permissionSets` (`archivedAt === null` szűrt) → `permissions[]`
+ *
+ * Defense-in-depth: csak `OFFICE_SCOPE_PERMISSION_SLUGS`-ban szereplő slug-okat
+ * fogadunk el (mintha valaki kézzel `org.*`-ot tett volna a doc-ba).
+ *
+ * **DB-hiba dob** — a hívó (`fetchUserPermissionSlugs`) propagálja, hogy az
+ * `enrichUserWithPermissions` / `refreshPermissions` "őrizd meg a régit"
+ * mintába kerüljön. A "0 dokumentum" lépcsőkön legitim `[]` (= nincs csoport,
+ * nincs assignment, nincs aktív permission set).
+ *
+ * @param {string} userId
+ * @param {string} editorialOfficeId
+ * @returns {Promise<string[]>} permission slug array (deduplikált, csak office-scope)
+ */
+async function fetchMemberPermissionSlugs(userId, editorialOfficeId) {
+    const APPWRITE_QUERY_EQUAL_LIMIT = 100;
+    const officeSlugSet = new Set(OFFICE_SCOPE_PERMISSION_SLUGS);
+
+    const paginatedListResilient = (collectionId, baseQueries, opName) => paginateAll(
+        (queries) => listWithResilience({ databaseId: DATABASE_ID, collectionId, queries }, opName),
+        { baseQueries, cursorAfterFn: Query.cursorAfter, limitFn: Query.limit, operationName: opName }
+    );
+
+    // 1) groupMemberships → groupId-list
+    const memberships = await paginatedListResilient(
+        COLLECTIONS.GROUP_MEMBERSHIPS,
+        [Query.equal('userId', userId), Query.equal('editorialOfficeId', editorialOfficeId)],
+        'fetchGroupMembershipsForPermission'
+    );
+    const groupIds = memberships.map(d => d.groupId).filter(Boolean);
+    if (groupIds.length === 0) return [];
+
+    // 2) groupPermissionSets — chunkolva (Appwrite Query.equal-array hard limit 100)
+    const permissionSetIds = new Set();
+    for (let chunkStart = 0; chunkStart < groupIds.length; chunkStart += APPWRITE_QUERY_EQUAL_LIMIT) {
+        const chunk = groupIds.slice(chunkStart, chunkStart + APPWRITE_QUERY_EQUAL_LIMIT);
+        const junctions = await paginatedListResilient(
+            COLLECTIONS.GROUP_PERMISSION_SETS,
+            [Query.equal('groupId', chunk)],
+            'fetchGroupPermissionSets'
+        );
+        for (const doc of junctions) {
+            if (doc.permissionSetId) permissionSetIds.add(doc.permissionSetId);
+        }
+    }
+    if (permissionSetIds.size === 0) return [];
+
+    // 3) permissionSets — chunkolva, archivedAt=null szűrt; defense-in-depth
+    //    csak az `OFFICE_SCOPE_PERMISSION_SLUGS`-ban szereplő slug-okat fogadunk el.
+    const slugs = new Set();
+    const ids = [...permissionSetIds];
+    for (let chunkStart = 0; chunkStart < ids.length; chunkStart += APPWRITE_QUERY_EQUAL_LIMIT) {
+        const chunk = ids.slice(chunkStart, chunkStart + APPWRITE_QUERY_EQUAL_LIMIT);
+        const sets = await paginatedListResilient(
+            COLLECTIONS.PERMISSION_SETS,
+            [Query.equal('$id', chunk), Query.isNull('archivedAt')],
+            'fetchPermissionSets'
+        );
+        for (const doc of sets) {
+            const arr = Array.isArray(doc.permissions) ? doc.permissions : [];
+            for (const slug of arr) {
+                if (officeSlugSet.has(slug)) slugs.add(slug);
+            }
+        }
+    }
+
+    return [...slugs];
+}
+
+/**
+ * A felhasználó office-scope permission slug array-jét (33 slug max) számolja
+ * a server `buildPermissionSnapshot` lépéseit követve:
+ *   1. `user.labels?.includes('admin')` (Appwrite global admin label) → 33 slug
+ *   2. `organizationMemberships.role === 'owner' | 'admin'` → 33 slug
+ *   3. Member-path: defense-in-depth office-tagság cross-check + permission set lookup.
+ *
+ * @param {Object} user - Appwrite account.get() válasz (`$id`, `labels`)
+ * @param {string} editorialOfficeId
+ * @param {Array} [offices] - opcionális, az `editorialOffices` state — gyorsít
+ *     az office → orgId resolve-on (egy DB hívás megspórolva).
+ * @returns {Promise<string[]>} permission slug array (deduplikált, csak office-scope)
+ */
+async function fetchUserPermissionSlugs(user, editorialOfficeId, offices) {
+    if (!user?.$id || !editorialOfficeId) return [];
+
+    if (Array.isArray(user.labels) && user.labels.includes('admin')) {
+        return [...OFFICE_SCOPE_PERMISSION_SLUGS];
+    }
+
+    const organizationId = await resolveOrgIdForOffice(editorialOfficeId, offices);
+    const orgRole = organizationId
+        ? await fetchOrgRoleForUser(user.$id, organizationId)
+        : null;
+
+    if (orgRole === 'owner' || orgRole === 'admin') {
+        return [...OFFICE_SCOPE_PERMISSION_SLUGS];
+    }
+
+    // Member-path — defense-in-depth: ha nincs office-tagság, üres set
+    // (mint a server `isStillOfficeMember` cross-check).
+    const stillMember = await isUserOfficeMember(user.$id, editorialOfficeId);
+    if (!stillMember) return [];
+
+    return await fetchMemberPermissionSlugs(user.$id, editorialOfficeId);
+}
+
 /**
  * Context objektum a felhasználói adatok megosztásához.
  * @type {React.Context}
@@ -137,6 +343,31 @@ const sameGroupSlugs = (a, b) => {
 
     if (setA.size !== setB.size) return false;
     return Array.from(setA).every(id => setB.has(id));
+};
+
+/**
+ * Sorrend-független string[] egyenlőség ellenőrzés általános célra
+ * (permissions snapshot diffing). `null`/`undefined` és `Array` keverhető:
+ * két `null` egyenlő; `null` és üres array NEM egyenlő (ez direkt — a
+ * `null` = "loading", a `[]` = "hydrated, üres jog").
+ */
+const sameStringSet = (a, b) => {
+    if (a === b) return true;
+    if (a == null || b == null) return false;
+    if (!Array.isArray(a) || !Array.isArray(b)) return false;
+
+    if (a.length !== b.length) return false;
+    const setA = new Set(a);
+    if (setA.size !== b.length) {
+        // Duplikátumok mindkét oldalon — ritka, de a Set-cmp védi
+        const setB = new Set(b);
+        if (setA.size !== setB.size) return false;
+        return Array.from(setA).every(s => setB.has(s));
+    }
+    for (const s of b) {
+        if (!setA.has(s)) return false;
+    }
+    return true;
 };
 
 /**
@@ -211,6 +442,37 @@ export function AuthorizationProvider({ children }) {
      * setUser-t — védi a per-office groupSlugs konzisztenciát.
      */
     const groupSlugsGenRef = useRef(0);
+
+    /**
+     * Permission-snapshot fetch generáció-számláló (A.5.1). A `refreshPermissions`
+     * minden hívása bumpolja; csak a legutolsó hívás commit-ol. Védi a
+     * cross-office leakage-et (gyors scopeChanged + permissionSetsChanged race).
+     */
+    const permissionsGenRef = useRef(0);
+
+    /**
+     * `editorialOffices` ref — a `enrichUserWithPermissions` az office → orgId
+     * resolve-hoz használja. Az állapot-frissítés és a perm-fetch között
+     * az állapot lehet még a régi (mert a memberships paralel fut), ezért
+     * fallback-elünk DB getDocument-ra, ha nincs cache hit.
+     */
+    const editorialOfficesRef = useRef([]);
+    useEffect(() => { editorialOfficesRef.current = editorialOffices; }, [editorialOffices]);
+
+    /**
+     * Mind a 4 auth-generation counter bumpolása. Auth-boundary átmenetnél
+     * (login start, logout, sessionExpired) hívandó: egy in-flight
+     * `enrichUserWithGroups` / `enrichUserWithPermissions` / `loadAndSetMemberships`
+     * válasza ne tudja a következő munkamenetet az előző user adataival
+     * megfertőzni. A `++` operator a `authGenRef`-en kívül rendben van —
+     * a többi gen-ref-et nem kell visszakapni a hívónak.
+     */
+    const bumpAllAuthGens = () => {
+        authGenRef.current += 1;
+        groupSlugsGenRef.current += 1;
+        permissionsGenRef.current += 1;
+        membershipsGenRef.current += 1;
+    };
 
     /**
      * Memberships betöltése + state frissítése egyetlen helyen. Stale guard:
@@ -304,9 +566,9 @@ export function AuthorizationProvider({ children }) {
         const gen = ++groupSlugsGenRef.current;
         try {
             if (!officeId) {
-                // Sync ág — nincs await, gen ellenőrzés itt felesleges (épp most bumpoltunk).
                 setUser(prev => {
                     if (!prev) return prev;
+                    if (prev.$id !== currentUserId) return prev;
                     if (sameGroupSlugs(prev.groupSlugs, [])) return prev;
                     return { ...prev, groupSlugs: [] };
                 });
@@ -319,6 +581,15 @@ export function AuthorizationProvider({ children }) {
             }
             setUser(prev => {
                 if (!prev) return prev;
+                // Cross-user leakage védelem (Codex baseline review): a fetch
+                // indulása óta auth-boundary-csere (logout + másik user login)
+                // történhetett. Ha a prev.$id már nem egyezik azzal, akire a
+                // lookup ment, NE írjuk át — a gen-ref bump már védett, ez
+                // belt-and-suspenders defense.
+                if (prev.$id !== currentUserId) {
+                    log(`[UserContext] groupSlugs válasz user-mismatch eldobva (${logLabel})`);
+                    return prev;
+                }
                 if (sameGroupSlugs(prev.groupSlugs, groupSlugs)) return prev;
                 log(`[UserContext] Csoporttagság frissítve (${logLabel})`);
                 return { ...prev, groupSlugs };
@@ -352,20 +623,108 @@ export function AuthorizationProvider({ children }) {
     };
 
     /**
-     * Paralel lefuttatja a `groupSlugs` enrichment-et és az org/office memberships
-     * betöltését. A memberships hibáját **nem** propagálja — a `membershipsError`
-     * state-en keresztül jelenik meg a `ScopedWorkspace`-nek.
+     * User objektum gazdagítása permission-set snapshot-tal (A.5.1, ADR 0008).
+     * A `permissions` mező 3 értéket vehet fel:
+     *   - `null` — még nem hydratált (loading); a `clientHasPermission(null, slug)`
+     *     `false`-t ad, így a guardok konzervatívak.
+     *   - `[]` — sikeresen lekérdezett, de nincs jog (member-path 0 set).
+     *   - `string[]` — 33 office-scope slug subset-je.
+     *
+     * Hibakezelés: ha a lookup elszáll, **megőrizzük az előzőt** (`previousPermissions`
+     * paraméter) — a Codex roast szerinti "őrizd meg a régit" mintát követve,
+     * hogy egy tranziens hálózati hiba ne okozzon tartós false-negative UX-et.
+     * A belső lookup helperek (DB-hiba esetén) propagálják a hibát ide; a
+     * "0 dokumentum" lépcsőkön (nincs csoport / nincs assignment / nincs aktív
+     * permission set) legitim `[]` jön vissza, NEM hiba.
+     *
+     * @param {Object} userData - Appwrite user objektum (`$id`, `labels`)
+     * @param {string|null} officeId - Az aktív szerkesztőség ID-ja
+     * @param {string[]|null|undefined} previousPermissions - Az előző snapshot
+     *   a setUser commit-hoz (`userRef.current?.permissions`). `null` / `undefined`
+     *   = még nem hydratált, a hibaág is `null`-ra esik (a tri-state szemantika
+     *   tiszta).
+     * @returns {Promise<Object>} Gazdagított user objektum `permissions` mezővel
+     */
+    const enrichUserWithPermissions = async (userData, officeId, previousPermissions) => {
+        try {
+            if (!officeId) {
+                return { ...userData, permissions: [] };
+            }
+            const permissions = await fetchUserPermissionSlugs(userData, officeId, editorialOfficesRef.current);
+            return { ...userData, permissions };
+        } catch (error) {
+            logWarn(`[UserContext] Permission-snapshot lekérése sikertelen (${error?.message}) — előző érték megtartva`);
+            // `??` (nem `||`): üres array (`[]`) megőrzendő — egy korábbi
+            // sikeres "0 jog" eredményt ne nyomjuk vissza `null`-ra.
+            return { ...userData, permissions: previousPermissions ?? null };
+        }
+    };
+
+    /**
+     * Paralel lefuttatja a `groupSlugs` és `permissions` enrichment-et,
+     * valamint az org/office memberships betöltését. A memberships hibáját
+     * **nem** propagálja — a `membershipsError` state-en keresztül jelenik
+     * meg a `ScopedWorkspace`-nek.
+     *
+     * Sorrend: a memberships fetch párhuzamos, hogy az `editorialOfficesRef`
+     * mihamarabb feltöltődjön a `enrichUserWithPermissions` office → orgId
+     * resolve-jához (cache hit, egy DB hívás megspórolva). Ha az office még
+     * nincs a state-ben, a `resolveOrgIdForOffice` DB getDocument-tel pótol.
      *
      * @param {Object} userData - Appwrite user objektum
-     * @param {string|null} officeId - Az aktív szerkesztőség ID-ja (a hívó
-     *     tipikusan localStorage-ból olvassa — a ScopeContext már bootstrap-elt).
+     * @param {string|null} officeId - Az aktív szerkesztőség ID-ja
+     * @param {string[]|null|undefined} previousPermissions - Opcionális, az
+     *   előző `permissions` érték (recovery / re-hydrate hívókra). Login-on
+     *   `null` (először hidratál); recovery-n `userRef.current?.permissions`.
      */
-    const hydrateUserWithMemberships = async (userData, officeId) => {
-        const [enrichedUser] = await Promise.all([
+    const hydrateUserWithMemberships = async (userData, officeId, previousPermissions = null) => {
+        const [enrichedWithGroups, enrichedWithPerms] = await Promise.all([
             enrichUserWithGroups(userData, officeId),
+            enrichUserWithPermissions(userData, officeId, previousPermissions),
             loadAndSetMemberships(userData.$id).catch(() => null)
         ]);
-        return enrichedUser;
+        // A két enrich párhuzamosan futott — egyesítsük a friss user-en
+        return {
+            ...enrichedWithGroups,
+            permissions: enrichedWithPerms.permissions
+        };
+    };
+
+    /**
+     * `user.permissions` snapshot újraszámolása + setUser. Generáció-guard
+     * (`permissionsGenRef`) védi a cross-office race-t. A loadása nem
+     * blokkoló — a hibákat lenyeli.
+     *
+     * @param {string} logLabel - naplózási kontextus (Realtime / scopeChanged / dataRefreshRequested)
+     * @param {string|null} officeId - aktív szerkesztőség (event payload vagy localStorage)
+     */
+    const refreshPermissions = async (logLabel, officeId) => {
+        const currentUser = userRef.current;
+        const currentUserId = currentUser?.$id;
+        if (!currentUserId) return;
+        const gen = ++permissionsGenRef.current;
+        try {
+            const permissions = officeId
+                ? await fetchUserPermissionSlugs(currentUser, officeId, editorialOfficesRef.current)
+                : [];
+            if (gen !== permissionsGenRef.current) {
+                log(`[UserContext] Stale permissions válasz eldobva (${logLabel})`);
+                return;
+            }
+            setUser(prev => {
+                if (!prev) return prev;
+                // Cross-user guard, ld. refreshGroupSlugs.
+                if (prev.$id !== currentUserId) {
+                    log(`[UserContext] permissions válasz user-mismatch eldobva (${logLabel})`);
+                    return prev;
+                }
+                if (sameStringSet(prev.permissions, permissions)) return prev;
+                log(`[UserContext] Permission-snapshot frissítve (${logLabel})`);
+                return { ...prev, permissions };
+            });
+        } catch (error) {
+            logWarn(`[UserContext] Permission-snapshot frissítése sikertelen (${logLabel})`);
+        }
     };
 
     /**
@@ -384,7 +743,11 @@ export function AuthorizationProvider({ children }) {
 
         // Staleness guard: közben érkező logout / sessionExpired ezt bumpolja,
         // így a hydrate válasza nem tud egy nullázott usert resurrectelni.
-        const gen = ++authGenRef.current;
+        // Cross-user leakage védelem (Codex baseline review): mind4 gen-ref-et
+        // bumpoljuk, hogy egy előző munkamenetből in-flight refresh válasza
+        // ne tudja az új user.permissions / user.groupSlugs mezőit megfertőzni.
+        bumpAllAuthGens();
+        const gen = authGenRef.current;
 
         try {
             try {
@@ -460,13 +823,11 @@ export function AuthorizationProvider({ children }) {
         } catch (error) {
             logError("[UserContext] Kijelentkezés sikertelen:", error);
         } finally {
-            // Inkrementálás: egy még in-flight fetchMemberships(régi user) válasza
-            // ne tudja visszaírni a state-et a logout után.
-            membershipsGenRef.current += 1;
-            // Auth gen bump: egy még in-flight hydrate (login / checkUserStatus /
-            // recovery refresh) válasza ne tudjon a logout UTÁN setUser-rel
-            // resurrect-elni egy már nullázott usert.
-            authGenRef.current += 1;
+            // Mind a 4 auth-gen bump: egy in-flight hydrate / refresh válasza
+            // ne tudjon a logout UTÁN setUser-rel resurrect-elni egy már
+            // nullázott usert, és ne tudja az új munkamenetbe szivárogtatni
+            // az előző user adatait (Codex baseline review cross-user fix).
+            bumpAllAuthGens();
             setUser(null);
             setOrganizations([]);
             setEditorialOffices([]);
@@ -530,13 +891,10 @@ export function AuthorizationProvider({ children }) {
             // a session már érvénytelen a szerveren és az async hívás
             // race condition-t okozna az újbóli bejelentkezéssel.
             clearLocalSession();
-            // Invalidáljuk az esetleg in-flight memberships fetch-et is (a stale
-            // válasz nem írhatja felül a state-et).
-            membershipsGenRef.current += 1;
-            // Auth gen bump: egy in-flight hydrate (recovery handleRefresh /
-            // mount checkUserStatus) ne tudjon setUser-rel a sessionExpired UTÁN
-            // visszahozni egy törölt session userét.
-            authGenRef.current += 1;
+            // Mind a 4 auth-gen bump (ld. logout finally) — in-flight hydrate
+            // / refresh nem hozhatja vissza a törölt session userét, és nem
+            // szivároghat a következő munkamenetbe.
+            bumpAllAuthGens();
             setOrganizations([]);
             setEditorialOffices([]);
             setMembershipsError(null);
@@ -599,7 +957,11 @@ export function AuthorizationProvider({ children }) {
                     ...payload,
                     name: payload.name || prev?.name,
                     email: payload.email || prev?.email,
-                    groupSlugs: prev?.groupSlugs || []
+                    groupSlugs: prev?.groupSlugs || [],
+                    // A permissions Realtime account payload-ban nincs (különálló
+                    // collection-ek). Megőrizzük az előzőt, hogy a tri-state
+                    // jelentése nem cserélődjön váratlanul `null`-ra.
+                    permissions: prev?.permissions ?? null
                 };
             });
         });
@@ -620,7 +982,11 @@ export function AuthorizationProvider({ children }) {
             const gen = ++authGenRef.current;
             try {
                 const updatedUser = await account.get();
-                const enrichedUser = await hydrateUserWithMemberships(updatedUser, getPersistedOfficeId());
+                // Recovery-n megőrizzük az előző permission-snapshot-ot, hogy
+                // egy tranziens DB hiba ne tüntesse el (a Realtime push később
+                // úgyis konvergálja).
+                const previousPermissions = userRef.current?.permissions ?? null;
+                const enrichedUser = await hydrateUserWithMemberships(updatedUser, getPersistedOfficeId(), previousPermissions);
                 if (gen !== authGenRef.current) {
                     log('[UserContext] Stale recovery hydrate válasz eldobva');
                     return;
@@ -630,7 +996,8 @@ export function AuthorizationProvider({ children }) {
                 // re-rendereket okoz a teljes fában (LockManager useEffect[user] stb.)
                 setUser(prev => {
                     if (prev && prev.$updatedAt === enrichedUser.$updatedAt
-                        && sameGroupSlugs(prev.groupSlugs, enrichedUser.groupSlugs)) {
+                        && sameGroupSlugs(prev.groupSlugs, enrichedUser.groupSlugs)
+                        && sameStringSet(prev.permissions, enrichedUser.permissions)) {
                         return prev;
                     }
                     log('[UserContext] Felhasználói adatok frissítve (recovery)');
@@ -649,27 +1016,135 @@ export function AuthorizationProvider({ children }) {
     // Csoporttagság Realtime szinkronizálása
     // A DataContext a groupMemberships csatornán figyeli a tagság-változásokat és
     // dispatch-eli a groupMembershipChanged MaestroEvent-et. Itt frissítjük a
-    // user.groupSlugs-t.
+    // user.groupSlugs-t. A.5.3 — a `groupMemberships` változás a permission-set
+    // snapshotot is érinti (new memberships → new groups → new permission set
+    // assignments), ezért a `refreshPermissions` is fut.
     useEffect(() => {
         if (!user) return;
 
         // groupMembershipChanged: a payload-ban nincs office (collection-szintű
         // event), ezért a perzisztált officeId-t használjuk.
-        const handleGroupChange = () => refreshGroupSlugs('Realtime', getPersistedOfficeId());
+        const handleGroupChange = () => {
+            const officeId = getPersistedOfficeId();
+            refreshGroupSlugs('Realtime', officeId);
+            refreshPermissions('Realtime / groupMemberships', officeId);
+        };
         // scopeChanged: a ScopeContext a payload-ban explicit küldi az új
         // editorialOfficeId-t (ld. ScopeContext.setActiveOffice). Ezt
         // preferáljuk a localStorage olvasás helyett — közvetlen forrás,
         // és nincs feltevés a perzisztencia sorrendjéről.
+        //
+        // Scope-átmenet eager-clear (Codex stop-time review): a `groupSlugs`
+        // és `permissions` az előző office-ra értelmezett — ha a refresh
+        // hibázik, a "őrizd meg a régit" minta cross-office stale state-et
+        // hagyna. Ehelyett azonnal nullázunk, és a refresh sikere írja felül;
+        // hibakor a null/üres marad (konzervatív loading semantics).
         const handleScopeChange = (event) => {
             const officeId = event?.detail?.editorialOfficeId ?? getPersistedOfficeId();
+            setUser(prev => {
+                if (!prev) return prev;
+                if (prev.groupSlugs?.length === 0 && prev.permissions === null) return prev;
+                return { ...prev, groupSlugs: [], permissions: null };
+            });
             refreshGroupSlugs('scopeChanged', officeId);
+            refreshPermissions('scopeChanged', officeId);
+        };
+        // permissionSetsChanged (A.5.3): a UserContext saját Realtime listenere
+        // (lent) dispatcheli — debounce-olt, scope-szűrt.
+        const handlePermissionsChange = () => {
+            refreshPermissions('Realtime / permissionSets', getPersistedOfficeId());
         };
 
         window.addEventListener(MaestroEvent.groupMembershipChanged, handleGroupChange);
         window.addEventListener(MaestroEvent.scopeChanged, handleScopeChange);
+        window.addEventListener(MaestroEvent.permissionSetsChanged, handlePermissionsChange);
         return () => {
             window.removeEventListener(MaestroEvent.groupMembershipChanged, handleGroupChange);
             window.removeEventListener(MaestroEvent.scopeChanged, handleScopeChange);
+            window.removeEventListener(MaestroEvent.permissionSetsChanged, handlePermissionsChange);
+        };
+    }, [user?.$id]);
+
+    // Tenant memberships Realtime szinkronizálása (A.5 harden, Codex baseline P1)
+    // Az `organizationMemberships` és `editorialOfficeMemberships` collection-ök
+    // változását is figyeljük — különben egy Dashboard-on végzett org-role
+    // promotion / office removal nem invalidálná a `permissions` snapshot-ot,
+    // és a UI tetszőlegesen sokáig stale jogokat mutatna. 300ms debounce +
+    // userId szűrés (csak a saját userId-t érintő event-ek). A trigger:
+    // `loadAndSetMemberships` (org/office listák) + `refreshPermissions`
+    // (snapshot rebuild).
+    useEffect(() => {
+        if (!user) return;
+
+        const channels = [
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.ORGANIZATION_MEMBERSHIPS}.documents`,
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.EDITORIAL_OFFICE_MEMBERSHIPS}.documents`
+        ];
+
+        let debounceId = null;
+        const DEBOUNCE_MS = 300;
+
+        const unsubscribe = realtime.subscribe(channels, (response) => {
+            const { events, payload } = response;
+            const isDelete = events?.some(e => e.includes('.delete'));
+            if (!isDelete) {
+                // Csak a saját userId-jét érintő event-eket vesszük figyelembe;
+                // más userek tagság-változása nem érdekli a saját snapshot-ot.
+                if (payload?.userId !== userRef.current?.$id) return;
+            }
+            if (debounceId) clearTimeout(debounceId);
+            debounceId = setTimeout(() => {
+                debounceId = null;
+                const userId = userRef.current?.$id;
+                if (!userId) return;
+                loadAndSetMemberships(userId).catch(() => null);
+                refreshPermissions('Realtime / tenant memberships', getPersistedOfficeId());
+            }, DEBOUNCE_MS);
+        });
+
+        return () => {
+            if (debounceId) clearTimeout(debounceId);
+            if (typeof unsubscribe === 'function') unsubscribe();
+        };
+    }, [user?.$id]);
+
+    // Permission-set Realtime szinkronizálása (A.5.3, ADR 0008)
+    // A `permissionSets` és `groupPermissionSets` collection-ök változását
+    // a UserContext közvetlenül figyeli — a DataContext NEM dispatcheli (nem
+    // tartozik annak hatáskörébe). 200ms debounce + scope-szűrés a payload
+    // `editorialOfficeId`-jén. A tényleges snapshot rebuildet a `refreshPermissions`
+    // végzi a `permissionSetsChanged` MaestroEvent-en keresztül — így a többi
+    // fogyasztó (jövőbeli `useUserPermission`) is hallgathat ugyanerre.
+    useEffect(() => {
+        if (!user) return;
+
+        const channels = [
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.PERMISSION_SETS}.documents`,
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.GROUP_PERMISSION_SETS}.documents`
+        ];
+
+        let debounceId = null;
+        const DEBOUNCE_MS = 200;
+
+        const unsubscribe = realtime.subscribe(channels, (response) => {
+            const { events, payload } = response;
+            // .delete eseményekre a payload csak `$id`-t tartalmazhat — ne szűrjünk
+            // scope-ra (a következő rebuild úgyis konvergálja a snapshotot).
+            const isDelete = events?.some(e => e.includes('.delete'));
+            if (!isDelete) {
+                const currentOfficeId = getPersistedOfficeId();
+                if (!currentOfficeId || payload?.editorialOfficeId !== currentOfficeId) return;
+            }
+            if (debounceId) clearTimeout(debounceId);
+            debounceId = setTimeout(() => {
+                debounceId = null;
+                dispatchMaestroEvent(MaestroEvent.permissionSetsChanged, { source: 'realtime' });
+            }, DEBOUNCE_MS);
+        });
+
+        return () => {
+            if (debounceId) clearTimeout(debounceId);
+            if (typeof unsubscribe === 'function') unsubscribe();
         };
     }, [user?.$id]);
 

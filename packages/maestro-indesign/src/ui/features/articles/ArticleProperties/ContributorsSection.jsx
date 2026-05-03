@@ -1,6 +1,9 @@
 // React
 import React from "react";
 
+// Context
+import { useData } from "../../../../core/contexts/DataContext.jsx";
+
 // Custom Hooks
 import { useContributorGroups } from "../../../../data/hooks/useContributorGroups.js";
 
@@ -10,7 +13,7 @@ import { CustomDropdown } from "../../../common/CustomDropdown.jsx";
 
 // Utils
 import { STORAGE_KEYS } from "../../../../core/utils/constants.js";
-import { getContributor, setContributor } from "maestro-shared/contributorHelpers.js";
+import { getContributor, setContributor, parseContributors } from "maestro-shared/contributorHelpers.js";
 
 /**
  * ContributorsSection Component
@@ -27,7 +30,50 @@ import { getContributor, setContributor } from "maestro-shared/contributorHelper
  * @param {Object} props.contributorPermissions - {slug: {allowed, reason}} jogosultsági map
  */
 export const ContributorsSection = ({ article, onFieldUpdate, disabled, contributorPermissions = {} }) => {
-    const { groups, membersBySlug } = useContributorGroups();
+    const { workflow } = useData();
+    // Az aktív publikáció `compiledWorkflowSnapshot`-ja (vagy a live workflow,
+    // ha snapshot-hiányos) szolgáltatja a kanonikus sorrendet a contributor
+    // dropdown-okhoz. Stabilizáció memo-val, hogy a hook ne re-fetcheljen.
+    const orderingSlugs = React.useMemo(
+        () => Array.isArray(workflow?.requiredGroupSlugs)
+            ? workflow.requiredGroupSlugs.map(g => g.slug).filter(Boolean)
+            : null,
+        [workflow]
+    );
+    const { groups, membersBySlug } = useContributorGroups({ orderingSlugs });
+
+    // Aktív contributor csoportok + a cikk `contributors` JSON-jában még
+    // szereplő legacy/archivált/ismeretlen slug-ok (hogy a felhasználó el
+    // tudja távolítani őket). A badge-et külön Map adja, hogy ne mutáljuk
+    // a hook által visszaadott group objektumot — a badge UI-only, nem
+    // domain-mező.
+    const { visibleGroups, badgesBySlug } = React.useMemo(() => {
+        const active = groups.filter(g => g.isContributorGroup === true && !g.archivedAt);
+        const activeSlugSet = new Set(active.map(g => g.slug));
+        const assigned = parseContributors(article?.contributors);
+        const legacy = [];
+        const badges = new Map();
+        for (const slug of Object.keys(assigned)) {
+            if (activeSlugSet.has(slug)) continue;
+            const fromList = groups.find(g => g.slug === slug);
+            if (fromList) {
+                legacy.push(fromList);
+                badges.set(slug, fromList.archivedAt ? 'archivált' : 'legacy');
+            } else {
+                legacy.push({
+                    slug,
+                    name: slug,
+                    description: '',
+                    color: '',
+                    isContributorGroup: false,
+                    isLeaderGroup: false,
+                    archivedAt: null
+                });
+                badges.set(slug, 'ismeretlen');
+            }
+        }
+        return { visibleGroups: [...active, ...legacy], badgesBySlug: badges };
+    }, [groups, article?.contributors]);
 
     /** Meghatározza, hogy az adott contributor dropdown disabled-e. */
     const isDropdownDisabled = (slug) => {
@@ -50,8 +96,8 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled, contribu
 
     // Csoportokat párokba rendezzük a 2 oszlopos elrendezéshez
     const pairs = [];
-    for (let i = 0; i < groups.length; i += 2) {
-        pairs.push(groups.slice(i, i + 2));
+    for (let i = 0; i < visibleGroups.length; i += 2) {
+        pairs.push(visibleGroups.slice(i, i + 2));
     }
 
     return (
@@ -77,7 +123,14 @@ export const ContributorsSection = ({ article, onFieldUpdate, disabled, contribu
                                     marginRight: colIndex === 0 && pair.length > 1 ? "12px" : undefined
                                 }}
                             >
-                                <sp-label>{group.name}</sp-label>
+                                <sp-label>
+                                    {group.name}
+                                    {badgesBySlug.get(group.slug) && (
+                                        <span style={{ marginLeft: 6, fontSize: 11, opacity: 0.7 }}>
+                                            ({badgesBySlug.get(group.slug)})
+                                        </span>
+                                    )}
+                                </sp-label>
                                 <CustomDropdown
                                     id={`contributor-${group.slug}-dropdown`}
                                     emptyLabel="Nincs hozzárendelve"

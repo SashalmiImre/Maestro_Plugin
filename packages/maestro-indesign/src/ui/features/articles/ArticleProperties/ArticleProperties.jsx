@@ -64,8 +64,18 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
         'validationForm', 'validationActions'
     ]);
 
-    // Csoportok a contributor dropdown jogosultság-számításhoz
-    const { groups: contributorGroupsList } = useContributorGroups();
+    // Csoportok a contributor dropdown jogosultság-számításhoz.
+    // A `orderingSlugs` a workflow `requiredGroupSlugs[].slug` listája — ez
+    // tipikusan az aktivált publikáció `compiledWorkflowSnapshot`-jából jön
+    // (snapshot-preferáló útvonal a `useData().workflow`-ban). Stabilizáció
+    // memo-val, hogy a hook ne re-fetcheljen minden re-renderre.
+    const orderingSlugs = React.useMemo(
+        () => Array.isArray(workflow?.requiredGroupSlugs)
+            ? workflow.requiredGroupSlugs.map(g => g.slug).filter(Boolean)
+            : null,
+        [workflow]
+    );
+    const { groups: contributorGroupsList } = useContributorGroups({ orderingSlugs });
     const contributorGroupSlugs = React.useMemo(
         () => contributorGroupsList.map(g => g.slug),
         [contributorGroupsList]

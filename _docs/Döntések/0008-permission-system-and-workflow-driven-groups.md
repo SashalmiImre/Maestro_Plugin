@@ -51,8 +51,11 @@ last_updated: 2026-05-03
 > 2. RealtimeBus reconnect resync handler — a WS-disconnect alatt elveszett
 >    event-eket nem kompenzálja a meglévő bus.
 >
-> **Hátra van**: A.5 (Plugin runtime — `enrichUserWithGroups` + `useElementPermission`
-> + plugin `useContributorGroups`), A.6 (smoke teszt).
+> **Hátra van**: A.6 (smoke teszt).
+>
+> **A.5 (Plugin runtime) kész** (2026-05-03 — Codex pre + közbenső + záró review): UserContext új `enrichUserWithPermissions(userData, officeId, previousPermissions)` Provider-szintű helperrel + 5 modul-szintű async lookup; tri-state `user.permissions: string[]|null` (loading=null), paralel hidration a `groupSlugs` és memberships ágával. A server `buildPermissionSnapshot` lépéseit replikálja (drift-rizikó kommentelve, A.7.1 Phase 2 single-source bundle). DB-hiba propagálódik → `previousPermissions ?? null` "őrizd meg a régit" fallback. Új `useUserPermission(slug)` és `useUserPermissions(slugs)` hookok (`maestro-shared/permissions.js` `clientHasPermission`-re alapozva) — feature-ready API; konkrét UI-bekötés nincs (a Plugin guardjai workflow-runtime + `groupSlugs` alapúak). Új MaestroEvent `permissionSetsChanged`; UserContext külön Realtime subscribe a `permissionSets` és `groupPermissionSets` csatornákra (200ms debounce, scope-szűrt). A meglévő `groupMembershipChanged` és `scopeChanged` handler bővült `refreshPermissions`-szel. `useContributorGroups` átírva Dashboard A.4.9 mintára: `orderingSlugs` opcionális paraméter (publikáció `compiledWorkflowSnapshot.requiredGroupSlugs[]`), 5p TTL helyett Realtime invalidate, metadata mezők (`description`, `color`, `isContributorGroup`, `isLeaderGroup`, `archivedAt`); `DEFAULT_GROUPS` import el; `dataRefreshRequested` recovery handler. `ContributorsSection` csak `isContributorGroup === true && !archivedAt` csoportokra ad dropdown-t; legacy / archivált / ismeretlen slug-ok megőrződnek `(legacy)` / `(archivált)` / `(ismeretlen)` badge-dzsel.
+>
+> **A.5.5 N/A**: a Plugin nem hív `activate_publication` CF-et (csak `isActivated=true` publikációkat lát). Az aktiválás Dashboard-on történik (A.2.9 már kész).
 
 > **A.3.6 záradék (2026-05-02 — Codex final review fix-ekkel)**:
 >
