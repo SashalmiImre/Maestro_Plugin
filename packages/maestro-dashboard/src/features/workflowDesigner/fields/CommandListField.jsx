@@ -16,8 +16,9 @@ const COMMAND_IDS = Object.keys(COMMAND_REGISTRY);
  * @param {Object[]} props.value - [{ id, allowedGroups }]
  * @param {string[]} props.availableGroups - Elérhető csoport slug-ok
  * @param {Function} props.onChange - (Object[]) => void
+ * @param {boolean} [props.disabled] - Letiltott módban a vezérlők nem használhatók
  */
-export default function CommandListField({ label, value = [], availableGroups = [], onChange }) {
+export default function CommandListField({ label, value = [], availableGroups = [], onChange, disabled = false }) {
     const [addingId, setAddingId] = useState('');
     const usedIds = new Set(value.map(c => c.id));
 
@@ -46,7 +47,7 @@ export default function CommandListField({ label, value = [], availableGroups = 
 
             {/* #71: empty state hint — egyértelműsíti, hogy lent a dropdown-ban
                 lehet parancsot hozzáadni (ha nincs hozzáadott parancs még). */}
-            {isEmpty && availableCommands.length > 0 && (
+            {isEmpty && availableCommands.length > 0 && !disabled && (
                 <p className="designer-field__empty-hint">
                     Még nincs parancs hozzáadva. Válassz egyet lentről a hozzáadáshoz.
                 </p>
@@ -65,6 +66,7 @@ export default function CommandListField({ label, value = [], availableGroups = 
                             onClick={() => handleRemove(cmd.id)}
                             title="Parancs eltávolítása"
                             aria-label={`${COMMAND_REGISTRY[cmd.id]?.label || cmd.id} parancs eltávolítása`}
+                            disabled={disabled}
                         >
                             <span aria-hidden="true">✕</span>
                         </button>
@@ -83,6 +85,7 @@ export default function CommandListField({ label, value = [], availableGroups = 
                                         : [...cmd.allowedGroups, slug];
                                     handleGroupsChange(cmd.id, next);
                                 }}
+                                disabled={disabled}
                             >
                                 {slug}
                             </button>
@@ -92,7 +95,7 @@ export default function CommandListField({ label, value = [], availableGroups = 
             ))}
 
             {/* Új parancs hozzáadás */}
-            {availableCommands.length > 0 && (
+            {availableCommands.length > 0 && !disabled && (
                 <div className="designer-field__add-row">
                     <select
                         value={addingId}

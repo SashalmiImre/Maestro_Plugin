@@ -85,6 +85,7 @@ export default function PropertiesSidebar({
                     onDataChange={onNodeDataChange}
                     availableGroups={availableGroups}
                     onDelete={onDeleteNode}
+                    isReadOnly={isReadOnly}
                 />
             ) : selectedEdge ? (
                 <TransitionPropertiesEditor
@@ -93,6 +94,7 @@ export default function PropertiesSidebar({
                     availableGroups={availableGroups}
                     onDelete={onDeleteEdge}
                     stateLabels={stateLabels}
+                    isReadOnly={isReadOnly}
                 />
             ) : (
                 <WorkflowPropertiesEditor

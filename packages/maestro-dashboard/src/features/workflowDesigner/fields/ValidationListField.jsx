@@ -23,8 +23,9 @@ function getValidatorId(v) {
  * @param {string} [props.helpText] - Magyarázó szöveg a label alatt (#66)
  * @param {Array} props.value - Kiválasztott validátorok (string[] vagy object[])
  * @param {Function} props.onChange - (Array) => void
+ * @param {boolean} [props.disabled] - Letiltott módban a chip-ek nem kattinthatók
  */
-export default function ValidationListField({ label, helpText, value = [], onChange }) {
+export default function ValidationListField({ label, helpText, value = [], onChange, disabled = false }) {
     const selectedIds = new Set(value.map(getValidatorId));
 
     const handleToggle = useCallback((validatorId) => {
@@ -52,6 +53,7 @@ export default function ValidationListField({ label, helpText, value = [], onCha
                         className={`designer-chip ${selectedIds.has(id) ? 'designer-chip--active' : ''}`}
                         onClick={() => handleToggle(id)}
                         title={VALIDATOR_REGISTRY[id].description}
+                        disabled={disabled}
                     >
                         {VALIDATOR_REGISTRY[id].label}
                     </button>
