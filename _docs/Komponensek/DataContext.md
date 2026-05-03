@@ -47,6 +47,7 @@ Központi adatállapot kezelő (publications, articles, validations, layouts, de
 - **Scope szűrés**: pub-ok az `activeEditorialOfficeId`-ra; cikkek az `activePublicationId`-ra; validációk csak az aktív pub cikkeire
 - **`$updatedAt` staleness guard** (mint a Plugin-é) + globális `workflowLatestUpdatedAtRef` (workflow-eseményekre)
 - **`applyWorkflowEvent` 6-arg signature**: `(setWorkflows, setArchivedWorkflows, versionsMap, ...)` — dual-list (aktív + archivált) Realtime handler. Archive↔restore átmenet mindkét listán szinkron, delete a versionsMap entry-t is törli
+- **Reconnect-time resync** ([[Döntések/0004-dashboard-realtime-bus]] 2026-05-03 záradék): `subscribeRealtime` `{ onReconnect: resyncRealtimeData }` opció. A `resyncRealtimeData` useCallback `await fetchPublications()` → ha az aktív pub disconnect alatt törlődött, clear-eli a derived state-et (articles / layouts / deadlines / validations / `articleIdsRef`); ha létezik, `switchPublication(activeId)` újrahúzza a child rekordokat. Végül párhuzamos `fetchWorkflow()` + `fetchArchivedWorkflows()`. Hibát warn-olja, nem dobja — más fogyasztók resync-je tovább megy.
 
 ### Memoizált context value
 A Provider `value` `useMemo`-zott (deps: minden state, singleton, useCallback). Megelőzi az ok nélküli context-consumer re-render-eket olyan komponenseknél, amelyek csak singleton-okat olvasnak (pl. `useContributorGroups`, `CreateEditorialOfficeModal`).

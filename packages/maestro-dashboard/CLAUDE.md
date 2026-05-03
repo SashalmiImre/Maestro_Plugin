@@ -130,7 +130,7 @@ A Dashboard Redesign Fázis 4 (2026-04-10) bevezette a teljes kiadvány CRUD-ot:
 - Minimum 1 layout megkötés: utolsó layout törlése toast-tal tiltva.
 
 **Contributors (dinamikus)**:
-- `useContributorGroups(workflow, publication)` hook lekéri a `compiled.contributorGroups`-ből származó csoportokat és a hozzájuk tartozó felhasználókat (5 perces cache, scope-szűrt).
+- `useContributorGroups({ orderingSlugs })` hook lekéri a `groups` collection `isContributorGroup === true` rekordjait (scope-szűrt) + a hozzájuk tartozó tagokat. Az `orderingSlugs` paraméter a megjelenítési sorrendet vezérli — Plugin oldalon a `compiled.contributorGroups` legacy hint, Dashboard oldalon a workflow `requiredGroupSlugs[]`.
 - A `publication.defaultContributors` JSON mező dropdown-onként szerkeszthető, mentés `updatePublication`-nel.
 - Smart update: ha vannak cikkek, ahol a kérdéses contributor slug `null`, a hook felajánlja a batch update-et (`useConfirm` → cikk frissítés).
 
@@ -169,10 +169,12 @@ maestro-dashboard/
 │   │   ├── view-switcher.css     ← Nézet-váltó gombok
 │   │   ├── toast.css             ← Toast értesítés
 │   │   ├── modal.css             ← Modal overlay / kártya / fejléc / tartalom / akció gombok
+│   │   ├── buttons.css           ← (A.4) közös gomb-stílusok (primary / secondary / ghost / danger variánsok)
 │   │   └── danger.css            ← Veszélyes zóna + `.danger-action` egységes destruktív gomb
 │   └── features/                 ← Feature-specifikus stílusok
 │       ├── article-table.css    ← Cikk tábla + placeholder sorok + üres állapot + loading
 │       ├── flatplan.css         ← Layout (Flatplan) nézet
+│       ├── editorial-office-settings.css ← (A.4) szerkesztőség beállítások (csoport mátrix, permission set editor, group row, dialog wrapper)
 │       └── publication-settings.css ← Publication settings modal: aktiválás + tab content + layout/határidő sorok
 │
 ├── src/
@@ -191,7 +193,8 @@ maestro-dashboard/
 │   ├── hooks/
 │   │   ├── useFilters.js         ← Szűrő állapot (localStorage perzisztált)
 │   │   ├── useUrgency.js         ← Sürgősség batch-számítás (5 perces timer)
-│   │   ├── useContributorGroups.js ← Contributor csoportok + tagok (5 perces cache, scope-szűrt)
+│   │   ├── useContributorGroups.js ← Contributor csoportok + tagok (`groups.isContributorGroup`, scope-szűrt + Realtime invalidate)
+│   │   ├── useTenantRealtimeRefresh.js ← Megosztott tenant-csatorna refresh (groups + memberships + invites + permissionSets + groupPermissionSets), 300ms debounce
 │   │   └── usePopoverClose.js    ← Outside-click / Escape popover bezárás
 │   │
 │   ├── routes/                   ← React Router route komponensek
@@ -202,7 +205,11 @@ maestro-dashboard/
 │   │   └── dashboard/            ← DashboardLayout, TableViewRoute, LayoutViewRoute
 │   │
 │   ├── features/
-│   │   └── workflowDesigner/     ← Workflow Designer full-screen page (dirty-state guard)
+│   │   └── workflowDesigner/     ← Workflow Designer full-screen page (dirty-state guard); új mező: `RequiredGroupSlugsField` (A.4) — kanonikus `requiredGroupSlugs[]` editor a workflow `compiled` JSON-ben
+│   │
+│   ├── utils/
+│   │   ├── colorPresets.js       ← (A.4) közös csoport-szín paletta + `nextAvailableColor()` helper
+│   │   └── inviteFunctionErrorMessages.js ← (A.4) CF error code → magyar toast szöveg mapping (`empty_required_groups`, `group_in_use`, `concurrent_modification`, …)
 │   │
 │   └── components/
 │       ├── LoginView.jsx         ← (legacy – auth route-okra migrálva)
@@ -224,15 +231,19 @@ maestro-dashboard/
 │       │   ├── GeneralTab.jsx              ← Név, coverage, rootPath (r/o), excludeWeekends, workflow
 │       │   ├── LayoutsTab.jsx              ← Layout CRUD, auto-naming, cascading delete
 │       │   ├── DeadlinesTab.jsx            ← Határidő CRUD, validáció (maestro-shared/deadlineValidator)
-│       │   └── ContributorsTab.jsx         ← Default contributors per contributorGroup (smart update)
+│       │   ├── ContributorsTab.jsx         ← Default contributors a `groups.isContributorGroup` rekordok alapján — smart update + legacy/archived badge
+│       │   └── EmptyRequiredGroupsDialog.jsx ← (A.4) aktiválás-blokkoló UI: hiányzó tagú `requiredGroupSlugs[]` lista, "Csoport megnyitása" link
 │       └── organization/         ← Szervezet / szerkesztőség beállítás modal-ok (#26, #27)
 │           ├── OrganizationSettingsModal.jsx ← Container (Általános / Felhasználók tab), localStorage perzisztencia
 │           ├── GeneralTab.jsx              ← Név szerkesztés, szerkesztőségek + „+ Új", DangerZone kaszkád számokkal
 │           ├── UsersTab.jsx                ← Invite flow, függő meghívók, tagok szerepkör szerint csoportosítva
 │           ├── CreateEditorialOfficeModal.jsx ← Új szerkesztőség (név + opcionális workflow klón org-szintről)
-│           ├── EditorialOfficeSettingsModal.jsx ← Szerkesztőség beállítások shell (2 tab: Általános / Csoportok)
+│           ├── EditorialOfficeSettingsModal.jsx ← Szerkesztőség beállítások shell (3 tab: Általános / Csoportok / Permission set-ek)
 │           ├── EditorialOfficeGeneralTab.jsx    ← (#28) név rename, „Új kiadvány", DangerZone
-│           └── EditorialOfficeGroupsTab.jsx     ← (#29) csoport CRUD + tag×csoport mátrix
+│           ├── EditorialOfficeGroupsTab.jsx     ← (#29 + A.4) csoport CRUD + tag×csoport mátrix + permission set assign + workflow-refs panel + archive/restore
+│           ├── GroupRow.jsx                ← (A.4) egyedi csoport sor — metadata szerkesztés (label/description/color/isContributorGroup/isLeaderGroup), permission set hozzárendelés, workflow-hivatkozás panel
+│           ├── PermissionSetsTab.jsx       ← (A.4) office-szintű permission set lista (CRUD + archive/restore)
+│           └── PermissionSetEditor.jsx     ← (A.4) permission slug-fa picker (`PermissionTaxonomy` 33 office-scope slug, contributor/leader csoport flag-ek)
 │       └── workflows/
 │           └── WorkflowLibraryPanel.jsx         ← (#82) közös workflow böngésző modal — breadcrumb + publikáció-hozzárendelés kontextus, 3-way visibility, archivált fül, kebab akciók
 │
@@ -289,7 +300,8 @@ A `@shared` Vite alias a `../maestro-shared` mappára mutat. Minden export ESM. 
 | `workflowRuntime.js`    | 16+ tiszta függvény: `getStateConfig`, `getAvailableTransitions`, `canUserMoveArticle`, `canEditElement`, `getInitialState`, … (mindig `compiled` paramétert kap) |
 | `commandRegistry.js`    | Command ID → label mapping (Workflow Designer számára)                              |
 | `contributorHelpers.js` | `parseContributors`, `getContributor`, `setContributor`, `isContributor`            |
-| `groups.js`             | `DEFAULT_GROUPS` (7 alapértelmezett csoport), `resolveGroupSlugs()` helper          |
+| `groups.js`             | `DEFAULT_GROUPS` (legacy UI-rendezési hint a Plugin `useContributorGroups`-hoz; a tényleges csoport-tartalmat a `groups` collection adja A.2.x óta), `resolveGroupSlugs()` helper |
+| `parseCompiledWorkflow.js` | (A.4) `parseCompiledWorkflow(jsonString)` + `resolvePublicationCompiled(publication, workflows)` — közös workflow JSON parser fail-safe-fel és `compiledWorkflowSnapshot` → `workflow.compiled` fallback prioritás |
 | `deadlineValidator.js`  | `isValidDate`, `isValidTime`, `isValidDatetime`, `buildDatetime`, `getDateFromDatetime`, `getTimeFromDatetime`, `validateDeadlines` — statikus helper + teljes lista validáció (plugin `DeadlineValidator` is delegálja) |
 | `urgency.js`            | `fetchHolidays`, `calculateUrgencyRatio`, `getUrgencyBackground` (workflow paramétert kap) |
 | `pageGapUtils.js`       | Placeholder sorok generálása lefedetlen oldalakhoz (workflow paramétert kap)        |

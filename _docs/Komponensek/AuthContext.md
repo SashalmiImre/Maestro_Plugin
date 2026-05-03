@@ -9,13 +9,15 @@ aliases: [AuthContext, Dashboard AuthContext]
 **Dashboard auth + tenant szinkron**: bejelentkezés / regisztráció, organization + editorial office membership kezelése, scope, Realtime feliratkozás 4 tenant collection-re. **NEM tévesztendő össze a Plugin [[UserContext]]-tel**.
 
 ## Helye
-- **Forrás**: `packages/maestro-dashboard/src/contexts/AuthContext.jsx:1–1090`
+- **Forrás**: `packages/maestro-dashboard/src/contexts/AuthContext.jsx:1–1363`
 
 ## Felület (API)
 - **Auth**: `login(email, password)`, `logout()`, `register(name, email, password)`, `acceptInvite(token)`, `declineInvite(token)`, `leaveOrganization(orgId)`
 - **Tenant ops**: `createOrganization(name, slug)`, `createEditorialOffice(orgId, name, sourceWorkflowId)` — CF `callInviteFunction`-on át
-- **Group ops**: `createGroup(officeId, name)`, `renameGroup(groupId, name)`, `deleteGroup(groupId)`
-- **Publication ops** ([[Döntések/0008-permission-system-and-workflow-driven-groups|ADR 0008]] A.2.2 / A.2.3): `activatePublication(publicationId, expectedUpdatedAt?)`, `assignWorkflowToPublication(publicationId, workflowId, expectedUpdatedAt?)`. Mindkettő `callInviteFunction`-on át — autoseed + `empty_required_groups` 409 / TOCTOU `concurrent_modification` 409 kezelés. A direkt `databases.updateDocument({isActivated: true})` és `updatePublication({workflowId})` megkerülné a server-side autoseedet, ezért a UI ezeken keresztül megy.
+- **Group ops**: `createGroup(officeId, name)`, `renameGroup(groupId, name)`, `deleteGroup(groupId)`, `updateGroupMetadata(groupId, patch)`, `archiveGroup(groupId)`, `restoreGroup(groupId)` ([[Döntések/0008-permission-system-and-workflow-driven-groups|ADR 0008]] A.2.6 / A.2.7 — soft-delete + metadata: label / description / color / `isContributorGroup` / `isLeaderGroup`)
+- **Permission set ops** (ADR 0008 A.3.3): `createPermissionSet(payload)`, `updatePermissionSet(permissionSetId, patch, expectedUpdatedAt?)`, `archivePermissionSet(permissionSetId, expectedUpdatedAt?)`, `restorePermissionSet(permissionSetId, expectedUpdatedAt?)`
+- **Permission set assign** (ADR 0008 A.3.4): `assignPermissionSetToGroup(groupId, permissionSetId)`, `unassignPermissionSetFromGroup(groupId, permissionSetId)` — `groupPermissionSets` m:n junction
+- **Publication ops** (ADR 0008 A.2.2 / A.2.3): `activatePublication(publicationId, expectedUpdatedAt?)`, `assignWorkflowToPublication(publicationId, workflowId, expectedUpdatedAt?)`. Mindkettő `callInviteFunction`-on át — autoseed + `empty_required_groups` 409 / TOCTOU `concurrent_modification` 409 kezelés. A direkt `databases.updateDocument({isActivated: true})` és `updatePublication({workflowId})` megkerülné a server-side autoseedet, ezért a UI ezeken keresztül megy.
 - **Reload**: `reloadMemberships()` → `true`/`false`
 - **Read**: `user`, `organizations`, `editorialOffices`, `orgMemberships`, `membershipsError`, `loading`
 
@@ -28,6 +30,7 @@ A non-2xx CF response-ból `Error` objektumot dob, az alábbi mezőkkel: `code` 
 - **Filter szabályok**: `*Memberships` event csak ha `payload.userId === user.$id`; org/office update/delete csak ha az ID benne van `organizationIdsRef`/`editorialOfficeIdsRef`-ben; create skip-elve
 - **Debounce**: 300ms — cascade műveletek (pl. org törlése × N office) egy fetch-be vonódnak
 - **Silent vs. fail-closed**: update/rename → `silent: true` (tranziens hiba ne törölje a scope-ot); delete → `silent: false` (hozzáférés-vesztés)
+- **Reconnect-time resync** ([[Döntések/0004-dashboard-realtime-bus]] 2026-05-03 záradék): `subscribeRealtime` `{ onReconnect }` opció — WS újrakapcsolódáskor (NEM az elsőkor) `loadAndSetMemberships(userId, { silent: true })`. A silent mód indoka: tranziens hiba reconnect-en ne ürítse a már érvényes scope-ot — destructive eseteket egy 403 vagy tényleges Realtime delete event jelez.
 
 ## Modul-szintű singleton exportok
 A `getClient()` / `getAccount()` mintájára a modul publikusan exportálja a `databases` és `functions` Appwrite példányt is:
