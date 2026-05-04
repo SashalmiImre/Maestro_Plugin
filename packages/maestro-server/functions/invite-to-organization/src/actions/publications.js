@@ -12,6 +12,7 @@ const {
     findEmptyRequiredGroupSlugs
 } = require('../helpers/groupSeed.js');
 const { validateDeadlinesInline } = require('../helpers/deadlineValidator.js');
+const { buildExtensionSnapshot } = require('../helpers/extensionSnapshot.js');
 const { buildOfficeAclPerms } = require('../teamHelpers.js');
 const permissions = require('../permissions.js');
 
@@ -516,14 +517,47 @@ async function activatePublication(ctx) {
         ? workflowDoc.compiled
         : JSON.stringify(workflowDoc.compiled);
 
-    // 6) Idempotens early-return — már aktiválva ugyanezzel a
-    //    workflow-snapshottal. Compiled parse ELŐTT: így sérült de
-    //    azonos snapshotú retry is zöldet ad (a runtime amúgy is a
-    //    snapshot string-egyezésből dolgozik, nem a parse-olt JSON-ból).
-    const alreadyActivatedSameWorkflow =
+    // 6) Compiled parse — autoseed + empty-check + extension-snapshot
+    //    scan ezt használja. A B.3 előtt parse az idempotens-check után
+    //    futott, de mostantól a parse-result kell az extension-scan-hez
+    //    az idempotens-egyezés kiértékelése előtt is (`compiledExtensionSnapshot`
+    //    egyezést is figyelembe kell venni — a workflow extension-jei
+    //    változhatnak a parent workflow `compiled` változatlanul maradása
+    //    mellett, így ugyanaz a `compiledStr` ≠ ugyanaz az extension-snapshot).
+    let compiled;
+    try {
+        compiled = JSON.parse(compiledStr);
+    } catch (parseErr) {
+        error(`[ActivatePub] workflow compiled parse hiba: ${parseErr.message}`);
+        return fail(res, 500, 'workflow_compiled_invalid');
+    }
+
+    // 7) Extension-snapshot összerakás (B.3.3) — fail-fast 422 hiányzó
+    //    extension / kind-mismatch / aggregate méret-cap esetén.
+    const extResult = await buildExtensionSnapshot(
+        databases,
+        {
+            databaseId: env.databaseId,
+            workflowExtensionsCollectionId: env.workflowExtensionsCollectionId
+        },
+        sdk,
+        compiled,
+        pubDoc.editorialOfficeId
+    );
+    if (!extResult.ok) {
+        return fail(res, extResult.status, extResult.reason, extResult.payload);
+    }
+    const extensionSnapshotStr = extResult.snapshot;
+
+    // 8) Idempotens early-return — már aktiválva ugyanezzel a
+    //    workflow-snapshottal ÉS extension-snapshottal. A két mező AND-elődik:
+    //    egy extension `code` változás (ugyanaz a workflow `compiled`)
+    //    újra-aktiváló kérést érdemel az új extension-pillanatkép rögzítéséhez.
+    const alreadyActivatedSame =
         pubDoc.isActivated === true
-        && pubDoc.compiledWorkflowSnapshot === compiledStr;
-    if (alreadyActivatedSameWorkflow) {
+        && pubDoc.compiledWorkflowSnapshot === compiledStr
+        && pubDoc.compiledExtensionSnapshot === extensionSnapshotStr;
+    if (alreadyActivatedSame) {
         return res.json({
             success: true,
             action: 'already_activated',
@@ -534,17 +568,7 @@ async function activatePublication(ctx) {
         });
     }
 
-    // 7) Compiled parse — autoseed + empty-check ezt használja, így
-    //    csak az új aktiváló ágon szükséges (idempotens után).
-    let compiled;
-    try {
-        compiled = JSON.parse(compiledStr);
-    } catch (parseErr) {
-        error(`[ActivatePub] workflow compiled parse hiba: ${parseErr.message}`);
-        return fail(res, 500, 'workflow_compiled_invalid');
-    }
-
-    // 8) Autoseed (idempotens — `assign_workflow_to_publication` már
+    // 9) Autoseed (idempotens — `assign_workflow_to_publication` már
     //    valószínűleg lefuttatta; a workflow azóta változhatott).
     let autoseed;
     try {
@@ -563,7 +587,7 @@ async function activatePublication(ctx) {
         return fail(res, 500, 'autoseed_failed', { error: seedErr.message });
     }
 
-    // 9) Empty check
+    // 10) Empty check
     const requiredSlugs = Array.isArray(compiled.requiredGroupSlugs)
         ? compiled.requiredGroupSlugs.map(e => e?.slug).filter(s => typeof s === 'string')
         : [];
@@ -585,8 +609,9 @@ async function activatePublication(ctx) {
         });
     }
 
-    // 10) Atomic update — isActivated + snapshot. SERVER_GUARD sentinel
-    //     a post-event `validate-publication-update`-nek (skip).
+    // 11) Atomic update — isActivated + workflow snapshot + extension snapshot.
+    //     SERVER_GUARD sentinel a post-event `validate-publication-update`-nek
+    //     (skip a state-snapshot guard-ra is, B.3.3).
     const SERVER_GUARD_ID = 'server-guard';
     const nowIso = new Date().toISOString();
     let updatedPubDoc;
@@ -599,6 +624,7 @@ async function activatePublication(ctx) {
                 isActivated: true,
                 activatedAt: nowIso,
                 compiledWorkflowSnapshot: compiledStr,
+                compiledExtensionSnapshot: extensionSnapshotStr,
                 modifiedByClientId: SERVER_GUARD_ID
             }
         );
@@ -607,7 +633,7 @@ async function activatePublication(ctx) {
         return fail(res, 500, 'activation_update_failed');
     }
 
-    log(`[ActivatePub] User ${callerId} aktiválta: pub=${publicationId}, workflow=${pubDoc.workflowId}, snapshot.size=${compiledStr.length}, autoseed.created=${autoseed.created.length}`);
+    log(`[ActivatePub] User ${callerId} aktiválta: pub=${publicationId}, workflow=${pubDoc.workflowId}, snapshot.size=${compiledStr.length}, extSnapshot.size=${extensionSnapshotStr.length}, extRefs=[validators=${extResult.refs.validatorSlugs.length},commands=${extResult.refs.commandSlugs.length}], autoseed.created=${autoseed.created.length}`);
 
     return res.json({
         success: true,

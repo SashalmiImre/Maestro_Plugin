@@ -20,10 +20,21 @@ const sdk = require("node-appwrite");
  *    írja. Fail-closed: ha a workflow lookup hibára fut, deaktivál. Minden
  *    aktiválásnál (re-aktiválás is) felülírja a snapshot-ot — új aktiválás
  *    új pillanatképet eredményez.
- * 6b. Snapshot immutability guard (#37) — ha a kliens payload közvetlenül
- *    érinti a `compiledWorkflowSnapshot` mezőt ÉS a caller nem a server
- *    guard, a publikáció deaktiválódik és a mező null-ra kerül. Új aktiválás
- *    kényszerítés → a §5a újraírja a helyes snapshot-ot.
+ * 5c. Extension snapshot presence check (B.3.3, ADR 0007 Phase 0) — ha az
+ *    `isActivated=true` ÁLLAPOT MELLETT a `compiledExtensionSnapshot` null
+ *    (vagyis a caller direkt API hívással kerülte meg az `activate_publication`
+ *    CF action-t), deaktiválunk. A SERVER_GUARD-os hívások (az `activate_
+ *    publication` CF action) eljutnak ide, de a payload mindig tartalmazza
+ *    a snapshotot, így a check zöldre vált. NEM próbáljuk backfill-elni
+ *    az extension snapshotot ebben a CF-ben — a `helpers/extensionSnapshot.js`
+ *    duplikációja túl drága; a felhasználó újraindítja az aktivációt az
+ *    authoritatív action-en.
+ * 6b. Snapshot immutability guard (#37 + B.3.3) — ha a kliens payload
+ *    közvetlenül érinti a `compiledWorkflowSnapshot` VAGY
+ *    `compiledExtensionSnapshot` mezőt ÉS a caller nem a server guard, a
+ *    publikáció deaktiválódik és a mezők null-ra kerülnek. Új aktiválás
+ *    kényszerítés → a §5a + `activate_publication` CF action újraírja a
+ *    helyes snapshot-okat.
  *
  * Érvénytelen contributor → nullázás.
  * rootPath probléma → csak logolás (nem javítjuk, lehet migráció folyamatban).
@@ -485,6 +496,72 @@ module.exports = async function ({ req, res, log, error }) {
             }
         }
 
+        // ── 5c. Direkt API aktiváció tilalom (B.3.3, ADR 0007 Phase 0) ──
+        //
+        // Codex adversarial review B.3 P1 fix: a presence-only check
+        // (`!freshDoc.compiledExtensionSnapshot`) NEM elég. Ha a publikáción
+        // korábban valamilyen módon kerül egy nem-üres `compiledExtensionSnapshot`,
+        // egy direkt API hívó `isActivated: true` payload-dal aktiválhatná
+        // a publikációt anélkül, hogy az authoritatív `activate_publication`
+        // action lefutott volna — a §5a refresh-elné a workflow snapshotot,
+        // a §5c presence-only check passes, a §6b nem fire (a payload nem
+        // érintette a snapshot mezőt), a publikáció aktivált marad **stale
+        // extension snapshot-tal**.
+        //
+        // Megoldás: ha a payload bármilyen módon érinti az `isActivated`-ot
+        // ÉS a caller nem SERVER_GUARD, deaktiválunk + minden snapshot null-ra.
+        // A re-aktivációhoz a felhasználónak az `activate_publication` action-en
+        // keresztül kell mennie — az authoritatív path frissíti mind a két
+        // snapshotot konzisztensen.
+        //
+        // SERVER_GUARD-os hívás (az `activate_publication` CF action) a
+        // függvény tetején már skip-pel — ide csak külső hívások futnak.
+        // A `corrections.isActivated === undefined` gate megakadályozza a
+        // duplikálást, ha a §5 / §5a már deaktivált.
+        //
+        // NEM backfill-elünk: az extension snapshot felépítése
+        // workflowExtensions DB-lookup + kind-konzisztencia + size-cap
+        // logika, ami a `invite-to-organization/helpers/extensionSnapshot.js`-ben
+        // él. Cross-CF inline duplikáció kockázata > a fail-closed deaktiválás
+        // előnye.
+        // 5c-A: minden direkt API aktiváció (a kliens payload-jában megjelenő
+        // `isActivated` mező + nem-SERVER_GUARD caller) fail-closed deaktiválás.
+        const isActivationPayloadDirect = Object.prototype.hasOwnProperty.call(payload, 'isActivated');
+        if (
+            isActivationPayloadDirect
+            && payload.modifiedByClientId !== SERVER_GUARD_ID
+            && corrections.isActivated === undefined
+        ) {
+            error(`[DirectActivation] ${freshDoc.$id} deaktiválva — direkt API aktiváció tilos, csak az activate_publication CF action engedett (caller=${callerId || 'unknown'})`);
+            corrections.isActivated = false;
+            corrections.activatedAt = null;
+            corrections.compiledWorkflowSnapshot = null;
+            corrections.compiledExtensionSnapshot = null;
+        }
+
+        // 5c-B: legacy aktivált pub (snapshot null) fail-closed deaktiválás.
+        // Akkor fut, ha a publikáció `isActivated=true` állapotban van + a
+        // `compiledExtensionSnapshot` null/üres + a payload NEM érintette
+        // az `isActivated`-ot (különben az §5c-A már lefutott). Ez legacy
+        // / B.3 előtti aktivált pubokat fed: az első update-jükkor (akármelyik
+        // mezőre) deaktiválódnak, és a felhasználó újraindítja az aktivációt
+        // az `activate_publication` CF action-en keresztül.
+        if (
+            freshDoc.isActivated === true
+            && corrections.isActivated === undefined
+            && (!freshDoc.compiledExtensionSnapshot
+                || (typeof freshDoc.compiledExtensionSnapshot === 'string'
+                    && freshDoc.compiledExtensionSnapshot.length === 0))
+        ) {
+            error(`[ExtensionSnapshot] ${freshDoc.$id} deaktiválva — compiledExtensionSnapshot null/üres, az aktivációt az activate_publication CF action-en keresztül kell újraindítani`);
+            corrections.isActivated = false;
+            corrections.activatedAt = null;
+            // A `compiledWorkflowSnapshot` is null-ra megy a teljes konzisztenciáért
+            // (különben az §5a backfill-elte volna ugyanebben a CF run-ban, ami
+            // utólag inkonzisztens lenne a deaktivált state-tel).
+            corrections.compiledWorkflowSnapshot = null;
+        }
+
         // ── 6. Workflow immutabilitás cikkekkel rendelkező aktív publikáción (Fázis 6) ──
         // Post-event CF nem látja a pre-update állapotot. Ha isActivated=true
         // ÉS van cikk, a workflowId-nek létező + az office-hoz tartozó workflow-ra
@@ -547,28 +624,38 @@ module.exports = async function ({ req, res, log, error }) {
             }
         }
 
-        // ── 6b. compiledWorkflowSnapshot immutability guard (#37) ──
+        // ── 6b. Snapshot immutability guard (#37 + B.3.3) ──
         //
-        // A snapshot mezőt csak a CF (SERVER_GUARD) írhatja — aktiváláskor az §5a
-        // fejezet. Post-event CF nem lát pre-state-et, így közvetlen mező-revert
-        // nem lehetséges. Megbízható detekció: a payload csak a kliens által
-        // érintett mezőket tartalmazza — ha a `compiledWorkflowSnapshot` szerepel
-        // a payload-ban ÉS a caller nem SERVER_GUARD, invariáns-sértés történt.
-        // Válasz: deaktiválás + snapshot null-ra → új aktiválás kényszerítés,
-        // ahol az §5a CF-oldalról újra ráírja a workflow aktuális `compiled`-ját.
+        // A snapshot mezőket (`compiledWorkflowSnapshot`,
+        // `compiledExtensionSnapshot`) csak a CF (SERVER_GUARD) írhatja —
+        // aktiváláskor az `activate_publication` CF action / a §5a backfill.
+        // Post-event CF nem lát pre-state-et, így közvetlen mező-revert nem
+        // lehetséges. Megbízható detekció: a payload csak a kliens által
+        // érintett mezőket tartalmazza — ha bármelyik snapshot-mező szerepel
+        // a payload-ban ÉS a caller nem SERVER_GUARD, invariáns-sértés
+        // történt. Válasz: deaktiválás + minden snapshot null-ra → új
+        // aktiválás kényszerítés, ahol az authoritatív CF action újra
+        // ráírja a workflow + extension pillanatképét.
         //
-        // A modifiedByClientId === SERVER_GUARD_ID eset már a függvény elején
-        // skip-pel elkap (saját korrekciós hívás), ide csak a külső hívások
-        // futnak be.
+        // A modifiedByClientId === SERVER_GUARD_ID eset már a függvény
+        // elején skip-pel elkap (saját korrekciós hívás), ide csak a külső
+        // hívások futnak be.
+        const workflowSnapshotTouched = Object.prototype.hasOwnProperty.call(payload, 'compiledWorkflowSnapshot');
+        const extensionSnapshotTouched = Object.prototype.hasOwnProperty.call(payload, 'compiledExtensionSnapshot');
         if (
-            Object.prototype.hasOwnProperty.call(payload, 'compiledWorkflowSnapshot')
+            (workflowSnapshotTouched || extensionSnapshotTouched)
             && payload.modifiedByClientId !== SERVER_GUARD_ID
             && corrections.isActivated === undefined
         ) {
-            error(`[SnapshotGuard] ${freshDoc.$id} deaktiválva — kliens módosította a compiledWorkflowSnapshot mezőt (caller=${callerId || 'unknown'})`);
+            const touched = [
+                workflowSnapshotTouched ? 'compiledWorkflowSnapshot' : null,
+                extensionSnapshotTouched ? 'compiledExtensionSnapshot' : null
+            ].filter(Boolean).join(', ');
+            error(`[SnapshotGuard] ${freshDoc.$id} deaktiválva — kliens módosította a snapshot mezőt (${touched}) (caller=${callerId || 'unknown'})`);
             corrections.isActivated = false;
             corrections.activatedAt = null;
             corrections.compiledWorkflowSnapshot = null;
+            corrections.compiledExtensionSnapshot = null;
         }
 
         // ── 7. Korrekciók alkalmazása ──

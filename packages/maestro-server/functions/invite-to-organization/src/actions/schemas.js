@@ -210,11 +210,12 @@ async function bootstrapWorkflowSchema(ctx) {
 }
 
 /**
- * ACTION='bootstrap_publication_schema' (#36) — owner-only schema-bővítés a
- * `publications` collectionön: `compiledWorkflowSnapshot` (string ~1 MB,
- * nullable). Aktiváláskor a workflow `compiled` JSON pillanatképét tároljuk —
- * onnantól a publikáció élete a snapshoton fut. Manuálisan triggerelendő
- * (curl vagy Console).
+ * ACTION='bootstrap_publication_schema' (#36 + B.3.3) — owner-only schema-
+ * bővítés a `publications` collectionön: `compiledWorkflowSnapshot` és
+ * `compiledExtensionSnapshot` (string ~1 MB, nullable). Aktiváláskor a
+ * workflow `compiled` JSON pillanatképét + a workflow által hivatkozott
+ * extension-ök kódját tároljuk — onnantól a publikáció élete a snapshoton
+ * fut. Manuálisan triggerelendő (curl vagy Console). Idempotens.
  */
 async function bootstrapPublicationSchema(ctx) {
     const { databases, env, callerId, log, error, res, fail } = ctx;
@@ -233,29 +234,42 @@ async function bootstrapPublicationSchema(ctx) {
     const created = [];
     const skipped = [];
 
-    // 3. compiledWorkflowSnapshot string attribútum.
+    // 3. compiledWorkflowSnapshot + compiledExtensionSnapshot string attribútumok.
     // Size: 1_000_000 char (~1 MB). A workflows.compiled jelenlegi mérete
-    // ~12 KB (8 állapotos default workflow); a sapka bőven fedi a bővítést
-    // (több állapot, részletesebb jogosultság-mátrix, capabilities).
-    // Nullable — legacy (már aktivált, snapshot nélküli) publikációkon
-    // null marad, a Plugin a workflowId cache-re fallback-el (Feladat #38).
-    try {
-        await databases.createStringAttribute(
-            env.databaseId,
-            env.publicationsCollectionId,
-            'compiledWorkflowSnapshot',
-            1000000,                       // size (~1 MB)
-            false,                         // required
-            null,                          // default
-            false                          // array
-        );
-        created.push('compiledWorkflowSnapshot');
-    } catch (err) {
-        if (isAlreadyExists(err)) {
-            skipped.push('compiledWorkflowSnapshot');
-        } else {
-            error(`[BootstrapPublicationSchema] compiledWorkflowSnapshot létrehozás hiba: ${err.message}`);
-            return fail(res, 500, 'schema_snapshot_failed', { error: err.message });
+    // ~12 KB (8 állapotos default workflow); a sapka bőven fedi a bővítést.
+    // Az extension-snapshot tipikus mérete 5-50 KB × workflow által hivatkozott
+    // extension count; a CF write-path egy szigorúbb operatív cap-et tesz
+    // (`EXTENSION_SNAPSHOT_MAX_BYTES = 800 KB`, lásd actions/publications.js).
+    // Nullable mindkettő — legacy aktivált publikációkon null marad.
+    const snapshotAttrs = [
+        // #36 — workflow snapshot (Phase 5)
+        { name: 'compiledWorkflowSnapshot' },
+        // B.3.3 (ADR 0007 Phase 0, 2026-05-04) — extension snapshot
+        { name: 'compiledExtensionSnapshot' }
+    ];
+
+    for (const attr of snapshotAttrs) {
+        try {
+            await databases.createStringAttribute(
+                env.databaseId,
+                env.publicationsCollectionId,
+                attr.name,
+                1000000,                       // size (~1 MB)
+                false,                         // required
+                null,                          // default
+                false                          // array
+            );
+            created.push(attr.name);
+        } catch (err) {
+            if (isAlreadyExists(err)) {
+                skipped.push(attr.name);
+            } else {
+                error(`[BootstrapPublicationSchema] ${attr.name} létrehozás hiba: ${err.message}`);
+                return fail(res, 500, 'schema_snapshot_failed', {
+                    attribute: attr.name,
+                    error: err.message
+                });
+            }
         }
     }
 
@@ -265,7 +279,7 @@ async function bootstrapPublicationSchema(ctx) {
         success: true,
         created,
         skipped,
-        note: 'Az attribútum feldolgozása ~5-10s. Várj a publikáció aktiválás előtt.'
+        note: 'Az attribútumok feldolgozása ~5-10s. Várj a publikáció aktiválás előtt.'
     });
 }
 
