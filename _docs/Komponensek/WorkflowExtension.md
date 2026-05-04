@@ -6,15 +6,17 @@ aliases: [WorkflowExtension, Custom validator, Custom command]
 # WorkflowExtension (Proposed)
 
 > **Státusz**: tervezett. Részletes ADR: [[Döntések/0007-workflow-extensions]].
+>
+> **Részleges implementáció (2026-05-04)**: B.1 (adatmodell) + B.2 (shared kontraktus) kész. Részletek alább a "Helye" és "Kontraktus" szekciókban; B.3 (CF CRUD) és B.4 (plugin runtime) hátra van.
 
 ## Cél
 DB-ben tárolt, dinamikusan betöltődő ExtendScript-alapú parancs vagy validátor, amelyre a workflow JSON `ext.<slug>` prefixszel hivatkozik. A beépített parancsok és validátorok mellett él, plugin újradeploy nélkül bővíthető.
 
-## Helye (tervezett)
-- **Adatmodell**: `workflowExtensions` Appwrite collection
-- **Plugin runtime**: `packages/maestro-indesign/src/core/utils/extensions/extensionRegistry.js`
-- **Dashboard editor**: `packages/maestro-dashboard/src/features/workflowDesigner/extensions/...`
-- **Shared kontraktus**: `packages/maestro-shared/extensionContract.js`
+## Helye
+- **Adatmodell** (B.1.1, kész): `workflowExtensions` Appwrite collection — schema bootstrap a `bootstrap_workflow_extension_schema` CF action-en át, doc-szintű ACL `buildExtensionAclPerms` (`teamHelpers.js`).
+- **Shared kontraktus** (B.2.1, kész): [packages/maestro-shared/extensionContract.js](../../packages/maestro-shared/extensionContract.js) — konstansok (`MAESTRO_EXTENSION_GLOBAL_NAME`, `EXTENSION_REF_PREFIX`, kind/scope enum-ok, slug/name méret-korlátok), `validateExtensionSlug()` slug-validátor, `isExtensionRef()` / `parseExtensionRef()` workflow JSON ref-helperek.
+- **Plugin runtime** (B.4, tervezett): `packages/maestro-indesign/src/core/utils/extensions/extensionRegistry.js`
+- **Dashboard editor** (B.5, tervezett): `packages/maestro-dashboard/src/features/workflowDesigner/extensions/...`
 
 ## Kontraktus
 
