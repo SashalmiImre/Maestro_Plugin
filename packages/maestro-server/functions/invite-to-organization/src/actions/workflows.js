@@ -880,13 +880,21 @@ async function deleteWorkflow(ctx) {
     //     (B.0.3.f review által felvetett, de preexisting).
     //   - `organization`: az org összes office-án belül (cross-office).
     //   - `editorial_office`: csak a saját office.
+    //   - **invalid / null visibility**: fail-closed = `public`
+    //     scope (LEGSZÉLESEBB scan). A delete-blocker célja minden
+    //     hivatkozó publikációt megtalálni; ha a visibility legacy /
+    //     korrupt / manuális Console-edit miatt ismeretlen, akkor a
+    //     legszigorúbb védelem a teljes scan, NEM az office-szűkítés
+    //     (Codex review P2, 2026-05-04). A `WORKFLOW_VISIBILITY_DEFAULT`
+    //     (`editorial_office`) csak read-time fallback más helyeken,
+    //     itt write-blocking szempontból téves lenne.
     //
     // Pagination + match-cap a MAX_REFERENCES_PER_SCAN-nel (bounded payload
     // + memória). A `select`-be bekerült az `organizationId` is, hogy a
     // `public` ágon a hívó UI azonosítani tudja a más szervezet pubját.
     const wfVisibility = WORKFLOW_VISIBILITY_VALUES.includes(workflowDoc.visibility)
         ? workflowDoc.visibility
-        : WORKFLOW_VISIBILITY_DEFAULT;
+        : 'public';
     const usedByPublications = [];
     let cursor = null;
 
@@ -902,8 +910,8 @@ async function deleteWorkflow(ctx) {
         } else if (wfVisibility === 'editorial_office') {
             queries.push(sdk.Query.equal('editorialOfficeId', editorialOfficeId));
         }
-        // `public`: nincs scope-szűrő — a `workflowId` egyezés bármely
-        // szervezet publikációját megtalálja.
+        // `public` (vagy invalid → public fallback): nincs scope-szűrő —
+        // a `workflowId` egyezés bármely szervezet publikációját megtalálja.
         if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
 
         const batch = await databases.listDocuments(
