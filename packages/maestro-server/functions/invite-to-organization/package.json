@@ -1,5 +1,6 @@
 {
     "dependencies": {
-        "node-appwrite": "^11.0.0"
+        "node-appwrite": "^11.0.0",
+        "acorn": "^8.16.0"
     }
 }

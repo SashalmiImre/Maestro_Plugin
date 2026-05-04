@@ -56,7 +56,15 @@ const VALID_ACTIONS = new Set([
     'create_permission_set', 'update_permission_set',
     'archive_permission_set', 'restore_permission_set',
     // A.3.4 — m:n junction CRUD
-    'assign_permission_set_to_group', 'unassign_permission_set_from_group'
+    'assign_permission_set_to_group', 'unassign_permission_set_from_group',
+    // B.3.1 (ADR 0007 Phase 0) — workflow extension CRUD.
+    // `restore_workflow_extension` SZÁNDÉKOSAN nincs (Codex tervi review
+    // 2026-05-04 nyíltan rögzít: a Feladatok.md / ADR 0007 csak az archive-ot
+    // említi; a Phase 1+ fogja eldönteni, hogy szükséges-e külön restore
+    // action vagy az `update_workflow_extension` `archivedAt: null`-lal
+    // implicit visszaállít).
+    'create_workflow_extension', 'update_workflow_extension',
+    'archive_workflow_extension'
 ]);
 
 // Slug formátum: kisbetű, szám, kötőjel. A frontend is ugyanezt alkalmazza.

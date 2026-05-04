@@ -44,6 +44,33 @@ const EXTENSION_KIND_VALUES = ['validator', 'command'];
 const EXTENSION_SCOPE_VALUES = ['article'];
 const EXTENSION_SCOPE_DEFAULT = 'article';
 
+// B.3 (ADR 0007 Phase 0, 2026-05-04) — extension méret-konstansok.
+//
+// SYNC WITH: packages/maestro-shared/extensionContract.js
+//   - EXTENSION_NAME_MAX_LENGTH (= 100): a kliens-oldali kontraktusban
+//     dokumentált, schema-szintű string size-zal egyezik. NEM a generikus
+//     NAME_MAX_LENGTH (= 128) — az extension `name` UI-ban látszik
+//     (Designer "Bővítmények" tab kártya-fejléc), domain-konstans.
+//   - EXTENSION_SLUG_REGEX, EXTENSION_SLUG_MAX_LENGTH: a server-helpers/util.js
+//     `SLUG_REGEX` (= /^[a-z0-9]+(?:-[a-z0-9]+)*$/) és `SLUG_MAX_LENGTH` (= 64)
+//     értékeivel betűre azonos. Phase 0-ban a CF write-path a meglévő
+//     `SLUG_REGEX`/`SLUG_MAX_LENGTH`-szal validál (NEM duplikál külön
+//     `EXTENSION_SLUG_*` konstansokat) — semantic drift-rizikó: a shared
+//     `validateExtensionSlug` whitespace-érzékeny + error-akkumulátor, a
+//     CF-en pedig a `sanitizeString` trim-elt érték szerint regex.test —
+//     értékek azonosak, semantic eltérő (Codex tervi review nyíltan rögzít).
+//
+// A `code` ~1 MB schema-ceiling (B.1.1 attribute size); a CF write-path
+// szigorúbb operatív cap-et tesz (Codex tervi review): a Phase 0 tipikus
+// extension 5-50 KB, a 256 KB defense-in-depth payload-méret guard. Az
+// aggregate `compiledExtensionSnapshot` ezzel max. ~16 extension-t fed
+// le (256 KB × 16 = 4 MB), de a snapshot mező maga is 1 MB, ezért az
+// `activate_publication` egy SNAPSHOT_MAX_BYTES guardot is alkalmaz a
+// stringify-olt JSON hosszára (lásd actions/publications.js).
+const EXTENSION_NAME_MAX_LENGTH = 100;
+const EXTENSION_CODE_MAX_LENGTH = 256 * 1024;     // 262144 char ≈ 256 KB
+const EXTENSION_SNAPSHOT_MAX_BYTES = 800 * 1024;  // 819200 char ≈ 800 KB
+
 module.exports = {
     CASCADE_BATCH_LIMIT,
     MAX_REFERENCES_PER_SCAN,
@@ -52,5 +79,8 @@ module.exports = {
     PARSE_ERROR,
     EXTENSION_KIND_VALUES,
     EXTENSION_SCOPE_VALUES,
-    EXTENSION_SCOPE_DEFAULT
+    EXTENSION_SCOPE_DEFAULT,
+    EXTENSION_NAME_MAX_LENGTH,
+    EXTENSION_CODE_MAX_LENGTH,
+    EXTENSION_SNAPSHOT_MAX_BYTES
 };

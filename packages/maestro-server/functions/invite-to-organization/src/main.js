@@ -67,6 +67,8 @@ const permissionSetActions = require("./actions/permissionSets.js");
 const workflowActions = require("./actions/workflows.js");
 const officeActions = require("./actions/offices.js");
 const publicationActions = require("./actions/publications.js");
+// B.3.1 (ADR 0007 Phase 0, 2026-05-04) — workflow extension CRUD.
+const extensionActions = require("./actions/extensions.js");
 
 // ────────────────────────────────────────────────────────────────────────────
 // ACTION HANDLERS (B.0.3 plan 3. pont, 2026-05-04)
@@ -140,7 +142,12 @@ const ACTION_HANDLERS = {
     'create_editorial_office': officeActions.createEditorialOffice,
     'update_editorial_office': officeActions.updateEditorialOffice,
     'delete_editorial_office': officeActions.deleteEditorialOffice,
-    'delete_organization': orgActions.deleteOrganization
+    'delete_organization': orgActions.deleteOrganization,
+
+    // B.3.1 (ADR 0007 Phase 0) — workflow extension CRUD.
+    'create_workflow_extension': extensionActions.createWorkflowExtension,
+    'update_workflow_extension': extensionActions.updateWorkflowExtension,
+    'archive_workflow_extension': extensionActions.archiveWorkflowExtension
 };
 
 // Module-load-time invariáns: a `VALID_ACTIONS` és `ACTION_HANDLERS`
@@ -431,12 +438,13 @@ module.exports = async function ({ req, res, log, error }) {
         // vissza, ami a guardokban 403-at eredményezne — fail-fast jobb.
         const permissionSetsCollectionId = process.env.PERMISSION_SETS_COLLECTION_ID;
         const groupPermissionSetsCollectionId = process.env.GROUP_PERMISSION_SETS_COLLECTION_ID;
-        // B.1.1 (ADR 0007 Phase 0) — workflowExtensions collection. Phase 0-ban
-        // CSAK a `bootstrap_workflow_extension_schema` action-höz kötelező
-        // (action-szintű guard, ld. actions/schemas.js). A B.3 új CRUD action-jeinek
-        // (`create/update/archive_workflow_extension`) érkezésekor globális
-        // fail-fast-ba emelendő — a `PERMISSION_SETS_COLLECTION_ID` evolúciója
-        // mintájára (A.3.6, 2026-05-03).
+        // B.1.1 (ADR 0007 Phase 0) — workflowExtensions collection.
+        // **B.3 (2026-05-04) — globális fail-fast**: a B.3.1 új CRUD action-jei
+        // (`create/update/archive_workflow_extension`) ÉS a B.3.3 snapshot
+        // logika (`activate_publication`) is ezen a collection-en olvas/ír,
+        // ezért a `PERMISSION_SETS_COLLECTION_ID` evolúciójának mintáját
+        // (A.3.6) követve a globális env var listára emeljük. Hiánya
+        // 500 `misconfigured`-et ad mindenfaj action-re.
         const workflowExtensionsCollectionId = process.env.WORKFLOW_EXTENSIONS_COLLECTION_ID;
 
         // ── Fail-fast env var guard ──
@@ -453,6 +461,9 @@ module.exports = async function ({ req, res, log, error }) {
         // A.3.6 (ADR 0008) — `userHasPermission()` member-path lookuphoz kötelező.
         if (!permissionSetsCollectionId) missingEnvVars.push('PERMISSION_SETS_COLLECTION_ID');
         if (!groupPermissionSetsCollectionId) missingEnvVars.push('GROUP_PERMISSION_SETS_COLLECTION_ID');
+        // B.3 (ADR 0007 Phase 0, 2026-05-04) — a B.3.1 CRUD action-ök ÉS a
+        // B.3.3 `activate_publication` snapshot scan globális olvasója.
+        if (!workflowExtensionsCollectionId) missingEnvVars.push('WORKFLOW_EXTENSIONS_COLLECTION_ID');
         if (!apiKey) missingEnvVars.push('APPWRITE_API_KEY (vagy x-appwrite-key header)');
         if (missingEnvVars.length > 0) {
             error(`[Config] Hiányzó környezeti változók: ${missingEnvVars.join(', ')}`);
