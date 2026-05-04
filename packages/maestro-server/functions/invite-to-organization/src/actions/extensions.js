@@ -227,17 +227,8 @@ async function createWorkflowExtension(ctx) {
         });
     }
 
-    // Office lookup → organizationId.
-    let officeDoc;
-    try {
-        officeDoc = await databases.getDocument(env.databaseId, env.officesCollectionId, editorialOfficeId);
-    } catch (err) {
-        if (err?.code === 404) return fail(res, 404, 'office_not_found');
-        error(`[CreateWorkflowExtension] office fetch hiba: ${err.message}`);
-        return fail(res, 500, 'office_fetch_failed');
-    }
-
-    // Auth — `extension.create` office-scope.
+    // Auth a fetch ELŐTT — különben a 404/403 különbség office létezés-
+    // oracle lenne unauthorized hívónak.
     const allowed = await permissions.userHasPermission(
         databases,
         permissionEnv,
@@ -252,6 +243,16 @@ async function createWorkflowExtension(ctx) {
             slug: 'extension.create',
             scope: 'office'
         });
+    }
+
+    // Office lookup → organizationId.
+    let officeDoc;
+    try {
+        officeDoc = await databases.getDocument(env.databaseId, env.officesCollectionId, editorialOfficeId);
+    } catch (err) {
+        if (err?.code === 404) return fail(res, 404, 'office_not_found');
+        error(`[CreateWorkflowExtension] office fetch hiba: ${err.message}`);
+        return fail(res, 500, 'office_fetch_failed');
     }
 
     // Doc create — `office_slug_unique` index 409.

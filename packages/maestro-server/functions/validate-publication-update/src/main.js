@@ -444,6 +444,31 @@ module.exports = async function ({ req, res, log, error }) {
             }
         }
 
+        // ── 5c-A. Direkt API aktiváció tilalom (B.3.3, ADR 0007 Phase 0) ──
+        //
+        // Az authoritatív aktiválás csak az `activate_publication` CF action
+        // (SERVER_GUARD-os write). Egy direkt `isActivated: true` payload
+        // egy korábbi non-null `compiledExtensionSnapshot` mellett stale
+        // állapotban hagyhatná a pubot (a §6b presence-only check nem
+        // elég). A `false`-os deaktiváló write-ok engedettek (Dashboard
+        // GeneralTab + revertelő logika).
+        //
+        // §5a ELŐTT fut, hogy a felesleges workflow lookup ne fusson le
+        // egy direkt aktiváción, amit utána nullra felülírnánk.
+        //
+        // NEM backfill-elünk extension snapshotot — a build helper a másik
+        // CF-ben él, cross-CF inline duplikáció ezt a guardot fel nem éri.
+        const isDirectActivation =
+            payload.isActivated === true
+            && payload.modifiedByClientId !== SERVER_GUARD_ID;
+        if (isDirectActivation && corrections.isActivated === undefined) {
+            error(`[DirectActivation] ${freshDoc.$id} deaktiválva — direkt API aktiváció tilos, csak az activate_publication CF action engedett (caller=${callerId || 'unknown'})`);
+            corrections.isActivated = false;
+            corrections.activatedAt = null;
+            corrections.compiledWorkflowSnapshot = null;
+            corrections.compiledExtensionSnapshot = null;
+        }
+
         // ── 5a. Workflow compiled snapshot rögzítése (#37) ──
         // Sikeres aktiválás (§5 zöld) után a publikáció `compiledWorkflowSnapshot`
         // mezőjébe írjuk a workflow aktuális `compiled` JSON-ját. Ez rögzíti
@@ -455,6 +480,9 @@ module.exports = async function ({ req, res, log, error }) {
         // (name, coverage stb.) NEM triggereli a snapshot újraírást —
         // különben egy időközben módosított workflow szivárogna be a
         // futó publikáció snapshot-jába, elrontva a feature lényegét.
+        //
+        // **§5c-A UTÁN** (M3 fix): ha a §5c-A direkt aktivációt deaktivált,
+        // a `corrections.isActivated === undefined` gate false → §5a skip.
         //
         // Fail-closed: ha a workflow lookup vagy scope check megbukik, deaktiválunk.
         const isActivationPayload = Object.prototype.hasOwnProperty.call(payload, 'isActivated');
@@ -494,54 +522,6 @@ module.exports = async function ({ req, res, log, error }) {
                     corrections.activatedAt = null;
                 }
             }
-        }
-
-        // ── 5c. Direkt API aktiváció tilalom (B.3.3, ADR 0007 Phase 0) ──
-        //
-        // Codex adversarial review B.3 P1 fix: a presence-only check
-        // (`!freshDoc.compiledExtensionSnapshot`) NEM elég. Ha a publikáción
-        // korábban valamilyen módon kerül egy nem-üres `compiledExtensionSnapshot`,
-        // egy direkt API hívó `isActivated: true` payload-dal aktiválhatná
-        // a publikációt anélkül, hogy az authoritatív `activate_publication`
-        // action lefutott volna — a §5a refresh-elné a workflow snapshotot,
-        // a §5c presence-only check passes, a §6b nem fire (a payload nem
-        // érintette a snapshot mezőt), a publikáció aktivált marad **stale
-        // extension snapshot-tal**.
-        //
-        // Megoldás: ha a payload `isActivated: true`-t küld ÉS a caller nem
-        // SERVER_GUARD, deaktiválunk + minden snapshot null-ra. A re-aktivációhoz
-        // a felhasználónak az `activate_publication` action-en keresztül kell
-        // mennie — az authoritatív path frissíti mind a két snapshotot konzisztensen.
-        //
-        // **A guard csak az `isActivated: true` aktiváló payload-okra szóljon**
-        // (Codex stop-time review 2026-05-04 fix): a Dashboard `GeneralTab`
-        // deactivate gomb és a sikertelen aktiválás revertelő logikája egyaránt
-        // küld `isActivated: false` payload-ot — ezeket NEM szabad blokkolni.
-        // A korábbi `Object.prototype.hasOwnProperty.call(payload, 'isActivated')`
-        // check a normál deaktiválás write-okat is fail-closed-deaktiválta volna
-        // (overreach + felesleges snapshot-nullázás).
-        //
-        // SERVER_GUARD-os hívás (az `activate_publication` CF action) a
-        // függvény tetején már skip-pel — ide csak külső hívások futnak.
-        // A `corrections.isActivated === undefined` gate megakadályozza a
-        // duplikálást, ha a §5 / §5a már deaktivált.
-        //
-        // NEM backfill-elünk: az extension snapshot felépítése
-        // workflowExtensions DB-lookup + kind-konzisztencia + size-cap
-        // logika, ami a `invite-to-organization/helpers/extensionSnapshot.js`-ben
-        // él. Cross-CF inline duplikáció kockázata > a fail-closed deaktiválás
-        // előnye.
-        // 5c-A: a kliens payload-jában `isActivated: true` érték + nem-SERVER_GUARD
-        // caller → fail-closed deaktiválás.
-        const isDirectActivation =
-            payload.isActivated === true
-            && payload.modifiedByClientId !== SERVER_GUARD_ID;
-        if (isDirectActivation && corrections.isActivated === undefined) {
-            error(`[DirectActivation] ${freshDoc.$id} deaktiválva — direkt API aktiváció tilos, csak az activate_publication CF action engedett (caller=${callerId || 'unknown'})`);
-            corrections.isActivated = false;
-            corrections.activatedAt = null;
-            corrections.compiledWorkflowSnapshot = null;
-            corrections.compiledExtensionSnapshot = null;
         }
 
         // 5c-B: legacy aktivált pub (snapshot null) fail-closed deaktiválás.

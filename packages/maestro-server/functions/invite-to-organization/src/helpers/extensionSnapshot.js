@@ -87,17 +87,17 @@ function extractExtensionRefs(compiled) {
         }
     }
 
-    // 2. commands (state → [{ id, allowedGroups }])
+    // 2. commands (state → [{ id, allowedGroups }]). A workflow Designer
+    // `CommandListField` és a Plugin runtime CSAK object-alakot használja —
+    // a string item itt halott kód lenne. Bővítés esetén előbb a Designer +
+    // runtime, majd ez a scan (single-source contract).
     const commands = compiled.commands;
     if (commands && typeof commands === 'object') {
         for (const stateName of Object.keys(commands)) {
             const stateList = commands[stateName];
             if (!Array.isArray(stateList)) continue;
             for (const item of stateList) {
-                if (typeof item === 'string') {
-                    const slug = parseExtRef(item);
-                    if (slug) commandSlugs.add(slug);
-                } else if (item && typeof item === 'object'
+                if (item && typeof item === 'object'
                     && typeof item.id === 'string') {
                     const slug = parseExtRef(item.id);
                     if (slug) commandSlugs.add(slug);
@@ -198,9 +198,24 @@ async function buildExtensionSnapshot(databases, env, sdk, compiled, editorialOf
         };
     }
 
-    const extensionsBySlug = await fetchExtensionsForOffice(
-        databases, env, sdk, editorialOfficeId, allSlugs
-    );
+    // Strukturált hiba a top-level catch helyett — különben a hívó raw
+    // `err.message`-szel térne vissza 500-ban (inkonzisztens contract).
+    let extensionsBySlug;
+    try {
+        extensionsBySlug = await fetchExtensionsForOffice(
+            databases, env, sdk, editorialOfficeId, allSlugs
+        );
+    } catch (fetchErr) {
+        return {
+            ok: false,
+            status: 500,
+            reason: 'extension_fetch_failed',
+            payload: {
+                note: 'Az extension-snapshot scan-jén belül a workflowExtensions listDocuments hívás hibát adott. Próbáld újra; ha tartós, ellenőrizd a WORKFLOW_EXTENSIONS_COLLECTION_ID env vart és a CF API key teams.read scope-ját.',
+                error: fetchErr?.message ?? String(fetchErr)
+            }
+        };
+    }
 
     // 4. Missing reference scan.
     const missing = [];

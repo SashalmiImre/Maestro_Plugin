@@ -4,15 +4,12 @@
 // (A.2.2 + A.2.4 snapshot rögzítés). Ezek a B.0.3 split utolsó action-csoportja.
 
 const {
-    WORKFLOW_VISIBILITY_VALUES,
-    WORKFLOW_VISIBILITY_DEFAULT
-} = require('../helpers/constants.js');
-const {
     seedGroupsFromWorkflow,
     findEmptyRequiredGroupSlugs
 } = require('../helpers/groupSeed.js');
 const { validateDeadlinesInline } = require('../helpers/deadlineValidator.js');
 const { buildExtensionSnapshot } = require('../helpers/extensionSnapshot.js');
+const { matchesWorkflowVisibility } = require('../helpers/workflowScope.js');
 const { buildOfficeAclPerms } = require('../teamHelpers.js');
 const permissions = require('../permissions.js');
 
@@ -128,16 +125,13 @@ async function createPublicationWithWorkflow(ctx) {
         error(`[CreatePubWithWorkflow] workflow fetch hiba: ${err.message}`);
         return fail(res, 500, 'workflow_fetch_failed');
     }
-    const wfVisibility = WORKFLOW_VISIBILITY_VALUES.includes(workflowDoc.visibility)
-        ? workflowDoc.visibility
-        : WORKFLOW_VISIBILITY_DEFAULT;
-    let scopeOk = false;
-    if (wfVisibility === 'public') scopeOk = true;
-    else if (wfVisibility === 'organization' && workflowDoc.organizationId === organizationId) scopeOk = true;
-    else if (wfVisibility === 'editorial_office' && workflowDoc.editorialOfficeId === editorialOfficeId) scopeOk = true;
-    if (!scopeOk) {
+    const visibilityCheck = matchesWorkflowVisibility(workflowDoc, {
+        organizationId,
+        editorialOfficeId
+    });
+    if (!visibilityCheck.ok) {
         return fail(res, 403, 'workflow_scope_mismatch', {
-            visibility: wfVisibility
+            visibility: visibilityCheck.visibility
         });
     }
 
@@ -296,16 +290,13 @@ async function assignWorkflowToPublication(ctx) {
     }
     // Visibility-alapú scope match: a workflow office-ára vagy
     // org-jára kell illeszteni — különben nem rendelhető hozzá.
-    const wfVisibility = WORKFLOW_VISIBILITY_VALUES.includes(workflowDoc.visibility)
-        ? workflowDoc.visibility
-        : WORKFLOW_VISIBILITY_DEFAULT;
-    let scopeOk = false;
-    if (wfVisibility === 'public') scopeOk = true;
-    else if (wfVisibility === 'organization' && workflowDoc.organizationId === pubDoc.organizationId) scopeOk = true;
-    else if (wfVisibility === 'editorial_office' && workflowDoc.editorialOfficeId === pubDoc.editorialOfficeId) scopeOk = true;
-    if (!scopeOk) {
+    const visibilityCheck = matchesWorkflowVisibility(workflowDoc, {
+        organizationId: pubDoc.organizationId,
+        editorialOfficeId: pubDoc.editorialOfficeId
+    });
+    if (!visibilityCheck.ok) {
         return fail(res, 403, 'workflow_scope_mismatch', {
-            visibility: wfVisibility,
+            visibility: visibilityCheck.visibility,
             workflowOfficeId: workflowDoc.editorialOfficeId,
             publicationOfficeId: pubDoc.editorialOfficeId
         });
@@ -471,27 +462,76 @@ async function activatePublication(ctx) {
         });
     }
 
-    // 4-5) Workflow fetch + deadline lookup paralel — független
-    //      hívások (mindkettő csak a pubDoc-ot követeli).
+    // 4) Workflow fetch — a no-op early-return (5) ezzel dolgozik. A
+    //    deadline lookup csak az új aktiváló ágon fut (6 után), különben
+    //    egy idempotens retry felesleges 500 doc serialize-t végez.
     let workflowDoc;
-    let deadlines;
     try {
-        const [wf, deadlineResult] = await Promise.all([
-            databases.getDocument(env.databaseId, env.workflowsCollectionId, pubDoc.workflowId),
-            databases.listDocuments(
-                env.databaseId,
-                deadlinesCollectionId,
-                [
-                    sdk.Query.equal('publicationId', publicationId),
-                    sdk.Query.limit(500)
-                ]
-            )
-        ]);
-        workflowDoc = wf;
-        deadlines = deadlineResult.documents || [];
+        workflowDoc = await databases.getDocument(
+            env.databaseId, env.workflowsCollectionId, pubDoc.workflowId
+        );
     } catch (err) {
         if (err?.code === 404) return fail(res, 404, 'workflow_not_found');
-        error(`[ActivatePub] workflow/deadline fetch hiba: ${err.message}`);
+        error(`[ActivatePub] workflow fetch hiba: ${err.message}`);
+        return fail(res, 500, 'preactivation_fetch_failed', { error: err.message });
+    }
+
+    // Defense-in-depth: a `workflowId` direkt DB write-tal idegen scope-ra
+    // mutathat. Az `assign_workflow_to_publication` normál esetben blokkolja.
+    const visibilityCheck = matchesWorkflowVisibility(workflowDoc, {
+        organizationId: pubDoc.organizationId,
+        editorialOfficeId: pubDoc.editorialOfficeId
+    });
+    if (!visibilityCheck.ok) {
+        return fail(res, 403, 'workflow_scope_mismatch', {
+            visibility: visibilityCheck.visibility,
+            workflowOfficeId: workflowDoc.editorialOfficeId,
+            workflowOrganizationId: workflowDoc.organizationId,
+            publicationOfficeId: pubDoc.editorialOfficeId,
+            publicationOrganizationId: pubDoc.organizationId
+        });
+    }
+
+    // String-normalizált compiled — a `workflowDoc.compiled` legacy esetén
+    // object lehet, és string-vs-object hasonlítás sosem egyenlő.
+    const compiledStr = typeof workflowDoc.compiled === 'string'
+        ? workflowDoc.compiled
+        : JSON.stringify(workflowDoc.compiled);
+
+    // 5) No-op idempotens early-return: aktivált pub stored snapshotokkal
+    //    runtime-immune az utólagos extension változásokra (ADR 0007). Ezért
+    //    NEM olvasunk live extension-öket egy retry-on, és deadline-okat
+    //    sem fetchelünk (felesleges I/O 95%+ retry-payloadon).
+    if (
+        pubDoc.isActivated === true
+        && pubDoc.compiledWorkflowSnapshot === compiledStr
+        && typeof pubDoc.compiledExtensionSnapshot === 'string'
+        && pubDoc.compiledExtensionSnapshot.length > 0
+    ) {
+        return res.json({
+            success: true,
+            action: 'already_activated',
+            publicationId,
+            workflowId: pubDoc.workflowId,
+            activatedAt: pubDoc.activatedAt,
+            publication: pubDoc
+        });
+    }
+
+    // 6) Új aktiváló / re-snapshot ág — deadlines fetch + parse + ext snapshot.
+    let deadlines;
+    try {
+        const deadlineResult = await databases.listDocuments(
+            env.databaseId,
+            deadlinesCollectionId,
+            [
+                sdk.Query.equal('publicationId', publicationId),
+                sdk.Query.limit(500)
+            ]
+        );
+        deadlines = deadlineResult.documents || [];
+    } catch (err) {
+        error(`[ActivatePub] deadline fetch hiba: ${err.message}`);
         return fail(res, 500, 'preactivation_fetch_failed', { error: err.message });
     }
 
@@ -507,23 +547,6 @@ async function activatePublication(ctx) {
         });
     }
 
-    // Normalizált compiled string — a snapshot-egyezés ellenőrzéshez
-    // ÉS a snapshot-íráshoz egyaránt. Ha a `workflowDoc.compiled`
-    // bármilyen okból nem string (pl. legacy seriálizálás), enélkül
-    // a `pubDoc.compiledWorkflowSnapshot === workflowDoc.compiled`
-    // string-vs-object hasonlítás sosem lenne egyenlő, és az `already_
-    // activated` retry mindig új snapshot-ot írna (nem idempotens).
-    const compiledStr = typeof workflowDoc.compiled === 'string'
-        ? workflowDoc.compiled
-        : JSON.stringify(workflowDoc.compiled);
-
-    // 6) Compiled parse — autoseed + empty-check + extension-snapshot
-    //    scan ezt használja. A B.3 előtt parse az idempotens-check után
-    //    futott, de mostantól a parse-result kell az extension-scan-hez
-    //    az idempotens-egyezés kiértékelése előtt is (`compiledExtensionSnapshot`
-    //    egyezést is figyelembe kell venni — a workflow extension-jei
-    //    változhatnak a parent workflow `compiled` változatlanul maradása
-    //    mellett, így ugyanaz a `compiledStr` ≠ ugyanaz az extension-snapshot).
     let compiled;
     try {
         compiled = JSON.parse(compiledStr);
@@ -532,8 +555,6 @@ async function activatePublication(ctx) {
         return fail(res, 500, 'workflow_compiled_invalid');
     }
 
-    // 7) Extension-snapshot összerakás (B.3.3) — fail-fast 422 hiányzó
-    //    extension / kind-mismatch / aggregate méret-cap esetén.
     const extResult = await buildExtensionSnapshot(
         databases,
         {
@@ -548,25 +569,6 @@ async function activatePublication(ctx) {
         return fail(res, extResult.status, extResult.reason, extResult.payload);
     }
     const extensionSnapshotStr = extResult.snapshot;
-
-    // 8) Idempotens early-return — már aktiválva ugyanezzel a
-    //    workflow-snapshottal ÉS extension-snapshottal. A két mező AND-elődik:
-    //    egy extension `code` változás (ugyanaz a workflow `compiled`)
-    //    újra-aktiváló kérést érdemel az új extension-pillanatkép rögzítéséhez.
-    const alreadyActivatedSame =
-        pubDoc.isActivated === true
-        && pubDoc.compiledWorkflowSnapshot === compiledStr
-        && pubDoc.compiledExtensionSnapshot === extensionSnapshotStr;
-    if (alreadyActivatedSame) {
-        return res.json({
-            success: true,
-            action: 'already_activated',
-            publicationId,
-            workflowId: pubDoc.workflowId,
-            activatedAt: pubDoc.activatedAt,
-            publication: pubDoc
-        });
-    }
 
     // 9) Autoseed (idempotens — `assign_workflow_to_publication` már
     //    valószínűleg lefuttatta; a workflow azóta változhatott).
