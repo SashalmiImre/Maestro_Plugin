@@ -871,11 +871,22 @@ async function deleteWorkflow(ctx) {
         return fail(res, 403, 'scope_mismatch');
     }
 
-    // 4. Publikáció-hivatkozás scan. Organization-visibility esetén az
-    // egész org publikációit nézzük (cross-office hivatkozás), különben
-    // csak az office-t. Pagination + match-cap a MAX_REFERENCES_PER_SCAN-nel
-    // (bounded payload + memória).
-    const isOrgScope = workflowDoc.visibility === 'organization';
+    // 4. Publikáció-hivatkozás scan — visibility-függő scope:
+    //   - `public`: minden szervezet publikációit nézzük (cross-org, csak
+    //     `workflowId` egyezés alapján). A `create_publication_with_workflow`
+    //     és `assign_workflow_to_publication` engedi `public` workflow
+    //     cross-org használatát, ezért a delete-blockernek is lefedettnek
+    //     kell lennie minden hivatkozó publikációra. Bug-fix 2026-05-04
+    //     (B.0.3.f review által felvetett, de preexisting).
+    //   - `organization`: az org összes office-án belül (cross-office).
+    //   - `editorial_office`: csak a saját office.
+    //
+    // Pagination + match-cap a MAX_REFERENCES_PER_SCAN-nel (bounded payload
+    // + memória). A `select`-be bekerült az `organizationId` is, hogy a
+    // `public` ágon a hívó UI azonosítani tudja a más szervezet pubját.
+    const wfVisibility = WORKFLOW_VISIBILITY_VALUES.includes(workflowDoc.visibility)
+        ? workflowDoc.visibility
+        : WORKFLOW_VISIBILITY_DEFAULT;
     const usedByPublications = [];
     let cursor = null;
 
@@ -883,14 +894,16 @@ async function deleteWorkflow(ctx) {
     while (true) {
         const queries = [
             sdk.Query.equal('workflowId', workflowId),
-            sdk.Query.select(['$id', 'name', 'editorialOfficeId']),
+            sdk.Query.select(['$id', 'name', 'editorialOfficeId', 'organizationId']),
             sdk.Query.limit(CASCADE_BATCH_LIMIT)
         ];
-        if (isOrgScope) {
+        if (wfVisibility === 'organization') {
             queries.push(sdk.Query.equal('organizationId', orgId));
-        } else {
+        } else if (wfVisibility === 'editorial_office') {
             queries.push(sdk.Query.equal('editorialOfficeId', editorialOfficeId));
         }
+        // `public`: nincs scope-szűrő — a `workflowId` egyezés bármely
+        // szervezet publikációját megtalálja.
         if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
 
         const batch = await databases.listDocuments(
@@ -900,7 +913,12 @@ async function deleteWorkflow(ctx) {
         );
         if (batch.documents.length === 0) break;
         for (const doc of batch.documents) {
-            usedByPublications.push({ $id: doc.$id, name: doc.name });
+            usedByPublications.push({
+                $id: doc.$id,
+                name: doc.name,
+                editorialOfficeId: doc.editorialOfficeId,
+                organizationId: doc.organizationId
+            });
             if (usedByPublications.length >= MAX_REFERENCES_PER_SCAN) {
                 break pubScanLoop;
             }
