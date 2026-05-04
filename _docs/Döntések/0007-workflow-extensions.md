@@ -2,8 +2,10 @@
 tags: [adr, workflow, extensions, plugin, runtime]
 status: Proposed
 date: 2026-05-01
-updated: 2026-05-03
+updated: 2026-05-04
 ---
+
+> **Frissítés (2026-05-04)** — B.1 Adatmodell **implementálva** ([packages/maestro-server/functions/invite-to-organization/src/actions/schemas.js](packages/maestro-server/functions/invite-to-organization/src/actions/schemas.js) `bootstrapWorkflowExtensionSchema` + [packages/maestro-server/functions/invite-to-organization/src/teamHelpers.js](packages/maestro-server/functions/invite-to-organization/src/teamHelpers.js) `buildExtensionAclPerms`). A `workflowExtensions` collection schema létrehozható a CF `bootstrap_workflow_extension_schema` action-en keresztül (owner-only, idempotens). Új env var: `WORKFLOW_EXTENSIONS_COLLECTION_ID` (Phase 0-ban action-scoped guard). Részletek: [packages/maestro-server/CLAUDE.md](../../packages/maestro-server/CLAUDE.md) → "Idempotens workflowExtensions schema bootstrap".
 
 > **Frissítés (2026-05-03)** — B.0 tervi tisztázás (Codex review): a Phase 0 hatókör szűkítve. Jelölve a változások a "Phase-ek" szekcióban + új "Phase 0 hatókör-szűkítés" szakasz az implementáció előtt. Az "Adatmodell" tábla `paramSchema` sora halasztva-jellel.
 
@@ -26,7 +28,7 @@ Cél: **DB-ben tárolt, dinamikusan betöltött parancsok és validátorok**, a 
 | `name` | string | Emberi név (UI-ban látszik) |
 | `slug` | string (egyedi szerkesztőségen belül) | A workflow JSON-ban `ext.<slug>` hivatkozás |
 | `kind` | enum | `validator` \| `command` |
-| `scope` | enum | `article` \| `publication` (Phase 0: csak `article`) |
+| `scope` | enum | Phase 0: **csak `article`** a sémában (fail-closed); Phase 1+ `updateEnumAttribute` add-eli a `publication`-t |
 | `code` | string | InDesign ExtendScript forrás |
 | ~~`paramSchema`~~ | ~~string (JSON, opcionális)~~ | **HALASZTVA Phase 1+-ba** (B.0 2026-05-03 — UI-builder Phase 0-ban nem implementált, ld. "Phase 0 hatókör-szűkítés"). |
 | `visibility` | enum | `editorial_office` \| `organization` \| `public` (mint a workflow-knál, [[0006-workflow-lifecycle-scope]]) |

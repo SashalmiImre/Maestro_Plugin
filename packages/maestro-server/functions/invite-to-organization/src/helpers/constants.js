@@ -30,10 +30,27 @@ const WORKFLOW_VISIBILITY_DEFAULT = 'editorial_office';
 // fail-closed jelzés a hívóknak (delete_group/archive_group blocker scan).
 const PARSE_ERROR = 'parse_error';
 
+// B.1.1 (ADR 0007 Phase 0) — workflow extension enum-ok.
+// A `kind` mindkét Phase 0 értékét tartalmazza (`validator`, `command`).
+//
+// A `scope` Phase 0-ban CSAK `['article']` — fail-closed séma. A Phase 1+
+// `publication` scope egy schema-frissítéssel kerül be (`updateEnumAttribute`,
+// a `bootstrap_workflow_schema` `public` visibility late-add mintáját követve).
+// Ezzel a Phase 0-ban a séma maga rejekti az ismeretlen scope-ú write-okat —
+// a B.3 CRUD action-nek nem kell explicit `scope: 'publication'` guard-ot
+// adnia (defense-in-depth a sémából jön; Codex adversarial review B.1
+// 2026-05-04 Medium fix).
+const EXTENSION_KIND_VALUES = ['validator', 'command'];
+const EXTENSION_SCOPE_VALUES = ['article'];
+const EXTENSION_SCOPE_DEFAULT = 'article';
+
 module.exports = {
     CASCADE_BATCH_LIMIT,
     MAX_REFERENCES_PER_SCAN,
     WORKFLOW_VISIBILITY_VALUES,
     WORKFLOW_VISIBILITY_DEFAULT,
-    PARSE_ERROR
+    PARSE_ERROR,
+    EXTENSION_KIND_VALUES,
+    EXTENSION_SCOPE_VALUES,
+    EXTENSION_SCOPE_DEFAULT
 };

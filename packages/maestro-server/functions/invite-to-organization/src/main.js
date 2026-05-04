@@ -110,6 +110,7 @@ const ACTION_HANDLERS = {
     'bootstrap_publication_schema': schemaActions.bootstrapPublicationSchema,
     'bootstrap_groups_schema': schemaActions.bootstrapGroupsSchema,
     'bootstrap_permission_sets_schema': schemaActions.bootstrapPermissionSetsSchema,
+    'bootstrap_workflow_extension_schema': schemaActions.bootstrapWorkflowExtensionSchema,
     'backfill_tenant_acl': schemaActions.backfillTenantAcl,
 
     // Permission set CRUD (A.3 + A.3.6)
@@ -170,8 +171,12 @@ const ACTION_HANDLERS = {
 // ────────────────────────────────────────────────────────────────────────────
 // FÁJL-SZERKEZET (B.0.3 inkrementális action-bontás után, 2026-05-04)
 //
-// A `main.js` mostantól TÖMÖR action-router. A 36 action handler logikája 8
-// külön `actions/*.js` modulban él; a `main.js` csak az init + dispatch.
+// A `main.js` mostantól TÖMÖR action-router. A meglévő action handler-ek
+// logikája 8 külön `actions/*.js` modulban él; a `main.js` csak az init +
+// dispatch. Az ACTION_HANDLERS / VALID_ACTIONS halmaz a B-blokk feladatokkal
+// folyamatosan bővül — az aktuális méretet a `helpers/util.js` `VALID_ACTIONS`
+// set-je és az alábbi `ACTION_HANDLERS` map kulcs-halmaza ÉS a require-load-time
+// drift-check együtt fémjelzi.
 //
 // Konstansok és utility-k → `helpers/util.js` (B.0.3.0):
 //   DEFAULT_WORKFLOW, INVITE_VALIDITY_DAYS, TOKEN_BYTES, EMAIL_REGEX,
@@ -181,8 +186,10 @@ const ACTION_HANDLERS = {
 // Fázis 1 helper-extract → `helpers/{constants,cascade,compiledValidator,
 //   workflowDoc,groupSeed,deadlineValidator}.js`.
 //
-// Action handlers (B.0.3.a-h):
-//   - actions/schemas.js          — 4 bootstrap_*_schema + backfill_tenant_acl
+// Action handlers (B.0.3.a-h, + B.1 bővítések):
+//   - actions/schemas.js          — bootstrap_*_schema (workflow / publication /
+//                                   groups / permission_sets / workflow_extension)
+//                                   + backfill_tenant_acl
 //   - actions/orgs.js             — bootstrap/create/update/delete_organization
 //   - actions/invites.js          — create/accept/decline_invite/list_my_invites
 //   - actions/groups.js           — add/remove_group_member, create/update_metadata,
@@ -317,10 +324,13 @@ const ACTION_HANDLERS = {
  * - GROUP_MEMBERSHIPS_COLLECTION_ID
  * - WORKFLOWS_COLLECTION_ID
  * - PUBLICATIONS_COLLECTION_ID (Fázis 8 — a delete_* action-ökhöz)
- * - PERMISSION_SETS_COLLECTION_ID (A.1 / ADR 0008 — csak a
- *   `bootstrap_permission_sets_schema` action-höz)
- * - GROUP_PERMISSION_SETS_COLLECTION_ID (A.1 / ADR 0008 — csak a
- *   `bootstrap_permission_sets_schema` action-höz)
+ * - PERMISSION_SETS_COLLECTION_ID (A.1 / ADR 0008 — A.3.6 retrofit óta
+ *   GLOBÁLISAN KÖTELEZŐ a `userHasPermission()` member-path lookuphoz)
+ * - GROUP_PERMISSION_SETS_COLLECTION_ID (A.1 / ADR 0008 — A.3.6 retrofit
+ *   óta GLOBÁLISAN KÖTELEZŐ)
+ * - WORKFLOW_EXTENSIONS_COLLECTION_ID (B.1.1 / ADR 0007 Phase 0 — egyelőre
+ *   CSAK a `bootstrap_workflow_extension_schema` action-höz; a B.3 új CRUD
+ *   action-jeinek érkezésekor globális fail-fast-ba emelendő.)
  */
 
 // (Fázis 1 helper-extract, 2026-05-02): a `WORKFLOW_VISIBILITY_*`,
@@ -421,6 +431,13 @@ module.exports = async function ({ req, res, log, error }) {
         // vissza, ami a guardokban 403-at eredményezne — fail-fast jobb.
         const permissionSetsCollectionId = process.env.PERMISSION_SETS_COLLECTION_ID;
         const groupPermissionSetsCollectionId = process.env.GROUP_PERMISSION_SETS_COLLECTION_ID;
+        // B.1.1 (ADR 0007 Phase 0) — workflowExtensions collection. Phase 0-ban
+        // CSAK a `bootstrap_workflow_extension_schema` action-höz kötelező
+        // (action-szintű guard, ld. actions/schemas.js). A B.3 új CRUD action-jeinek
+        // (`create/update/archive_workflow_extension`) érkezésekor globális
+        // fail-fast-ba emelendő — a `PERMISSION_SETS_COLLECTION_ID` evolúciója
+        // mintájára (A.3.6, 2026-05-03).
+        const workflowExtensionsCollectionId = process.env.WORKFLOW_EXTENSIONS_COLLECTION_ID;
 
         // ── Fail-fast env var guard ──
         const missingEnvVars = [];
@@ -512,7 +529,8 @@ module.exports = async function ({ req, res, log, error }) {
             publicationsCollectionId,
             articlesCollectionId,
             permissionSetsCollectionId,
-            groupPermissionSetsCollectionId
+            groupPermissionSetsCollectionId,
+            workflowExtensionsCollectionId
         };
         const ctx = {
             databases,

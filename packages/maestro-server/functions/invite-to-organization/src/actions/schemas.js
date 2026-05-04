@@ -11,7 +11,10 @@
 const {
     WORKFLOW_VISIBILITY_VALUES,
     WORKFLOW_VISIBILITY_DEFAULT,
-    CASCADE_BATCH_LIMIT
+    CASCADE_BATCH_LIMIT,
+    EXTENSION_KIND_VALUES,
+    EXTENSION_SCOPE_VALUES,
+    EXTENSION_SCOPE_DEFAULT
 } = require('../helpers/constants.js');
 const {
     buildOrgTeamId,
@@ -21,6 +24,10 @@ const {
     ensureTeam,
     ensureTeamMembership
 } = require('../teamHelpers.js');
+const {
+    isAlreadyExists,
+    requireOwnerAnywhere
+} = require('../helpers/util.js');
 
 /**
  * ACTION='bootstrap_workflow_schema' (#30 + #80) — owner-only schema-bővítés
@@ -28,23 +35,11 @@ const {
  * `archivedAt` + 2 fulltext index. Idempotens (409 → skip).
  */
 async function bootstrapWorkflowSchema(ctx) {
-    const { databases, env, callerId, log, error, res, fail, sdk } = ctx;
+    const { databases, env, callerId, log, error, res, fail } = ctx;
 
-    // 1. Caller legalább egy org owner-e
-    const ownerships = await databases.listDocuments(
-        env.databaseId,
-        env.membershipsCollectionId,
-        [
-            sdk.Query.equal('userId', callerId),
-            sdk.Query.equal('role', 'owner'),
-            sdk.Query.limit(1)
-        ]
-    );
-    if (ownerships.documents.length === 0) {
-        return fail(res, 403, 'insufficient_role', {
-            requiredRole: 'owner'
-        });
-    }
+    // 1. Caller legalább egy org owner-e (single-source helper, B.1 simplify pass).
+    const denied = await requireOwnerAnywhere(ctx);
+    if (denied) return denied;
 
     const created = [];
     const updated = [];
@@ -71,7 +66,7 @@ async function bootstrapWorkflowSchema(ctx) {
         );
         created.push('visibility');
     } catch (err) {
-        if (err?.code === 409 || /already exists/i.test(err?.message || '')) {
+        if (isAlreadyExists(err)) {
             // Már létezik — próbáljuk bővíteni a `public` értékkel (#80).
             try {
                 await databases.updateEnumAttribute(
@@ -108,7 +103,7 @@ async function bootstrapWorkflowSchema(ctx) {
         );
         created.push('createdBy');
     } catch (err) {
-        if (err?.code === 409 || /already exists/i.test(err?.message || '')) {
+        if (isAlreadyExists(err)) {
             skipped.push('createdBy');
         } else {
             error(`[BootstrapWorkflowSchema] createdBy létrehozás hiba: ${err.message}`);
@@ -131,7 +126,7 @@ async function bootstrapWorkflowSchema(ctx) {
         );
         created.push('description');
     } catch (err) {
-        if (err?.code === 409 || /already exists/i.test(err?.message || '')) {
+        if (isAlreadyExists(err)) {
             skipped.push('description');
         } else {
             error(`[BootstrapWorkflowSchema] description létrehozás hiba: ${err.message}`);
@@ -153,7 +148,7 @@ async function bootstrapWorkflowSchema(ctx) {
         );
         created.push('archivedAt');
     } catch (err) {
-        if (err?.code === 409 || /already exists/i.test(err?.message || '')) {
+        if (isAlreadyExists(err)) {
             skipped.push('archivedAt');
         } else {
             error(`[BootstrapWorkflowSchema] archivedAt létrehozás hiba: ${err.message}`);
@@ -182,10 +177,14 @@ async function bootstrapWorkflowSchema(ctx) {
             created.push(`index:${key}`);
         } catch (err) {
             const msg = err?.message || '';
-            if (err?.code === 409 || /already exists/i.test(msg)) {
+            if (isAlreadyExists(err)) {
                 skipped.push(`index:${key}`);
-            } else if (err?.code === 400 || /not available|processing|unknown attribute/i.test(msg)) {
+            } else if (err?.code === 400 && /not available|processing|unknown attribute/i.test(msg)) {
                 // Attribute még nem elérhető — a user futtassa újra az action-t.
+                // (Korábbi `||` elírás minden 400-as hibát erre az ágra terelt —
+                // az érvénytelen index név / inkompatibilis attr-típus stb.
+                // hibákat is csendben elnyelte. 2026-05-04 fix: a 3 sibling
+                // action-nel egyező `&&` szigorúbb feltétel.)
                 indexesPending.push(key);
             } else {
                 error(`[BootstrapWorkflowSchema] index:${key} létrehozás hiba: ${err.message}`);
@@ -218,23 +217,11 @@ async function bootstrapWorkflowSchema(ctx) {
  * (curl vagy Console).
  */
 async function bootstrapPublicationSchema(ctx) {
-    const { databases, env, callerId, log, error, res, fail, sdk } = ctx;
+    const { databases, env, callerId, log, error, res, fail } = ctx;
 
-    // 1. Caller legalább egy org owner-e
-    const ownerships = await databases.listDocuments(
-        env.databaseId,
-        env.membershipsCollectionId,
-        [
-            sdk.Query.equal('userId', callerId),
-            sdk.Query.equal('role', 'owner'),
-            sdk.Query.limit(1)
-        ]
-    );
-    if (ownerships.documents.length === 0) {
-        return fail(res, 403, 'insufficient_role', {
-            requiredRole: 'owner'
-        });
-    }
+    // 1. Caller legalább egy org owner-e (single-source helper, B.1 simplify pass).
+    const denied = await requireOwnerAnywhere(ctx);
+    if (denied) return denied;
 
     // 2. publicationsCollectionId env var kötelező
     if (!env.publicationsCollectionId) {
@@ -264,7 +251,7 @@ async function bootstrapPublicationSchema(ctx) {
         );
         created.push('compiledWorkflowSnapshot');
     } catch (err) {
-        if (err?.code === 409 || /already exists/i.test(err?.message || '')) {
+        if (isAlreadyExists(err)) {
             skipped.push('compiledWorkflowSnapshot');
         } else {
             error(`[BootstrapPublicationSchema] compiledWorkflowSnapshot létrehozás hiba: ${err.message}`);
@@ -290,29 +277,14 @@ async function bootstrapPublicationSchema(ctx) {
  * egyszer manuálisan futtatni.
  */
 async function bootstrapGroupsSchema(ctx) {
-    const { databases, env, callerId, log, error, res, fail, sdk } = ctx;
+    const { databases, env, callerId, log, error, res, fail } = ctx;
 
-    // 1. Caller legalább egy org owner-e
-    const ownerships = await databases.listDocuments(
-        env.databaseId,
-        env.membershipsCollectionId,
-        [
-            sdk.Query.equal('userId', callerId),
-            sdk.Query.equal('role', 'owner'),
-            sdk.Query.limit(1)
-        ]
-    );
-    if (ownerships.documents.length === 0) {
-        return fail(res, 403, 'insufficient_role', {
-            requiredRole: 'owner'
-        });
-    }
+    // 1. Caller legalább egy org owner-e (single-source helper, B.1 simplify pass).
+    const denied = await requireOwnerAnywhere(ctx);
+    if (denied) return denied;
 
     const created = [];
     const skipped = [];
-
-    const isAlreadyExists = (err) =>
-        err?.code === 409 || /already exists/i.test(err?.message || '');
 
     // 2. description string attr (max 500 char, nullable)
     try {
@@ -466,23 +438,11 @@ async function bootstrapGroupsSchema(ctx) {
  * deploy után ellenőrizendő, hogy a `rowSecurity` flag aktív.
  */
 async function bootstrapPermissionSetsSchema(ctx) {
-    const { databases, env, callerId, log, error, res, fail, sdk } = ctx;
+    const { databases, env, callerId, log, error, res, fail } = ctx;
 
-    // 1. Caller legalább egy org owner-e
-    const ownerships = await databases.listDocuments(
-        env.databaseId,
-        env.membershipsCollectionId,
-        [
-            sdk.Query.equal('userId', callerId),
-            sdk.Query.equal('role', 'owner'),
-            sdk.Query.limit(1)
-        ]
-    );
-    if (ownerships.documents.length === 0) {
-        return fail(res, 403, 'insufficient_role', {
-            requiredRole: 'owner'
-        });
-    }
+    // 1. Caller legalább egy org owner-e (single-source helper, B.1 simplify pass).
+    const denied = await requireOwnerAnywhere(ctx);
+    if (denied) return denied;
 
     // 2. Action-szintű env var guard (csak itt kötelező).
     const missingActionEnvVars = [];
@@ -505,10 +465,7 @@ async function bootstrapPermissionSetsSchema(ctx) {
     // ── Lokális helperek (csak ezen az action-en belül) ──────────
     // A 3 ismétlődő boilerplate egységesítése: collection-create,
     // attribute-create-loop, index-create-loop. Az `isAlreadyExists`
-    // a 409 / "already exists" idempotens skip-feltételt fedi.
-    const isAlreadyExists = (err) =>
-        err?.code === 409 || /already exists/i.test(err?.message || '');
-
+    // a `helpers/util.js`-ből jön (B.1 simplify pass single-source extract).
     const ensureCollection = async (colId, label) => {
         try {
             await databases.createCollection(env.databaseId, colId, label, [], true, true);
@@ -627,6 +584,171 @@ async function bootstrapPermissionSetsSchema(ctx) {
     const note = indexesPending.length > 0
         ? 'Az attribútumok feldolgozása ~5-10s. Futtasd újra az action-t amíg az indexesPending lista kiürül.'
         : 'A schema kész. A.3.2-A.3.5 implementálva: bootstrap_organization + create_editorial_office automatikusan seedeli a default permission set-eket. CRUD action-ök (create_permission_set, update_permission_set, archive/restore_permission_set, assign/unassign_permission_set_to_group) elérhetőek. Következő lépés (A.3.6, külön commit): meglévő CF guardok lecserélése userHasPermission()-re.';
+
+    return res.json({
+        success: true,
+        created,
+        skipped,
+        indexesPending,
+        note
+    });
+}
+
+/**
+ * ACTION='bootstrap_workflow_extension_schema' (B.1.1, ADR 0007 Phase 0) —
+ * owner-only idempotens schema-create a `workflowExtensions` collectionre.
+ * Doc-szintű ACL (`documentSecurity: true`); a Console-on deploy után
+ * ellenőrizendő, hogy a `rowSecurity` flag aktív (különben a doc-szintű
+ * `buildExtensionAclPerms()` ACL nem érvényesül a Realtime push-on).
+ *
+ * Phase 0 hatókör-szűkítés (B.0.4): a `paramSchema` mező SZÁNDÉKOSAN
+ * kimaradt — a Phase 0 MVP nem támogat per-workflow extension-paraméter-
+ * átadást, az ExtendScript `code` önálló logikát kódol kötött I/O
+ * kontraktussal. A mező a Phase 1+ schema-frissítésben jön (additive,
+ * "nincs migráció" alapelv).
+ */
+async function bootstrapWorkflowExtensionSchema(ctx) {
+    const { databases, env, callerId, log, error, res, fail } = ctx;
+
+    // 1. Caller legalább egy org owner-e (single-source helper, B.1 simplify pass).
+    const denied = await requireOwnerAnywhere(ctx);
+    if (denied) return denied;
+
+    // 2. Action-szintű env var guard. A `WORKFLOW_EXTENSIONS_COLLECTION_ID`
+    // Phase 0-ban CSAK ennél az action-nél kötelező — a B.3 új CRUD
+    // action-jeinek érkezésekor a `main.js` globális fail-fast-ba emeli
+    // (a `PERMISSION_SETS_COLLECTION_ID` evolúciójának mintájára, A.3.6).
+    if (!env.workflowExtensionsCollectionId) {
+        return fail(res, 500, 'misconfigured', {
+            missing: ['WORKFLOW_EXTENSIONS_COLLECTION_ID']
+        });
+    }
+
+    const created = [];
+    const skipped = [];
+    const indexesPending = [];
+
+    // 3. Collection idempotens létrehozása `documentSecurity: true` flag-gel.
+    // Pattern: `bootstrapPermissionSetsSchema` (A.1) — collection-szintű
+    // perms üres, doc-szintű team ACL ad olvasási jogot
+    // (`buildExtensionAclPerms`).
+    try {
+        await databases.createCollection(
+            env.databaseId,
+            env.workflowExtensionsCollectionId,
+            'workflowExtensions',
+            [],
+            true,   // documentSecurity
+            true    // enabled
+        );
+        created.push('collection:workflowExtensions');
+    } catch (err) {
+        if (isAlreadyExists(err)) {
+            skipped.push('collection:workflowExtensions');
+        } else {
+            error(`[BootstrapWorkflowExtensionSchema] collection létrehozás hiba: ${err.message}`);
+            return fail(res, 500, 'schema_collection_failed', { error: err.message });
+        }
+    }
+
+    // 4. Attribútumok. A `name` 100 char (UI-ban látszik); a `slug` 64 char
+    // (`ext.<slug>` hivatkozás a workflow JSON-ban); a `code` 1_000_000 char
+    // (~1 MB, az ExtendScript forrás bőven elfér — tipikus 5-50 KB).
+    // Az `archivedAt` nullable (soft-delete marker, a meglévő workflow-k
+    // mintája). A `paramSchema` SZÁNDÉKOSAN kimaradt (B.0.1 / B.0.4).
+    // A `scope` enum Phase 0-ban CSAK `['article']` (fail-closed séma); a
+    // Phase 1+ `publication` érték utólagos `updateEnumAttribute`-tal kerül be,
+    // a `bootstrap_workflow_schema` `public` visibility late-add mintáját
+    // követve (Codex adversarial review B.1 2026-05-04 Medium fix).
+    const extensionAttrs = [
+        { name: 'name',              kind: 'string',   size: 100,  required: true },
+        { name: 'slug',              kind: 'string',   size: 64,   required: true },
+        { name: 'kind',              kind: 'enum',     values: EXTENSION_KIND_VALUES,     required: true,  default: null },
+        { name: 'scope',             kind: 'enum',     values: EXTENSION_SCOPE_VALUES,    required: false, default: EXTENSION_SCOPE_DEFAULT },
+        { name: 'code',              kind: 'string',   size: 1_000_000, required: true },
+        { name: 'visibility',        kind: 'enum',     values: WORKFLOW_VISIBILITY_VALUES, required: false, default: WORKFLOW_VISIBILITY_DEFAULT },
+        { name: 'archivedAt',        kind: 'datetime', required: false },
+        { name: 'editorialOfficeId', kind: 'string',   size: 36,   required: true },
+        { name: 'organizationId',    kind: 'string',   size: 36,   required: true },
+        { name: 'createdByUserId',   kind: 'string',   size: 36,   required: false }
+    ];
+
+    for (const attr of extensionAttrs) {
+        try {
+            if (attr.kind === 'datetime') {
+                await databases.createDatetimeAttribute(
+                    env.databaseId, env.workflowExtensionsCollectionId,
+                    attr.name, attr.required, null, false
+                );
+            } else if (attr.kind === 'enum') {
+                // Appwrite 1.9+: `required=true` + `default` kombináció
+                // hibát dob (`attribute_default_unsupported`). A `kind`
+                // mezőnél (required: true) ezért default=null;
+                // a `scope` és `visibility` (required: false) kap default-ot.
+                await databases.createEnumAttribute(
+                    env.databaseId, env.workflowExtensionsCollectionId,
+                    attr.name, attr.values, attr.required,
+                    attr.default ?? null, false
+                );
+            } else {
+                await databases.createStringAttribute(
+                    env.databaseId, env.workflowExtensionsCollectionId,
+                    attr.name, attr.size, attr.required, null, false
+                );
+            }
+            created.push(`workflowExtensions.${attr.name}`);
+        } catch (err) {
+            if (isAlreadyExists(err)) {
+                skipped.push(`workflowExtensions.${attr.name}`);
+            } else {
+                error(`[BootstrapWorkflowExtensionSchema] ${attr.name} attribútum hiba: ${err.message}`);
+                return fail(res, 500, 'schema_attribute_failed', {
+                    attribute: attr.name, error: err.message
+                });
+            }
+        }
+    }
+
+    // 5. Indexek. Az `office_slug_unique` az autoseed/duplikátum-blokkhoz
+    // (a workflow `ext.<slug>` resolverje office-szűkített Phase 0-ban,
+    // ezért az office-szintű uniqueness elegendő). A `office_idx` és
+    // `org_idx` a Realtime + listing query-khez szükséges.
+    const extensionIndexes = [
+        { key: 'office_slug_unique', type: 'unique', attrs: ['editorialOfficeId', 'slug'] },
+        { key: 'office_idx',         type: 'key',    attrs: ['editorialOfficeId'] },
+        { key: 'org_idx',            type: 'key',    attrs: ['organizationId'] }
+    ];
+
+    for (const idx of extensionIndexes) {
+        try {
+            await databases.createIndex(
+                env.databaseId, env.workflowExtensionsCollectionId,
+                idx.key, idx.type, idx.attrs
+            );
+            created.push(`workflowExtensions.index:${idx.key}`);
+        } catch (err) {
+            const msg = err?.message || '';
+            if (isAlreadyExists(err)) {
+                skipped.push(`workflowExtensions.index:${idx.key}`);
+            } else if (err?.code === 400 && /not available|processing|unknown attribute/i.test(msg)) {
+                // Az aszinkron attribute-feldolgozás 400-at pending-re tesszük;
+                // egyéb 400 propagáljon (érvénytelen index név, inkompatibilis
+                // attribute típus stb.).
+                indexesPending.push(`workflowExtensions.${idx.key}`);
+            } else {
+                error(`[BootstrapWorkflowExtensionSchema] index:${idx.key} hiba: ${err.message}`);
+                return fail(res, 500, 'schema_index_failed', {
+                    index: idx.key, error: err.message
+                });
+            }
+        }
+    }
+
+    log(`[BootstrapWorkflowExtensionSchema] User ${callerId}: created=[${created.join(',')}] skipped=[${skipped.join(',')}] indexesPending=[${indexesPending.join(',')}]`);
+
+    const note = indexesPending.length > 0
+        ? 'Az attribútumok feldolgozása ~5-10s. Futtasd újra az action-t amíg az indexesPending lista kiürül.'
+        : 'A schema kész. Console-on ellenőrizendő: a `workflowExtensions` collection `rowSecurity` flag-je aktív (különben a doc-szintű team ACL nem érvényesül a Realtime push-on). Következő lépés (B.3): create/update/archive_workflow_extension CRUD action-ök az `actions/extensions.js` modulban.';
 
     return res.json({
         success: true,
@@ -920,5 +1042,6 @@ module.exports = {
     bootstrapPublicationSchema,
     bootstrapGroupsSchema,
     bootstrapPermissionSetsSchema,
+    bootstrapWorkflowExtensionSchema,
     backfillTenantAcl
 };

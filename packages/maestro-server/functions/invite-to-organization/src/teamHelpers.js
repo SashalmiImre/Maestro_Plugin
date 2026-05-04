@@ -50,7 +50,8 @@ function buildOfficeAclPerms(editorialOfficeId) {
 }
 
 /**
- * Workflow dokumentum ACL — Feladat #80 (2026-04-20). Három scope-szint:
+ * 3-way visibility scope-pal védett dokumentum ACL — közös helper a
+ * workflow-k és workflow extension-ök számára (Feladat #80, ADR 0006/0007).
  *
  * - `editorial_office` → `read("team:office_${officeId}")`
  * - `organization`     → `read("team:org_${orgId}")`
@@ -62,30 +63,56 @@ function buildOfficeAclPerms(editorialOfficeId) {
  * (az API key felülírja a per-user write ACL-t, de a read szűrő aktív marad
  * a kliens SDK + Realtime push oldalon).
  *
- * `rowSecurity: true` kötelező a `workflows` collection-ön, különben a
- * collection-szintű `read("users")` felülírja ezt (lásd Fázis 2 Team ACL
- * deploy checklist, 60. feladat).
+ * `rowSecurity: true` kötelező az érintett collection-ön (workflows ÉS
+ * workflowExtensions), különben a collection-szintű `read("users")`
+ * felülírja a doc-szintű ACL-t (lásd Fázis 2 Team ACL deploy checklist,
+ * 60. feladat).
  *
+ * Belső helper — a publikus wrapper-ek (`buildWorkflowAclPerms` /
+ * `buildExtensionAclPerms`) hardcode-olják a `who` címet, hogy a hibaüzenet
+ * stack trace-ben látsszon, melyik public API-ról propagált. NEM exportálva
+ * (YAGNI — egyetlen ad-hoc hívóhely sincs a wrapper-eken kívül).
+ *
+ * @param {string} who - debug-cím a hibaüzenethez (csak belső használatra)
  * @param {string} visibility - 'editorial_office' | 'organization' | 'public'
  * @param {string} organizationId
  * @param {string} editorialOfficeId
  * @returns {string[]} Appwrite permission string-ek
  */
-function buildWorkflowAclPerms(visibility, organizationId, editorialOfficeId) {
+function buildVisibilityAclPerms(who, visibility, organizationId, editorialOfficeId) {
     if (visibility === 'public') {
         return [sdk.Permission.read(sdk.Role.users())];
     }
     if (visibility === 'organization') {
         if (!organizationId) {
-            throw new Error('buildWorkflowAclPerms: organizationId required for organization visibility');
+            throw new Error(`${who}: organizationId required for organization visibility`);
         }
         return [sdk.Permission.read(sdk.Role.team(buildOrgTeamId(organizationId)))];
     }
     // editorial_office (default) vagy ismeretlen legacy érték
     if (!editorialOfficeId) {
-        throw new Error('buildWorkflowAclPerms: editorialOfficeId required for editorial_office visibility');
+        throw new Error(`${who}: editorialOfficeId required for editorial_office visibility`);
     }
     return [sdk.Permission.read(sdk.Role.team(buildOfficeTeamId(editorialOfficeId)))];
+}
+
+/**
+ * Workflow dokumentum ACL — Feladat #80 (2026-04-20). A
+ * `buildVisibilityAclPerms` thin wrapper-je, a hibaüzenetekben
+ * `buildWorkflowAclPerms` cím marad.
+ */
+function buildWorkflowAclPerms(visibility, organizationId, editorialOfficeId) {
+    return buildVisibilityAclPerms('buildWorkflowAclPerms', visibility, organizationId, editorialOfficeId);
+}
+
+/**
+ * Workflow extension dokumentum ACL — B.1.2 (ADR 0007 Phase 0). A
+ * `buildVisibilityAclPerms` thin wrapper-je. A workflow-kkal IDENTIKUS
+ * 3-way scope szemantika; külön helper a hívóhelyi olvashatóság miatt
+ * (`actions/extensions.js` ezt fogja használni a B.3 CRUD action-ökben).
+ */
+function buildExtensionAclPerms(visibility, organizationId, editorialOfficeId) {
+    return buildVisibilityAclPerms('buildExtensionAclPerms', visibility, organizationId, editorialOfficeId);
 }
 
 // ── Idempotens Team műveletek ───────────────────────────────────────────────
@@ -212,6 +239,7 @@ module.exports = {
     buildOrgAclPerms,
     buildOfficeAclPerms,
     buildWorkflowAclPerms,
+    buildExtensionAclPerms,
     ensureTeam,
     ensureTeamMembership,
     removeTeamMembership,

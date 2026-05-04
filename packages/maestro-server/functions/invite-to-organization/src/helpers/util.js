@@ -39,6 +39,8 @@ const VALID_ACTIONS = new Set([
     'bootstrap_publication_schema',
     'bootstrap_permission_sets_schema',
     'bootstrap_groups_schema',
+    // B.1.1 (ADR 0007 Phase 0) — workflowExtensions collection schema-create.
+    'bootstrap_workflow_extension_schema',
     'create_workflow', 'update_workflow',
     'update_workflow_metadata',
     'delete_workflow', 'duplicate_workflow',
@@ -104,6 +106,51 @@ function sanitizeString(value, maxLength) {
     return trimmed;
 }
 
+/**
+ * Idempotens "already exists" hibafelismerés Appwrite SDK call-okhoz.
+ * 409 status code VAGY a hibaüzenet `already exists` szöveget tartalmaz.
+ *
+ * Korábban 5 schema-bootstrap action duplikálta inline lambdaként —
+ * single-source extract a B.1 simplify pass-ben (2026-05-04).
+ */
+function isAlreadyExists(err) {
+    return err?.code === 409 || /already exists/i.test(err?.message || '');
+}
+
+/**
+ * Globális owner-only auth check a `bootstrap_*_schema` és más privileged
+ * site-szintű action-ökhöz: a caller LEGALÁBB EGY orgban owner kell legyen
+ * (nem scope-szűkített orgId-re — ezért "anywhere"). Ha nem: 403
+ * `insufficient_role` response.
+ *
+ * Korábban 5 schema-bootstrap action duplikálta inline-ban (12 soros block) —
+ * single-source extract a B.1 simplify pass-ben (2026-05-04).
+ *
+ * @param {Object} ctx - a CF entry-point által épített handler-context.
+ * @returns {Promise<Object|null>} `null` ha a caller jogosult; egyébként a
+ *   `fail(res, 403, ...)` által visszaadott response objektumot, amit a hívónak
+ *   `return`-elnie kell. Idiomatikus hívás:
+ *
+ *     const denied = await requireOwnerAnywhere(ctx);
+ *     if (denied) return denied;
+ */
+async function requireOwnerAnywhere(ctx) {
+    const { databases, env, callerId, sdk, res, fail: failFn } = ctx;
+    const ownerships = await databases.listDocuments(
+        env.databaseId,
+        env.membershipsCollectionId,
+        [
+            sdk.Query.equal('userId', callerId),
+            sdk.Query.equal('role', 'owner'),
+            sdk.Query.limit(1)
+        ]
+    );
+    if (ownerships.documents.length === 0) {
+        return failFn(res, 403, 'insufficient_role', { requiredRole: 'owner' });
+    }
+    return null;
+}
+
 module.exports = {
     DEFAULT_WORKFLOW,
     INVITE_VALIDITY_DAYS,
@@ -116,5 +163,7 @@ module.exports = {
     HUN_ACCENT_MAP,
     fail,
     slugifyName,
-    sanitizeString
+    sanitizeString,
+    isAlreadyExists,
+    requireOwnerAnywhere
 };
