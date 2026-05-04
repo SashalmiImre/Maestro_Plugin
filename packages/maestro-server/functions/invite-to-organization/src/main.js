@@ -69,80 +69,140 @@ const officeActions = require("./actions/offices.js");
 const publicationActions = require("./actions/publications.js");
 
 // ────────────────────────────────────────────────────────────────────────────
-// TARTALOMJEGYZÉK (Fázis 1, 2026-05-02; B.0.3.0 update 2026-05-04)
+// ACTION HANDLERS (B.0.3 plan 3. pont, 2026-05-04)
 //
-// A fájl 36 action handler szekciót tartalmaz. Az alábbi sorszámok a B.0.3.0
-// előtti (Fázis 1 helper-extract utáni) állapotot tükrözik megközelítőleg —
-// a `helpers/util.js` extract után minden szekció kb. ~66 sorral feljebb
-// csúszott. Az inkrementális B.0.3.a-h szétbontás során ezek a szekciók
-// külön `actions/*.js` modulokba kerülnek; a TOC-ot a teljes split után
-// frissítjük (vagy elhagyjuk, ha a `main.js` már csak action-router lesz).
-// Pontos sorszámért: `grep -n "if (action ===" main.js`.
+// Dispatch table: action-string → handler függvény. A CF entry-pointja
+// ezen keresztül routeolja a request-et a megfelelő `actions/*.js`
+// modulra. Az alias action-ök (pl. `bootstrap_organization` és
+// `create_organization`) ugyanarra a handler-re mutatnak, és a handler
+// `ctx.action`-ből dönt a flow-ról (lásd `bootstrapOrCreateOrganization`,
+// `archiveOrRestoreGroup`, `archiveOrRestoreWorkflow`,
+// `archiveOrRestorePermissionSet`, `updateGroupMetadata` (`rename_group`
+// alias)).
 //
-// Konstansok és utility-k:
-//   `DEFAULT_WORKFLOW`, `INVITE_VALIDITY_DAYS`, `TOKEN_BYTES`, `EMAIL_REGEX`,
-//   `VALID_ACTIONS`, `SLUG_REGEX`, `SLUG_MAX_LENGTH`, `NAME_MAX_LENGTH`,
-//   `fail()`, `HUN_ACCENT_MAP`, `slugifyName()`, `sanitizeString()`
-//   → `helpers/util.js` (B.0.3.0).
+// A map kulcsainak halmaza ÉS a `VALID_ACTIONS` (helpers/util.js) halmaza
+// szinkronban kell legyen. Drift-rizikó: ha új action-t adnak hozzá, mindkét
+// helyen frissíteni kell. Defense-in-depth: a router 500-at ad ha a két
+// lista szétcsúszik (lásd lent a fallback ágat).
+// ────────────────────────────────────────────────────────────────────────────
+const ACTION_HANDLERS = {
+    // Tenant onboarding & invite flow
+    'bootstrap_organization': orgActions.bootstrapOrCreateOrganization,
+    'create_organization': orgActions.bootstrapOrCreateOrganization,
+    'create': inviteActions.createInvite,
+    'accept': inviteActions.acceptInvite,
+    'list_my_invites': inviteActions.listMyInvites,
+    'decline_invite': inviteActions.declineInvite,
+    'leave_organization': officeActions.leaveOrganization,
+
+    // Group CRUD (A.2 + A.3.6)
+    'add_group_member': groupActions.addGroupMember,
+    'remove_group_member': groupActions.removeGroupMember,
+    'create_group': groupActions.createGroup,
+    'update_group_metadata': groupActions.updateGroupMetadata,
+    'rename_group': groupActions.updateGroupMetadata,
+    'archive_group': groupActions.archiveOrRestoreGroup,
+    'restore_group': groupActions.archiveOrRestoreGroup,
+    'delete_group': groupActions.deleteGroup,
+
+    // Schema bootstrap (owner-only) + ACL backfill
+    'bootstrap_workflow_schema': schemaActions.bootstrapWorkflowSchema,
+    'bootstrap_publication_schema': schemaActions.bootstrapPublicationSchema,
+    'bootstrap_groups_schema': schemaActions.bootstrapGroupsSchema,
+    'bootstrap_permission_sets_schema': schemaActions.bootstrapPermissionSetsSchema,
+    'backfill_tenant_acl': schemaActions.backfillTenantAcl,
+
+    // Permission set CRUD (A.3 + A.3.6)
+    'create_permission_set': permissionSetActions.createPermissionSet,
+    'update_permission_set': permissionSetActions.updatePermissionSet,
+    'archive_permission_set': permissionSetActions.archiveOrRestorePermissionSet,
+    'restore_permission_set': permissionSetActions.archiveOrRestorePermissionSet,
+    'assign_permission_set_to_group': permissionSetActions.assignPermissionSetToGroup,
+    'unassign_permission_set_from_group': permissionSetActions.unassignPermissionSetFromGroup,
+
+    // Workflow CRUD (#30/#80/#81 + A.3.6)
+    'create_workflow': workflowActions.createWorkflow,
+    'update_workflow': workflowActions.updateWorkflow,
+    'update_workflow_metadata': workflowActions.updateWorkflowMetadata,
+    'archive_workflow': workflowActions.archiveOrRestoreWorkflow,
+    'restore_workflow': workflowActions.archiveOrRestoreWorkflow,
+    'delete_workflow': workflowActions.deleteWorkflow,
+    'duplicate_workflow': workflowActions.duplicateWorkflow,
+
+    // Publication actions (A.2.2-A.2.10 + A.3.6)
+    'create_publication_with_workflow': publicationActions.createPublicationWithWorkflow,
+    'assign_workflow_to_publication': publicationActions.assignWorkflowToPublication,
+    'activate_publication': publicationActions.activatePublication,
+
+    // Org & office CRUD (A.3.6 org-scope/office-scope)
+    'update_organization': orgActions.updateOrganization,
+    'create_editorial_office': officeActions.createEditorialOffice,
+    'update_editorial_office': officeActions.updateEditorialOffice,
+    'delete_editorial_office': officeActions.deleteEditorialOffice,
+    'delete_organization': orgActions.deleteOrganization
+};
+
+// Module-load-time invariáns: a `VALID_ACTIONS` és `ACTION_HANDLERS`
+// kulcs-halmazának egyeznie kell. Drift fail-fast-ot dob a require-load-kor
+// (cold start container init → a CF az első hívásnál azonnal kibukik 500-zal,
+// nem szétszórt 500/misconfigured-ekkel a futási idő során).
+//
+// Két irány:
+//   - VALID_ACTIONS-ban van, ACTION_HANDLERS-ben nincs → halott eljutás a
+//     router fallback-jéhez (500 misconfigured runtime — defenseive-in-depth)
+//   - ACTION_HANDLERS-ben van, VALID_ACTIONS-ban nincs → halott kód (a CF entry
+//     `VALID_ACTIONS.has` guard-ja eldobja, mielőtt a router-hez érne)
+{
+    const handlerKeys = new Set(Object.keys(ACTION_HANDLERS));
+    const validKeys = VALID_ACTIONS;
+    const missing = [...validKeys].filter(k => !handlerKeys.has(k));
+    const extra = [...handlerKeys].filter(k => !validKeys.has(k));
+    if (missing.length > 0 || extra.length > 0) {
+        const err = new Error(
+            `[Router] ACTION_HANDLERS / VALID_ACTIONS drift: `
+            + `missing=[${missing.join(',')}], extra=[${extra.join(',')}]`
+        );
+        // Dobás require-load-time → cold start fail-fast.
+        throw err;
+    }
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// FÁJL-SZERKEZET (B.0.3 inkrementális action-bontás után, 2026-05-04)
+//
+// A `main.js` mostantól TÖMÖR action-router. A 36 action handler logikája 8
+// külön `actions/*.js` modulban él; a `main.js` csak az init + dispatch.
+//
+// Konstansok és utility-k → `helpers/util.js` (B.0.3.0):
+//   DEFAULT_WORKFLOW, INVITE_VALIDITY_DAYS, TOKEN_BYTES, EMAIL_REGEX,
+//   VALID_ACTIONS, SLUG_REGEX, SLUG_MAX_LENGTH, NAME_MAX_LENGTH,
+//   HUN_ACCENT_MAP, fail(), slugifyName(), sanitizeString().
+//
+// Fázis 1 helper-extract → `helpers/{constants,cascade,compiledValidator,
+//   workflowDoc,groupSeed,deadlineValidator}.js`.
+//
+// Action handlers (B.0.3.a-h):
+//   - actions/schemas.js          — 4 bootstrap_*_schema + backfill_tenant_acl
+//   - actions/orgs.js             — bootstrap/create/update/delete_organization
+//   - actions/invites.js          — create/accept/decline_invite/list_my_invites
+//   - actions/groups.js           — add/remove_group_member, create/update_metadata,
+//                                   rename_group alias, archive/restore/delete_group
+//   - actions/permissionSets.js   — create/update/archive/restore_permission_set,
+//                                   assign/unassign_permission_set_to_group
+//   - actions/workflows.js        — create/update/update_metadata/archive/restore/
+//                                   delete/duplicate_workflow
+//   - actions/offices.js          — leave_organization, create/update/delete_editorial_office
+//   - actions/publications.js     — create_publication_with_workflow (A.2.10 atomic),
+//                                   assign_workflow_to_publication, activate_publication
+//
+// Tilos import-irány: `actions/*` → `helpers/*` → `permissions.js` /
+// `teamHelpers.js`. Visszafelé NEM (CommonJS ciklikus require csendben
+// fél-inicializált exports-ot ad).
 //
 // CF entry-point: `module.exports = async function ({ req, res, log, error })`.
-//   Init: payload parse, action whitelist, callerId header, SDK + env-guard,
-//   `permissionEnv` + `permissionContext` + `callerUser` (A.3.6 / A.3.7).
-//
-// ACTION HANDLEREK (megközelítő sorszámok — futtatáskor pontosak lehetnek
-//   a ±5-10 soros eltolódásig):
-//
-//   Tenant onboarding & invite flow:
-//     - bootstrap_organization | create_organization     ~ 418
-//     - create (admin invite)                            ~ 759
-//     - accept                                           ~ 910
-//     - list_my_invites                                  ~ 1085
-//     - decline_invite                                   ~ 1207
-//     - leave_organization                               ~ 1303
-//
-//   Group CRUD (A.2 + A.3.6):
-//     - add_group_member                                 ~ 1540
-//     - remove_group_member                              ~ 1651
-//     - create_group                                     ~ 1806
-//     - update_group_metadata | rename_group             ~ 1954
-//     - archive_group | restore_group                    ~ 2215
-//     - delete_group                                     ~ 2517
-//
-//   Schema bootstrap (owner-only):
-//     - bootstrap_workflow_schema                        ~ 2822
-//     - bootstrap_publication_schema                     ~ 3016
-//     - bootstrap_groups_schema                          ~ 3094
-//     - bootstrap_permission_sets_schema                 ~ 3275
-//
-//   Permission set CRUD (A.3 + A.3.6):
-//     - create_permission_set                            ~ 3464
-//     - update_permission_set                            ~ 3601
-//     - archive_permission_set | restore_permission_set  ~ 3741
-//     - assign_permission_set_to_group                   ~ 3853
-//     - unassign_permission_set_from_group               ~ 3997
-//
-//   Workflow CRUD (#30/#80/#81 + A.3.6):
-//     - create_workflow                                  ~ 4093
-//     - create_editorial_office (LEGACY org-role check)  ~ 4261
-//     - update_workflow                                  ~ 4501
-//     - update_workflow_metadata                         ~ 4677
-//     - archive_workflow | restore_workflow              ~ 4983
-//     - delete_workflow                                  ~ 5109
-//     - duplicate_workflow                               ~ 5271
-//
-//   Publication actions (A.2.2-A.2.10 + A.3.6):
-//     - create_publication_with_workflow (dual-check)    ~ 5508
-//     - assign_workflow_to_publication                   ~ 5710
-//     - activate_publication                             ~ 5898
-//
-//   Org & office CRUD (A.3.6 org-scope):
-//     - update_organization (BREAKING: org.rename owner) ~ 6112
-//     - update_editorial_office                          ~ 6183
-//     - delete_editorial_office                          ~ 6283
-//     - delete_organization (org.delete owner-only)      ~ 6392
-//
-//   Tenant ACL migráció (Fázis 2 / #60):
-//     - backfill_tenant_acl                              ~ 6600
+//   Init: payload parse + action whitelist + callerId header + SDK
+//   + env-guard + `permissionEnv` + `permissionContext` + `callerUser`
+//   + ctx (handler-context) → `ACTION_HANDLERS[action](ctx)`.
 // ────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -473,257 +533,24 @@ module.exports = async function ({ req, res, log, error }) {
         };
 
         // ════════════════════════════════════════════════════════
-        // ACTION = 'bootstrap_organization' | 'create_organization' (B.0.3.b)
+        // Action router (B.0.3 plan 3. pont): if-elif lánc helyett
+        // dispatch table. A `VALID_ACTIONS` (helpers/util.js) már
+        // szűrte az ismeretlen action-öket, így a lookup soha nem
+        // ad undefined-et — defense-in-depth fallback alább.
         // ════════════════════════════════════════════════════════
-        if (action === 'bootstrap_organization' || action === 'create_organization') {
-            return await orgActions.bootstrapOrCreateOrganization(ctx);
+        const handler = ACTION_HANDLERS[action];
+        if (handler) {
+            return await handler(ctx);
         }
 
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'create' (B.0.3.c — actions/invites.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'create') {
-            return await inviteActions.createInvite(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'accept' (B.0.3.c — actions/invites.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'accept') {
-            return await inviteActions.acceptInvite(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'list_my_invites' (B.0.3.c — actions/invites.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'list_my_invites') {
-            return await inviteActions.listMyInvites(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'decline_invite' (B.0.3.c — actions/invites.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'decline_invite') {
-            return await inviteActions.declineInvite(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'leave_organization' (B.0.3.g — actions/offices.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'leave_organization') {
-            return await officeActions.leaveOrganization(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'add_group_member' (B.0.3.d — actions/groups.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'add_group_member') {
-            return await groupActions.addGroupMember(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'remove_group_member' (B.0.3.d — actions/groups.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'remove_group_member') {
-            return await groupActions.removeGroupMember(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'create_group' (B.0.3.d — actions/groups.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'create_group') {
-            return await groupActions.createGroup(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'update_group_metadata' | 'rename_group' (B.0.3.d)
-        // ════════════════════════════════════════════════════════
-        if (action === 'update_group_metadata' || action === 'rename_group') {
-            return await groupActions.updateGroupMetadata(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'archive_group' | 'restore_group' (B.0.3.d)
-        // ════════════════════════════════════════════════════════
-        if (action === 'archive_group' || action === 'restore_group') {
-            return await groupActions.archiveOrRestoreGroup(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'delete_group' (B.0.3.d — actions/groups.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'delete_group') {
-            return await groupActions.deleteGroup(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'bootstrap_workflow_schema' (B.0.3.a — actions/schemas.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'bootstrap_workflow_schema') {
-            return await schemaActions.bootstrapWorkflowSchema(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'bootstrap_publication_schema' (B.0.3.a — actions/schemas.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'bootstrap_publication_schema') {
-            return await schemaActions.bootstrapPublicationSchema(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'bootstrap_groups_schema' (B.0.3.a — actions/schemas.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'bootstrap_groups_schema') {
-            return await schemaActions.bootstrapGroupsSchema(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'bootstrap_permission_sets_schema' (B.0.3.a — actions/schemas.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'bootstrap_permission_sets_schema') {
-            return await schemaActions.bootstrapPermissionSetsSchema(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'create_permission_set' (B.0.3.e — actions/permissionSets.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'create_permission_set') {
-            return await permissionSetActions.createPermissionSet(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'update_permission_set' (B.0.3.e — actions/permissionSets.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'update_permission_set') {
-            return await permissionSetActions.updatePermissionSet(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'archive_permission_set' | 'restore_permission_set' (B.0.3.e)
-        // ════════════════════════════════════════════════════════
-        if (action === 'archive_permission_set' || action === 'restore_permission_set') {
-            return await permissionSetActions.archiveOrRestorePermissionSet(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'assign_permission_set_to_group' (B.0.3.e)
-        // ════════════════════════════════════════════════════════
-        if (action === 'assign_permission_set_to_group') {
-            return await permissionSetActions.assignPermissionSetToGroup(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'unassign_permission_set_from_group' (B.0.3.e)
-        // ════════════════════════════════════════════════════════
-        if (action === 'unassign_permission_set_from_group') {
-            return await permissionSetActions.unassignPermissionSetFromGroup(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'create_workflow' (B.0.3.f — actions/workflows.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'create_workflow') {
-            return await workflowActions.createWorkflow(ctx);
-        }
-
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'create_editorial_office' (B.0.3.g — actions/offices.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'create_editorial_office') {
-            return await officeActions.createEditorialOffice(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'update_workflow' (B.0.3.f — actions/workflows.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'update_workflow') {
-            return await workflowActions.updateWorkflow(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'update_workflow_metadata' (B.0.3.f — actions/workflows.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'update_workflow_metadata') {
-            return await workflowActions.updateWorkflowMetadata(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'archive_workflow' | 'restore_workflow' (B.0.3.f — actions/workflows.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'archive_workflow' || action === 'restore_workflow') {
-            return await workflowActions.archiveOrRestoreWorkflow(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'delete_workflow' (B.0.3.f — actions/workflows.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'delete_workflow') {
-            return await workflowActions.deleteWorkflow(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'duplicate_workflow' (B.0.3.f — actions/workflows.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'duplicate_workflow') {
-            return await workflowActions.duplicateWorkflow(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'create_publication_with_workflow' (B.0.3.h — actions/publications.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'create_publication_with_workflow') {
-            return await publicationActions.createPublicationWithWorkflow(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'assign_workflow_to_publication' (B.0.3.h)
-        // ════════════════════════════════════════════════════════
-        if (action === 'assign_workflow_to_publication') {
-            return await publicationActions.assignWorkflowToPublication(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'activate_publication' (B.0.3.h)
-        // ════════════════════════════════════════════════════════
-        if (action === 'activate_publication') {
-            return await publicationActions.activatePublication(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════════════
-        // ACTION = 'update_organization' (B.0.3.b — actions/orgs.js)
-        // ════════════════════════════════════════════════════════════════
-        if (action === 'update_organization') {
-            return await orgActions.updateOrganization(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'update_editorial_office' (B.0.3.g — actions/offices.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'update_editorial_office') {
-            return await officeActions.updateEditorialOffice(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════
-        // ACTION = 'delete_editorial_office' (B.0.3.g — actions/offices.js)
-        // ════════════════════════════════════════════════════════
-        if (action === 'delete_editorial_office') {
-            return await officeActions.deleteEditorialOffice(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════════════
-        // ACTION = 'delete_organization' (B.0.3.b — actions/orgs.js)
-        // ════════════════════════════════════════════════════════════════
-        if (action === 'delete_organization') {
-            return await orgActions.deleteOrganization(ctx);
-        }
-
-        // ════════════════════════════════════════════════════════════════
-        // ACTION = 'backfill_tenant_acl' (B.0.3.a — actions/schemas.js)
-        // ════════════════════════════════════════════════════════════════
-        if (action === 'backfill_tenant_acl') {
-            return await schemaActions.backfillTenantAcl(ctx);
-        }
+        // Unreachable a `VALID_ACTIONS.has(action)` guard miatt — de
+        // defense-in-depth: ha a két lista szétcsúszik (pl. új action
+        // VALID_ACTIONS-ban, de handler-map-ben nincs), 500-zal
+        // jelezzük a misconfig-et és nem 200/undefined-del.
+        error(`[Router] Unmapped action passed VALID_ACTIONS guard: ${action}`);
+        return fail(res, 500, 'misconfigured', {
+            note: `Action "${action}" valid, de nincs handler-je. Frissítsd az ACTION_HANDLERS map-et.`
+        });
 
     } catch (err) {
         error(`Function hiba: ${err.message}`);
