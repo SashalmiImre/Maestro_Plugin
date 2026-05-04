@@ -508,11 +508,18 @@ module.exports = async function ({ req, res, log, error }) {
         // érintette a snapshot mezőt), a publikáció aktivált marad **stale
         // extension snapshot-tal**.
         //
-        // Megoldás: ha a payload bármilyen módon érinti az `isActivated`-ot
-        // ÉS a caller nem SERVER_GUARD, deaktiválunk + minden snapshot null-ra.
-        // A re-aktivációhoz a felhasználónak az `activate_publication` action-en
-        // keresztül kell mennie — az authoritatív path frissíti mind a két
-        // snapshotot konzisztensen.
+        // Megoldás: ha a payload `isActivated: true`-t küld ÉS a caller nem
+        // SERVER_GUARD, deaktiválunk + minden snapshot null-ra. A re-aktivációhoz
+        // a felhasználónak az `activate_publication` action-en keresztül kell
+        // mennie — az authoritatív path frissíti mind a két snapshotot konzisztensen.
+        //
+        // **A guard csak az `isActivated: true` aktiváló payload-okra szóljon**
+        // (Codex stop-time review 2026-05-04 fix): a Dashboard `GeneralTab`
+        // deactivate gomb és a sikertelen aktiválás revertelő logikája egyaránt
+        // küld `isActivated: false` payload-ot — ezeket NEM szabad blokkolni.
+        // A korábbi `Object.prototype.hasOwnProperty.call(payload, 'isActivated')`
+        // check a normál deaktiválás write-okat is fail-closed-deaktiválta volna
+        // (overreach + felesleges snapshot-nullázás).
         //
         // SERVER_GUARD-os hívás (az `activate_publication` CF action) a
         // függvény tetején már skip-pel — ide csak külső hívások futnak.
@@ -524,14 +531,12 @@ module.exports = async function ({ req, res, log, error }) {
         // logika, ami a `invite-to-organization/helpers/extensionSnapshot.js`-ben
         // él. Cross-CF inline duplikáció kockázata > a fail-closed deaktiválás
         // előnye.
-        // 5c-A: minden direkt API aktiváció (a kliens payload-jában megjelenő
-        // `isActivated` mező + nem-SERVER_GUARD caller) fail-closed deaktiválás.
-        const isActivationPayloadDirect = Object.prototype.hasOwnProperty.call(payload, 'isActivated');
-        if (
-            isActivationPayloadDirect
-            && payload.modifiedByClientId !== SERVER_GUARD_ID
-            && corrections.isActivated === undefined
-        ) {
+        // 5c-A: a kliens payload-jában `isActivated: true` érték + nem-SERVER_GUARD
+        // caller → fail-closed deaktiválás.
+        const isDirectActivation =
+            payload.isActivated === true
+            && payload.modifiedByClientId !== SERVER_GUARD_ID;
+        if (isDirectActivation && corrections.isActivated === undefined) {
             error(`[DirectActivation] ${freshDoc.$id} deaktiválva — direkt API aktiváció tilos, csak az activate_publication CF action engedett (caller=${callerId || 'unknown'})`);
             corrections.isActivated = false;
             corrections.activatedAt = null;
