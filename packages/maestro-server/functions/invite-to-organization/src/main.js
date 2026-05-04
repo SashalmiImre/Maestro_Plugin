@@ -59,6 +59,11 @@ const {
     sanitizeString
 } = require("./helpers/util.js");
 
+// B.0.3.a (2026-05-04) — schema bootstrap action-ok kiszervezve külön modulba.
+// Inkrementális action-bontás (Codex (C) opció): a `main.js`-ben csak az
+// action-router maradt e szekciókhoz, a logika az `actions/schemas.js`-ben él.
+const schemaActions = require("./actions/schemas.js");
+
 // ────────────────────────────────────────────────────────────────────────────
 // TARTALOMJEGYZÉK (Fázis 1, 2026-05-02; B.0.3.0 update 2026-05-04)
 //
@@ -408,6 +413,58 @@ module.exports = async function ({ req, res, log, error }) {
             .map(s => s.trim())
             .filter(Boolean);
         const callerUser = { id: callerId, labels: callerLabels };
+
+        // B.0.3 (2026-05-04) — közös handler-context.
+        // A `actions/*.js` modulok ezt az egy objektumot kapják paraméterként;
+        // mindegyik handler destrukturálja, amire szüksége van. Az `env` plain
+        // object minden collection ID-vel; a `permissionEnv` és
+        // `permissionContext` az A.3.6 retrofit-elt action-öknek kell.
+        //
+        // ctx shape (kanonikus — ne adjunk hozzá ad-hoc mezőt, ne átnevezzünk):
+        //   - databases:   sdk.Databases példány (API key-jel)
+        //   - usersApi:    sdk.Users példány
+        //   - teamsApi:    sdk.Teams példány
+        //   - sdk:         a `node-appwrite` modul (Query, ID, Permission, Role)
+        //   - env:         { databaseId, ...CollectionId } — minden CF env var
+        //   - callerId:    string — `x-appwrite-user-id` header
+        //   - callerUser:  { id, labels: string[] } — globális admin shortcut-hoz
+        //   - payload:     parsed `req.body` JSON
+        //   - log/error:   Appwrite Function logger callback-ek
+        //   - res:         Appwrite Function `res` (res.json + statusCode)
+        //   - fail:        helpers/util.js fail() — `{ success: false, reason, ... }`
+        //   - permissionEnv:    A.3.6 — `permissions.userHasPermission` env
+        //   - permissionContext: A.3.6 — `permissions.createPermissionContext()` cache
+        const env = {
+            databaseId,
+            organizationsCollectionId,
+            membershipsCollectionId,
+            officesCollectionId,
+            officeMembershipsCollectionId,
+            invitesCollectionId,
+            groupsCollectionId,
+            groupMembershipsCollectionId,
+            workflowsCollectionId,
+            publicationsCollectionId,
+            articlesCollectionId,
+            permissionSetsCollectionId,
+            groupPermissionSetsCollectionId
+        };
+        const ctx = {
+            databases,
+            usersApi,
+            teamsApi,
+            sdk,
+            env,
+            callerId,
+            callerUser,
+            payload,
+            log,
+            error,
+            res,
+            fail,
+            permissionEnv,
+            permissionContext
+        };
 
         // ════════════════════════════════════════════════════════
         // ACTION = 'bootstrap_organization' | 'create_organization'
@@ -2809,651 +2866,31 @@ module.exports = async function ({ req, res, log, error }) {
         }
 
         // ════════════════════════════════════════════════════════
-        // ACTION = 'bootstrap_workflow_schema'
+        // ACTION = 'bootstrap_workflow_schema' (B.0.3.a — actions/schemas.js)
         // ════════════════════════════════════════════════════════
-        //
-        // Egyszeri, idempotens séma-bővítés a `workflows` collection-re. Fedi:
-        // - #30 attribútumok: `visibility` enum, `createdBy` string
-        // - #80 attribútumok: `description` string, `archivedAt` datetime
-        // - #80 enum-bővítés: a meglévő `visibility` attribute `public` értékkel
-        //   (updateEnumAttribute — ha a create 409-et ad, mert már létezik)
-        // - #80 fulltext indexek: `name` + `description` (szabadszavas kereső)
-        //
-        // A user futtatja le (Appwrite Console → Function → Execute vagy curl)
-        // deploy után. Az action idempotens: a már létező attributes / enum
-        // values / indexek skip-elődnek, a response `created` / `updated` /
-        // `skipped` listákkal jelzi a történteket.
-        //
-        // Auth: caller kell hogy legyen valamely szervezet `owner`-e — az
-        // adminisztratív művelet jellege miatt admin role is szándékosan
-        // kizárva.
-        //
-        // Megjegyzés: az attribútum-létrehozás **aszinkron** a szerveren
-        // (processing → available átmenet néhány másodperc). Az indexeket a
-        // CF megpróbálja létrehozni, de ha az attribute még nem available,
-        // 400/409-re futva skip-eli. A user futtassa le újra 10s után, amíg
-        // az `indexes_pending` lista kiürül.
         if (action === 'bootstrap_workflow_schema') {
-            // 1. Caller legalább egy org owner-e
-            const ownerships = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.equal('role', 'owner'),
-                    sdk.Query.limit(1)
-                ]
-            );
-            if (ownerships.documents.length === 0) {
-                return fail(res, 403, 'insufficient_role', {
-                    requiredRole: 'owner'
-                });
-            }
-
-            const created = [];
-            const updated = [];
-            const skipped = [];
-            const indexesPending = [];
-
-            // 2. visibility enum attribútum.
-            // Appwrite 1.9+: a `required=true` és `default` kombináció
-            // hibát dob (`attribute_default_unsupported`). `required=false`
-            // + default → új doc explicit vagy default értéket kap,
-            // legacy row-ok null-ja a consumer fallback-en át `editorial_office`.
-            // Ha már létezik (#30 deploy), updateEnumAttribute-tal bővítjük a
-            // `public` értékkel (Feladat #80). Ha az Appwrite nem engedi
-            // (pl. deprecated method), a user a Console-ban bővíti.
-            try {
-                await databases.createEnumAttribute(
-                    databaseId,
-                    workflowsCollectionId,
-                    'visibility',
-                    WORKFLOW_VISIBILITY_VALUES,
-                    false,                         // required
-                    WORKFLOW_VISIBILITY_DEFAULT,   // default
-                    false                          // array
-                );
-                created.push('visibility');
-            } catch (err) {
-                if (err?.code === 409 || /already exists/i.test(err?.message || '')) {
-                    // Már létezik — próbáljuk bővíteni a `public` értékkel (#80).
-                    try {
-                        await databases.updateEnumAttribute(
-                            databaseId,
-                            workflowsCollectionId,
-                            'visibility',
-                            WORKFLOW_VISIBILITY_VALUES,
-                            false,
-                            WORKFLOW_VISIBILITY_DEFAULT
-                        );
-                        updated.push('visibility(public added)');
-                    } catch (updateErr) {
-                        // Nem halálos: a user manuálisan bővítheti a Console-on.
-                        const msg = updateErr?.message || String(updateErr);
-                        log(`[BootstrapWorkflowSchema] visibility update nem ment: ${msg} — Console-ban bővítsd a 'public' értékkel.`);
-                        skipped.push(`visibility (update_failed: ${msg})`);
-                    }
-                } else {
-                    error(`[BootstrapWorkflowSchema] visibility létrehozás hiba: ${err.message}`);
-                    return fail(res, 500, 'schema_visibility_failed', { error: err.message });
-                }
-            }
-
-            // 3. createdBy string attribútum (user $id = 36 char)
-            try {
-                await databases.createStringAttribute(
-                    databaseId,
-                    workflowsCollectionId,
-                    'createdBy',
-                    36,                            // size
-                    false,                         // required — legacy row-okon null
-                    null,                          // default
-                    false                          // array
-                );
-                created.push('createdBy');
-            } catch (err) {
-                if (err?.code === 409 || /already exists/i.test(err?.message || '')) {
-                    skipped.push('createdBy');
-                } else {
-                    error(`[BootstrapWorkflowSchema] createdBy létrehozás hiba: ${err.message}`);
-                    return fail(res, 500, 'schema_createdby_failed', { error: err.message });
-                }
-            }
-
-            // 4. #80 — description string attribútum (szabadszavas keresőhöz
-            // fulltext indexelt, max 500 char — egy-két mondatos workflow
-            // leírás, hosszabb szöveg más mezőkbe).
-            try {
-                await databases.createStringAttribute(
-                    databaseId,
-                    workflowsCollectionId,
-                    'description',
-                    500,                           // size
-                    false,                         // required
-                    null,                          // default
-                    false                          // array
-                );
-                created.push('description');
-            } catch (err) {
-                if (err?.code === 409 || /already exists/i.test(err?.message || '')) {
-                    skipped.push('description');
-                } else {
-                    error(`[BootstrapWorkflowSchema] description létrehozás hiba: ${err.message}`);
-                    return fail(res, 500, 'schema_description_failed', { error: err.message });
-                }
-            }
-
-            // 5. #80 — archivedAt datetime attribútum (soft-delete marker).
-            // Null → aktív workflow, nem-null → archivált (N napos türelmi
-            // idő, lásd Feladatok.md #81 cron hard-delete).
-            try {
-                await databases.createDatetimeAttribute(
-                    databaseId,
-                    workflowsCollectionId,
-                    'archivedAt',
-                    false,                         // required
-                    null,                          // default
-                    false                          // array
-                );
-                created.push('archivedAt');
-            } catch (err) {
-                if (err?.code === 409 || /already exists/i.test(err?.message || '')) {
-                    skipped.push('archivedAt');
-                } else {
-                    error(`[BootstrapWorkflowSchema] archivedAt létrehozás hiba: ${err.message}`);
-                    return fail(res, 500, 'schema_archivedat_failed', { error: err.message });
-                }
-            }
-
-            // 6. #80 — fulltext indexek a szabadszavas kereséshez (name +
-            // description). Appwrite egyetlen fulltext indexben csak egy
-            // attribute-ot támogat, ezért külön-külön. Ha az attribute még
-            // nem `available` (aszinkron processing), az index létrehozás
-            // 400-at/409-et ad — a user futtassa újra az action-t 10s múlva.
-            const fulltextIndexes = [
-                { key: 'name_fulltext', attr: 'name' },
-                { key: 'description_fulltext', attr: 'description' }
-            ];
-            for (const { key, attr } of fulltextIndexes) {
-                try {
-                    await databases.createIndex(
-                        databaseId,
-                        workflowsCollectionId,
-                        key,
-                        'fulltext',
-                        [attr]
-                    );
-                    created.push(`index:${key}`);
-                } catch (err) {
-                    const msg = err?.message || '';
-                    if (err?.code === 409 || /already exists/i.test(msg)) {
-                        skipped.push(`index:${key}`);
-                    } else if (err?.code === 400 || /not available|processing|unknown attribute/i.test(msg)) {
-                        // Attribute még nem elérhető — a user futtassa újra az action-t.
-                        indexesPending.push(key);
-                    } else {
-                        error(`[BootstrapWorkflowSchema] index:${key} létrehozás hiba: ${err.message}`);
-                        return fail(res, 500, 'schema_index_failed', { index: key, error: err.message });
-                    }
-                }
-            }
-
-            log(`[BootstrapWorkflowSchema] User ${callerId}: created=[${created.join(',')}] updated=[${updated.join(',')}] skipped=[${skipped.join(',')}] indexesPending=[${indexesPending.join(',')}]`);
-
-            const note = indexesPending.length > 0
-                ? `Az attribútumok feldolgozása ~5-10s. Futtasd újra az action-t amíg az indexesPending lista kiürül. A create_workflow hívás előtt várj, amíg a visibility + description + archivedAt available státuszú.`
-                : 'Az attribútumok feldolgozása ~5-10s. Várj a create_workflow hívás előtt.';
-
-            return res.json({
-                success: true,
-                created,
-                updated,
-                skipped,
-                indexesPending,
-                note
-            });
+            return await schemaActions.bootstrapWorkflowSchema(ctx);
         }
 
         // ════════════════════════════════════════════════════════
-        // ACTION = 'bootstrap_publication_schema'
+        // ACTION = 'bootstrap_publication_schema' (B.0.3.a — actions/schemas.js)
         // ════════════════════════════════════════════════════════
-        //
-        // Idempotens schema-bővítés a `publications` collection-re:
-        // `compiledWorkflowSnapshot` (string, nullable, ~1 MB). Aktiváláskor
-        // a workflow `compiled` JSON pillanatképét tároljuk — onnantól a
-        // publikáció élete a snapshot-on fut, a workflow későbbi módosításai
-        // már nem érintik. Lásd _docs/Feladatok.md #36.
-        //
-        // Owner-only — a `bootstrap_workflow_schema` mintáját követi. Csak
-        // org owner-ek hívhatják; a Dashboard-ról nem elérhető, manuálisan
-        // kell triggerelni egyszer az env-ben (curl vagy Console).
         if (action === 'bootstrap_publication_schema') {
-            // 1. Caller legalább egy org owner-e
-            const ownerships = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.equal('role', 'owner'),
-                    sdk.Query.limit(1)
-                ]
-            );
-            if (ownerships.documents.length === 0) {
-                return fail(res, 403, 'insufficient_role', {
-                    requiredRole: 'owner'
-                });
-            }
-
-            // 2. publicationsCollectionId env var kötelező
-            if (!publicationsCollectionId) {
-                return fail(res, 500, 'misconfigured', {
-                    missing: ['PUBLICATIONS_COLLECTION_ID']
-                });
-            }
-
-            const created = [];
-            const skipped = [];
-
-            // 3. compiledWorkflowSnapshot string attribútum.
-            // Size: 1_000_000 char (~1 MB). A workflows.compiled jelenlegi mérete
-            // ~12 KB (8 állapotos default workflow); a sapka bőven fedi a bővítést
-            // (több állapot, részletesebb jogosultság-mátrix, capabilities).
-            // Nullable — legacy (már aktivált, snapshot nélküli) publikációkon
-            // null marad, a Plugin a workflowId cache-re fallback-el (Feladat #38).
-            try {
-                await databases.createStringAttribute(
-                    databaseId,
-                    publicationsCollectionId,
-                    'compiledWorkflowSnapshot',
-                    1000000,                       // size (~1 MB)
-                    false,                         // required
-                    null,                          // default
-                    false                          // array
-                );
-                created.push('compiledWorkflowSnapshot');
-            } catch (err) {
-                if (err?.code === 409 || /already exists/i.test(err?.message || '')) {
-                    skipped.push('compiledWorkflowSnapshot');
-                } else {
-                    error(`[BootstrapPublicationSchema] compiledWorkflowSnapshot létrehozás hiba: ${err.message}`);
-                    return fail(res, 500, 'schema_snapshot_failed', { error: err.message });
-                }
-            }
-
-            log(`[BootstrapPublicationSchema] User ${callerId}: created=[${created.join(',')}] skipped=[${skipped.join(',')}]`);
-
-            return res.json({
-                success: true,
-                created,
-                skipped,
-                note: 'Az attribútum feldolgozása ~5-10s. Várj a publikáció aktiválás előtt.'
-            });
+            return await schemaActions.bootstrapPublicationSchema(ctx);
         }
 
         // ════════════════════════════════════════════════════════
-        // ACTION = 'bootstrap_groups_schema'
+        // ACTION = 'bootstrap_groups_schema' (B.0.3.a — actions/schemas.js)
         // ════════════════════════════════════════════════════════
-        //
-        // A.2.6 / A.2.7 (ADR 0008) — idempotens schema-bővítés a `groups`
-        // collection-re. Új mezők: `description`, `color`,
-        // `isContributorGroup`, `isLeaderGroup`, `archivedAt`.
-        //
-        // A `slug` és `name` mezők változatlanok (legacy bootstrap óta
-        // léteznek). A `name` mező a UI-ban "label" néven jelenik meg —
-        // a séma-szintű átnevezés szándékosan elmarad ("Nincs migráció" elv).
-        //
-        // Owner-only — a `bootstrap_workflow_schema` mintáját követi.
-        // Ha az `update_group_metadata` action `schema_missing` errort ad,
-        // ezt kell egyszer manuálisan futtatni.
         if (action === 'bootstrap_groups_schema') {
-            // 1. Caller legalább egy org owner-e
-            const ownerships = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.equal('role', 'owner'),
-                    sdk.Query.limit(1)
-                ]
-            );
-            if (ownerships.documents.length === 0) {
-                return fail(res, 403, 'insufficient_role', {
-                    requiredRole: 'owner'
-                });
-            }
-
-            const created = [];
-            const skipped = [];
-
-            const isAlreadyExists = (err) =>
-                err?.code === 409 || /already exists/i.test(err?.message || '');
-
-            // 2. description string attr (max 500 char, nullable)
-            try {
-                await databases.createStringAttribute(
-                    databaseId,
-                    groupsCollectionId,
-                    'description',
-                    500,
-                    false,
-                    null,
-                    false
-                );
-                created.push('description');
-            } catch (err) {
-                if (isAlreadyExists(err)) skipped.push('description');
-                else {
-                    error(`[BootstrapGroupsSchema] description létrehozás hiba: ${err.message}`);
-                    return fail(res, 500, 'schema_description_failed', { error: err.message });
-                }
-            }
-
-            // 3. color string attr (max 9 char: #rrggbbaa hex), nullable
-            try {
-                await databases.createStringAttribute(
-                    databaseId,
-                    groupsCollectionId,
-                    'color',
-                    9,
-                    false,
-                    null,
-                    false
-                );
-                created.push('color');
-            } catch (err) {
-                if (isAlreadyExists(err)) skipped.push('color');
-                else {
-                    error(`[BootstrapGroupsSchema] color létrehozás hiba: ${err.message}`);
-                    return fail(res, 500, 'schema_color_failed', { error: err.message });
-                }
-            }
-
-            // 4. isContributorGroup boolean attr — false default (legacy
-            // csoportokon nincs érték; a workflow autoseed flag-et ad).
-            try {
-                await databases.createBooleanAttribute(
-                    databaseId,
-                    groupsCollectionId,
-                    'isContributorGroup',
-                    false,
-                    false,
-                    false
-                );
-                created.push('isContributorGroup');
-            } catch (err) {
-                if (isAlreadyExists(err)) skipped.push('isContributorGroup');
-                else {
-                    error(`[BootstrapGroupsSchema] isContributorGroup létrehozás hiba: ${err.message}`);
-                    return fail(res, 500, 'schema_iscontributor_failed', { error: err.message });
-                }
-            }
-
-            // 5. isLeaderGroup boolean attr
-            try {
-                await databases.createBooleanAttribute(
-                    databaseId,
-                    groupsCollectionId,
-                    'isLeaderGroup',
-                    false,
-                    false,
-                    false
-                );
-                created.push('isLeaderGroup');
-            } catch (err) {
-                if (isAlreadyExists(err)) skipped.push('isLeaderGroup');
-                else {
-                    error(`[BootstrapGroupsSchema] isLeaderGroup létrehozás hiba: ${err.message}`);
-                    return fail(res, 500, 'schema_isleader_failed', { error: err.message });
-                }
-            }
-
-            // 6. archivedAt datetime attr — soft-delete marker az `archive_group`
-            // action-höz. Null = aktív, nem-null = archivált.
-            try {
-                await databases.createDatetimeAttribute(
-                    databaseId,
-                    groupsCollectionId,
-                    'archivedAt',
-                    false,
-                    null,
-                    false
-                );
-                created.push('archivedAt');
-            } catch (err) {
-                if (isAlreadyExists(err)) skipped.push('archivedAt');
-                else {
-                    error(`[BootstrapGroupsSchema] archivedAt létrehozás hiba: ${err.message}`);
-                    return fail(res, 500, 'schema_archivedat_failed', { error: err.message });
-                }
-            }
-
-            // 7. (office_slug_unique) — A.2.2/A.2.3 előfeltétel. Az autoseed
-            // (`seedGroupsFromWorkflow`) `document_already_exists` skip-pe
-            // CSAK akkor véd duplikátum ellen, ha a DB-ben tényleges unique
-            // index van az `(editorialOfficeId, slug)` páron. Ezt eddig csak
-            // a `_docs/workflow-designer/DATA_MODEL.md` dokumentálta — most
-            // a CF kötelezően létrehozza, hogy a két paralel autoseed ne
-            // hozhasson létre `editors`-t kétszer ugyanabban az office-ban.
-            //
-            // Az index létrehozása aszinkron — első futáson 400 `not available`
-            // lehet, ha a `slug` attr még processing-ben van. A `pending` lista
-            // erre jelez, a user retry-ol.
-            const indexesPending = [];
-            try {
-                await databases.createIndex(
-                    databaseId,
-                    groupsCollectionId,
-                    'office_slug_unique',
-                    'unique',
-                    ['editorialOfficeId', 'slug']
-                );
-                created.push('index:office_slug_unique');
-            } catch (err) {
-                const msg = err?.message || '';
-                if (isAlreadyExists(err)) {
-                    skipped.push('index:office_slug_unique');
-                } else if (err?.code === 400 && /not available|processing|unknown attribute/i.test(msg)) {
-                    indexesPending.push('office_slug_unique');
-                } else {
-                    error(`[BootstrapGroupsSchema] index:office_slug_unique létrehozás hiba: ${err.message}`);
-                    return fail(res, 500, 'schema_index_failed', { error: err.message });
-                }
-            }
-
-            log(`[BootstrapGroupsSchema] User ${callerId}: created=[${created.join(',')}] skipped=[${skipped.join(',')}] indexesPending=[${indexesPending.join(',')}]`);
-
-            return res.json({
-                success: true,
-                created,
-                skipped,
-                indexesPending,
-                note: indexesPending.length > 0
-                    ? 'Az attribútumok feldolgozása ~5-10s. Futtasd újra az action-t, amíg az indexesPending lista kiürül — a unique index NÉLKÜL az autoseed duplikátum csoportot hozhat létre.'
-                    : 'A schema kész. A `update_group_metadata` action és az autoseed flow használhatja az új mezőket + a unique index védi a duplikátumtól.'
-            });
+            return await schemaActions.bootstrapGroupsSchema(ctx);
         }
 
         // ════════════════════════════════════════════════════════
-        // ACTION = 'bootstrap_permission_sets_schema'
+        // ACTION = 'bootstrap_permission_sets_schema' (B.0.3.a — actions/schemas.js)
         // ════════════════════════════════════════════════════════
-        //
-        // A.1 (ADR 0008) — két új collection idempotens létrehozása a
-        // jogosultság-csoport (permissionSet) réteghez. A `bootstrap_workflow_schema`
-        // mintáját követi: owner-only, 409 → skip, `created`/`skipped`/`indexesPending`
-        // listák a response-ban.
-        //
-        // Doc-szintű ACL (ADR 0003): collection perms üres + `documentSecurity: true`,
-        // a read-jogot a doc-onkénti `team:office_${officeId}` adja. Deploy után a
-        // Console-on ellenőrizendő, hogy a `rowSecurity` flag aktív (különben a
-        // doc-ACL nem érvényesül).
         if (action === 'bootstrap_permission_sets_schema') {
-            // 1. Caller legalább egy org owner-e
-            const ownerships = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.equal('role', 'owner'),
-                    sdk.Query.limit(1)
-                ]
-            );
-            if (ownerships.documents.length === 0) {
-                return fail(res, 403, 'insufficient_role', {
-                    requiredRole: 'owner'
-                });
-            }
-
-            // 2. Action-szintű env var guard (csak itt kötelező).
-            const missingActionEnvVars = [];
-            if (!permissionSetsCollectionId) {
-                missingActionEnvVars.push('PERMISSION_SETS_COLLECTION_ID');
-            }
-            if (!groupPermissionSetsCollectionId) {
-                missingActionEnvVars.push('GROUP_PERMISSION_SETS_COLLECTION_ID');
-            }
-            if (missingActionEnvVars.length > 0) {
-                return fail(res, 500, 'misconfigured', {
-                    missing: missingActionEnvVars
-                });
-            }
-
-            const created = [];
-            const skipped = [];
-            const indexesPending = [];
-
-            // ── Lokális helperek (csak ezen az action-en belül) ──────────
-            // A 3 ismétlődő boilerplate egységesítése: collection-create,
-            // attribute-create-loop, index-create-loop. Az `isAlreadyExists`
-            // a 409 / "already exists" idempotens skip-feltételt fedi.
-            const isAlreadyExists = (err) =>
-                err?.code === 409 || /already exists/i.test(err?.message || '');
-
-            const ensureCollection = async (colId, label) => {
-                try {
-                    await databases.createCollection(databaseId, colId, label, [], true, true);
-                    created.push(`collection:${label}`);
-                    return true;
-                } catch (err) {
-                    if (isAlreadyExists(err)) {
-                        skipped.push(`collection:${label}`);
-                        return true;
-                    }
-                    error(`[BootstrapPermissionSetsSchema] ${label} collection létrehozás hiba: ${err.message}`);
-                    return fail(res, 500, 'schema_collection_failed', { collection: label, error: err.message });
-                }
-            };
-
-            const ensureAttributes = async (colId, label, attrs) => {
-                for (const attr of attrs) {
-                    try {
-                        if (attr.kind === 'datetime') {
-                            await databases.createDatetimeAttribute(databaseId, colId, attr.name, attr.required, null, false);
-                        } else {
-                            await databases.createStringAttribute(databaseId, colId, attr.name, attr.size, attr.required, null, attr.array === true);
-                        }
-                        created.push(`${label}.${attr.name}`);
-                    } catch (err) {
-                        if (isAlreadyExists(err)) {
-                            skipped.push(`${label}.${attr.name}`);
-                        } else {
-                            error(`[BootstrapPermissionSetsSchema] ${label}.${attr.name} attribútum hiba: ${err.message}`);
-                            return fail(res, 500, 'schema_attribute_failed', { collection: label, attribute: attr.name, error: err.message });
-                        }
-                    }
-                }
-                return true;
-            };
-
-            const ensureIndexes = async (colId, label, indexes) => {
-                for (const idx of indexes) {
-                    try {
-                        await databases.createIndex(databaseId, colId, idx.key, idx.type, idx.attrs);
-                        created.push(`${label}.index:${idx.key}`);
-                    } catch (err) {
-                        const msg = err?.message || '';
-                        if (isAlreadyExists(err)) {
-                            skipped.push(`${label}.index:${idx.key}`);
-                        } else if (err?.code === 400 && /not available|processing|unknown attribute/i.test(msg)) {
-                            // Az aszinkron attribute-feldolgozás 400-at pending-re
-                            // tesszük, egyéb 400 (érvénytelen index név, inkompatibilis
-                            // attribute típus stb.) propagáljon — ne nyelje el a driftet.
-                            indexesPending.push(`${label}.${idx.key}`);
-                        } else {
-                            error(`[BootstrapPermissionSetsSchema] ${label}.index:${idx.key} hiba: ${err.message}`);
-                            return fail(res, 500, 'schema_index_failed', { collection: label, index: idx.key, error: err.message });
-                        }
-                    }
-                }
-                return true;
-            };
-
-            // ── permissionSets ──────────────────────────────────────────
-            // A `permissions` egy string tömb — egy slug max 100 char
-            // (`<resource>.<sub>.<action>` formátum bőven elfér). Az
-            // `archivedAt` nullable (soft-delete marker).
-            const permissionSetsAttrs = [
-                { name: 'name',              kind: 'string',   size: 100,  required: true },
-                { name: 'slug',              kind: 'string',   size: 100,  required: true },
-                { name: 'description',       kind: 'string',   size: 500,  required: false },
-                { name: 'permissions',       kind: 'string',   size: 100,  required: true,  array: true },
-                { name: 'editorialOfficeId', kind: 'string',   size: 36,   required: true },
-                { name: 'organizationId',    kind: 'string',   size: 36,   required: true },
-                { name: 'archivedAt',        kind: 'datetime',             required: false },
-                { name: 'createdByUserId',   kind: 'string',   size: 36,   required: false }
-            ];
-            // Az `office_slug_unique` egy office-on belül slug-ütközést
-            // akadályoz; az `office_idx` / `org_idx` a Realtime + listing
-            // query-khez kell.
-            const permissionSetsIndexes = [
-                { key: 'office_slug_unique', type: 'unique', attrs: ['editorialOfficeId', 'slug'] },
-                { key: 'office_idx',         type: 'key',    attrs: ['editorialOfficeId'] },
-                { key: 'org_idx',            type: 'key',    attrs: ['organizationId'] }
-            ];
-
-            const psCol = await ensureCollection(permissionSetsCollectionId, 'permissionSets');
-            if (psCol !== true) return psCol;
-            const psAttrs = await ensureAttributes(permissionSetsCollectionId, 'permissionSets', permissionSetsAttrs);
-            if (psAttrs !== true) return psAttrs;
-            const psIdx = await ensureIndexes(permissionSetsCollectionId, 'permissionSets', permissionSetsIndexes);
-            if (psIdx !== true) return psIdx;
-
-            // ── groupPermissionSets (m:n junction) ──────────────────────
-            const groupPermissionSetsAttrs = [
-                { name: 'groupId',           kind: 'string', size: 36, required: true },
-                { name: 'permissionSetId',   kind: 'string', size: 36, required: true },
-                { name: 'editorialOfficeId', kind: 'string', size: 36, required: true },
-                { name: 'organizationId',    kind: 'string', size: 36, required: true }
-            ];
-            // A `group_set_unique` (groupId, permissionSetId) páronként egy
-            // junction doc-ot enged — duplikátum-blokk. A többi index a
-            // Realtime/lookup útvonalakhoz.
-            const groupPermissionSetsIndexes = [
-                { key: 'group_set_unique', type: 'unique', attrs: ['groupId', 'permissionSetId'] },
-                { key: 'office_idx',       type: 'key',    attrs: ['editorialOfficeId'] },
-                { key: 'group_idx',        type: 'key',    attrs: ['groupId'] },
-                { key: 'set_idx',          type: 'key',    attrs: ['permissionSetId'] }
-            ];
-
-            const gpsCol = await ensureCollection(groupPermissionSetsCollectionId, 'groupPermissionSets');
-            if (gpsCol !== true) return gpsCol;
-            const gpsAttrs = await ensureAttributes(groupPermissionSetsCollectionId, 'groupPermissionSets', groupPermissionSetsAttrs);
-            if (gpsAttrs !== true) return gpsAttrs;
-            const gpsIdx = await ensureIndexes(groupPermissionSetsCollectionId, 'groupPermissionSets', groupPermissionSetsIndexes);
-            if (gpsIdx !== true) return gpsIdx;
-
-            log(`[BootstrapPermissionSetsSchema] User ${callerId}: created=[${created.join(',')}] skipped=[${skipped.join(',')}] indexesPending=[${indexesPending.join(',')}]`);
-
-            const note = indexesPending.length > 0
-                ? 'Az attribútumok feldolgozása ~5-10s. Futtasd újra az action-t amíg az indexesPending lista kiürül.'
-                : 'A schema kész. A.3.2-A.3.5 implementálva: bootstrap_organization + create_editorial_office automatikusan seedeli a default permission set-eket. CRUD action-ök (create_permission_set, update_permission_set, archive/restore_permission_set, assign/unassign_permission_set_to_group) elérhetőek. Következő lépés (A.3.6, külön commit): meglévő CF guardok lecserélése userHasPermission()-re.';
-
-            return res.json({
-                success: true,
-                created,
-                skipped,
-                indexesPending,
-                note
-            });
+            return await schemaActions.bootstrapPermissionSetsSchema(ctx);
         }
 
         // ════════════════════════════════════════════════════════
@@ -6596,299 +6033,10 @@ module.exports = async function ({ req, res, log, error }) {
         }
 
         // ════════════════════════════════════════════════════════════════
-        // ACTION = 'backfill_tenant_acl'
+        // ACTION = 'backfill_tenant_acl' (B.0.3.a — actions/schemas.js)
         // ════════════════════════════════════════════════════════════════
-        //
-        // Egy konkrét szervezet + annak minden szerkesztőségének egyszeri
-        // migrációja — létrehozza a hiányzó Appwrite Team-eket, szinkronizálja
-        // a tagságot (`organizationMemberships` / `editorialOfficeMemberships`
-        // alapján), és rewrite-olja a document-szintű ACL-t:
-        //   - organizationInvites.read  = team:org_${orgId}
-        //   - groups.read               = team:office_${officeId}
-        //   - groupMemberships.read     = team:office_${officeId}
-        //
-        // Caller: KIZÁRÓLAG a payload-beli org `owner` role-lal rendelkező tagja.
-        // Scoped action: csak a megadott `organizationId` + hozzá tartozó
-        // office-ok kerülnek migrálásra — NINCS project-wide scan, mert az
-        // lehetővé tenné, hogy A tenant owner-e mutassa B tenant ACL-jét.
-        // Több org migrálásához többször kell hívni (egyszeri művelet).
-        //
-        // Idempotens: ugyanabban az env-ben többször futtatható, a team- és
-        // membership-műveletek ugyanazt az eredményt adják (409 → skip),
-        // az ACL rewrite pedig determinisztikus.
-        //
-        // Payload:
-        //   - organizationId: string  (kötelező — target org)
-        //   - dryRun: true            (opcionális — nem ír, csak számolja mi változna)
-        //
-        // Fail-open per-doc: egy-egy ACL rewrite vagy team member hiba
-        // NEM szakítja meg a futást, a végeredményben `errors[]` kap egy
-        // sort. Így egy félbeszakadt első futás után a következő futás a
-        // maradékot is pótolja.
         if (action === 'backfill_tenant_acl') {
-            const dryRun = payload.dryRun === true;
-            const { organizationId: targetOrgId } = payload;
-
-            if (!targetOrgId || typeof targetOrgId !== 'string') {
-                return fail(res, 400, 'missing_fields', { required: ['organizationId'] });
-            }
-
-            // Caller jogosultság: target org `owner` role.
-            const ownerMembership = await databases.listDocuments(
-                databaseId,
-                membershipsCollectionId,
-                [
-                    sdk.Query.equal('organizationId', targetOrgId),
-                    sdk.Query.equal('userId', callerId),
-                    sdk.Query.select(['role']),
-                    sdk.Query.limit(1)
-                ]
-            );
-            if (ownerMembership.documents.length === 0) {
-                return fail(res, 403, 'not_a_member');
-            }
-            if (ownerMembership.documents[0].role !== 'owner') {
-                return fail(res, 403, 'insufficient_role', {
-                    yourRole: ownerMembership.documents[0].role,
-                    required: 'owner'
-                });
-            }
-
-            // Target org fetch — name kell a team labelnek + létezés check.
-            let targetOrg;
-            try {
-                targetOrg = await databases.getDocument(
-                    databaseId, organizationsCollectionId, targetOrgId
-                );
-            } catch (err) {
-                if (err?.code === 404) return fail(res, 404, 'organization_not_found');
-                error(`[Backfill] org fetch hiba: ${err.message}`);
-                return fail(res, 500, 'organization_fetch_failed');
-            }
-
-            const stats = {
-                dryRun,
-                organizationId: targetOrgId,
-                organizations: { scanned: 0, teamsCreated: 0, memberships: 0 },
-                offices: { scanned: 0, teamsCreated: 0, memberships: 0 },
-                acl: { invites: 0, groups: 0, groupMemberships: 0 },
-                errors: []
-            };
-
-            const listAll = async (collectionId, queries = []) => {
-                const out = [];
-                let cursor = null;
-                while (true) {
-                    const q = [...queries, sdk.Query.limit(CASCADE_BATCH_LIMIT)];
-                    if (cursor) q.push(sdk.Query.cursorAfter(cursor));
-                    const batch = await databases.listDocuments(databaseId, collectionId, q);
-                    out.push(...batch.documents);
-                    if (batch.documents.length < CASCADE_BATCH_LIMIT) break;
-                    cursor = batch.documents[batch.documents.length - 1].$id;
-                }
-                return out;
-            };
-
-            // ── 1) target organization: team + memberships + invites ACL
-            //
-            // Az org team HARD prerequisite az invite ACL rewrite-hoz.
-            // Ha a team nem jön létre, a doksik `read(team:org_...)`-ra
-            // kerülnének anélkül, hogy bárki tagja volna → minden user
-            // elveszítené az invite láthatóságát, de a CF success-t adna.
-            // Ezért: team create fail → abort az egész action 500-zal.
-            {
-                const org = targetOrg;
-                stats.organizations.scanned++;
-                const orgTeamId = buildOrgTeamId(org.$id);
-
-                if (!dryRun) {
-                    try {
-                        const result = await ensureTeam(teamsApi, orgTeamId, `Org: ${org.name}`);
-                        if (result.created) stats.organizations.teamsCreated++;
-                    } catch (err) {
-                        error(`[Backfill] org team create hard-fail (${org.$id}): ${err.message}`);
-                        return fail(res, 500, 'org_team_create_failed', {
-                            orgId: org.$id,
-                            message: err.message,
-                            hint: 'Org team create failure megakadályozta az ACL rewrite-ot az org invite-okra.'
-                        });
-                    }
-                }
-
-                let orgMembers;
-                try {
-                    orgMembers = await listAll(
-                        membershipsCollectionId,
-                        [sdk.Query.equal('organizationId', org.$id)]
-                    );
-                } catch (err) {
-                    stats.errors.push({ kind: 'org_members_list', orgId: org.$id, message: err.message });
-                    orgMembers = [];
-                }
-
-                for (const m of orgMembers) {
-                    if (dryRun) { stats.organizations.memberships++; continue; }
-                    try {
-                        const result = await ensureTeamMembership(
-                            teamsApi, orgTeamId, m.userId, [m.role || 'member']
-                        );
-                        if (result.added) {
-                            stats.organizations.memberships++;
-                        } else if (result.skipped === 'team_not_found') {
-                            // A team-et épp most hoztuk létre — ha itt kap 404-et,
-                            // a team időközben eltűnt (párhuzamos törlés?). Hard error.
-                            stats.errors.push({
-                                kind: 'org_membership', orgId: org.$id, userId: m.userId,
-                                message: 'team_not_found after ensureTeam succeeded'
-                            });
-                        }
-                    } catch (err) {
-                        stats.errors.push({
-                            kind: 'org_membership', orgId: org.$id, userId: m.userId, message: err.message
-                        });
-                    }
-                }
-
-                // Invites ACL rewrite — most már safe, a team biztosan létezik.
-                let invites;
-                try {
-                    invites = await listAll(
-                        invitesCollectionId,
-                        [sdk.Query.equal('organizationId', org.$id)]
-                    );
-                } catch (err) {
-                    stats.errors.push({ kind: 'invites_list', orgId: org.$id, message: err.message });
-                    invites = [];
-                }
-                const orgPerms = buildOrgAclPerms(org.$id);
-                for (const inv of invites) {
-                    if (dryRun) { stats.acl.invites++; continue; }
-                    try {
-                        await databases.updateDocument(
-                            databaseId, invitesCollectionId, inv.$id, {}, orgPerms
-                        );
-                        stats.acl.invites++;
-                    } catch (err) {
-                        stats.errors.push({
-                            kind: 'invite_acl', inviteId: inv.$id, message: err.message
-                        });
-                    }
-                }
-            }
-
-            // ── 2) target org editorialOffices: team + memberships + groups/groupMemberships ACL
-            let offices;
-            try {
-                offices = await listAll(
-                    officesCollectionId,
-                    [sdk.Query.equal('organizationId', targetOrgId)]
-                );
-            } catch (err) {
-                error(`[Backfill] offices list hiba: ${err.message}`);
-                return fail(res, 500, 'scan_failed', { step: 'offices_list' });
-            }
-            for (const office of offices) {
-                stats.offices.scanned++;
-                const officeTeamId = buildOfficeTeamId(office.$id);
-
-                if (!dryRun) {
-                    try {
-                        const result = await ensureTeam(teamsApi, officeTeamId, `Office: ${office.name}`);
-                        if (result.created) stats.offices.teamsCreated++;
-                    } catch (err) {
-                        stats.errors.push({ kind: 'office_team', officeId: office.$id, message: err.message });
-                        continue;
-                    }
-                }
-
-                let officeMembers;
-                try {
-                    officeMembers = await listAll(
-                        officeMembershipsCollectionId,
-                        [sdk.Query.equal('editorialOfficeId', office.$id)]
-                    );
-                } catch (err) {
-                    stats.errors.push({ kind: 'office_members_list', officeId: office.$id, message: err.message });
-                    officeMembers = [];
-                }
-
-                for (const m of officeMembers) {
-                    if (dryRun) { stats.offices.memberships++; continue; }
-                    try {
-                        const result = await ensureTeamMembership(
-                            teamsApi, officeTeamId, m.userId, [m.role || 'member']
-                        );
-                        if (result.added) {
-                            stats.offices.memberships++;
-                        } else if (result.skipped === 'team_not_found') {
-                            stats.errors.push({
-                                kind: 'office_membership', officeId: office.$id, userId: m.userId,
-                                message: 'team_not_found after ensureTeam succeeded'
-                            });
-                        }
-                    } catch (err) {
-                        stats.errors.push({
-                            kind: 'office_membership', officeId: office.$id, userId: m.userId, message: err.message
-                        });
-                    }
-                }
-
-                const officePerms = buildOfficeAclPerms(office.$id);
-
-                // Groups ACL rewrite
-                let groups;
-                try {
-                    groups = await listAll(
-                        groupsCollectionId,
-                        [sdk.Query.equal('editorialOfficeId', office.$id)]
-                    );
-                } catch (err) {
-                    stats.errors.push({ kind: 'groups_list', officeId: office.$id, message: err.message });
-                    groups = [];
-                }
-                for (const g of groups) {
-                    if (dryRun) { stats.acl.groups++; continue; }
-                    try {
-                        await databases.updateDocument(
-                            databaseId, groupsCollectionId, g.$id, {}, officePerms
-                        );
-                        stats.acl.groups++;
-                    } catch (err) {
-                        stats.errors.push({
-                            kind: 'group_acl', groupId: g.$id, message: err.message
-                        });
-                    }
-                }
-
-                // GroupMemberships ACL rewrite
-                let groupMembers;
-                try {
-                    groupMembers = await listAll(
-                        groupMembershipsCollectionId,
-                        [sdk.Query.equal('editorialOfficeId', office.$id)]
-                    );
-                } catch (err) {
-                    stats.errors.push({ kind: 'group_memberships_list', officeId: office.$id, message: err.message });
-                    groupMembers = [];
-                }
-                for (const gm of groupMembers) {
-                    if (dryRun) { stats.acl.groupMemberships++; continue; }
-                    try {
-                        await databases.updateDocument(
-                            databaseId, groupMembershipsCollectionId, gm.$id, {}, officePerms
-                        );
-                        stats.acl.groupMemberships++;
-                    } catch (err) {
-                        stats.errors.push({
-                            kind: 'group_membership_acl', gmId: gm.$id, message: err.message
-                        });
-                    }
-                }
-            }
-
-            log(`[Backfill] User ${callerId} — org=${targetOrgId}, dryRun=${dryRun}, offices=${stats.offices.scanned}, errors=${stats.errors.length}`);
-
-            return res.json({ success: true, action: 'backfilled', stats });
+            return await schemaActions.backfillTenantAcl(ctx);
         }
 
     } catch (err) {
