@@ -13,6 +13,8 @@ Daily notes — időrendi munkajegyzetek. Érdemes hosszabb session végén kés
 ## 2026 május
 - [[2026-05-01]] — vault-konszolidáció (5 ADR, 15 atomic note, 4. fázis kész)
 - [[2026-05-02]] — A.1 (ADR 0008 séma-szint): `permissionSets` + `groupPermissionSets` collection, `requiredGroupSlugs[]` a workflow-ban, hard contract validátor
+- [[2026-05-03]] — A.3.6 + Fázis 1 helper-extract (29 retrofit hívás + 6 helper-modul kiszervezés)
+- [[2026-05-04]] — B.3 Workflow Extensions Phase 0 szerver-oldal (5 commit: CRUD + snapshot pipeline + harden)
 
 ## Új daily note
 1. Másold a [[Templates/daily-note-template]] tartalmát.

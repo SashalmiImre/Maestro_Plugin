@@ -87,21 +87,34 @@ maestro-server/
     ├── migrate-legacy-paths/          ← Régi útvonalak batch migrációja (manuális, DRY_RUN)
     │   ├── package.json
     │   └── src/main.js
-    ├── invite-to-organization/        ← Tenant management + workflow + permission set CRUD (egy CF-ben, ~36 action)
-    │   ├── package.json
+    ├── invite-to-organization/        ← Tenant + workflow + permission set + extension CRUD (egy CF, ~40 action)
+    │   ├── package.json                ← `acorn` ^8 függőség (B.3.1 ECMA3 pre-parse)
     │   └── src/
-    │       ├── main.js                 ← Action-router + env + permissionContext (~6964 sor, A.3.6 + Fázis 1 helper-extract után)
-    │       ├── permissions.js          ← A.3.5/A.3.7 — userHasPermission/userHasOrgPermission + isStillOfficeMember (A.3.6 harden 2026-05-03)
-    │       ├── teamHelpers.js          ← Per-tenant Team ACL builder + ensureTeam/Membership helperek
+    │       ├── main.js                 ← Action-router + env init + permissionContext (~589 sor, B.0.3 + B.3 modularizáció után)
+    │       ├── permissions.js          ← A.3.5/A.3.7 — userHasPermission/userHasOrgPermission + isStillOfficeMember
+    │       ├── teamHelpers.js          ← Per-tenant Team ACL builder + ensureTeam/Membership + buildExtensionAclPerms
     │       ├── defaultWorkflow.json    ← Bootstrap workflow seed
-    │       └── helpers/                ← Fázis 1 helper-extract (2026-05-03)
-    │           ├── constants.js        (CASCADE_BATCH_LIMIT, MAX_REFERENCES_PER_SCAN, WORKFLOW_VISIBILITY_*, PARSE_ERROR)
+    │       ├── actions/                ← B.0.3 + B.3 action-modularizáció
+    │       │   ├── orgs.js             (bootstrap_organization, delete_organization, rename_organization, ...)
+    │       │   ├── offices.js          (create_editorial_office, archive_office, restore_office, ...)
+    │       │   ├── invites.js          (create_invite, revoke_invite, accept_invite, ...)
+    │       │   ├── groups.js           (create_group, archive_group, restore_group, group-membership ágak)
+    │       │   ├── permissionSets.js   (create/update/archive/restore_permission_set, assign/unassign)
+    │       │   ├── workflows.js        (create/update/duplicate/archive/restore/delete_workflow, share)
+    │       │   ├── publications.js     (createPublicationWithWorkflow, assignWorkflowToPublication, **activate_publication** — B.3.3 extension snapshot pipeline)
+    │       │   ├── schemas.js          (bootstrap_*_schema action-ök, beleértve `bootstrap_workflow_extension_schema`)
+    │       │   └── extensions.js       (**B.3.1+B.3.2**: create/update/archive_workflow_extension — acorn ECMA3 pre-parse, permission gate)
+    │       └── helpers/                ← B.0.3 helper-extract + B.3 új helper-ek
+    │           ├── constants.js        (CASCADE_BATCH_LIMIT, MAX_REFERENCES_PER_SCAN, WORKFLOW_VISIBILITY_*, EXTENSION_*, PARSE_ERROR)
+    │           ├── util.js             (közös util-ok: query/lookup/throttle helperek)
     │           ├── cascade.js          (deleteByQuery, cascadeDeleteOffice)
     │           ├── compiledValidator.js (workflowReferencesSlug, contributorJsonReferencesSlug, validateCompiledSlugs re-export, buildCompiledValidationFailure)
     │           ├── _generated_compiledValidator.js (AUTO-GENERATED: scripts/build-cf-validator.mjs by A.7.1, kanonikus forrás packages/maestro-shared/compiledValidator.js)
     │           ├── workflowDoc.js      (createWorkflowDoc — schema-safe fallback)
     │           ├── groupSeed.js       (seedGroupsFromWorkflow, findEmptyRequiredGroupSlugs, seedDefaultPermissionSets)
-    │           └── deadlineValidator.js (validateDeadlinesInline)
+    │           ├── deadlineValidator.js (validateDeadlinesInline)
+    │           ├── **workflowScope.js** (B.3.3 — `matchesWorkflowVisibility(workflowDoc, target)` 3-way scope matcher single-source: createPublicationWithWorkflow / assignWorkflowToPublication / activatePublication)
+    │           └── **extensionSnapshot.js** (B.3.3 — `extractExtensionRefs(compiled)` + `fetchExtensionsForOffice()` + `buildExtensionSnapshot()`: deterministicus, slug-rendezett `compiledExtensionSnapshot` JSON build aktiváláshoz)
     └── team/                          ← DEPRECATED (Fázis 2: groupMemberships collection váltotta ki)
 ```
 
@@ -239,7 +252,11 @@ Kiadvány létrehozás/módosításkor fut. `defaultContributors` JSON parse →
 
 **Workflow snapshot rögzítése (§5a, #37):** Sikeres aktiválási átmenet vagy snapshot-hiányos aktív publikáció esetén a CF beolvassa a `workflowId`-hoz tartozó `workflows.compiled` JSON-t és a `publications.compiledWorkflowSnapshot` mezőbe írja. Trigger-szűk: csak `payload.isActivated` érintés vagy `freshDoc.compiledWorkflowSnapshot` hiány → nem fut normál szerkesztési update-nél (így egy időközben módosított workflow nem szivárog be az élő publikáció snapshotjába). Fail-closed: workflow lookup hiba vagy office scope mismatch → deaktiválás. Idempotens: azonos tartalomra nem ír, elkerüli a felesleges SERVER_GUARD korrekciós kört. Szükséges env var: `WORKFLOWS_COLLECTION_ID`.
 
-**Snapshot immutability guard (§6b, #37):** Ha a kliens payload tartalmazza a `compiledWorkflowSnapshot` kulcsot ÉS a caller nem SERVER_GUARD, invariáns-sértés → deaktiválás + snapshot null-ra. A post-event CF nem lát pre-state-et, ezért közvetlen mező-revert nem lehetséges; a deaktiválás új aktiválást kényszerít, ahol az §5a a workflow aktuális `compiled`-ját ráírja. Normál szerkesztés (name, coverage, contributors stb.) nem érinti a mezőt, így a guard csak explicit visszaélés ellen véd.
+**Extension snapshot direct-activation guard (§5c-A, B.3.3 / ADR 0007 Phase 0):** Ha `payload.isActivated === true` ÉS `payload.modifiedByClientId !== 'server-guard'` ÉS `corrections.isActivated === undefined` (azaz a kliens DIREKT aktiválást próbál — pl. REST hívással kerülve meg az `activate_publication` CF action-t, és nincs korábbi deaktiválás-korrekció) → deaktiválás 4 mezővel: `{ isActivated: false, activatedAt: null, compiledWorkflowSnapshot: null, compiledExtensionSnapshot: null }`. A guard a §5a (workflow snapshot rögzítése) ELŐTT fut, hogy a felesleges workflow lookup ne fusson le egy direkt aktiváción, amit utána nullra felülírnánk. A SERVER_GUARD-os hívások (az `activate_publication` action) a CF teljes lefutását kihagyják (early-skip a `payload.modifiedByClientId` ÉS `freshDoc.modifiedByClientId` alapján a `validate-publication-update` belépésekor), így a guard értük nem fut le egyáltalán. Szigorítás: csak `isActivated:true` payloadra fut (B.3.3 Codex stop-time fix, commit `371d03c`) — egyéb update-ek (pl. `name` módosítás aktivált pubon) nem triggerelnek deaktiválást, és a `false`-os deaktiváló write-ok engedettek (Dashboard GeneralTab + revertelő logika). **Backfill-elni nem próbáljuk** — a `helpers/extensionSnapshot.js` duplikációja túl drága ebben a CF-ben, a felhasználó újraindítja az aktivációt az authoritatív action-en.
+
+**Legacy aktivált pub fail-closed (§5c-B, B.3.3):** Ha `freshDoc.isActivated === true` ÉS `corrections.isActivated === undefined` (a payload nem érintette az `isActivated`-ot, vagy az §5c-A már lefutott és deaktivált) ÉS a `freshDoc.compiledExtensionSnapshot` null/üres → deaktiválás. Ez a B.3.3 deploy ELŐTTI legacy aktivált publikációkat fogja meg: az első update-jükkor (akármelyik mezőre) deaktiválódnak, és a felhasználó újraindítja az aktivációt az `activate_publication` CF action-en keresztül.
+
+**Snapshot immutability guard (§6b, #37 + B.3.3):** Ha a kliens payload közvetlenül érinti a `compiledWorkflowSnapshot` VAGY `compiledExtensionSnapshot` mezőt ÉS a caller nem SERVER_GUARD, invariáns-sértés → deaktiválás + MINDKÉT snapshot mező null-ra. A post-event CF nem lát pre-state-et, ezért közvetlen mező-revert nem lehetséges; a deaktiválás új aktiválást kényszerít, ahol az §5a + `activate_publication` action a workflow aktuális `compiled`-ját ÉS az aktuális extension-snapshot-ot ráírja. Normál szerkesztés (name, coverage, contributors stb.) nem érinti egyik mezőt sem, így a guard csak explicit visszaélés ellen véd.
 
 ### set-publication-root-path
 
@@ -583,6 +600,62 @@ Két új attribútum a `workflows` collection-ön:
 - Payload: `{ groupId, permissionSetId }`. Junction doc lookup + delete.
 - Idempotens: ha nem létezik junction → success `already_unassigned`.
 
+### Workflow Extension CRUD action-ök (B.3.1 + B.3.2 / ADR 0007 Phase 0, 2026-05-04)
+
+> **Helye**: [actions/extensions.js](functions/invite-to-organization/src/actions/extensions.js) — 595 sor. A `restore_workflow_extension` SZÁNDÉKOSAN nem létezik: az implicit visszaállítás `update_workflow_extension` payload `archivedAt: null`-lal történik (Phase 1+ döntheti el külön action-é emelést).
+
+**Közös előfeltételek**:
+- Auth-fetch sorrend (B.3 harden Codex adversarial): a `userHasPermission()` check a doc-fetch ELŐTT fut, hogy a 404/403 különbség ne legyen office-létezés-oracle az unauthorized hívónak.
+- `acorn` ECMA3 pre-parse a `code` mezőre (`ecmaVersion: 3`, sourceType `script`, `locations: true` a hibapozícióhoz). **AST-szintű ellenőrzés** a Codex P1 fix nyomán: a `Program.body` tetején pontosan EGY `FunctionDeclaration` kell legyen `id.name === 'maestroExtension'` — string-detekció önmagában (regex / source-search) átengedne stringbe ágyazott magic-text-et vagy nested deklarációt. A futtatott `app.doScript` global scope-ban hívja, ezért top-level kötelező.
+- `EXTENSION_CODE_MAX_LENGTH = 256 KB` operatív cap (a séma 1 MB-ot enged, de a Phase 0 tipikus extension 5-50 KB).
+- **Visibility Phase 0 hatókör-szűkítés** (Codex tervi review 2026-05-04): a CRUD action-ök CSAK az `editorial_office` visibility-t fogadják el (`assertVisibilityOrFail` → 400 `unsupported_visibility`); a séma 3-way enum-ja (`editorial_office`/`organization`/`public`) érintetlen, hogy Phase 1+-ban additíven jöhessen az `extension.share` permission slug a non-default scope-hoz. Defense-in-depth: különben egy `extension.create`-jogú user `public` extension-t hozhatna létre — privilege-eszkalációs felület.
+
+**ACTION='create_workflow_extension'** (B.3.1):
+- Payload: `{ editorialOfficeId, name, slug, kind, scope?, code, visibility? }`.
+- Auth: `extension.create` office-scope (`userHasPermission()`).
+- Validációk: `missing_fields` (400), `invalid_slug` (400, SLUG_REGEX), `invalid_kind` (400, `EXTENSION_KIND_VALUES`), `invalid_scope` (400, Phase 0: csak `article`), `invalid_extension_code` (400, acorn parse + AST top-level `maestroExtension` FunctionDeclaration check).
+- ACL: `buildExtensionAclPerms(visibility, organizationId, editorialOfficeId)` — `teamHelpers.js`.
+- Slug-ütközés: `office_slug_unique` index → 409 `extension_slug_taken`.
+- `createdByUserId` mező rögzíti a callert.
+
+**ACTION='update_workflow_extension'** (B.3.1):
+- Payload: `{ extensionId, expectedUpdatedAt?, name?, kind?, scope?, code?, visibility?, archivedAt? }`.
+- Auth: `extension.edit` office-scope (a doc-ból olvasott `editorialOfficeId` alapján).
+- **Slug immutable**: `payload.slug !== undefined` → 400 `slug_immutable`.
+- TOCTOU guard: `expectedUpdatedAt` ↔ `extensionDoc.$updatedAt` mismatch → 409 `version_conflict`.
+- ACL újraszámolás visibility-váltáskor: `databases.updateDocument()` perms paraméter.
+- Implicit restore: `archivedAt: null` payload visszaállítja az archivált doc-ot (Phase 0).
+
+**ACTION='archive_workflow_extension'** (B.3.1):
+- Payload: `{ extensionId, expectedUpdatedAt? }`.
+- Auth: `extension.archive` office-scope.
+- Soft-delete: `archivedAt = now()`. Idempotens: már archivált → `already_archived`.
+- TOCTOU guard: ugyanaz a minta, mint update-nél.
+
+**Snapshot pipeline (B.3.3, `helpers/extensionSnapshot.js`)**:
+
+- `extractExtensionRefs(compiled)` → `{ validatorSlugs: Set<string>, commandSlugs: Set<string> }` (KÉT különálló set, kind-konzisztencia ellenőrzéshez):
+  - `compiled.validations` séma: `{ [stateName]: { onEntry, requiredToEnter, requiredToExit } }` — a 3 lane mindegyike string vagy `{validator, options}` objektum item-ekkel. Az `ext.<slug>` prefixű string vagy a `validator` mező értéke kerül a `validatorSlugs` set-be.
+  - `compiled.commands` séma: `{ [stateName]: [{ id, allowedGroups }] }` — CSAK object-alakú item-ek; az `id` mező `ext.<slug>` prefixű értéke kerül a `commandSlugs` set-be. (String item-eket SZÁNDÉKOSAN nem fogad — single-source contract a Designer `CommandListField` és Plugin runtime felé. B.3 harden P3 fix.)
+- `fetchExtensionsForOffice(databases, env, sdk, officeId, requestedSlugs)` — paginált batch lookup `sdk.Query.equal('editorialOfficeId', officeId)` + `sdk.Query.limit(100)` + `sdk.Query.cursorAfter(...)` lapozással. **Az `archivedAt` szűrés MEMÓRIÁBAN történik** (`if (requestedSlugs.has(doc.slug) && !doc.archivedAt)`) — Appwrite `Query.isNull` kompatibilitási nehézség miatt. Visszatér: `Map<slug, doc>` csak a kért slug-ok közül a nem-archiváltakra.
+- `buildExtensionSnapshot(databases, env, sdk, compiled, officeId)` — fail-fast pipeline, normalizált `{ ok, ... }` response (NEM dob, hogy a hívó CF action `if (!result.ok) return fail(...)` mintát használhassa):
+  1. `extractExtensionRefs(compiled)` → két slug-set, union-uk a fetch-elendő halmaz.
+  2. **Üres union** → `{ ok: true, snapshot: '{}', refs }` early-return. A `'{}'` szándékosan NEM null — a B.3 előtti legacy null állapottól való megkülönböztetésre.
+  3. `fetchExtensionsForOffice` try/catch wrap → `{ ok: false, status: 500, reason: 'extension_fetch_failed', payload: { error: fetchErr.message, note } }`. **A payload `error` mezője TARTALMAZZA a raw `err.message`-t** — ez egy CF→CF debug-flow segéd, nem leak: a CF action a hívás-eredményt szerver-oldalon `error()`-rel logolja, a kliens a normalizált 500-as választ kapja. A B.3 harden P2 fix a strukturált hibafelület megalkotása volt (raw exception propagálás helyett), NEM a `err.message` cenzúrázása.
+  4. **Hiányzó slug** (nem található / archivált) → `{ ok: false, status: 422, reason: 'missing_extension_references', payload: { missing: [...slug], note } }`. (A status `422` Unprocessable Entity, NEM 409 — a workflow JSON szemantikai hiba, nem konkurrencia-ütközés.)
+  5. **Kind-konzisztencia invariáns** (Codex tervi review) — `validatorSlugs` minden eleme `kind === 'validator'` doc-ra, `commandSlugs` minden eleme `kind === 'command'`-ra mutat. Eltérés → `{ ok: false, status: 422, reason: 'extension_kind_mismatch', payload: { mismatches: [{slug, expected, actual, lane}] } }`.
+  6. **JSON serializálás** — slug-szerint sortolt **flat map**: `{[slug]: { name, kind, scope, code }}`. **Nincs `schemaVersion`, nincs `extensions[]` array, nincs `$id` vagy `$updatedAt`.** A `code` mezőt a runtime futtatja, a többi metadata a UI-nak / guard-nak.
+  7. **Aggregate méret-cap** `EXTENSION_SNAPSHOT_MAX_BYTES`-zal → `{ ok: false, status: 422, reason: 'extension_snapshot_too_large', payload: { snapshotBytes, limitBytes, slugCount } }`. A schema 1 MB-ot enged a `compiledExtensionSnapshot` mezőre, a 800 KB cap (`EXTENSION_SNAPSHOT_MAX_BYTES`) marad jövőbeli Phase 1+ paramSchema / kompatibilitási header számára.
+- Az `activate_publication` action a return-elt `snapshot` JSON-stringet közvetlenül a `compiledExtensionSnapshot` mezőbe írja egy atomic update-ben (`isActivated`, `activatedAt`, `compiledWorkflowSnapshot`, `compiledExtensionSnapshot`, `modifiedByClientId: 'server-guard'`).
+- **Idempotens no-op early-return** (B.3 harden P1 fix, **`buildExtensionSnapshot` HÍVÁS ELŐTT** fut): ha `pubDoc.isActivated === true` ÉS `pubDoc.compiledWorkflowSnapshot === compiledStr` (string-egyezés a workflow aktuális `compiled`-jával) ÉS a `pubDoc.compiledExtensionSnapshot` non-empty string (CSAK PRESENCE check, NEM équivalence-check az új snapshot-tal — a runtime-immune semantika miatt egy retry NEM olvas live extension-öket) → `already_activated` válasz, deadline-fetch + extension-fetch kihagyva.
+
+**`activate_publication` integrációs változások (B.3.3)**:
+- A snapshot-build az `activate_publication`-ben a deadline-fetch UTÁN, de a DB write ELŐTT fut (idempotent re-aktiváció esetén early-return előbbre került — B.3 harden Codex P1 fix, 2026-05-04: archivált extension ne blokkolja a no-op retry-t).
+- A scope-check (`matchesWorkflowVisibility`) a 3 publikáció ↔ workflow párosítási helyen (`createPublicationWithWorkflow`, `assignWorkflowToPublication`, `activatePublication`) egységes single-source forrást használ — `helpers/workflowScope.js` (B.3 simplify P1 fix, 2026-05-04). A `delete_workflow` szándékosan eltér: ott `public` fail-closed minden hivatkozó pubot megtalál.
+
+**Globális env var dependencia (B.3 follow-up)**:
+- `WORKFLOW_EXTENSIONS_COLLECTION_ID` — a B.3.1 érkezésével a B.0.3-as terv globális fail-fast átemelése elhalasztva: a CRUD action-ök ÉS a `bootstrap_workflow_extension_schema` action lokálisan `fail(res, 500, 'misconfigured', { missing: ['WORKFLOW_EXTENSIONS_COLLECTION_ID'] })`-ot ad, ha a env nem set. A globális kötelezősítés Phase 0+1 váltáskor (Plugin runtime érkezése) szándékozott, hogy a B.4-es érintőlegesen NEM használó action-ök ne bukjanak el a deploy-on env hiányában. Aktuális state: action-szintű guard, env-set CSAK akkor szükséges, ha az adott action effektíven hívja az `extensionSnapshot`-ot vagy az extension collection-t.
+
 ### `permissions.js` modul (A.3.5 + A.3.6 + 2026-05-03 harden)
 
 A jogosultsági helper kétféle:
@@ -628,13 +701,15 @@ A meglévő CF action guardok átkötve a slug-alapú permission rendszerre:
 
 **Frontend impact A.4-re**: a 403 reason-mapping átállás slug-alapúra. A.4-ig a régi `insufficient_role` toast-ok generic-be esnek vissza (vault szabálya: nincs visszafelé-kompat).
 
-### Fázis 1 helper-extract (2026-05-03)
+### Helper- + action-extract evolúció (B.0.3 → B.3, 2026-05-03 → 2026-05-04)
 
-A `main.js` 7790 → 6964 sor (-844 sor, -11%) az inline helper-függvények külön modulokba költöztetésével. Új mappa: [packages/maestro-server/functions/invite-to-organization/src/helpers/](packages/maestro-server/functions/invite-to-organization/src/helpers/) (6 modul).
+**Fázis 1** (2026-05-03): a `main.js` 7790 → 6964 sor (-844 sor, -11%) az inline helper-függvények 6 helper-modulba költöztetésével. Új mappa: [packages/maestro-server/functions/invite-to-organization/src/helpers/](packages/maestro-server/functions/invite-to-organization/src/helpers/).
+
+**Fázis 2 — B.0.3 + B.3** (2026-05-04, 76430fb): a 36 → ~40 action handler szétbontva 9 `actions/*.js` modulba (orgs, offices, invites, groups, permissionSets, workflows, publications, schemas, **extensions** (B.3 új)). A `main.js` mostani mérete **589 sor** (action-router + env init + permissionContext only). A B.3 további 2 helper-modult adott: `workflowScope.js` és `extensionSnapshot.js` (összesen 10 helper-modul).
 
 **Import-irány tilt** (Codex flag, ciklikus require kockázat): `actions/*` → `helpers/*` → `permissions.js` / `teamHelpers.js`. Visszafelé NEM. CommonJS ciklikus require csendben fél-inicializált exports-ot ad.
 
-A `main.js` tetejére **77 soros TOC-blokk** került a 36 action handler approximate sorszámaival. **Fázis 2 (CF action-bontás)** szándékosan halasztva — a B blokk (Workflow Extensions) elejére időzítve, mert akkor új action-ök jönnek (lásd Feladatok B.0.3).
+**Fázis 3 — A.7.5 / Phase 1+ (tervezett)**: a `permissions.js` és `extensionContract.js` shared → CF generálás (`scripts/build-cf-permissions.mjs`, `scripts/build-cf-extension-contract.mjs`) az A.7.1 (`compiledValidator.js`) mintáját követve. A B.3 szándékos átmenettel él: `MAESTRO_EXTENSION_GLOBAL_NAME` és `EXTENSION_*` konstansok inline duplikáltak, drift-komment a fájl tetején.
 
 **Plugin 2-way fetch query** (`DataContext.jsx`):
 ```js
