@@ -72,6 +72,43 @@ function fallbackOnMissingSchema(err, label) {
 }
 
 /**
+ * B.5.1 stop-time follow-up — lapozott listDocuments. A `workflows` és
+ * `workflowExtensions` collection-ön a 100-as `Query.limit` silent truncate-et
+ * okozna 100+ doc-os office-on (a `WorkflowExtensionsTab` "X workflow
+ * hivatkozik rá" badge alulszámolna; az archive-confirm warning hiányos
+ * listát adna; a Bővítmények tab nem mutatna minden extension-t).
+ * `Query.cursorAfter` doc-`$id`-n alapuló lapozással biztonságosan
+ * összegyűjti az összeset, `HARD_LIMIT` az infinite-loop ellen véd.
+ *
+ * @returns {Promise<{ documents: Object[] }>} a teljes lista — a hívó
+ *   ugyanúgy `result.documents`-ot olvas, mint a `listDocuments`-nél
+ */
+async function listAllPaginated(databases, collectionId, queries) {
+    const PAGE_SIZE = 100;
+    const HARD_LIMIT = 1000;
+    const all = [];
+    let cursor = null;
+    while (all.length < HARD_LIMIT) {
+        const pageQueries = [...queries, Query.limit(PAGE_SIZE)];
+        if (cursor) pageQueries.push(Query.cursorAfter(cursor));
+        const page = await databases.listDocuments({
+            databaseId: DATABASE_ID,
+            collectionId,
+            queries: pageQueries
+        });
+        all.push(...page.documents);
+        if (page.documents.length < PAGE_SIZE) break;
+        cursor = page.documents[page.documents.length - 1].$id;
+    }
+    if (all.length >= HARD_LIMIT) {
+        console.warn(
+            `[EditorialOfficeSettingsModal] ${collectionId} HARD_LIMIT (${HARD_LIMIT}) — ennyi doc egy office-ban valószínűleg hibás állapot.`
+        );
+    }
+    return { documents: all };
+}
+
+/**
  * @param {Object} props
  * @param {string} props.editorialOfficeId — a kezelendő szerkesztőség $id-ja
  * @param {string} [props.initialTab] — kezdeti fül override (különben a localStorage)
@@ -185,37 +222,26 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
                         Query.limit(500)
                     ]
                 }).catch((err) => fallbackOnMissingSchema(err, 'groupPermissionSets')),
-                // B.5.1 / ADR 0007 Phase 0 — workflow extensions. Ugyanaz a
-                // szelektív schema-missing fallback minta: ha a collection
+                // B.5.1 / ADR 0007 Phase 0 — workflow extensions. **Lapozott**
+                // (B.5.1 stop-time follow-up): a 100-as `Query.limit` silent
+                // truncate-et adott, ami a Bővítmények tab listáját
+                // alulszámolná 100+ extension-ös office-on. Ha a collection
                 // nincs bootstrap-elve (`bootstrap_workflow_extension_schema`
-                // owner-only action még nem futott), üres listát mutatunk a
-                // tabon — a UI továbbra is működik, csak a "Nincs még
-                // bővítmény" empty-state jelenik meg. **Limit 500**:
-                // a Phase 0 tipikus office 5-10 extensiont tart, de a 100-as
-                // cap silent truncate-et okozna nagyobb office-on (Codex
-                // B.5.3 stop-time M1 fix). 500 abszolút sok, de a
-                // teljesítmény-veszteség elenyésző (egy listDocuments
-                // hívás + 500 doc render).
-                databases.listDocuments({
-                    databaseId: DATABASE_ID,
-                    collectionId: COLLECTIONS.WORKFLOW_EXTENSIONS,
-                    queries: [
-                        Query.equal('editorialOfficeId', editorialOfficeId),
-                        Query.limit(500)
-                    ]
-                }).catch((err) => fallbackOnMissingSchema(err, 'workflowExtensions')),
+                // owner-only action még nem futott), üres listát mutatunk —
+                // a UI továbbra is működik, csak a "Nincs még bővítmény"
+                // empty-state jelenik meg.
+                listAllPaginated(databases, COLLECTIONS.WORKFLOW_EXTENSIONS, [
+                    Query.equal('editorialOfficeId', editorialOfficeId)
+                ]).catch((err) => fallbackOnMissingSchema(err, 'workflowExtensions')),
                 // Workflows — a "X workflow hivatkozik rá" badge + archive
-                // confirm dialógus warning-jához kell. Ugyanúgy fallback-el,
-                // ha bármi gond van — az extension tab az üres listán is
-                // korrekt működik (csak nincs reference info).
-                databases.listDocuments({
-                    databaseId: DATABASE_ID,
-                    collectionId: COLLECTIONS.WORKFLOWS,
-                    queries: [
-                        Query.equal('editorialOfficeId', editorialOfficeId),
-                        Query.limit(100)
-                    ]
-                }).catch((err) => fallbackOnMissingSchema(err, 'workflows'))
+                // confirm dialógus warning-jához kell. **Lapozott** (B.5.1
+                // stop-time follow-up): 100+ workflow-os office-on a 100-as
+                // cap silent under-report-ot okozott a hivatkozás-számláláson
+                // — a felhasználó "0 workflow hivatkozik rá"-t látott volna
+                // egy archiválás-blokkoló valódi referencia mellett.
+                listAllPaginated(databases, COLLECTIONS.WORKFLOWS, [
+                    Query.equal('editorialOfficeId', editorialOfficeId)
+                ]).catch((err) => fallbackOnMissingSchema(err, 'workflows'))
             ]);
 
             if (gen !== loadGenRef.current) return;
