@@ -73,7 +73,15 @@ export function useTenantRealtimeRefresh({ scopeField, scopeId, reload }) {
 
         const handler = (response) => {
             const payload = response?.payload;
-            if (!payload || payload[scopeField] !== scopeId) return;
+            if (!payload) return;
+
+            // Delete payload szűkített mezőkészlettel jöhet (csak `$id`),
+            // így scope-filter false-ozhatna egy valós tenant-mutáción —
+            // delete-en bypass-oljuk. A reload úgyis a saját scope-ját
+            // kérdezi le; cross-tenant delete max egy felesleges fetch.
+            const isDelete = (response.events || []).some(e => e.includes('.delete'));
+            if (!isDelete && payload[scopeField] !== scopeId) return;
+
             if (debounceId) clearTimeout(debounceId);
             debounceId = setTimeout(() => {
                 debounceId = null;

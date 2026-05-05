@@ -205,20 +205,26 @@ export default function WorkflowExtensionsTab({
                     </p>
                     {referencingWorkflows.length > 0 ? (
                         <p>
-                            <strong>{referencingWorkflows.length} workflow hivatkozik rá</strong>:{' '}
+                            <strong>{referencingWorkflows.length} aktuális workflow hivatkozik rá</strong>:{' '}
                             {referencingWorkflows.slice(0, 5).join(', ')}
                             {referencingWorkflows.length > 5 ? `, … (+${referencingWorkflows.length - 5})` : ''}.
-                            A már aktivált publikációk a saját <code>compiledExtensionSnapshot</code>-jukban
-                            őrzik a kódot — ott érintetlenül futnak tovább. Új aktiválás
-                            viszont 422 hibára fut, amíg vissza nem állítod, vagy a
+                            Új aktiválás 422 hibára fut, amíg vissza nem állítod, vagy a
                             workflow-ból ki nem szeded a hivatkozást.
                         </p>
                     ) : (
                         <p>
-                            Egyetlen workflow sem hivatkozik rá jelenleg, így biztonságosan
-                            archiválható.
+                            Egyetlen aktuális workflow sem hivatkozik rá.
                         </p>
                     )}
+                    {/* A 0 workflow-ref nem jelenti, hogy a kód senkinél nem fut:
+                        snapshot-os pub-ok az immutable snapshot-on futnak tovább. */}
+                    <p>
+                        <strong>Figyelem</strong>: ha van olyan aktivált publikáció,
+                        amely az archiválandó bővítményt korábban már rögzítette a
+                        saját <code>compiledExtensionSnapshot</code>-jában, az
+                        immutable snapshot-on <strong>továbbra is futtatja</strong>{' '}
+                        a kódot — az archiválás csak az új aktiválásokat blokkolja.
+                    </p>
                 </>
             ),
             confirmLabel: 'Archiválás',

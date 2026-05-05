@@ -826,3 +826,7 @@
     gap: 8px;
     justify-content: flex-end;
 }
+
+.workflow-extension-editor__conflict-close {
+    margin-left: 12px;
+}

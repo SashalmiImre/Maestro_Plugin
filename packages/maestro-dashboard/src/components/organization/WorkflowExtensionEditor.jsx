@@ -152,7 +152,15 @@ export default function WorkflowExtensionEditor({ editorialOfficeId, existing = 
 
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState('');
+    const [errorReason, setErrorReason] = useState('');
     const [parseErrorLine, setParseErrorLine] = useState(null);
+
+    // 409 conflict derived flag (a TOCTOU guard-on elhasal, ha közben más
+    // admin szerkesztette / archiválta). A render egy "Bezárás" CTA-t ad
+    // — a parent Tab a Realtime push-ra automatikusan frissül.
+    const isVersionConflict =
+        errorReason.includes('version_conflict') ||
+        errorReason.includes('concurrent_modification');
 
     const codeRef = useRef(null);
 
@@ -206,6 +214,14 @@ export default function WorkflowExtensionEditor({ editorialOfficeId, existing = 
         e.preventDefault();
         if (submitting) return;
 
+        // Reset minden korábbi error-state-et a validáció előtt — különben
+        // egy korábbi 409 `errorReason`-je megmarad, és a derived
+        // `isVersionConflict` flag félrevezető "Bezárás" CTA-t mutatna egy
+        // tisztán lokális validációs hibán is (Codex /harden verify regression).
+        setError('');
+        setErrorReason('');
+        setParseErrorLine(null);
+
         const trimmedName = name.trim();
         const trimmedSlug = slug.trim();
 
@@ -241,12 +257,24 @@ export default function WorkflowExtensionEditor({ editorialOfficeId, existing = 
         }
 
         setSubmitting(true);
-        setError('');
-        setParseErrorLine(null);
         try {
             if (isEdit) {
-                // Slug NEM kerül a payload-ba (a server `slug_immutable`-ot adna).
-                const patch = { name: trimmedName, kind, code };
+                // Slug immutable (server 400 `slug_immutable`). A `code`
+                // conditional: name-only update-en kihagyjuk, hogy a server
+                // ne futtassa újra az acorn parse-ot (~300 ms / 256 KB).
+                const patch = {};
+                if (trimmedName !== (existing.name || '')) patch.name = trimmedName;
+                if (kind !== existing.kind) patch.kind = kind;
+                if (code !== (existing.code || '')) patch.code = code;
+                if (Object.keys(patch).length === 0) {
+                    // Üres patch — server 400 `nothing_to_update`-et adna.
+                    // A `disabled={!isDirty}` UI-szinten véd, ezért ez csak
+                    // edge case (pl. focus-loss közbeni race), de a CF-hibát
+                    // megelőzzük (Codex /harden verify regression).
+                    setSubmitting(false);
+                    closeModal();
+                    return;
+                }
                 await updateWorkflowExtension(existing.$id, patch, existing.$updatedAt);
             } else {
                 await createWorkflowExtension({
@@ -263,7 +291,8 @@ export default function WorkflowExtensionEditor({ editorialOfficeId, existing = 
             const reason = err.code || err.message || '';
             const errors = err.errors || err.response?.errors;
             setError(errorMessage(reason, errors));
-            // Parse-hiba esetén a textarea-t a hibás sorra ugrasztjuk.
+            setErrorReason(reason);
+            // Parse-hiba: textarea fókusz/scroll a hibás sorra.
             if (Array.isArray(errors) && errors.length > 0 && errors[0].line) {
                 setParseErrorLine(errors[0].line);
             }
@@ -293,7 +322,18 @@ export default function WorkflowExtensionEditor({ editorialOfficeId, existing = 
     return (
         <form onSubmit={handleSubmit} className="publication-form workflow-extension-editor">
             {error && (
-                <div className="login-error workflow-extension-editor__error">{error}</div>
+                <div className="login-error workflow-extension-editor__error">
+                    {error}
+                    {isVersionConflict && (
+                        <button
+                            type="button"
+                            onClick={closeModal}
+                            className="btn-ghost-sm workflow-extension-editor__conflict-close"
+                        >
+                            Bezárás
+                        </button>
+                    )}
+                </div>
             )}
 
             <div className="workflow-extension-editor__row">
