@@ -58,13 +58,17 @@ tags: [referencia]
 | Fogalom | Leírás |
 |---------|--------|
 | **WorkflowLibraryPanel** | Közös workflow-könyvtár modal (breadcrumb chip + publikáció-hozzárendelés) — [[Komponensek/WorkflowLibrary]] |
-| **WorkflowExtension** | DB-tárolt ExtendScript validátor / parancs (Proposed) — [[Komponensek/WorkflowExtension]] |
+| **WorkflowExtension** | DB-tárolt ExtendScript validátor / parancs ([[Döntések/0007-workflow-extensions|ADR 0007 Phase 0]] — implementáció B blokk) |
 | **`WORKFLOW_STATE_COLORS`** | Közös szín-paletta + `nextAvailableColor()` helper — [[Komponensek/WorkflowStateColors]] |
-| **`visibility` enum (3-state)** | `editorial_office` / `organization` / `public` — workflow scope ([[Döntések/0006-workflow-lifecycle-scope]]) |
+| **`visibility` enum (3-state)** | `editorial_office` / `organization` / `public` — workflow / extension scope ([[Döntések/0006-workflow-lifecycle-scope]], [[Döntések/0007-workflow-extensions]]) |
 | **`compiledWorkflowSnapshot`** | Aktivált publikáció snapshot mező — futó workflow immutable védelem |
+| **`compiledExtensionSnapshot`** | Aktivált publikáció extension snapshot mező — `Map<slug, { name, kind, scope, code }>` JSON, immutable a pub élettartama alatt ([[Döntések/0007-workflow-extensions]] §Snapshot-pattern) |
 | **`archivedAt`** | Soft-delete mező — 7 napos retention, `cleanup-archived-workflows` napi cron |
 | **`buildWorkflowAclPerms()`** | Doc-szintű ACL helper a `workflows` collection-höz (Fázis 2 minta kiterjesztése) |
 | **`ext.<slug>` prefix** | Workflow JSON `validations` / `commands` listájában custom extension hivatkozás |
+| **`extensionRegistry`** | Plugin runtime `Map<slug, { name, kind, scope, code }>` — `buildExtensionRegistry(snapshot)` eredménye, [[Komponensek/DataContext]] derived state-en át fogyasztva ([[Komponensek/ExtensionRegistry]]) |
+| **`maestroExtension(input)`** | ExtendScript globál függvény — extension kód kötött belépési pontja. **Phase 0**: validator → `{ article }`, command → `{ article, publicationRoot }` (a publikáció `rootPath` STRINGJE, nem teljes objekt). **Phase 1+**: `options` mező + `publication` scope a `paramSchema` mentén |
+| **`isExtensionRef(name)` / `parseExtensionRef(name)`** | Shared helper (`maestro-shared/extensionContract`) — `ext.<slug>` prefix detektálás + slug kinyerés workflow JSON validation/command listából |
 
 ## Jogosultsági rendszer (Partially-Implemented — [[Döntések/0008-permission-system-and-workflow-driven-groups]])
 

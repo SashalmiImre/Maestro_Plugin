@@ -48,11 +48,16 @@ export const validate = async (target, checkTypes, context = {}) => {
                 break;
 
             case VALIDATOR_TYPES.STATE_COMPLIANCE:
+                // `extensions` propagálás (B.4.2) — a `StateComplianceValidator` switch
+                // default ága `ext.<slug>` esetén ezt használja a `dispatchExtensionValidator`
+                // hívásnál; nélküle az extension-validátor mindig fail-closed
+                // "registry hiányzik" ágba esne.
                 result = await validators.stateCompliance.validate({
                     article: target,
                     workflow: context.workflow,
                     targetState: context.targetState,
-                    publicationRootPath: context.publicationRootPath
+                    publicationRootPath: context.publicationRootPath,
+                    extensions: context.extensions
                 });
                 break;
 

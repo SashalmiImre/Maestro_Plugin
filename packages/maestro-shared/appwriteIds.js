@@ -29,7 +29,9 @@ export const COLLECTIONS = {
     WORKFLOWS: 'workflows',
     // ADR 0008 / A.3 — Jogosultság-csoportok (permission sets)
     PERMISSION_SETS: 'permissionSets',
-    GROUP_PERMISSION_SETS: 'groupPermissionSets'
+    GROUP_PERMISSION_SETS: 'groupPermissionSets',
+    // ADR 0007 Phase 0 / B.1.1 — Workflow extensions (validator + command)
+    WORKFLOW_EXTENSIONS: 'workflowExtensions'
 };
 
 /**

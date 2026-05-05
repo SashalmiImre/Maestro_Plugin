@@ -7,8 +7,11 @@
 import { ValidatorBase } from "./ValidatorBase.js";
 import { PreflightValidator } from "./PreflightValidator.js";
 import { getStateValidations } from "maestro-shared/workflowRuntime.js";
+import { isExtensionRef, parseExtensionRef } from "maestro-shared/extensionContract.js";
 import { VALIDATOR_TYPES } from "../validationConstants.js";
 import { isValidFileName, toAbsoluteArticlePath, escapePathForExtendScript } from "../pathUtils.js";
+import { dispatchExtensionValidator } from "../extensions/extensionRegistry.js";
+import { logWarn } from "../logger.js";
 
 /** Gyorsítótárazott PreflightValidator példány. */
 const preflightValidator = new PreflightValidator();
@@ -80,6 +83,20 @@ export class StateComplianceValidator extends ValidatorBase {
                         if (entryConfig?.options) options = entryConfig.options;
                     }
                     await this._checkPreflight(article, options, results);
+                    break;
+                }
+
+                default: {
+                    // Workflow extension hivatkozás (`ext.<slug>`) — B.4.2 / ADR 0007 Phase 0.
+                    // Az `options` Phase 0-ban (B.0.4) NEM kerül továbbításra a `maestroExtension(input)`-be.
+                    if (isExtensionRef(validatorName)) {
+                        const ref = parseExtensionRef(validatorName);
+                        await this._checkExtensionValidator(ref.slug, article, context.extensions, results);
+                    } else {
+                        // Defense-in-depth: a server-oldali workflow compile szűr ismeretlen validator
+                        // típust, de ha valami csendben átment, a no-op skip helyett legalább logoljunk.
+                        logWarn(`[StateComplianceValidator] Ismeretlen validator-típus: ${validatorName}`);
+                    }
                     break;
                 }
             }
@@ -177,6 +194,24 @@ export class StateComplianceValidator extends ValidatorBase {
         if (result.skipped) {
             results.skipped = true;
             results.unmountedDrives = result.unmountedDrives;
+        }
+    }
+
+    /**
+     * Workflow extension validator dispatch (`ext.<slug>` — ADR 0007 Phase 0, B.4.2).
+     *
+     * A `extensionRegistry` az aktivált publikáció `compiledExtensionSnapshot`-jából épül
+     * (`buildExtensionRegistry`); fail-closed: hiányzó registry / unknown slug / kind-mismatch
+     * → `[ext.<slug>] ...` prefixált error a `results.errors`-ba.
+     */
+    async _checkExtensionValidator(slug, article, extensionRegistry, results) {
+        const result = await dispatchExtensionValidator(extensionRegistry, slug, { article });
+        if (!result.isValid) {
+            results.isValid = false;
+            results.errors.push(...result.errors);
+        }
+        if (result.warnings?.length > 0) {
+            results.warnings.push(...result.warnings);
         }
     }
 }

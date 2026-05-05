@@ -47,7 +47,8 @@ import { uploadThumbnails, deleteOldThumbnails, cleanupTempFiles, getTempFolderP
 
 export const ArticleProperties = ({ article, publication, onUpdate }) => {
     const { user } = useUser();
-    const { updateArticle, applyArticleUpdate, workflow } = useData();
+    // `extensionRegistry` a DataContext snapshot-preferáló derived state-je (B.4.2).
+    const { updateArticle, applyArticleUpdate, workflow, extensionRegistry } = useData();
     const { renameArticle } = useArticles(article?.publicationId, null, false);
     const { showToast } = useToast();
     const { hasErrors } = useUnifiedValidation(article);
@@ -394,7 +395,7 @@ export const ArticleProperties = ({ article, publication, onUpdate }) => {
         );
 
         try {
-            const result = await WorkflowEngine.executeTransition(workflow, article, targetState, user, publication?.rootPath);
+            const result = await WorkflowEngine.executeTransition(workflow, article, targetState, user, publication?.rootPath, extensionRegistry);
 
             if (result.success) {
                 applyArticleUpdate(result.document);

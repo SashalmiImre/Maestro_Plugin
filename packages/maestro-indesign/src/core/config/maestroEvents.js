@@ -88,6 +88,13 @@ export const MaestroEvent = Object.freeze({
     // --- Workflow ---
     /** Workflow konfiguráció megváltozott (Realtime hot-reload). Nincs detail. */
     workflowChanged: 'maestro:workflow-changed',
+    /**
+     * Workflow extension collection változás (Realtime). Nincs detail.
+     * Phase 0-ban consumer nincs: a Plugin runtime a publikáció `compiledExtensionSnapshot`-jából
+     * építi a registry-t, amely immutable az aktivált pub élettartama alatt. Az event jövőbeli
+     * non-snapshot fallback / Designer plugin tab számára él. (ADR 0007 Phase 0, B.4.3)
+     */
+    workflowExtensionsChanged: 'maestro:workflow-extensions-changed',
 
     // --- Infrastruktúra ---
     /** Proxy endpoint váltás történt. Detail: { isPrimary, endpoint } */

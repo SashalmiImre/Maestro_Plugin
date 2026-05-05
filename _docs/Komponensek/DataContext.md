@@ -14,7 +14,7 @@ Központi adatállapot kezelő (publications, articles, validations, layouts, de
 - **Forrás**: `packages/maestro-indesign/src/core/contexts/DataContext.jsx:67`
 
 ### Felület (API)
-- **Read**: `publications[]`, `articles[]`, `validations[]`, `layouts[]`, `deadlines[]`, `workflow`, `activePublicationId`, `isLoading`, `isSwitchingPublication`
+- **Read**: `publications[]`, `articles[]`, `validations[]`, `layouts[]`, `deadlines[]`, `workflow`, `workflows[]`, `activePublication`, `extensionRegistry`, `activePublicationId`, `isLoading`, `isSwitchingPublication`
 - **Write-through**: `createArticle(data)`, `updateArticle(id, data)` (CF-en át), `deleteArticle(id)`, `createValidation`/`updateValidation`/`deleteValidation`
 - **Util**: `setActivePublicationId(id)`, `fetchData(isBackground)`, `applyArticleUpdate(doc)` (külső írók — pl. [[WorkflowEngine]] — számára)
 - **Hook**: `useData()`
@@ -22,6 +22,11 @@ Központi adatállapot kezelő (publications, articles, validations, layouts, de
 ### Belső védelmek
 - **`$updatedAt` staleness guard**: Realtime és write-through is ellenőrzi, hogy a helyi adat frissebb-e az incoming payload-nál — megelőzi az optimista update felülírást
 - **Fetch generáció-számláló**: párhuzamos `fetchData()` hívások (recovery + pub switch) eredményeit szűri — a régibb generáció eldobódik (no UI jump)
+
+### Workflow extension registry (B.4.2, ADR 0007 Phase 0)
+- **Snapshot-preferáló derived state**: `extensionRegistry` az `activePublication.compiledExtensionSnapshot`-ból épül (`buildExtensionRegistry`, [[ExtensionRegistry]]), `useMemo` deps: `$id` + snapshot-string identitás. Workflow-doc Realtime mutáció NEM invalidálja az aktivált pub registry-jét (immutable a pub élettartama alatt).
+- **Single-source**: a fogyasztók (`ArticleProperties`, `PropertiesPanel`, [[WorkflowEngine]] `validateTransition`/`executeTransition`, `executeCommand`) ezt a derived state-et használják — egy parse / aktivált pub.
+- **Realtime subscribe**: a `workflowExtensions` collection változásait a Plugin Realtime handler debug-logolja és [[MaestroEvent#Workflow extension eseményei B.4.3, ADR 0007 Phase 0|`workflowExtensionsChanged` event]]-tel jelzi — Phase 0-ban consumer NINCS, runtime cache invalidálás NINCS (jövőbeli Designer plugin tab / non-snapshot fallback számára).
 
 ## Dashboard DataContext
 
@@ -63,6 +68,6 @@ A Provider `value` `useMemo`-zott (deps: minden state, singleton, useCallback). 
 - **Workflow derived (Dashboard)** prefer sorrend: compiled snapshot JSON → workflowId cache → null (fail-closed)
 
 ## Kapcsolódó
-- [[MaestroEvent]], [[RealtimeBus]], [[ScopeContext]] (TBD), [[ConnectionContext]]
-- [[Döntések/0002-fazis2-dynamic-groups]], [[Döntések/0004-dashboard-realtime-bus]], [[Döntések/0006-workflow-lifecycle-scope]]
+- [[MaestroEvent]], [[RealtimeBus]], [[ScopeContext]] (TBD), [[ConnectionContext]], [[ExtensionRegistry]]
+- [[Döntések/0002-fazis2-dynamic-groups]], [[Döntések/0004-dashboard-realtime-bus]], [[Döntések/0006-workflow-lifecycle-scope]], [[Döntések/0007-workflow-extensions]]
 - [[WorkflowLibrary]] (a panel a `archivedWorkflows` + scope-szűrt `workflows` consumer-e)

@@ -26,9 +26,10 @@ import { realtime } from "../config/realtimeClient.js";
 import { useConnection } from "./ConnectionContext.jsx";
 import { useScope } from "./ScopeContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
-import { log, logWarn, logError } from "../utils/logger.js";
+import { log, logWarn, logError, logDebug } from "../utils/logger.js";
 import { withTimeout, withRetry } from "../utils/promiseUtils.js";
 import { isNetworkError, isAuthError } from "../utils/errorUtils.js";
+import { buildExtensionRegistry } from "../utils/extensions/extensionRegistry.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../config/maestroEvents.js";
 import { FETCH_TIMEOUT_CONFIG, TOAST_TYPES } from "../utils/constants.js";
 
@@ -562,6 +563,16 @@ export const DataProvider = ({ children }) => {
         }
     }, [activePublication?.$id, activePublication?.compiledWorkflowSnapshot]);
 
+    // Workflow extension registry az aktivált pub `compiledExtensionSnapshot`-jából
+    // (B.4.2 / ADR 0007 Phase 0). Snapshot-preferáló: `$id` + snapshot-string identitásra
+    // memo-zva, így workflow-doc Realtime mutáció nem invalidálja az aktivált pub registry-jét.
+    // Single-source: a fogyasztók (ArticleProperties, PropertiesPanel) ezt a derived
+    // state-et használják — egy parse / aktivált pub.
+    const extensionRegistry = useMemo(
+        () => buildExtensionRegistry(activePublication?.compiledExtensionSnapshot),
+        [activePublication?.$id, activePublication?.compiledExtensionSnapshot]
+    );
+
     // Legacy (snapshot nélküli) publikáció workflowId útvonala. Ha van érvényes
     // snapshot, ezt nem használjuk — ne zavarjon workflow-doc Realtime mutáció
     // az aktivált publikáción.
@@ -864,7 +875,8 @@ export const DataProvider = ({ children }) => {
             `databases.${DATABASE_ID}.collections.${COLLECTIONS.LAYOUTS}.documents`,
             `databases.${DATABASE_ID}.collections.${COLLECTIONS.DEADLINES}.documents`,
             `databases.${DATABASE_ID}.collections.${COLLECTIONS.GROUP_MEMBERSHIPS}.documents`,
-            `databases.${DATABASE_ID}.collections.${COLLECTIONS.WORKFLOWS}.documents`
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.WORKFLOWS}.documents`,
+            `databases.${DATABASE_ID}.collections.${COLLECTIONS.WORKFLOW_EXTENSIONS}.documents`
         ];
 
         const unsubscribe = realtime.subscribe(channels, (response) => {
@@ -1137,6 +1149,16 @@ export const DataProvider = ({ children }) => {
                     setWorkflows(prev => prev.filter(w => w.$id !== payload.$id));
                 }
             }
+
+            // --- Workflow Extensions (B.4.3, ADR 0007 Phase 0) ---
+            // Snapshot-only stratégia: a Plugin runtime az aktivált pub
+            // `compiledExtensionSnapshot`-jából építi a registry-t (immutable). Ez a feliratkozás
+            // jövőbeli consumer (Designer plugin tab vagy non-snapshot fallback) számára él;
+            // most csak debug log + event dispatch nyitja a kaput, runtime cache invalidálás nincs.
+            else if (event.includes(COLLECTIONS.WORKFLOW_EXTENSIONS)) {
+                logDebug(`[DataContext] workflowExtensions Realtime esemény: ${event} (${payload.$id})`);
+                dispatchMaestroEvent(MaestroEvent.workflowExtensionsChanged);
+            }
         });
 
         return () => {
@@ -1174,6 +1196,12 @@ export const DataProvider = ({ children }) => {
         deadlines,
         workflow,
         workflows,
+        // Aktív publikáció derived state — a B.4 extension registry build a
+        // `compiledExtensionSnapshot`-ot innen olvassa.
+        activePublication,
+        // Snapshot-preferáló workflow extension registry (B.4.2). A fogyasztók
+        // ezt használják, NEM kell külön `buildExtensionRegistry()` minden komponensben.
+        extensionRegistry,
         isLoading,
         isSwitchingPublication,
         activePublicationId,
@@ -1192,6 +1220,7 @@ export const DataProvider = ({ children }) => {
         deleteValidation
     }), [
         publications, articles, validations, layouts, deadlines, workflow, workflows,
+        activePublication, extensionRegistry,
         isLoading, isSwitchingPublication, activePublicationId,
         updateActivePublicationId, fetchData,
         createArticle, updateArticle, deleteArticle, applyArticleUpdate,

@@ -3,6 +3,8 @@ import { handleCollectImages } from "./handlers/collectImages.js";
 import { handleArchiving } from "./handlers/archiving.js";
 import { handlePrinting } from "./handlers/printing.js";
 import { handlePreflightCheck } from "./handlers/preflightCheck.js";
+import { isExtensionRef, parseExtensionRef } from "maestro-shared/extensionContract.js";
+import { dispatchExtensionCommand } from "../utils/extensions/extensionRegistry.js";
 import { log, logWarn, logError } from "../utils/logger.js";
 
 /**
@@ -20,14 +22,28 @@ const COMMAND_REGISTRY = {
 
 /**
  * Executes a command by ID.
- * 
- * @param {string} commandId - The ID of the command to execute.
- * @param {object} context - Context data (e.g., current item, user info).
+ *
+ * @param {string} commandId - The ID of the command to execute. Speciális eset: `ext.<slug>`
+ *   alakú workflow extension hivatkozás — a `context.extensions` registry-ből oldódik fel
+ *   (B.4.2 / ADR 0007 Phase 0).
+ * @param {object} context - Context data (e.g., current item, user info, extensions).
+ *   Az extension command ágon kötelező: `extensions` (registry Map) + `item` (article).
+ *   Opcionális: `publication` (a `rootPath`-t a `publicationRoot` JSON I/O kulcsra mappeljük).
  * @returns {Promise<object>} Result of the command execution.
  */
 export const executeCommand = async (commandId, context = {}) => {
+    // Workflow extension hivatkozás (`ext.<slug>`) — Phase 0-ban (B.0.4) az `options`
+    // szándékosan nem kerül átadásra; a JSON I/O csak `{ article, publicationRoot }` mezőt kap.
+    if (isExtensionRef(commandId)) {
+        const ref = parseExtensionRef(commandId);
+        log(`[CommandExecutor] Extension command dispatch: ${commandId}`);
+        return dispatchExtensionCommand(context.extensions, ref.slug, {
+            article: context.item,
+            publicationRoot: context.publication?.rootPath ?? null
+        });
+    }
+
     const handler = COMMAND_REGISTRY[commandId];
-    
     if (!handler) {
         logWarn(`[CommandExecutor] No handler found for command: ${commandId}`);
         return { success: false, error: `Unknown command: ${commandId}` };

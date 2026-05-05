@@ -5,6 +5,8 @@ date: 2026-05-01
 updated: 2026-05-04
 ---
 
+> **Frissítés (2026-05-05)** — B.4 Plugin runtime **implementálva** (unstaged a `feature/maestro-redesign` branchen). Új modul: [packages/maestro-indesign/src/core/utils/extensions/extensionRegistry.js](../../packages/maestro-indesign/src/core/utils/extensions/extensionRegistry.js) — részletes leírás: [[Komponensek/ExtensionRegistry]]. A Plugin **snapshot-only stratégiát** használ: a runtime az aktivált publikáció `compiledExtensionSnapshot`-jából építi a registry-t (immutable a pub élettartama alatt) — a "Plugin runtime dispatch" §-ban említett `workflowExtensions` cache helyett. A `workflowExtensions` Realtime channel ([[Komponensek/MaestroEvent]] `workflowExtensionsChanged`) Phase 0-ban consumer-mentes (jövőbeli Designer plugin tab / non-snapshot fallback számára). Belépési pontok: [[Komponensek/DataContext]] derived `extensionRegistry` (snapshot-preferáló useMemo), [[Komponensek/StateComplianceValidator]] `_checkExtensionValidator`, `commands/index.js` `executeCommand` `ext.<slug>` ág, [[Komponensek/WorkflowEngine]] `validateTransition`/`executeTransition` opcionális `extensionRegistry` paraméter. **Kontraktus pontosítás (Phase 0)**: a Plugin a command-runtime-nak `publicationRoot`-ot (publikáció `rootPath` stringje) ad át, NEM a teljes publication objektumot — ld. ADR §Runtime kontraktus táblázat (a kontraktus szándéka már a 2026-05-01 verzióban is `publicationRoot` volt; az inline példa most konzisztensen javítva).
+
 > **Frissítés (2026-05-04)** — B.1 Adatmodell **implementálva** ([packages/maestro-server/functions/invite-to-organization/src/actions/schemas.js](packages/maestro-server/functions/invite-to-organization/src/actions/schemas.js) `bootstrapWorkflowExtensionSchema` + [packages/maestro-server/functions/invite-to-organization/src/teamHelpers.js](packages/maestro-server/functions/invite-to-organization/src/teamHelpers.js) `buildExtensionAclPerms`). A `workflowExtensions` collection schema létrehozható a CF `bootstrap_workflow_extension_schema` action-en keresztül (owner-only, idempotens). Új env var: `WORKFLOW_EXTENSIONS_COLLECTION_ID` (Phase 0-ban action-scoped guard). Részletek: [packages/maestro-server/CLAUDE.md](../../packages/maestro-server/CLAUDE.md) → "Idempotens workflowExtensions schema bootstrap".
 
 > **Frissítés (2026-05-03)** — B.0 tervi tisztázás (Codex review): a Phase 0 hatókör szűkítve. Jelölve a változások a "Phase-ek" szekcióban + új "Phase 0 hatókör-szűkítés" szakasz az implementáció előtt. Az "Adatmodell" tábla `paramSchema` sora halasztva-jellel.
@@ -43,8 +45,8 @@ Minden extension egyetlen kötött felületet implementál:
 ```js
 // ExtendScript (InDesign runtime)
 function maestroExtension(input) {
-    // input = JSON: { article, options, publication }
-    // ...
+    // Phase 0 (B.0.4): validator → { article }, command → { article, publicationRoot }
+    // Phase 1+: a `options` mező + `publication` scope kibővítés a paramSchema mentén
     return { /* JSON eredmény */ };
 }
 ```
@@ -97,7 +99,7 @@ A Phase 0 MVP **nem támogat per-workflow extension-paraméter-átadást**:
 - A Plugin command runtime csak `cmd.id`-t propagál ([PropertiesPanel.jsx:37-44](packages/maestro-indesign/src/ui/features/workspace/PropertiesPanel/PropertiesPanel.jsx), [commands/index.js:28-39](packages/maestro-indesign/src/core/commands/index.js)).
 
 Következmények Phase 0-ra:
-- Az ExtendScript `code`-ja önálló logika, **kötött I/O kontraktussal**: validator → `{ article, options? }`, command → `{ article, options?, publication }`. A futtatott `options` argumentum extension-eknek **MVP-ben üres / nincs továbbítva** (a beépített validátorok ma használnak `options`-t, pl. `preflight_check.requiredArticleStates`, de azt a Designer és a runtime még csak rájuk van bekötve).
+- Az ExtendScript `code`-ja önálló logika, **kötött I/O kontraktussal**: validator → `{ article }`, command → `{ article, publicationRoot }` (a publikáció `rootPath` STRINGJE, NEM teljes objekt — ld. [`commands/index.js`](packages/maestro-indesign/src/core/commands/index.js)). A `options` mező Phase 0-ban üres / NEM kerül a `maestroExtension(input)`-be (a beépített validátorok ma használnak `options`-t, pl. `preflight_check.requiredArticleStates`, de azt a Designer és a runtime még csak rájuk van bekötve). A `publication` scope kibővítése (teljes publication objekt input) Phase 1+ enum-bővítéssel jön.
 - A `paramSchema` mező halasztása a Phase 1+ kibővítés egy darabja, de **nem önálló blokkoló** — Phase 1-ben együtt jön a Designer `ValidationListField`/`CommandListField` options-szerkesztő bővítésével és a Plugin runtime options-átadás kibővítésével.
 
 ### Phase 1+

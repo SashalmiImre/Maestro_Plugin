@@ -63,13 +63,21 @@ export class WorkflowEngine {
      * @param {Object} article - A validálandó cikk objektum.
      * @param {string} targetState - A célállapot string ID-ja.
      * @param {string} publicationRootPath - A kiadvány gyökér útvonala.
+     * @param {Map<string, object>} [extensionRegistry] - Workflow extension registry
+     *   (`buildExtensionRegistry(activePublication.compiledExtensionSnapshot)` eredménye).
+     *   Ha hiányzik, az `ext.<slug>` validátorok fail-closed `isValid:false`-t adnak.
      * @returns {Promise<Object>} Validációs eredmény: { isValid, errors[], warnings[] }.
      */
-    static async validateTransition(workflow, article, targetState, publicationRootPath) {
+    static async validateTransition(workflow, article, targetState, publicationRootPath, extensionRegistry = null) {
         if (!workflow) {
             return { isValid: false, errors: ["Hiányzó workflow konfiguráció."], warnings: [] };
         }
-        return validate(article, VALIDATOR_TYPES.STATE_COMPLIANCE, { workflow, targetState, publicationRootPath });
+        return validate(article, VALIDATOR_TYPES.STATE_COMPLIANCE, {
+            workflow,
+            targetState,
+            publicationRootPath,
+            extensions: extensionRegistry
+        });
     }
 
     /**
@@ -84,11 +92,14 @@ export class WorkflowEngine {
      * @param {string} targetState - A célállapot string ID-ja.
      * @param {Object} user - A felhasználó, aki végrehajtja a váltást (naplózáshoz).
      * @param {string} publicationRootPath - A kiadvány gyökér útvonala.
+     * @param {Map<string, object>} [extensionRegistry] - `buildExtensionRegistry(...)` eredménye
+     *   az `ext.<slug>` validator-extension dispatch-hez (B.4.2). Ha null, a `validateTransition`
+     *   fail-closed `[ext.<slug>] extension regisztry nem inicializált` hibát ad.
      * @returns {Promise<Object>} { success, document?, error?, permissionDenied?, validation? }
      *   A `validation` csak akkor szerepel, ha a kliens-oldali validáció bukott (tartalmazza:
      *   `errors`, `warnings`, `skipped`, `unmountedDrives` — hogy a UI pontos toast-ot tudjon formálni).
      */
-    static async executeTransition(workflow, article, targetState, user, publicationRootPath) {
+    static async executeTransition(workflow, article, targetState, user, publicationRootPath, extensionRegistry = null) {
         if (!workflow || !article) {
             logWarn("[WorkflowEngine] executeTransition: hiányzó workflow vagy article");
             return { success: false, error: "Hiányzó workflow konfiguráció vagy cikk." };
@@ -96,7 +107,7 @@ export class WorkflowEngine {
 
         try {
             // 1. Kliens-oldali átmenet-validáció (drága: preflight, file-accessible)
-            const validation = await WorkflowEngine.validateTransition(workflow, article, targetState, publicationRootPath);
+            const validation = await WorkflowEngine.validateTransition(workflow, article, targetState, publicationRootPath, extensionRegistry);
             if (!validation.isValid) {
                 return {
                     success: false,

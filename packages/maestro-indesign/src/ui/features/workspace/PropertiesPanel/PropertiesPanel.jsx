@@ -11,12 +11,14 @@ import { useToast } from "../../../common/Toast/ToastContext.jsx";
 import { TOAST_TYPES } from "../../../../core/utils/constants.js";
 import { executeCommand } from "../../../../core/commands/index.js";
 import { useElementPermissions } from "../../../../data/hooks/useElementPermission.js";
+import { isExtensionRef, parseExtensionRef } from "maestro-shared/extensionContract.js";
 import { log, logError } from "../../../../core/utils/logger.js";
 
 export const PropertiesPanel = ({ selectedItem, publication, onUpdate, onBack, onOpen, runAndPersistPreflight }) => {
     // Hooks
     const { user } = useUser();
-    const { layouts, applyArticleUpdate, workflow } = useData();
+    // `extensionRegistry` a DataContext snapshot-preferáló derived state-je (B.4.2).
+    const { layouts, applyArticleUpdate, workflow, extensionRegistry } = useData();
     const { showToast } = useToast();
     const [isSyncing, setIsSyncing] = useState(false);
 
@@ -34,15 +36,21 @@ export const PropertiesPanel = ({ selectedItem, publication, onUpdate, onBack, o
     const canOpen = Boolean(item.filePath);
     const isIgnored = (item.markers & MARKERS.IGNORE) !== 0;
 
-    // Az aktuális állapothoz tartozó parancsok — a workflow compiled commands-ból
+    // Az aktuális állapothoz tartozó parancsok — a workflow compiled commands-ból.
+    // Extension command (`ext.<slug>`) esetén a label a registry `name` mezőjéből jön
+    // (a `commandRegistry.js` a beépített parancsokat ismeri csak — fallback a slug-ra).
     const commands = useMemo(() => {
         if (!item.state || !workflow) return [];
-        return getStateCommands(workflow, item.state).map(cmd => ({
-            id: cmd.id,
-            label: getCommandLabel(cmd.id),
-            allowedGroups: cmd.allowedGroups
-        }));
-    }, [item.state, workflow]);
+        return getStateCommands(workflow, item.state).map(cmd => {
+            let label = getCommandLabel(cmd.id);
+            if (isExtensionRef(cmd.id)) {
+                const ref = parseExtensionRef(cmd.id);
+                const ext = ref ? extensionRegistry.get(ref.slug) : null;
+                if (ext?.name) label = ext.name;
+            }
+            return { id: cmd.id, label, allowedGroups: cmd.allowedGroups };
+        });
+    }, [item.state, workflow, extensionRegistry]);
 
     const handleOpen = async () => {
         if (canOpen && onOpen) {
@@ -59,7 +67,7 @@ export const PropertiesPanel = ({ selectedItem, publication, onUpdate, onBack, o
 
         setIsSyncing(true);
         try {
-            const context = { item, user, publication, layouts, runAndPersistPreflight };
+            const context = { item, user, publication, layouts, runAndPersistPreflight, extensions: extensionRegistry };
             const result = await executeCommand(commandId, context);
 
             // silent: a handler már megjelenítette a visszajelzést (pl. toast a hook-ból)
