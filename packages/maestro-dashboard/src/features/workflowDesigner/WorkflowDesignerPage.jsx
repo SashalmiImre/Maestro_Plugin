@@ -19,7 +19,7 @@ import { useParams, Link, useBlocker, useNavigate } from 'react-router-dom';
 import { useNodesState, useEdgesState } from '@xyflow/react';
 import { Query } from 'appwrite';
 import { useAuth } from '../../contexts/AuthContext.jsx';
-import { subscribeRealtime, documentChannel } from '../../contexts/realtimeBus.js';
+import { subscribeRealtime, documentChannel, collectionChannel } from '../../contexts/realtimeBus.js';
 import { useData } from '../../contexts/DataContext.jsx';
 import { useScope } from '../../contexts/ScopeContext.jsx';
 import { useToast } from '../../contexts/ToastContext.jsx';
@@ -294,6 +294,149 @@ export default function WorkflowDesignerPage() {
 
         return () => { unsubscribe(); };
     }, [workflowDocId]);
+
+    // ── Workflow extensions fetch + Realtime (B.5.3, ADR 0007 Phase 0) ─────
+    // A Designer választható validátor / parancs listája Phase 0 óta a
+    // beépített `VALIDATOR_REGISTRY` + `COMMAND_REGISTRY` mellett az office
+    // workflow extension-eket is mutatja `ext.<slug>` ref-ek formájában.
+    //
+    // **Egy truth source, props-drilling** (Codex tervi roast 3-as pont):
+    // a `WorkflowDesignerPage` szintjén fetch-elünk és iratkozunk fel — a
+    // `PropertiesSidebar` → `StatePropertiesEditor` → `ValidationListField`
+    // / `CommandListField` mind ugyanazt a listát kapja propon. Külön
+    // DataContext-réteg overengineering volna egyetlen office-scope listára.
+    //
+    // **Realtime hot-reload**: a `workflowExtensions` collection-re
+    // feliratkozunk (csak az aktuális office-ra szűrve a payload-on).
+    // Create / archive / update mind triggereli a `setOfficeExtensions`-t,
+    // így a Designer validation/command chip-listája azonnal frissül a
+    // 4. Bővítmények tabban végzett CRUD nyomán.
+    //
+    // **Fail-tolerant fetch**: ha a `workflowExtensions` collection nincs
+    // még bootstrap-elve (`bootstrap_workflow_extension_schema` owner-only
+    // action), üres listát kapunk; az `archivedAt` szűrés memóriában megy
+    // (a Plugin-snapshot-mintát követve), hogy a Realtime payload-ot is
+    // egységesen tudjuk feldolgozni anélkül, hogy a `Query.isNull` (ami az
+    // Appwrite-on hisztérikus) szerver-oldalon kellene futtatni.
+    const [officeExtensions, setOfficeExtensions] = useState([]);
+
+    useEffect(() => {
+        if (!workflowOwnerOfficeId) {
+            setOfficeExtensions([]);
+            return;
+        }
+        let cancelled = false;
+        (async () => {
+            // Lapozott fetch (Codex stop-time M1 fix): a 100-as `Query.limit`
+            // csendes truncate-et adott volna 100+ extension-ös office-on. A
+            // Phase 0 tipikus extension-szám 5-10, de a fail-closed minta a
+            // jövőbeli office-méret-növekedés ellen védi a Designer
+            // választható listáját. `Query.cursorAfter` a doc `$id`-jén alapul.
+            const PAGE_SIZE = 100;
+            const HARD_LIMIT = 1000; // safety cap az infinite-loop ellen
+            try {
+                const all = [];
+                let cursor = null;
+                while (all.length < HARD_LIMIT) {
+                    const queries = [
+                        Query.equal('editorialOfficeId', workflowOwnerOfficeId),
+                        Query.limit(PAGE_SIZE)
+                    ];
+                    if (cursor) queries.push(Query.cursorAfter(cursor));
+                    const page = await databases.listDocuments(
+                        DATABASE_ID,
+                        COLLECTIONS.WORKFLOW_EXTENSIONS,
+                        queries
+                    );
+                    if (cancelled) return;
+                    all.push(...page.documents);
+                    if (page.documents.length < PAGE_SIZE) break;
+                    cursor = page.documents[page.documents.length - 1].$id;
+                }
+                if (all.length >= HARD_LIMIT) {
+                    console.warn(
+                        `[WorkflowDesigner] workflowExtensions HARD_LIMIT (${HARD_LIMIT}) — ennyi extension egy office-ban valószínűleg hibás állapot.`
+                    );
+                }
+                if (!cancelled) setOfficeExtensions(all);
+            } catch (err) {
+                // Ha a collection még nem létezik (404 / collection_not_found),
+                // a Designer nem dob — csak az extension lista lesz üres,
+                // a built-in validator/command chip-ek továbbra is
+                // megjelennek. Egyéb hibákat best-effort logolunk.
+                const code = err?.code;
+                const isMissing = code === 404 || /collection_not_found/i.test(err?.message || '');
+                if (!cancelled && !isMissing) {
+                    console.warn('[WorkflowDesigner] workflowExtensions fetch hiba:', err?.message || err);
+                }
+                if (!cancelled) setOfficeExtensions([]);
+            }
+        })();
+        return () => { cancelled = true; };
+    }, [workflowOwnerOfficeId, databases]);
+
+    useEffect(() => {
+        if (!workflowOwnerOfficeId) return undefined;
+
+        const unsubscribe = subscribeRealtime(
+            [collectionChannel(COLLECTIONS.WORKFLOW_EXTENSIONS)],
+            (response) => {
+                const payload = response?.payload;
+                if (!payload) return;
+                const events = response.events || [];
+                const isDelete = events.some(e => e.includes('.delete'));
+                const isCreate = events.some(e => e.includes('.create'));
+
+                // **Delete-ág scope-szűrés guard nélkül** (Codex stop-time M2
+                // fix): az Appwrite delete payload egyes esetekben szűkített
+                // mezőkészlettel jön (csak `$id`), így a
+                // `editorialOfficeId !== workflowOwnerOfficeId` filter
+                // false-ot adhatna — pedig az adott $id ténylegesen
+                // törlődött, és a phantom maradna a state-ben. A `findIndex`
+                // úgyis no-op az scope-más doc-okra (azokat a state-ben
+                // sosem hozzuk be a fetch + create szűrése miatt).
+                if (isDelete) {
+                    setOfficeExtensions((prev) => {
+                        const idx = prev.findIndex(e => e.$id === payload.$id);
+                        return idx === -1 ? prev : prev.filter(e => e.$id !== payload.$id);
+                    });
+                    return;
+                }
+
+                // Create/update — scope-szűrés a payload `editorialOfficeId`-jén
+                // (más office-ok eseményei NEM kerülnek be a state-be).
+                if (payload.editorialOfficeId !== workflowOwnerOfficeId) return;
+
+                setOfficeExtensions((prev) => {
+                    const idx = prev.findIndex(e => e.$id === payload.$id);
+                    if (idx === -1) return isCreate ? [...prev, payload] : prev;
+                    // Update — `$updatedAt` elavulás-védelem a többi
+                    // DataContext handler mintáját követve.
+                    if (prev[idx].$updatedAt && payload.$updatedAt &&
+                        prev[idx].$updatedAt > payload.$updatedAt) return prev;
+                    const next = [...prev];
+                    next[idx] = payload;
+                    return next;
+                });
+            }
+        );
+        return () => { unsubscribe(); };
+    }, [workflowOwnerOfficeId]);
+
+    // A Designer számára `extensions[]` minimal alak: csak az aktív
+    // (nem archivált) extension-ek a választható listában. Az archivált
+    // ext.<slug>-ek read-only chip-ként megjelennek a stale workflow JSON-ben
+    // (Codex 5-ös pont) — a UI-szintű feloldást a `ValidationListField` /
+    // `CommandListField` végzi a teljes listából (archivedAt-tel együtt).
+    const designerExtensions = useMemo(() => {
+        return (officeExtensions || []).map(ext => ({
+            $id: ext.$id,
+            slug: ext.slug,
+            name: ext.name,
+            kind: ext.kind,
+            archivedAt: ext.archivedAt || null
+        }));
+    }, [officeExtensions]);
 
     // ── Kijelölés kezelés ────────────────────────────────────────────────────
 
@@ -991,6 +1134,7 @@ export default function WorkflowDesignerPage() {
                     metadata={metadata}
                     onMetadataChange={handleMetadataChange}
                     stateLabels={stateLabels}
+                    extensions={designerExtensions}
                     isCollapsed={isSidebarCollapsed}
                     onToggleCollapsed={toggleSidebarCollapsed}
                     isReadOnly={isReadOnly}

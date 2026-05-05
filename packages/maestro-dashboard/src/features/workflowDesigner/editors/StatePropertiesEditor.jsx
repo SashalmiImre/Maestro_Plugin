@@ -18,9 +18,12 @@ import CommandListField from '../fields/CommandListField.jsx';
  * @param {Function} props.onDataChange - (newData) => void
  * @param {string[]} props.availableGroups - Elérhető csoport slug-ok
  * @param {Function} props.onDelete - Node törlés callback
+ * @param {Array<{slug: string, name: string, kind: string, archivedAt: string|null}>} [props.extensions]
+ *   - Az office workflow extension-listája (B.5.3, ADR 0007 Phase 0). A
+ *   `ValidationListField` és `CommandListField` mind a `kind`-ra szűr.
  * @param {boolean} [props.isReadOnly] - Olvasásra korlátozott mód — letiltja az interaktív vezérlőket
  */
-export default function StatePropertiesEditor({ node, onDataChange, availableGroups, onDelete, isReadOnly = false }) {
+export default function StatePropertiesEditor({ node, onDataChange, availableGroups, onDelete, extensions, isReadOnly = false }) {
     const { data } = node;
     // #64: minden szekció ZÁRVA alapból — szimmetria + a Mozgatási jogosultság
     // (kritikus policy) sem ragad „rejtett"-ben az aszimmetrikus default miatt.
@@ -163,6 +166,7 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                             helpText="Az állapotba lépés pillanatában lefutó művelet (pl. preflight). Nem blokkolja a belépést."
                             value={data.validations?.onEntry || []}
                             onChange={v => updateValidation('onEntry', v)}
+                            extensions={extensions}
                             disabled={isReadOnly}
                         />
                         <ValidationListField
@@ -170,6 +174,7 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                             helpText="Az állapotba lépés ELŐTT futó kapu — ha bukik, az átmenet blokkolva."
                             value={data.validations?.requiredToEnter || []}
                             onChange={v => updateValidation('requiredToEnter', v)}
+                            extensions={extensions}
                             disabled={isReadOnly}
                         />
                         <ValidationListField
@@ -177,6 +182,7 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                             helpText="Az állapotból kilépés ELŐTT futó kapu — ha bukik, az átmenet blokkolva."
                             value={data.validations?.requiredToExit || []}
                             onChange={v => updateValidation('requiredToExit', v)}
+                            extensions={extensions}
                             disabled={isReadOnly}
                         />
                     </div>
@@ -201,6 +207,7 @@ export default function StatePropertiesEditor({ node, onDataChange, availableGro
                             value={data.commands || []}
                             availableGroups={availableGroups}
                             onChange={v => update('commands', v)}
+                            extensions={extensions}
                             disabled={isReadOnly}
                         />
                     </div>

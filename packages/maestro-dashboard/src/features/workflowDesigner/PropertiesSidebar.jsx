@@ -23,6 +23,12 @@ import WorkflowPropertiesEditor from './editors/WorkflowPropertiesEditor.jsx';
  * @param {Object} props.metadata - Workflow-szintű adatok
  * @param {Function} props.onMetadataChange - Metadata módosítás callback
  * @param {Object<string,string>} [props.stateLabels] - State slug → label térkép (TransitionPropertiesEditor #65)
+ * @param {Array<{slug: string, name: string, kind: 'validator'|'command', archivedAt: string|null}>} [props.extensions]
+ *   - Az office workflow extension-listája (B.5.3, ADR 0007 Phase 0). A
+ *   `ValidationListField` és `CommandListField` a built-in registry mellé
+ *   `ext.<slug>` chip-eket renderel. Az `archivedAt !== null` extension a
+ *   választható listából kimarad, de stale ref-ként read-only chip-ként
+ *   megjelenik (Codex tervi roast 5-ös pont).
  * @param {boolean} [props.isCollapsed] - Összecsukott állapot (#73)
  * @param {Function} [props.onToggleCollapsed] - Toggle callback (#73)
  * @param {boolean} [props.isReadOnly=false] - Foreign workflow / nincs jogosultság — disabled UI (A.4.6)
@@ -34,6 +40,7 @@ export default function PropertiesSidebar({
     availableGroups,
     version, metadata, onMetadataChange,
     stateLabels,
+    extensions,
     isCollapsed = false,
     onToggleCollapsed,
     isReadOnly = false
@@ -85,6 +92,7 @@ export default function PropertiesSidebar({
                     onDataChange={onNodeDataChange}
                     availableGroups={availableGroups}
                     onDelete={onDeleteNode}
+                    extensions={extensions}
                     isReadOnly={isReadOnly}
                 />
             ) : selectedEdge ? (

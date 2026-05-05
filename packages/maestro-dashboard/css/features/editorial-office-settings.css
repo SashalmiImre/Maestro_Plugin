@@ -767,3 +767,62 @@
     display: flex;
     gap: 6px;
 }
+
+
+/* ─── WorkflowExtensionEditor.jsx (B.5.2 / ADR 0007 Phase 0) ─────────────── */
+
+.workflow-extension-editor {
+    min-width: min(640px, 100%);
+}
+
+.workflow-extension-editor__error {
+    margin-bottom: 12px;
+}
+
+.workflow-extension-editor__row {
+    display: flex;
+    gap: 12px;
+    margin-bottom: 12px;
+}
+
+.workflow-extension-editor__row > .eo-form-stack {
+    flex: 1;
+}
+
+.workflow-extension-editor__kind {
+    margin-bottom: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.workflow-extension-editor__kind-hint {
+    margin: 4px 0 0;
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.workflow-extension-editor__code-label {
+    margin-bottom: 12px;
+}
+
+.workflow-extension-editor__code {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
+    font-size: 12px;
+    line-height: 1.45;
+    tab-size: 4;
+    white-space: pre;
+    overflow-wrap: normal;
+    overflow-x: auto;
+    min-height: 320px;
+    /* A textarea-t a viewport ne nyúlja meg vízszintesen — wraplődő
+       sorok helyett scroll. Ha a parse hiba mutat egy konkrét sorra,
+       a setSelectionRange + scrollTop a fókuszt is odaviszi. */
+    resize: vertical;
+}
+
+.workflow-extension-editor__actions {
+    display: flex;
+    gap: 8px;
+    justify-content: flex-end;
+}

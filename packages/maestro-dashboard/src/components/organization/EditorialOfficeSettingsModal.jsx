@@ -22,13 +22,16 @@ import AnimatedAutoHeight from '../AnimatedAutoHeight.jsx';
 import EditorialOfficeGeneralTab from './EditorialOfficeGeneralTab.jsx';
 import EditorialOfficeGroupsTab from './EditorialOfficeGroupsTab.jsx';
 import PermissionSetsTab from './PermissionSetsTab.jsx';
+import WorkflowExtensionsTab from './WorkflowExtensionsTab.jsx';
 import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 
-// ADR 0008 / A.4.3 — új tab a permission set CRUD-hoz.
+// ADR 0008 / A.4.3 — permission set CRUD tab.
+// ADR 0007 Phase 0 / B.5.1 — workflow extensions CRUD tab.
 const TAB_DEFS = [
     { id: 'general', label: 'Általános' },
     { id: 'groups', label: 'Csoportok' },
-    { id: 'permission-sets', label: 'Jogosultság-csoportok' }
+    { id: 'permission-sets', label: 'Jogosultság-csoportok' },
+    { id: 'extensions', label: 'Bővítmények' }
 ];
 
 const ACTIVE_TAB_STORAGE_KEY = 'maestro.editorialOfficeSettingsActiveTab';
@@ -93,6 +96,12 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
     const [officeMembers, setOfficeMembers] = useState([]);
     const [permissionSets, setPermissionSets] = useState([]);
     const [groupPermissionSets, setGroupPermissionSets] = useState([]);
+    // B.5.1 — workflow extensions a "Bővítmények" tabhoz; a `workflows`
+    // a hivatkozó-warning panelhez (a Phase 0 hatókör csak az office
+    // saját workflow-jain scan-el — cross-office hivatkozást szándékosan
+    // nem mutatunk, az office Settings UI scope-on kívül esik).
+    const [workflowExtensions, setWorkflowExtensions] = useState([]);
+    const [workflows, setWorkflows] = useState([]);
     const [isLoading, setIsLoading] = useState(true);
     const [loadError, setLoadError] = useState('');
 
@@ -125,7 +134,9 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
                 membershipsResult,
                 officeMembersResult,
                 permissionSetsResult,
-                groupPermissionSetsResult
+                groupPermissionSetsResult,
+                workflowExtensionsResult,
+                workflowsResult
             ] = await Promise.all([
                 databases.listDocuments({
                     databaseId: DATABASE_ID,
@@ -173,7 +184,38 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
                         Query.equal('editorialOfficeId', editorialOfficeId),
                         Query.limit(500)
                     ]
-                }).catch((err) => fallbackOnMissingSchema(err, 'groupPermissionSets'))
+                }).catch((err) => fallbackOnMissingSchema(err, 'groupPermissionSets')),
+                // B.5.1 / ADR 0007 Phase 0 — workflow extensions. Ugyanaz a
+                // szelektív schema-missing fallback minta: ha a collection
+                // nincs bootstrap-elve (`bootstrap_workflow_extension_schema`
+                // owner-only action még nem futott), üres listát mutatunk a
+                // tabon — a UI továbbra is működik, csak a "Nincs még
+                // bővítmény" empty-state jelenik meg. **Limit 500**:
+                // a Phase 0 tipikus office 5-10 extensiont tart, de a 100-as
+                // cap silent truncate-et okozna nagyobb office-on (Codex
+                // B.5.3 stop-time M1 fix). 500 abszolút sok, de a
+                // teljesítmény-veszteség elenyésző (egy listDocuments
+                // hívás + 500 doc render).
+                databases.listDocuments({
+                    databaseId: DATABASE_ID,
+                    collectionId: COLLECTIONS.WORKFLOW_EXTENSIONS,
+                    queries: [
+                        Query.equal('editorialOfficeId', editorialOfficeId),
+                        Query.limit(500)
+                    ]
+                }).catch((err) => fallbackOnMissingSchema(err, 'workflowExtensions')),
+                // Workflows — a "X workflow hivatkozik rá" badge + archive
+                // confirm dialógus warning-jához kell. Ugyanúgy fallback-el,
+                // ha bármi gond van — az extension tab az üres listán is
+                // korrekt működik (csak nincs reference info).
+                databases.listDocuments({
+                    databaseId: DATABASE_ID,
+                    collectionId: COLLECTIONS.WORKFLOWS,
+                    queries: [
+                        Query.equal('editorialOfficeId', editorialOfficeId),
+                        Query.limit(100)
+                    ]
+                }).catch((err) => fallbackOnMissingSchema(err, 'workflows'))
             ]);
 
             if (gen !== loadGenRef.current) return;
@@ -183,6 +225,8 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
             setOfficeMembers(officeMembersResult.documents);
             setPermissionSets(permissionSetsResult.documents);
             setGroupPermissionSets(groupPermissionSetsResult.documents);
+            setWorkflowExtensions(workflowExtensionsResult.documents);
+            setWorkflows(workflowsResult.documents);
         } catch (err) {
             if (gen !== loadGenRef.current) return;
             console.error('[EditorialOfficeSettingsModal] Adatok betöltése sikertelen:', err);
@@ -260,6 +304,17 @@ export default function EditorialOfficeSettingsModal({ editorialOfficeId, initia
                             permissionSets={permissionSets}
                             groupPermissionSets={groupPermissionSets}
                             groups={groups}
+                            isLoading={isLoading}
+                            isOrgAdmin={isOrgAdmin}
+                            onReload={loadData}
+                        />
+                    )}
+
+                    {activeTab === 'extensions' && (
+                        <WorkflowExtensionsTab
+                            office={office}
+                            extensions={workflowExtensions}
+                            workflows={workflows}
                             isLoading={isLoading}
                             isOrgAdmin={isOrgAdmin}
                             onReload={loadData}

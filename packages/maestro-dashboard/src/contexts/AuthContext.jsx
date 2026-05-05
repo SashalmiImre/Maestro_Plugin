@@ -1263,6 +1263,90 @@ export function AuthProvider({ children }) {
         );
     }, [user?.$id]);
 
+    /**
+     * Új workflow extension létrehozása (B.3.1, ADR 0007 Phase 0). A `code`
+     * mező acorn ECMA3 pre-parse-ön és AST top-level `function maestroExtension`
+     * deklaráció-ellenőrzésen átmegy a CF-ben — kontraktus-szegő kód 400
+     * `invalid_extension_code` errorral elbukik. A slug regex:
+     * `/^[a-z0-9]+(?:-[a-z0-9]+)*$/`. Phase 0 hatókör: csak `editorial_office`
+     * visibility ÉS csak `article` scope, a többi 400-as.
+     *
+     * @param {{ editorialOfficeId: string, name: string, slug: string, kind: 'validator'|'command', scope?: 'article', code: string }} payload
+     */
+    const createWorkflowExtension = useCallback(async (payload) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'create_workflow_extension',
+            payload,
+            'extension_create_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * Extension szerkesztése (B.3.1). A `slug` immutable. Frissíthető:
+     * `name`, `kind`, `scope`, `code`, `visibility`, `archivedAt` (`null`
+     * implicit restore — a CF dupla auth-ot kér: `extension.edit` ÉS
+     * `extension.archive`). Opcionális `expectedUpdatedAt` TOCTOU guard
+     * (`version_conflict` 409).
+     *
+     * @param {string} extensionId
+     * @param {{ name?: string, kind?: string, scope?: string, code?: string, visibility?: string, archivedAt?: string|null }} patch
+     * @param {string} [expectedUpdatedAt] - opcionális TOCTOU guard
+     */
+    const updateWorkflowExtension = useCallback(async (extensionId, patch, expectedUpdatedAt) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        const payload = { extensionId, ...patch };
+        if (expectedUpdatedAt) payload.expectedUpdatedAt = expectedUpdatedAt;
+        return callInviteFunction(
+            'update_workflow_extension',
+            payload,
+            'extension_update_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * Extension archiválása (B.3.1). Soft-delete `archivedAt`-tel; a Plugin
+     * runtime az archivált extension-eket a registry build-ben nem oldja fel
+     * (snapshot-os pubok érintetlenek). Idempotens: már archivált → success
+     * `already_archived` (a CF dönt).
+     *
+     * @param {string} extensionId
+     * @param {string} [expectedUpdatedAt] - opcionális TOCTOU guard
+     */
+    const archiveWorkflowExtension = useCallback(async (extensionId, expectedUpdatedAt) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        const payload = { extensionId };
+        if (expectedUpdatedAt) payload.expectedUpdatedAt = expectedUpdatedAt;
+        return callInviteFunction(
+            'archive_workflow_extension',
+            payload,
+            'extension_archive_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * Archivált extension visszaállítása (B.3.1, implicit). Phase 0-ban a
+     * server NEM ad külön `restore_workflow_extension` action-t, ehelyett az
+     * `update_workflow_extension` payload `archivedAt: null`-lal triggereli a
+     * visszaállítást — DUPLA AUTH: `extension.edit` ÉS `extension.archive`
+     * slug is kell (különben az `extension.edit`-jogú user megkerülné a
+     * permission split-et). A UI ezt explicit "Visszaállítás" gombbal
+     * mutatja (Codex tervi review fix).
+     *
+     * @param {string} extensionId
+     * @param {string} [expectedUpdatedAt] - opcionális TOCTOU guard
+     */
+    const restoreWorkflowExtension = useCallback(async (extensionId, expectedUpdatedAt) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        const payload = { extensionId, archivedAt: null };
+        if (expectedUpdatedAt) payload.expectedUpdatedAt = expectedUpdatedAt;
+        return callInviteFunction(
+            'update_workflow_extension',
+            payload,
+            'extension_restore_failed'
+        );
+    }, [user?.$id]);
+
     const value = useMemo(() => ({
         user,
         loading,
@@ -1305,6 +1389,10 @@ export function AuthProvider({ children }) {
         restorePermissionSet,
         assignPermissionSetToGroup,
         unassignPermissionSetFromGroup,
+        createWorkflowExtension,
+        updateWorkflowExtension,
+        archiveWorkflowExtension,
+        restoreWorkflowExtension,
         activatePublication,
         assignWorkflowToPublication,
         createPublicationWithWorkflow
@@ -1350,6 +1438,10 @@ export function AuthProvider({ children }) {
         restorePermissionSet,
         assignPermissionSetToGroup,
         unassignPermissionSetFromGroup,
+        createWorkflowExtension,
+        updateWorkflowExtension,
+        archiveWorkflowExtension,
+        restoreWorkflowExtension,
         activatePublication,
         assignWorkflowToPublication,
         createPublicationWithWorkflow

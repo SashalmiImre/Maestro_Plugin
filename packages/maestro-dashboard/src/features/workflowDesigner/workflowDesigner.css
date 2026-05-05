@@ -900,6 +900,36 @@
     font-family: var(--font-mono, ui-monospace, monospace);
 }
 
+/* B.5.3 — extension chip variánsok (workflow extensions, ADR 0007 Phase 0).
+   A built-in registry chip-ektől megkülönböztető vizuális jelzés, hogy
+   a workflow szerkesztő egyértelműen tudja, melyik validátor / parancs
+   származik bővítményből vs. beépítettből. A `--stale` variáns archivált
+   vagy hiányzó (nem-feloldható) ext.<slug>-re — read-only, csak X-szel
+   eltávolítható. */
+.designer-chip--extension {
+    border-style: dashed;
+}
+
+.designer-chip--extension.designer-chip--active {
+    /* Aktív állapotban is megtartjuk a dashed border-t a "ez ext." jelzéshez. */
+    border-style: dashed;
+}
+
+.designer-chip--stale {
+    cursor: default;
+    color: var(--c-warning, #ffb85c);
+    border-color: rgb(from var(--c-warning, #ffb85c) r g b / 0.4);
+    border-style: dashed;
+    background: rgb(from var(--c-warning, #ffb85c) r g b / 0.06);
+}
+
+.designer-chip--stale:hover {
+    /* Hover-on nem csillan fel — read-only.                               */
+    color: var(--c-warning, #ffb85c);
+    border-color: rgb(from var(--c-warning, #ffb85c) r g b / 0.4);
+    background: rgb(from var(--c-warning, #ffb85c) r g b / 0.06);
+}
+
 .designer-field__chips--readonly {
     margin-top: 4px;
 }
@@ -959,6 +989,17 @@
     font-size: 12px;
     font-weight: 500;
     color: var(--text-primary, #e8e8e8);
+}
+
+/* B.5.3 — command-name extension/stale jelölés (a chip-eknél analóg). */
+.designer-field__command-name--extension {
+    /* dashed underline simulating "different origin" the way the chips do */
+    text-decoration: underline dashed rgb(from var(--text-secondary) r g b / 0.4) 1px;
+    text-underline-offset: 3px;
+}
+
+.designer-field__command-name--stale {
+    color: var(--c-warning, #ffb85c);
 }
 
 .designer-field__remove-btn {

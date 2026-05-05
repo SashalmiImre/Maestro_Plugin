@@ -23,15 +23,24 @@ import { useEffect } from 'react';
 import { subscribeRealtime, collectionChannel } from '../contexts/realtimeBus.js';
 import { COLLECTIONS } from '../config.js';
 
-// Office-szintű fogyasztók (`scopeField: 'editorialOfficeId'`) az 5 collection-re
-// iratkoznak: a `permissionSets` és `groupPermissionSets` (A.4.7) az
-// `EditorialOfficeSettingsModal` Permission set tabjához kell.
+// Office-szintű fogyasztók (`scopeField: 'editorialOfficeId'`) a 7 collection-re
+// iratkoznak:
+//   - permissionSets / groupPermissionSets (A.4.7) — Permission set tabhoz.
+//   - workflowExtensions (B.5.1) — új Bővítmények tabhoz.
+//   - workflows (B.5.1 follow-up, Codex stop-time M1 fix) — a Bővítmények
+//     tab "X workflow hivatkozik rá" badge-ei + archive confirm-warning
+//     szövegei a `workflows` listából derived-elnek; ha másik tab/session
+//     egy workflow-ban hivatkozik / elveszi az `ext.<slug>` ref-et, a
+//     reload nélkül stale számláló jelenne meg (potenciálisan félrevezető
+//     archive-döntés UX-e).
 const OFFICE_CHANNELS = [
     collectionChannel(COLLECTIONS.GROUPS),
     collectionChannel(COLLECTIONS.GROUP_MEMBERSHIPS),
     collectionChannel(COLLECTIONS.ORGANIZATION_INVITES),
     collectionChannel(COLLECTIONS.PERMISSION_SETS),
-    collectionChannel(COLLECTIONS.GROUP_PERMISSION_SETS)
+    collectionChannel(COLLECTIONS.GROUP_PERMISSION_SETS),
+    collectionChannel(COLLECTIONS.WORKFLOW_EXTENSIONS),
+    collectionChannel(COLLECTIONS.WORKFLOWS)
 ];
 
 // Org-szintű fogyasztók (`scopeField: 'organizationId'`) csak a 3 alapcsatornán.
