@@ -1,19 +1,129 @@
-/* ─── Login nézet ──────────────────────────────────────────────────────────── */
+/* ─── Auth split layout (C.2.6.login, 2026-05-06) ────────────────────────────
+ *
+ * Stitch screen `7aa70471d4...` — két-oszlopos desktop split:
+ *   - BAL: `.auth-hero` (brand + Editorial OS hero + ambient + footer)
+ *   - JOBB: `.login-card` (form glass card)
+ *
+ * Mobile responsive: a `.login-container` `column` irányba vált (`@media`
+ * `responsive.css`-ben), a `.auth-hero` ekkor compact heading-ként marad. */
 
 .login-container {
     display: flex;
-    flex-direction: column;
-    align-items: center;
+    flex-direction: row;
+    align-items: stretch;
     justify-content: center;
     min-height: 100vh;
-    padding: 20px;
     background: var(--bg-base);
-    /* Finom radiális fényhatás a háttérben */
+    /* Finom radiális fényhatás a háttérben (megőrzött) */
     background-image:
         radial-gradient(ellipse 600px 400px at 50% 40%, rgb(from var(--accent) r g b / 0.04), transparent);
 }
 
-/* Brand szekció */
+/* ─── Hero (bal oszlop) ─────────────────────────────────────────────────────── */
+
+.auth-hero {
+    flex: 1 1 60%;
+    max-width: 720px;
+    position: relative;
+    padding: 64px 72px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    overflow: hidden;
+    animation: loginFadeIn 0.4s ease-out;
+}
+
+/* Abstract ambient — CSS-only, NEM SVG asset / illustration pipeline.
+ * Codex tervi roast 8. pont overengineering watch: lightweight decorative work. */
+.auth-hero__ambient {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background:
+        radial-gradient(ellipse 480px 320px at 18% 22%, rgb(from var(--accent) r g b / 0.10), transparent 70%),
+        radial-gradient(ellipse 360px 480px at 82% 78%, rgb(from var(--tertiary) r g b / 0.07), transparent 70%),
+        radial-gradient(circle 220px at 75% 20%, rgb(from var(--accent-hover) r g b / 0.05), transparent 70%);
+    filter: blur(0.5px);
+}
+
+.auth-hero__brand,
+.auth-hero__copy,
+.auth-hero__footer {
+    position: relative;
+    z-index: 1;
+}
+
+.auth-hero__brand {
+    display: flex;
+    align-items: center;
+    gap: var(--space-4);
+}
+
+.auth-hero__wordmark {
+    font-size: 1.75rem;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--text-primary);
+}
+
+.auth-hero__divider {
+    width: 40px;
+    height: 2px;
+    border-radius: 1px;
+    background: linear-gradient(135deg, var(--accent-solid), var(--accent));
+}
+
+.auth-hero__copy {
+    margin-top: auto;
+    margin-bottom: auto;
+    max-width: 520px;
+    padding: var(--space-7) 0;
+}
+
+.auth-hero__eyebrow {
+    font-size: clamp(2.4rem, 4vw, 3.5rem);
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    line-height: 1.05;
+    color: var(--accent);
+    margin-bottom: var(--space-4);
+}
+
+.auth-hero__subtitle {
+    margin: 0;
+    font-size: 15px;
+    line-height: 1.55;
+    color: var(--text-secondary);
+}
+
+.auth-hero__footer {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+/* ─── Auth card wrap (jobb oszlop konténer) ──────────────────────────────────
+ *
+ * A `.login-card`-ot középre helyezi a jobb oszlopban. A meglévő `.login-card`
+ * stílus (glassmorphism + padding + max-width 380px) érintetlen marad — a wrap
+ * csak a flex-elhelyezkedést kezeli, NEM a card méretét. */
+
+.login-container > .login-card {
+    flex: 1 1 40%;
+    align-self: center;
+    margin: 0 auto;
+}
+
+/* ─── Legacy `.login-brand` (deprecated, BrandHero v1 — törlendő C.2.6 után) ─
+ *
+ * A v2 BrandHero az `.auth-hero__*` osztályokat használja. A régi `.login-brand`
+ * blokk megőrzött a többi auth-flow (Register/Verify/Forgot/Reset) BC-jéért
+ * arra az esetre, ha valami helyileg hivatkozna rá — jelenleg nincs hivatkozó.
+ * A teljes törlést a következő iterációban (C.2 záró doc audit) végezzük. */
+
 .login-brand {
     display: flex;
     flex-direction: column;
@@ -40,7 +150,6 @@
     margin-bottom: 18px;
 }
 
-/* Dekoratív gradiens vonal */
 .login-brand .divider {
     width: 40px;
     height: 2px;
@@ -57,7 +166,11 @@
     border-radius: 16px;
     padding: 36px 40px;
     width: 100%;
-    max-width: 380px;
+    /* Ultra-wide desktopon a 380px fix érték kicsinek hat a 720px hero mellett
+     * (harden 2026-05-06, Codex adversarial design-tweak): clamp 380→420px
+     * 32vw szerint, nagy monitoron kicsit szélesebb card. Mobile-on a `width:
+     * 100%` érvényesül (a viewport kisebb, mint 380px). */
+    max-width: clamp(380px, 32vw, 420px);
     box-shadow:
         0 16px 48px rgba(var(--shadow-tint), 0.45),
         inset 0 1px 0 var(--glass-inset);
@@ -120,6 +233,52 @@
 
 .form-group input::placeholder {
     color: var(--text-disabled);
+}
+
+/* ─── Eye-toggle az input mellett (C.2.6.login, 2026-05-06) ───────────────────
+ *
+ * A jelszó inputot wrap-eli `.form-input-with-toggle`-be, és a `.form-input-toggle`
+ * gomb absolute pozícióban a jobb szélen ül. A `.form-group input` padding-right-jét
+ * a wrapper esetében kibővítjük, hogy a szöveg ne fusson alá. */
+
+.form-input-with-toggle {
+    position: relative;
+}
+
+.form-input-with-toggle input {
+    padding-right: 40px;
+}
+
+.form-input-toggle {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    transform: translateY(-50%);
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color 0.15s, background 0.15s;
+}
+
+.form-input-toggle:hover {
+    color: var(--text-secondary);
+    background: rgb(from var(--bg-hover) r g b / 0.40);
+}
+
+.form-input-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+}
+
+.form-input-toggle svg {
+    display: block;
 }
 
 .login-btn {
@@ -318,5 +477,85 @@
     outline: 2px solid var(--accent-solid);
     outline-offset: 2px;
     border-radius: 2px;
+}
+
+/* ─── Auth — prefers-reduced-motion (harden 2026-05-06) ─────────────────────
+ *
+ * A11y: `prefers-reduced-motion: reduce` esetén a `loginFadeIn` keyframe és a
+ * gomb `transform: scale(0.98)` aktív állapot kikapcsolva. Codex adversarial
+ * P2-#3 fix — a Workflow Designer dirty-dot már ezt használja, itt eddig
+ * inkonzisztens volt.
+ *
+ * `animation: none !important` — felülírja a `.login-brand`, `.auth-hero`,
+ * `.login-card`, `.login-error` `loginFadeIn` shorthand-et. */
+
+@media (prefers-reduced-motion: reduce) {
+    .login-brand,
+    .auth-hero,
+    .login-card,
+    .login-error {
+        animation: none !important;
+    }
+    .login-btn:active:not(:disabled) {
+        transform: none;
+    }
+}
+
+/* ─── Auth split — responsive (C.2.6.login, 2026-05-06) ──────────────────────
+ *
+ * Mobile breakpoint: a két-oszlop column irányba vált, a hero kompakt heading
+ * formára szűkül, az ambient+footer eltűnik. */
+
+@media (max-width: 960px) {
+    .login-container {
+        flex-direction: column;
+    }
+
+    .auth-hero {
+        flex: 0 0 auto;
+        max-width: none;
+        padding: 36px 32px 24px;
+    }
+
+    .auth-hero__copy {
+        padding: var(--space-4) 0;
+        max-width: none;
+    }
+
+    .auth-hero__eyebrow {
+        font-size: clamp(1.6rem, 5vw, 2.4rem);
+    }
+
+    .auth-hero__subtitle {
+        font-size: 13px;
+    }
+
+    .auth-hero__footer {
+        display: none;
+    }
+
+    .login-container > .login-card {
+        max-width: none;
+        width: 100%;
+        padding: 0 20px 32px;
+    }
+}
+
+@media (max-width: 640px) {
+    .auth-hero {
+        padding: 24px 20px 16px;
+    }
+
+    .auth-hero__brand {
+        gap: var(--space-3);
+    }
+
+    .auth-hero__wordmark {
+        font-size: 1.4rem;
+    }
+
+    .auth-hero__ambient {
+        opacity: 0.6;
+    }
 }
 
