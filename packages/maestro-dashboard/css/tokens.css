@@ -83,6 +83,37 @@
     --glass-edge:  rgba(255, 255, 255, 0.20);
     --glass-inset: rgba(255, 255, 255, 0.04);
 
+    /* ── Workflow Designer canvas (third-party React Flow Background/MiniMap props) ──
+     * Ezek a tokenek third-party prop-okhoz mennek (NEM CSS-ben használtak), a JSX
+     * `useCssToken` hookkal olvassa őket. C.2.7.a (Codex C.0.2 finding). */
+    --canvas-dot-color:  #333333;                   /* Background variant=Dots color prop */
+    --canvas-mask-color: rgba(0, 0, 0, 0.60);       /* MiniMap maskColor prop */
+
+    /* ── Workflow Designer edge színek (C.2.7.b, Codex C.0.2 finding) ──
+     * A `TransitionEdge.jsx` JSX-ből referenciázza `useCssToken` hookkal. */
+    --edge-forward:  #4ade80;   /* zöld */
+    --edge-backward: #fb923c;   /* narancs */
+    --edge-reset:    #f87171;   /* piros */
+    --edge-selected: #3b82f6;   /* kék (selected stroke) */
+    --edge-marker:   #888888;   /* default arrow-marker (WorkflowCanvas.defaultEdgeOptions) */
+
+    /* ── Workflow láthatóság palette (C.2.7.c, Codex C.0.2 finding) ──
+     * 3 CSS-helyen reuse-elt (badge.css `.badge--{public|organization|editorial_office}`,
+     * publication-settings.css `.publication-workflow-picker__chip.is-*`,
+     * workflowDesigner.css `.workflow-designer-toolbar__scope-chip.is-*`).
+     * A class-átnevezés szándékosan kihagyva — Codex tervi roast 6. pont, „NE rename". */
+    --vis-public-bg:           rgba(124, 89, 235, 0.15);
+    --vis-public-text:         #a98bff;
+    --vis-public-border:       rgba(124, 89, 235, 0.35);
+
+    --vis-organization-bg:     rgba(0, 130, 200, 0.15);
+    --vis-organization-text:   #6fb8e8;
+    --vis-organization-border: rgba(0, 130, 200, 0.35);
+
+    --vis-office-bg:           rgba(var(--shadow-tint), 0.30);
+    --vis-office-text:         var(--text-secondary);
+    --vis-office-border:       var(--outline-variant);
+
     /* Spacing tokenek — 4px lineáris + 2× skála (4–64px) */
     --space-1: 4px;
     --space-2: 8px;
@@ -165,6 +196,35 @@
     /* Glassmorphism élek — sötét overlay light felszínen (invertált) */
     --glass-edge:  rgba(31, 35, 40, 0.10);
     --glass-inset: rgba(31, 35, 40, 0.04);
+
+    /* ── Workflow Designer canvas (light variáns, C.2.7.a) ── */
+    --canvas-dot-color:  #d0d7de;                   /* GitHub light outline-variant */
+    --canvas-mask-color: rgba(31, 35, 40, 0.20);    /* halványabb a fehér háttérhez */
+
+    /* ── Workflow Designer edge színek (light variáns, C.2.7.b) ── */
+    --edge-forward:  #1a7f37;   /* sötét zöld (kontraszt fehéren) */
+    --edge-backward: #9a6700;   /* sötét sárgásbarna */
+    --edge-reset:    #cf222e;   /* sötét piros */
+    --edge-selected: #0969da;   /* GitHub light primary kék */
+    --edge-marker:   #6e7781;   /* GitHub light text-muted-szerű marker */
+
+    /* ── Workflow láthatóság palette (light variáns, C.2.7.c) ── */
+    --vis-public-bg:           rgba(130, 80, 223, 0.10);
+    --vis-public-text:         #6639ba;
+    --vis-public-border:       rgba(130, 80, 223, 0.30);
+
+    --vis-organization-bg:     rgba(9, 105, 218, 0.10);
+    --vis-organization-text:   #0550ae;
+    --vis-organization-border: rgba(9, 105, 218, 0.30);
+
+    --vis-office-bg:           rgba(var(--shadow-tint), 0.06);
+    --vis-office-text:         var(--text-secondary);
+    /* Codex review fix (2026-05-06, Q8): a `var(--outline-variant)` light témán
+     * `#d0d7de` solid lenne, ami határozottabb a régi feature-local 12%-os
+     * `text-primary` transzparens értéknél. Light-on átkapcsolunk a finomabb
+     * ghost border-re; dark-on marad az `outline-variant` (mind a 3 régi helyen
+     * ezt használta a `badge.css` + `publication-settings.css` blokkokban). */
+    --vis-office-border:       rgb(from var(--text-primary) r g b / 0.12);
 }
 
 /* Színes felület-kiemelést igénylő böngésző UI-k (scrollbar, kijelölés) */

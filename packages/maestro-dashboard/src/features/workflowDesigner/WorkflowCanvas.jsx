@@ -5,7 +5,7 @@
  * Custom node/edge típusokat regisztrál, MiniMap-et és Controls-t jelenít meg.
  */
 
-import React, { useMemo } from 'react';
+import React, { useCallback, useMemo } from 'react';
 import {
     ReactFlow,
     MiniMap,
@@ -15,8 +15,12 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 
+import { useCssTokens } from '../../hooks/useCssToken.js';
 import StateNode from './nodes/StateNode.jsx';
 import TransitionEdge from './edges/TransitionEdge.jsx';
+
+/** Stabil token-lista referencia — a useCssTokens dep-je `.join(',')` ugyanaz marad. */
+const CANVAS_TOKEN_NAMES = ['--canvas-dot-color', '--canvas-mask-color', '--edge-marker'];
 
 /** Custom node típusok regisztrálása (stabil referencia) */
 const nodeTypes = { stateNode: StateNode };
@@ -24,15 +28,10 @@ const nodeTypes = { stateNode: StateNode };
 /** Custom edge típusok regisztrálása (stabil referencia) */
 const edgeTypes = { transitionEdge: TransitionEdge };
 
-/** Edge marker (nyílhegy) definíció */
-const defaultEdgeOptions = {
-    markerEnd: {
-        type: 'arrowclosed',
-        width: 16,
-        height: 16,
-        color: '#888'
-    }
-};
+/** Stabil prop-érték — nem újraépítve render-enként. A nyílhegy színét
+ *  runtime-ban injektáljuk a `defaultEdgeOptions` memo-ban (lentebb), hogy
+ *  light témán is helyes színt adjon. C.2.7.b spontán finding (Codex). */
+const DEFAULT_EDGE_MARKER_DIMENSIONS = { type: 'arrowclosed', width: 16, height: 16 };
 
 /**
  * @param {Object} props
@@ -58,10 +57,21 @@ export default function WorkflowCanvas({
     onInit,
     defaultViewport
 }) {
-    // MiniMap szín a node szín alapján
-    const miniMapNodeColor = useMemo(() => {
-        return (node) => node.data?.color || '#888';
-    }, []);
+    // MiniMap szín a node szín alapján — useCallback, hogy a függvény-referencia
+    // stabil maradjon (a MiniMap a prop-azonosság alapján dönt re-renderről).
+    const miniMapNodeColor = useCallback((node) => node.data?.color || '#888', []);
+
+    // C.2.7.a + 7b spontán: a Background `color`, MiniMap `maskColor` és edge
+    // marker color prop-okat tokenekből olvassuk, hogy light témán automatikusan
+    // átálljanak (Codex C.0.2 finding + spontán 2026-05-06 finding).
+    const [canvasDotColor, canvasMaskColor, edgeMarkerColor] = useCssTokens(CANVAS_TOKEN_NAMES);
+
+    const defaultEdgeOptions = useMemo(() => ({
+        markerEnd: {
+            ...DEFAULT_EDGE_MARKER_DIMENSIONS,
+            color: edgeMarkerColor || '#888',
+        },
+    }), [edgeMarkerColor]);
 
     const isEmpty = nodes.length === 0;
 
@@ -88,7 +98,12 @@ export default function WorkflowCanvas({
                 deleteKeyCode={['Backspace', 'Delete']}
                 selectNodesOnDrag={false}
             >
-                <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#333" />
+                <Background
+                    variant={BackgroundVariant.Dots}
+                    gap={20}
+                    size={1}
+                    color={canvasDotColor || '#333'}
+                />
                 <Controls
                     showInteractive={false}
                     position="bottom-left"
@@ -99,7 +114,7 @@ export default function WorkflowCanvas({
                     nodeStrokeWidth={1}
                     position="bottom-right"
                     className="workflow-canvas__minimap"
-                    maskColor="rgba(0, 0, 0, 0.6)"
+                    maskColor={canvasMaskColor || 'rgba(0, 0, 0, 0.6)'}
                 />
             </ReactFlow>
 

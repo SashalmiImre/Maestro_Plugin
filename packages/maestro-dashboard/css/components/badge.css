@@ -66,24 +66,31 @@
     border-color: var(--outline-variant);
 }
 
-/* ─── Workflow láthatóság variánsok ─── */
+/* ─── Workflow láthatóság variánsok ───
+ *
+ * A színek a `--vis-{public|organization|office}-{bg|text|border}` tokenekből
+ * jönnek (`tokens.css`), 3-helyen reuse-elt palette (badge.css + publication-
+ * settings.css + workflowDesigner.css). C.2.7.c, 2026-05-06.
+ *
+ * A class-nevek a meglévő `.badge--{public|organization|editorial_office}`-t
+ * követik — Codex tervi roast 6. pont „NE rename" (felesleges churn). */
 
 .badge--public {
-    background: rgba(124, 89, 235, 0.15);
-    color: #a98bff;
-    border-color: rgba(124, 89, 235, 0.35);
+    background: var(--vis-public-bg);
+    color: var(--vis-public-text);
+    border-color: var(--vis-public-border);
 }
 
 .badge--organization {
-    background: rgba(0, 130, 200, 0.15);
-    color: #6fb8e8;
-    border-color: rgba(0, 130, 200, 0.35);
+    background: var(--vis-organization-bg);
+    color: var(--vis-organization-text);
+    border-color: var(--vis-organization-border);
 }
 
 .badge--editorial_office {
-    background: rgba(var(--shadow-tint), 0.3);
-    color: var(--text-secondary);
-    border-color: var(--outline-variant);
+    background: var(--vis-office-bg);
+    color: var(--vis-office-text);
+    border-color: var(--vis-office-border);
 }
 
 /* ─── Warning variáns (archivált törlési dátum) ─── */
