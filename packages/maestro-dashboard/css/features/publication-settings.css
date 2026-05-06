@@ -194,6 +194,213 @@
     background: var(--c-warning-solid);
 }
 
+/* ─── Validation banner (C.2.3, 2026-05-06, Stitch v2 spec) ──────────────────
+ *
+ * Full-width tinted banner (NEM solid kártya) — a Határidők tab tetején a
+ * timeline alatt jelenik meg, ha errors üres és van warning. Ütemezési
+ * hiányosság / lefedettség jelzés. */
+
+.validation-banner {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    border-radius: var(--radius-md);
+    border: 1px solid transparent;
+    margin: var(--space-3) 0;
+}
+
+.validation-banner--warning {
+    background: rgb(from var(--c-warning) r g b / 0.10);
+    border-color: rgb(from var(--c-warning) r g b / 0.30);
+    color: var(--text-primary);
+}
+
+.validation-banner__icon {
+    flex: 0 0 auto;
+    font-size: 16px;
+    line-height: 1.4;
+    color: var(--c-warning);
+}
+
+.validation-banner__body {
+    flex: 1;
+    min-width: 0;
+}
+
+.validation-banner__title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--c-warning);
+    margin-bottom: var(--space-1);
+}
+
+.validation-banner__list {
+    margin: 0;
+    padding-left: var(--space-4);
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
+.validation-banner__list li {
+    margin: 2px 0;
+}
+
+/* ─── Deadline timeline (C.2.3, Stitch screen `a422b3d9...`) ───────────────── */
+
+.deadline-timeline {
+    margin-bottom: var(--space-5);
+    padding: var(--space-4);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-md);
+}
+
+.deadline-timeline__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+}
+
+.deadline-timeline__title {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--text-muted);
+}
+
+.deadline-timeline__coverage {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    font-size: 11px;
+    color: var(--text-muted);
+    font-variant-numeric: tabular-nums;
+}
+
+.deadline-timeline__empty {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
+.deadline-timeline__track {
+    position: relative;
+    height: 64px;
+    margin-top: var(--space-2);
+}
+
+/* A track-vonal a tickek mögött — finom horizontal accent */
+.deadline-timeline__track::before {
+    content: '';
+    position: absolute;
+    top: 8px;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: linear-gradient(
+        90deg,
+        rgb(from var(--accent) r g b / 0.20),
+        rgb(from var(--accent) r g b / 0.40) 50%,
+        rgb(from var(--accent) r g b / 0.20)
+    );
+    border-radius: 1px;
+}
+
+.deadline-timeline__tick {
+    position: absolute;
+    top: 0;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    pointer-events: none;
+}
+
+.deadline-timeline__tick-stem {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 2px var(--bg-elevated);
+    margin-top: 2px;
+}
+
+.deadline-timeline__tick-label {
+    margin-top: var(--space-1);
+    text-align: center;
+    line-height: 1.3;
+    pointer-events: auto;
+}
+
+.deadline-timeline__tick-page {
+    display: block;
+    font-size: 10px;
+    font-weight: 700;
+    color: var(--text-secondary);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.deadline-timeline__tick-when {
+    display: block;
+    font-size: 11px;
+    color: var(--text-muted);
+    margin-top: 1px;
+    white-space: nowrap;
+}
+
+/* ─── Form info tile (C.2.6.createpub, 2026-05-06) ───────────────────────────
+ *
+ * Statikus tájékoztató tile a form-ban (pl. autoseed-magyarázat). Light és
+ * info-jellegű, NEM warning. Ha máshol is megjelenik, közös komponens-blokká
+ * emelhető. Egyelőre publication-settings scope. */
+
+.form-info-tile {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-4);
+    margin-bottom: var(--space-4);
+    background: var(--accent-subtle);
+    border: 1px solid rgb(from var(--accent) r g b / 0.20);
+    border-radius: var(--radius-md);
+}
+
+.form-info-tile__icon {
+    flex: 0 0 auto;
+    font-size: 16px;
+    line-height: 1.4;
+}
+
+.form-info-tile__body {
+    flex: 1;
+    min-width: 0;
+}
+
+.form-info-tile__title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--accent);
+    margin-bottom: var(--space-1);
+}
+
+.form-info-tile__text {
+    font-size: 12px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+}
+
 /* ─── Workflow picker (GeneralTab) ──────────────────────────────────────── */
 /* A korábbi `<select>` helyett egy „current + cserélés" stílust alkalmazunk.
    A display-doboz mutatja az aktuális workflow-t + láthatóság chip-et, a
@@ -246,20 +453,23 @@
     flex-shrink: 0;
 }
 
+/* A színek a `--vis-{public|organization|office}-*` tokenekből (tokens.css) —
+ * 3-helyen reuse-elt visibility palette (badge.css + ez + workflowDesigner.css).
+ * C.2.7.c (2026-05-06). */
 .publication-workflow-picker__chip.is-public {
-    background: rgba(124, 89, 235, 0.15);
-    color: #a98bff;
-    border-color: rgba(124, 89, 235, 0.3);
+    background: var(--vis-public-bg);
+    color: var(--vis-public-text);
+    border-color: var(--vis-public-border);
 }
 
 .publication-workflow-picker__chip.is-organization {
-    background: rgba(0, 130, 200, 0.15);
-    color: #6fb8e8;
-    border-color: rgba(0, 130, 200, 0.3);
+    background: var(--vis-organization-bg);
+    color: var(--vis-organization-text);
+    border-color: var(--vis-organization-border);
 }
 
 .publication-workflow-picker__chip.is-editorial_office {
-    background: rgba(var(--shadow-tint), 0.3);
-    color: var(--text-secondary);
-    border-color: var(--outline-variant);
+    background: var(--vis-office-bg);
+    color: var(--vis-office-text);
+    border-color: var(--vis-office-border);
 }

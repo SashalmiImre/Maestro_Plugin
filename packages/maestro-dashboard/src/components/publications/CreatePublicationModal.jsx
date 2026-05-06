@@ -29,6 +29,12 @@ import { showAutoseedWarnings } from '../../utils/autoseedWarnings.js';
 
 const DEFAULT_LAYOUT_NAME = 'A';
 
+/** C.0.3 copy-hygiene — file-local copy a Stitch screen v2 enrichment-jéhez. */
+const COPY = {
+    autoseedTitle: 'Automatikus felhasználó-csoport létrehozás',
+    autoseedBody: 'Ha a kiválasztott workflow olyan csoportokat igényel, amelyek a szerkesztőségben még nem léteznek, automatikusan létre fogjuk hozni őket — autoseed.',
+};
+
 export default function CreatePublicationModal() {
     const { workflows, createLayout, applyCreatedPublicationLocal } = useData();
     const { createPublicationWithWorkflow } = useAuth();
@@ -298,6 +304,18 @@ export default function CreatePublicationModal() {
                 {touched.workflowId && errors.workflowId && (
                     <div className="form-error">{errors.workflowId}</div>
                 )}
+            </div>
+
+            {/* C.2.6.createpub (2026-05-06, Stitch screen `9beb312f...`):
+                autoseed info-tile a workflow select alá. Statikus információ — a
+                tényleges autoseed-eredményt a `showAutoseedWarnings` toast jelzi
+                a sikeres mentés után (utils/autoseedWarnings.js). */}
+            <div className="form-info-tile" role="note" aria-label={COPY.autoseedTitle}>
+                <span className="form-info-tile__icon" aria-hidden="true">✨</span>
+                <div className="form-info-tile__body">
+                    <div className="form-info-tile__title">{COPY.autoseedTitle}</div>
+                    <div className="form-info-tile__text">{COPY.autoseedBody}</div>
+                </div>
             </div>
 
             {/* Általános hiba */}
