@@ -126,6 +126,16 @@
     flex-shrink: 0;
 }
 
+/* C.2.7.d (2026-05-06, Codex C.0.2 finding fix): light témán a drop-shadow
+ * glow halvány marad fehér háttéren (gyenge kontraszt), ezért outline-ring-re
+ * cseréljük. A `currentColor` a state config szerinti szín (a `style={{ color }}`
+ * inline state-ből), `rgb(from ... / 0.35)` halvány ring-color → finom de
+ * látható accent fehér háttéren. */
+[data-theme="light"] .state-dot {
+    filter: none;
+    box-shadow: 0 0 0 1.5px rgb(from currentColor r g b / 0.35);
+}
+
 /* Státusz cella (pont + szöveg dual coding, #53 — color-blind support) */
 .state-cell {
     display: inline-flex;
