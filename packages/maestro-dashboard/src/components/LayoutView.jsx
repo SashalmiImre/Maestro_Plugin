@@ -567,20 +567,38 @@ export default function LayoutView({ filteredArticles }) {
                         ref={layoutViewRef}
                         style={{ '--spread-columns': columns }}
                     >
-                        {spreads.map(spread => (
-                            <div className="spread" key={spread.leftNum ?? spread.rightNum}>
-                                <PageSlot
-                                    pageData={spread.left}
-                                    pageNum={spread.leftNum}
-                                    validationItems={spread.left?.articleId ? validationIndex.get(spread.left.articleId) || null : null}
-                                />
-                                <PageSlot
-                                    pageData={spread.right}
-                                    pageNum={spread.rightNum}
-                                    validationItems={spread.right?.articleId ? validationIndex.get(spread.right.articleId) || null : null}
-                                />
-                            </div>
-                        ))}
+                        {spreads.map((spread) => {
+                            // C.2.4 (2026-05-06, Stitch screen `9095baeab...`): az
+                            // 1. oldal a borító. Magazin konvenció — az 1. oldal
+                            // mindig jobb, üres bal page-szlot mellett. Codex P1
+                            // fix (2026-05-06): a `index === 0` heurisztika hibás
+                            // `coverageStart !== 1` esetén (pl. 8. oldaltól induló
+                            // coverage-en a 8-as spread is „Borító"-t kapna). A
+                            // `leftNum === null && rightNum === 1` szigorú szabály.
+                            const isCover = spread.leftNum === null && spread.rightNum === 1;
+                            return (
+                                <div
+                                    className={`spread ${isCover ? 'spread--cover' : ''}`}
+                                    key={spread.leftNum ?? spread.rightNum}
+                                >
+                                    {isCover && (
+                                        <span className="spread__cover-marker" aria-label="Borító spread">
+                                            Borító
+                                        </span>
+                                    )}
+                                    <PageSlot
+                                        pageData={spread.left}
+                                        pageNum={spread.leftNum}
+                                        validationItems={spread.left?.articleId ? validationIndex.get(spread.left.articleId) || null : null}
+                                    />
+                                    <PageSlot
+                                        pageData={spread.right}
+                                        pageNum={spread.rightNum}
+                                        validationItems={spread.right?.articleId ? validationIndex.get(spread.right.articleId) || null : null}
+                                    />
+                                </div>
+                            );
+                        })}
                     </div>
                 </div>
             </div>

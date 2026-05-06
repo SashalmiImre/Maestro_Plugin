@@ -198,9 +198,44 @@
 }
 
 .spread {
+    position: relative;
     display: flex;
     gap: 0;
     align-items: flex-end;
+    /* C.2.4 (2026-05-06, Stitch screen `9095baeab...`): ghost border —
+     * kerettelenebb hatás, csak finom határvonal. A `--border-muted` token
+     * dark `rgba(66,71,84,0.05)`, light `rgba(31,35,40,0.06)`. */
+    border: 1px solid var(--border-muted);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+}
+
+/* ─── Cover spread emphasis (C.2.4 + 7e, 2026-05-06) ─────────────────────────
+ *
+ * Az első spread a borító — accent-szín ring + "Borító" pozícionális marker.
+ * Light témán a `--accent-solid` `#0969da` (telített kék) — kontrasztos.
+ * Dark témán `#2563eb` — szintén kontrasztos. A token-átállás magától működik. */
+
+.spread--cover {
+    border-color: rgb(from var(--accent-solid) r g b / 0.30);
+    box-shadow: 0 0 0 1px rgb(from var(--accent-solid) r g b / 0.15);
+}
+
+.spread__cover-marker {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    z-index: 4;
+    padding: 2px 8px;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: #fff;
+    background: var(--accent-solid);
+    border-radius: var(--radius-sm);
+    pointer-events: none;
+    box-shadow: 0 2px 8px rgba(var(--shadow-tint), 0.30);
 }
 
 /* Oldal slot — Stitch rounded card + shadow */
