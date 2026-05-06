@@ -46,6 +46,7 @@ A plugin `CLAUDE.md`-ben leírt konvenciók érvényesek itt is:
 - **Import sorrend**: vendor → context/hooks → config/constants → utils → components
 - **Boolean elnevezés**: `is`, `has`, `can`, `should` prefixek
 - **Logger**: A dashboardon `console.*` elfogadott (nincs UXP logger)
+- **Copy-hygiene** (C.0.3): a C.2-ben újragyúrt screen-eken a user-facing copy file-local `LABELS` / `COPY` objektumba kerül, NEM inline JSX-stringként. Részletek + minta: [design-system.md](design-system.md) `Copy-hygiene` szekció. Cross-app `t()`-infrastruktúra TILOS — D blokk hatáskör.
 
 ---
 
@@ -154,7 +155,7 @@ maestro-dashboard/
 │
 ├── css/
 │   ├── index.css                 ← Entry — csak `@import`-ok, ezt importálja `main.jsx`
-│   ├── tokens.css                ← Design tokenek (`:root`) — színek, spacing, radius. Itt jön majd a `[data-theme="light"]` blokk
+│   ├── tokens.css                ← Design tokenek (`:root` dark + `[data-theme="light"]` light overrides). `useTheme` hook + `main.jsx` no-flash bootstrap kezeli a váltást. Részletek: `design-system.md` Theming szekció
 │   ├── base.css                  ← Reset, html/body, scrollbar
 │   ├── layouts/                  ← Page-szintű shell stílusok
 │   │   ├── auth.css              ← Login + auth tabs + auth segéd elemek

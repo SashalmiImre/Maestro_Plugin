@@ -26,7 +26,8 @@ Egy fájl = egy domain fogalom. Mély, lefelé linkel a kódra (`fájl:sor`), ol
 - [[LockManager]]
 - [[DocumentMonitor]]
 - [[WorkflowLibrary]] — Dashboard
-- [[WorkflowExtension]] — Proposed
+- [[WorkflowExtension]] — Partially Implemented (Phase 0: B.1–B.5 kész, B.6.1 manuális smoke hátra)
+- [[ExtensionRegistry]] — Plugin runtime registry (B.4)
 - [[WorkflowStateColors]]
 
 ## Hookok
