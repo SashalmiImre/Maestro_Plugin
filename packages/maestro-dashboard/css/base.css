@@ -16,6 +16,13 @@ html, body {
     -webkit-font-smoothing: antialiased;
     scrollbar-width: thin;
     scrollbar-color: var(--bg-hover) transparent;
+    /* Modal megnyitáskor a `body { overflow: hidden }` scroll lock miatt
+       a függőleges scrollbar el szokott tűnni / megjelenni — ez 6px-es
+       reflow-villanást okozhat a háttér tartalomban. A `scrollbar-gutter: stable`
+       fenntartja a sávot scroll nélkül is, így nincs ugrás. (A dashboard shell
+       elvileg eleve viewport-magas és nincs body-szintű scroll, de a stable
+       gutter biztosíték minden routera, beleértve az auth split layoutot.) */
+    scrollbar-gutter: stable;
 }
 
 /* Custom scrollbar */

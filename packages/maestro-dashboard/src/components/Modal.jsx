@@ -8,7 +8,7 @@
  * keresztül — minden újabb réteg blur-öli az előzőt.
  */
 
-import React, { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useCallback, useState } from 'react';
 import { createPortal } from 'react-dom';
 
 /**
@@ -20,6 +20,18 @@ import { createPortal } from 'react-dom';
  * így a számláló konzisztens marad (++/-- páros).
  */
 let scrollLockCount = 0;
+
+/**
+ * Bezárás-animáció hossza ms-ben — szinkronban a `modal.css`
+ * `modalFadeOut` / `modalSlideOut` keyframe-jeivel.
+ *
+ * Miért: nyitásra `modalFadeIn` (0.2s) van, de bezárásra korábban
+ * azonnali unmount történt — a `backdrop-filter: blur(8px)` réteg
+ * abrupt eltűnése a háttér ArticleTable / LayoutView újra-festését
+ * okozta, ami villanásnak látszott. A szimmetrikus fade-out simítja
+ * ezt: az overlay opacity-jét lassan visszaviszi 0-ra a unmount előtt.
+ */
+const CLOSE_ANIMATION_MS = 200;
 
 /**
  * @param {Object} props
@@ -42,12 +54,47 @@ export default function Modal({
 }) {
     const cardRef = useRef(null);
     const previousFocusRef = useRef(null);
+    const closingRef = useRef(false);
+    const closeTimerRef = useRef(null);
+    const [isOpen, setIsOpen] = useState(false);
+    const [isClosing, setIsClosing] = useState(false);
 
-    // Bezárás kísérlet — onBeforeClose guard-dal
+    // Mount-ot követő rAF: a CSS-ben az alapérték `opacity: 0` + transition;
+    // egy frame múlva a `.is-open` átkapcsolja `opacity: 1`-re és a transition
+    // az aktuális komputált értékből interpolál. Strict Mode-ban a dupla
+    // mount/unmount-ra a rAF-et cancel-eljük, hogy ne maradjon árva.
+    useEffect(() => {
+        const rafId = requestAnimationFrame(() => setIsOpen(true));
+        return () => cancelAnimationFrame(rafId);
+    }, []);
+
+    // Bezárás kísérlet — onBeforeClose guard-dal. Két fázis:
+    //   1) `isClosing=true` → a CSS `is-closing` osztály opacity-t 0-ra,
+    //      kártyát kicsit lejjebb+kicsinyíti az AKTUÁLIS állapotból
+    //      (transition interpolál — nincs snap mid-open close esetén).
+    //   2) `CLOSE_ANIMATION_MS` után tényleges `onClose()` (unmount).
+    // A `closingRef` re-entrancy guard: gyors duplakattintás a backdrop-on
+    // vagy ESC ne indítson párhuzamos záró timer-t.
     const attemptClose = useCallback(() => {
+        if (closingRef.current) return;
         if (onBeforeClose && onBeforeClose() === false) return;
-        onClose();
+        closingRef.current = true;
+        setIsClosing(true);
+        closeTimerRef.current = setTimeout(() => {
+            closeTimerRef.current = null;
+            onClose();
+        }, CLOSE_ANIMATION_MS);
     }, [onClose, onBeforeClose]);
+
+    // Pending close-timer takarítás: ha a parent (pl. scope auto-close)
+    // előbb unmount-ol, mint hogy a setTimeout lejárna, ne maradjon
+    // árva timer (potenciális onClose-hívás már unmountolt komponensre).
+    useEffect(() => () => {
+        if (closeTimerRef.current) {
+            clearTimeout(closeTimerRef.current);
+            closeTimerRef.current = null;
+        }
+    }, []);
 
     // ESC billentyű — csak a legfelső modal reagál
     const overlayRef = useRef(null);
@@ -84,8 +131,13 @@ export default function Modal({
 
         return () => {
             cancelAnimationFrame(rafId);
+            // `preventScroll: true` — a focus restore alapértelmezetten
+            // `scrollIntoView`-t hív, ami a háttér tartalmat (ArticleTable
+            // sora, LayoutView page-slot) elgörgetheti, ha az előző fókusz
+            // pont nem éppen viewport-ban van. Az ugrás "villanásnak" látszik
+            // a fade-out közben.
             if (previousFocusRef.current && typeof previousFocusRef.current.focus === 'function') {
-                previousFocusRef.current.focus();
+                previousFocusRef.current.focus({ preventScroll: true });
             }
         };
     }, []);
@@ -144,16 +196,19 @@ export default function Modal({
 
     const overlayStyle = zIndex != null ? { zIndex } : undefined;
 
+    const overlayClass = `modal-overlay${isOpen ? ' is-open' : ''}${isClosing ? ' is-closing' : ''}`;
+    const cardClass = `modal-card modal-${size}${isOpen ? ' is-open' : ''}${isClosing ? ' is-closing' : ''}`;
+
     return createPortal(
         <div
             ref={overlayRef}
-            className="modal-overlay"
+            className={overlayClass}
             style={overlayStyle}
             onClick={handleBackdropClick}
         >
             <div
                 ref={cardRef}
-                className={`modal-card modal-${size}`}
+                className={cardClass}
                 tabIndex={-1}
                 role="dialog"
                 aria-modal="true"

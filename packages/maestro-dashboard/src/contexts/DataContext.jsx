@@ -156,7 +156,20 @@ export function DataProvider({ children }) {
 
     // ─── Kiadvány váltás ────────────────────────────────────────────────────
 
-    const switchPublication = useCallback(async (publicationId) => {
+    /**
+     * @param {string|null} publicationId
+     * @param {Object} [options]
+     * @param {boolean} [options.silent=false] — `true` esetén NEM állítjuk
+     *   az `isLoading` flag-et (sem true-ra, sem false-ra) és nem ürítjük a
+     *   `layouts` derived state-et. A `resyncRealtimeData` hívja így WS
+     *   reconnect után — a háttér ArticleTable / LayoutView nem cserélődik
+     *   ki egy "Betöltés…" spinnerre, csak a fetch befejeztével frissülnek
+     *   az adatok. Settings modal mount/unmount által okozott bus-rebuild
+     *   szintén ezt az ágat választja (ld. realtimeBus.js handleSocketClose
+     *   megjegyzés) — Codex stop-time review.
+     */
+    const switchPublication = useCallback(async (publicationId, options = {}) => {
+        const { silent = false } = options;
         const gen = ++switchPublicationGenRef.current;
         activePublicationIdRef.current = publicationId;
         setActivePublicationIdState(publicationId);
@@ -168,12 +181,14 @@ export function DataProvider({ children }) {
             setDeadlines([]);
             setValidations([]);
             articleIdsRef.current = new Set();
-            setIsLoading(false);
+            if (!silent) setIsLoading(false);
             return;
         }
 
-        setLayouts([]);
-        setIsLoading(true);
+        if (!silent) {
+            setLayouts([]);
+            setIsLoading(true);
+        }
 
         try {
             // 1. fázis: cikkek, layoutok, határidők párhuzamosan
@@ -276,8 +291,9 @@ export function DataProvider({ children }) {
         } finally {
             // A loading flag csak akkor kerüljön false-ra, ha mi vagyunk a friss
             // generation — különben egy stale finally letörölné egy aktív frissebb
-            // switch loading-spinnerét.
-            if (gen === switchPublicationGenRef.current) setIsLoading(false);
+            // switch loading-spinnerét. Silent ágon eleve nem touch-oltuk az
+            // isLoading-et — itt sem.
+            if (!silent && gen === switchPublicationGenRef.current) setIsLoading(false);
         }
     }, [databases]);
 
@@ -807,7 +823,14 @@ export function DataProvider({ children }) {
                 // ezt a clear-ág veszi át, különben a spinner stuck-true marad.
                 setIsLoading(false);
             } else if (activeId && stillExists) {
-                await switchPublication(activeId);
+                // Silent: a háttér ArticleTable / LayoutView marad látható,
+                // a `loading-overlay` spinnert nem villantjuk fel egy gyors
+                // resync miatt. Ez fedi le a settings modal mount/unmount
+                // által okozott bus-rebuild → pseudo-reconnect → resync láncot
+                // is — ami a felhasználó által panaszolt spinner-villanást
+                // okozta. (Tényleges hálózati reconnect után is silent: a
+                // user nem tett semmit, csak a háttérben frissülnek az adatok.)
+                await switchPublication(activeId, { silent: true });
             }
 
             await Promise.all([fetchWorkflow(), fetchArchivedWorkflows()]);

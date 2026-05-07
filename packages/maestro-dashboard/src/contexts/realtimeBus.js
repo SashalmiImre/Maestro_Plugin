@@ -101,6 +101,15 @@ function handleSocketClose() {
     // Csak akkor jelöljük rá a "resync szükséges" flag-et, ha már egyszer
     // megnyílt a WS — különben a kezdeti kapcsolódási kísérlet közbeni
     // sikertelen close-ok hamisan reconnect-et jelenetnének az első open-nél.
+    //
+    // MEGJEGYZÉS: a settings modal mount/unmount által indított SDK rebuild
+    // is close+open ciklust ad — itt is `pendingResync = true`, és a
+    // `fireReconnectListeners` lefut. A spinner-villanás ezért a fogyasztó
+    // oldalon (DataContext `resyncRealtimeData` `switchPublication`-jánál)
+    // van elnyomva `silent: true` opcióval, NEM bus-szinten — bus-szinten a
+    // self-close vs. hálózati close megkülönböztetése (`wasClean` / close-code)
+    // nem biztonságos: a szerver oldali clean close-ok (inactivity / restart)
+    // is `code: 1000` lehetnek, és valódi reconnect-et nyelne el (Codex review).
     if (hasBeenConnected) pendingResync = true;
 }
 

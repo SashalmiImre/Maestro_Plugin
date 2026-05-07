@@ -1,5 +1,18 @@
 /* ─── Modal overlay (backdrop) ────────────────────────────────────────────── */
 
+/* Nyitás/zárás: `transition` (NEM `animation`) — a `transition` az aktuális
+   komputált értékből interpolál, így mid-open close (felhasználó még a
+   fadeIn alatt ESC-el / backdrop-ra kattint) NEM snap-el vissza `opacity: 1`-re,
+   hogy onnan tűnjön el; egyenesen az épp aktuális opacity-ről fade-el 0-ra.
+   Codex stop-time review (close-during-open path).
+
+   Három fázis a JS oldalról:
+   - `mounting` (alapállapot): opacity 0, kártya alulról+kicsinyítve
+   - `is-open` (egy `requestAnimationFrame` után): opacity 1, kártya helyén
+   - `is-closing` (attemptClose után, `CLOSE_ANIMATION_MS` alatt): opacity 0
+     a JELENLEGI állapotból (közepes is lehet, ha még nyitottuk).
+*/
+
 .modal-overlay {
     position: fixed;
     inset: 0;
@@ -10,12 +23,27 @@
     background: var(--modal-backdrop);
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
-    animation: modalFadeIn 0.2s ease-out;
+    /* Saját kompozitor-réteg: a `backdrop-filter: blur` réteg ne
+       kényszerítse a háttér ArticleTable / LayoutView újra-rasterizálását
+       a nyitás/zárás frame-jén. A `will-change` hint a böngészőnek, hogy
+       az opacity / backdrop-filter módosítása várható; a `transform: translateZ(0)`
+       biztosítja a saját layer promotálást Safari-n is. */
+    will-change: opacity, backdrop-filter;
+    transform: translateZ(0);
+    /* Mounting alapérték — egy frame múlva a `.is-open` osztály billent át. */
+    opacity: 0;
+    transition: opacity 0.2s ease-out;
 }
 
-@keyframes modalFadeIn {
-    from { opacity: 0; }
-    to   { opacity: 1; }
+.modal-overlay.is-open {
+    opacity: 1;
+}
+
+/* `is-closing` jön a `is-open` UTÁN a fájlban → ugyanaz a specificitás,
+   sorrend dönt → `is-closing` nyer akkor is, ha mindkettő ott van. */
+.modal-overlay.is-closing {
+    opacity: 0;
+    transition: opacity 0.2s ease-in;
 }
 
 /* ─── Modal kártya ────────────────────────────────────────────────────────── */
@@ -30,19 +58,23 @@
     max-height: 85vh;
     display: flex;
     flex-direction: column;
-    animation: modalSlideIn 0.25s ease-out;
     outline: none;
+    /* Mounting: enyhén lejjebb és kisebbre — a `.is-open` egy frame múlva
+       visszaviszi a helyére (transition interpolál). */
+    opacity: 0;
+    transform: translateY(12px) scale(0.97);
+    transition: opacity 0.25s ease-out, transform 0.25s ease-out;
 }
 
-@keyframes modalSlideIn {
-    from {
-        opacity: 0;
-        transform: translateY(12px) scale(0.97);
-    }
-    to {
-        opacity: 1;
-        transform: translateY(0) scale(1);
-    }
+.modal-card.is-open {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+}
+
+.modal-card.is-closing {
+    opacity: 0;
+    transform: translateY(8px) scale(0.97);
+    transition: opacity 0.2s ease-in, transform 0.2s ease-in;
 }
 
 /* Méretek */
