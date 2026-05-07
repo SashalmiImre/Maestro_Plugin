@@ -114,6 +114,8 @@ const ACTION_HANDLERS = {
     'bootstrap_permission_sets_schema': schemaActions.bootstrapPermissionSetsSchema,
     'bootstrap_workflow_extension_schema': schemaActions.bootstrapWorkflowExtensionSchema,
     'backfill_tenant_acl': schemaActions.backfillTenantAcl,
+    // 2026-05-07 — userName/userEmail denormalizáció backfill (owner-anywhere).
+    'backfill_membership_user_names': schemaActions.backfillMembershipUserNames,
 
     // Permission set CRUD (A.3 + A.3.6)
     'create_permission_set': permissionSetActions.createPermissionSet,
@@ -139,6 +141,9 @@ const ACTION_HANDLERS = {
 
     // Org & office CRUD (A.3.6 org-scope/office-scope)
     'update_organization': orgActions.updateOrganization,
+    // 2026-05-07: org-tag role változtatás (org.member.role.change slug,
+    // self-edit + last-owner + owner-touch guardokkal). UsersTab role-dropdown.
+    'change_organization_member_role': orgActions.changeOrganizationMemberRole,
     'create_editorial_office': officeActions.createEditorialOffice,
     'update_editorial_office': officeActions.updateEditorialOffice,
     'delete_editorial_office': officeActions.deleteEditorialOffice,
@@ -506,6 +511,14 @@ module.exports = async function ({ req, res, log, error }) {
             .filter(Boolean);
         const callerUser = { id: callerId, labels: callerLabels };
 
+        // 2026-05-07 — User identity per-request cache.
+        // Az `organizationMemberships` és `editorialOfficeMemberships` collection-ök
+        // mostantól denormalizálják a `userName` és `userEmail` mezőket (snapshot-at-join).
+        // A `helpers/util.fetchUserIdentity(usersApi, userId, cache)` ezt a Map-et
+        // használja, hogy egy request egy userId-re csak egyszer hívja az `usersApi.get`-et
+        // (pl. bootstrap a self-membership + office-membership ágon kétszer érintené).
+        const userIdentityCache = new Map();
+
         // B.0.3 (2026-05-04) — közös handler-context.
         // A `actions/*.js` modulok ezt az egy objektumot kapják paraméterként;
         // mindegyik handler destrukturálja, amire szüksége van. Az `env` plain
@@ -558,7 +571,8 @@ module.exports = async function ({ req, res, log, error }) {
             res,
             fail,
             permissionEnv,
-            permissionContext
+            permissionContext,
+            userIdentityCache
         };
 
         // ════════════════════════════════════════════════════════

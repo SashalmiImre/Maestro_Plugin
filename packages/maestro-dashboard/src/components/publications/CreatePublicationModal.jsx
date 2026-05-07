@@ -8,11 +8,16 @@
  *
  * Mezők:
  *   - Név (kötelező)
- *   - Gyökérmappa (opcionális, kanonikus formátum ha megadva: /ShareName/relative/path).
- *     A Plugin állítja be natív folder picker után — a Dashboardon opcionális.
  *   - Fedés kezdete / vége (két number input — oldalszám)
  *   - Hétvégék kihagyása (checkbox)
  *   - Workflow (dropdown, auto-disabled ha csak egy workflow van)
+ *
+ * Megjegyzés (2026-05-07): a Gyökérmappa mező eltávolításra került a webes
+ * UI-ról. A `rootPath`-t kizárólag a Plugin (InDesign) állítja be natív
+ * folder picker-rel az első megnyitáskor, mert a Dashboardon nincs
+ * megbízható mód a kanonikus `/ShareName/relative/path` előállítására.
+ * A backend `rootPath` továbbra is opcionális — ez a kliens-szintű
+ * felelősség-szétválasztás, nem séma-változás.
  *
  * Az új kiadvány `isActivated = false` — a Plugin csak Fázis 5-ben kapcsolódik
  * be az aktiválási logikába, így a létrehozás nem érinti a plugin-oldali
@@ -44,7 +49,6 @@ export default function CreatePublicationModal() {
 
     // ─── Form állapot ───────────────────────────────────────────────────────
     const [name, setName] = useState('');
-    const [rootPath, setRootPath] = useState('');
     const [coverageStart, setCoverageStart] = useState('1');
     const [coverageEnd, setCoverageEnd] = useState('');
     const [excludeWeekends, setExcludeWeekends] = useState(true);
@@ -70,15 +74,6 @@ export default function CreatePublicationModal() {
 
         if (!name.trim()) next.name = 'A név nem lehet üres.';
 
-        const trimmedRoot = rootPath.trim();
-        if (trimmedRoot !== '') {
-            if (!trimmedRoot.startsWith('/')) {
-                next.rootPath = 'A gyökérmappának / karakterrel kell kezdődnie.';
-            } else if (trimmedRoot === '/') {
-                next.rootPath = 'Adj meg egy kanonikus útvonalat (pl. /Story/2026/March).';
-            }
-        }
-
         const startNum = parseInt(coverageStart, 10);
         const endNum = parseInt(coverageEnd, 10);
         if (isNaN(startNum) || startNum < 1) {
@@ -98,7 +93,7 @@ export default function CreatePublicationModal() {
         }
 
         return next;
-    }, [name, rootPath, coverageStart, coverageEnd, workflowId, workflows]);
+    }, [name, coverageStart, coverageEnd, workflowId, workflows]);
 
     const hasErrors = Object.keys(errors).length > 0;
 
@@ -112,7 +107,6 @@ export default function CreatePublicationModal() {
         if (needsWorkflow) return 'Válassz egy workflow-t.';
         if (errors.workflowId) return errors.workflowId;
         if (errors.coverageStart || errors.coverageEnd) return 'Ellenőrizd a lefedett oldalakat.';
-        if (errors.rootPath) return 'Ellenőrizd a gyökérmappa útvonalat.';
         return '';
     }, [hasErrors, name, workflowId, workflows.length, errors]);
 
@@ -120,7 +114,7 @@ export default function CreatePublicationModal() {
     async function handleSubmit(e) {
         e?.preventDefault?.();
         setTouched({
-            name: true, rootPath: true, coverageStart: true, coverageEnd: true, workflowId: true
+            name: true, coverageStart: true, coverageEnd: true, workflowId: true
         });
         if (hasErrors || isSubmitting) return;
 
@@ -138,7 +132,11 @@ export default function CreatePublicationModal() {
             // create + autoseed → nincs kliens-oldali tranziens "workflowId
             // nélkül" ablak. Ha bukik (autoseed/workflow-fetch), a CF maga
             // rollbackel; itt csak az error toast jelenik meg.
-            const trimmedRoot = rootPath.trim();
+            //
+            // A `rootPath` szándékosan kimarad a payloadból: a Plugin
+            // (InDesign) állítja be natív folder picker-rel az első
+            // megnyitáskor. A backend mező opcionális — null-ként marad
+            // a publikáció create után, és a Plugin update-eli.
             const payload = {
                 organizationId: activeOrganizationId,
                 editorialOfficeId: activeEditorialOfficeId,
@@ -148,7 +146,6 @@ export default function CreatePublicationModal() {
                 coverageEnd: parseInt(coverageEnd, 10),
                 excludeWeekends
             };
-            if (trimmedRoot !== '') payload.rootPath = trimmedRoot;
 
             const response = await createPublicationWithWorkflow(payload);
             const publication = response?.publication;
@@ -209,27 +206,6 @@ export default function CreatePublicationModal() {
                 />
                 {touched.name && errors.name && (
                     <div className="form-error">{errors.name}</div>
-                )}
-            </div>
-
-            {/* Gyökérmappa */}
-            <div className="form-group">
-                <label htmlFor="cp-rootpath">Gyökérmappa (opcionális)</label>
-                <input
-                    id="cp-rootpath"
-                    type="text"
-                    value={rootPath}
-                    onChange={(e) => setRootPath(e.target.value)}
-                    onBlur={() => markTouched('rootPath')}
-                    className={touched.rootPath && errors.rootPath ? 'invalid-input' : ''}
-                    placeholder="/Story/2026/March"
-                />
-                {touched.rootPath && errors.rootPath ? (
-                    <div className="form-error">{errors.rootPath}</div>
-                ) : (
-                    <div className="form-hint">
-                        A Plugin fogja beállítani, amikor a felhasználó először megnyitja a kiadványt.
-                    </div>
                 )}
             </div>
 

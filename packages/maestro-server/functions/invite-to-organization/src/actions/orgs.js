@@ -11,7 +11,8 @@ const {
     SLUG_MAX_LENGTH,
     SLUG_REGEX,
     DEFAULT_WORKFLOW,
-    sanitizeString
+    sanitizeString,
+    fetchUserIdentity
 } = require('../helpers/util.js');
 const { CASCADE_BATCH_LIMIT, WORKFLOW_VISIBILITY_DEFAULT } = require('../helpers/constants.js');
 const { deleteByQuery, cascadeDeleteOffice } = require('../helpers/cascade.js');
@@ -49,7 +50,13 @@ const permissions = require('../permissions.js');
  *     index-en bukik el.
  */
 async function bootstrapOrCreateOrganization(ctx) {
-    const { databases, env, callerId, payload, log, error, res, fail, sdk, teamsApi, action } = ctx;
+    const { databases, env, callerId, payload, log, error, res, fail, sdk, teamsApi, usersApi, userIdentityCache, action } = ctx;
+
+    // 2026-05-07 — Self user identity lookup a denormalizált membership
+    // mezőkhöz (`userName`, `userEmail`). Egyszer fetch-elünk, kétszer
+    // használjuk (organizationMemberships + editorialOfficeMemberships).
+    // Failure tolerant: ha a lookup bukik, `null` marad — a flow tovább megy.
+    const callerIdentity = await fetchUserIdentity(usersApi, callerId, userIdentityCache, log);
 
     const orgName = sanitizeString(payload.orgName, NAME_MAX_LENGTH);
     const orgSlug = sanitizeString(payload.orgSlug, SLUG_MAX_LENGTH);
@@ -187,7 +194,10 @@ async function bootstrapOrCreateOrganization(ctx) {
                 organizationId: newOrgId,
                 userId: callerId,
                 role: 'owner',
-                addedByUserId: callerId
+                addedByUserId: callerId,
+                // 2026-05-07 denormalizáció (snapshot-at-join)
+                userName: callerIdentity.userName,
+                userEmail: callerIdentity.userEmail
             }
         );
         newMembershipId = membership.$id;
@@ -280,7 +290,11 @@ async function bootstrapOrCreateOrganization(ctx) {
                 editorialOfficeId: newOfficeId,
                 organizationId: newOrgId,
                 userId: callerId,
-                role: 'admin'
+                role: 'admin',
+                // 2026-05-07 denormalizáció (snapshot-at-join) —
+                // ugyanaz a `callerIdentity` cache-ből, nincs 2. usersApi.get
+                userName: callerIdentity.userName,
+                userEmail: callerIdentity.userEmail
             }
         );
         newOfficeMembershipId = officeMembershipDoc.$id;
@@ -652,8 +666,196 @@ async function deleteOrganization(ctx) {
     });
 }
 
+/**
+ * ACTION='change_organization_member_role' (2026-05-07).
+ *
+ * Egy meglévő `organizationMemberships` rekord `role` mezőjének változtatása
+ * (`owner` ↔ `admin` ↔ `member`). A `org.member.role.change` org-scope slug
+ * adja a jogot — `userHasOrgPermission()` szerint owner és admin egyaránt
+ * megkapja, viszont az action **extra owner-only guardot** ír elő minden
+ * owner-érintettségű cserére (admin nem promote-olhat owner-ré, és nem
+ * demote-olhat egy meglévő owner-t — különben privilege-escalation lenne).
+ *
+ * Védelmi rétegek (sorban):
+ *   1. Payload validation — `organizationId`, `targetUserId`, `role`
+ *   2. Self-edit guard — `callerId === targetUserId` → 403
+ *      (egy másik owner-rel kell elvégeztetni; egyébként az utolsó owner
+ *      saját magát admin-ra léptethetné, és örökre elveszne az org-role)
+ *   3. Permission check — `org.member.role.change` (owner / admin)
+ *   4. Owner-touch guard — ha az ÚJ role 'owner' VAGY a RÉGI role 'owner',
+ *      akkor a caller-nek `owner`-nek kell lennie (admin nem nyúl owner-hez)
+ *   5. Membership lookup (`organizationMemberships` `userId + organizationId`)
+ *   6. Idempotens: ha a membership.role már egyenlő `role`-lal → success no-op
+ *   7. Last-owner guard — ha owner→non-owner és csak 1 owner van az org-ban,
+ *      `409 cannot_demote_last_owner` (különben az org „owner-mentes" lenne)
+ *   8. `databases.updateDocument` — csak a `role` mező
+ *
+ * @param {Object} ctx
+ * @returns {Promise<Object>} CF response
+ */
+async function changeOrganizationMemberRole(ctx) {
+    const { databases, env, callerId, callerUser, payload, log, error, res, fail, sdk, permissionEnv, permissionContext } = ctx;
+    const { organizationId, targetUserId, role } = payload;
+
+    // 1. Payload validation
+    if (!organizationId || !targetUserId || !role) {
+        return fail(res, 400, 'missing_fields', {
+            required: ['organizationId', 'targetUserId', 'role']
+        });
+    }
+    if (typeof organizationId !== 'string'
+        || typeof targetUserId !== 'string'
+        || typeof role !== 'string') {
+        return fail(res, 400, 'invalid_payload_types');
+    }
+    const VALID_ROLES = ['owner', 'admin', 'member'];
+    if (!VALID_ROLES.includes(role)) {
+        return fail(res, 400, 'invalid_role', {
+            allowed: VALID_ROLES
+        });
+    }
+
+    // 2. Self-edit guard — a saját org-role-od nem módosíthatod.
+    //    Indok: defense-in-depth a last-owner guard mellett. Egy owner
+    //    a `last-owner check`-et megkerülhetné (mert ha közben egy
+    //    másik owner-t admin-ra rakott, az az adatkár), de a self-edit
+    //    blokkolása egyszerűbb és határozottabb szabály.
+    if (callerId === targetUserId) {
+        return fail(res, 403, 'cannot_change_own_role', {
+            note: 'A saját role-od nem módosíthatod. Egy másik owner-rel kell elvégeztetned.'
+        });
+    }
+
+    // 3. Permission check — `org.member.role.change` org-scope slug.
+    const allowed = await permissions.userHasOrgPermission(
+        databases,
+        permissionEnv,
+        callerUser,
+        'org.member.role.change',
+        organizationId,
+        permissionContext.orgRoleByOrg
+    );
+    if (!allowed) {
+        return fail(res, 403, 'insufficient_permission', {
+            slug: 'org.member.role.change',
+            scope: 'org'
+        });
+    }
+
+    // 5. Membership lookup — előbb-utánra húzva a 4. (owner-touch) elé,
+    //    mert a 4. szabály a `membership.role` ismeretére épül.
+    let membership;
+    try {
+        const list = await databases.listDocuments(
+            env.databaseId,
+            env.membershipsCollectionId,
+            [
+                sdk.Query.equal('organizationId', organizationId),
+                sdk.Query.equal('userId', targetUserId),
+                sdk.Query.limit(1)
+            ]
+        );
+        if (list.documents.length === 0) {
+            return fail(res, 404, 'membership_not_found', {
+                note: 'A target user nem tagja ennek a szervezetnek.'
+            });
+        }
+        membership = list.documents[0];
+    } catch (err) {
+        error(`[ChangeOrgMemberRole] membership lookup hiba: ${err.message}`);
+        return fail(res, 500, 'membership_lookup_failed');
+    }
+
+    const currentRole = membership.role;
+
+    // 4. Owner-touch guard — owner érintettségű cserénél csak owner-caller
+    //    léphet. A `userHasOrgPermission` admin-nak is true-t adna, de az
+    //    ADR 0008 szerinti privilege-elv azt mondja: admin nem promote-olhat
+    //    saját szintje fölé, és nem nyúlhat magasabb szintű felhasználó
+    //    role-jához. A caller role-ját a `getOrgRole` per-request cache-ből
+    //    olvassuk (idempotens, gyors).
+    const isOwnerTouch = role === 'owner' || currentRole === 'owner';
+    if (isOwnerTouch) {
+        const callerRole = await permissions.getOrgRole(
+            databases,
+            permissionEnv,
+            callerId,
+            organizationId,
+            permissionContext.orgRoleByOrg
+        );
+        if (callerRole !== 'owner') {
+            return fail(res, 403, 'requires_owner_for_owner_role_change', {
+                note: 'Owner promote / demote csak owner caller-rel végezhető. Admin nem nyúlhat owner-szintű role-okhoz.'
+            });
+        }
+    }
+
+    // 6. Idempotens no-op
+    if (currentRole === role) {
+        return res.json({
+            success: true,
+            action: 'noop',
+            organizationId,
+            targetUserId,
+            role,
+            note: 'A target user már ezzel a role-lal rendelkezik.'
+        });
+    }
+
+    // 7. Last-owner guard — csak akkor releváns, ha most owner→non-owner
+    //    irányú változás. Az org-ban legalább egy owner-nek lennie kell,
+    //    különben org.delete / org.rename / member-role-change soha többé
+    //    nem futna le owner-hiány miatt (deadlock).
+    if (currentRole === 'owner' && role !== 'owner') {
+        try {
+            const owners = await databases.listDocuments(
+                env.databaseId,
+                env.membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', organizationId),
+                    sdk.Query.equal('role', 'owner'),
+                    sdk.Query.limit(2) // 2 elég a "≥2 owner van?" döntéshez
+                ]
+            );
+            if (owners.documents.length <= 1) {
+                return fail(res, 409, 'cannot_demote_last_owner', {
+                    note: 'A szervezetben legalább egy owner-nek lennie kell. Előbb promote-olj egy másik tagot owner-ré, majd demote-old ezt.'
+                });
+            }
+        } catch (err) {
+            error(`[ChangeOrgMemberRole] owner count lookup hiba: ${err.message}`);
+            return fail(res, 500, 'owner_count_lookup_failed');
+        }
+    }
+
+    // 8. Update — csak a `role` mezőt írjuk, a többit változatlanul hagyjuk.
+    try {
+        await databases.updateDocument(
+            env.databaseId,
+            env.membershipsCollectionId,
+            membership.$id,
+            { role }
+        );
+    } catch (err) {
+        error(`[ChangeOrgMemberRole] update hiba: ${err.message}`);
+        return fail(res, 500, 'role_update_failed');
+    }
+
+    log(`[ChangeOrgMemberRole] User ${callerId} → org=${organizationId} target=${targetUserId} role: ${currentRole} → ${role}`);
+
+    return res.json({
+        success: true,
+        action: 'updated',
+        organizationId,
+        targetUserId,
+        previousRole: currentRole,
+        role
+    });
+}
+
 module.exports = {
     bootstrapOrCreateOrganization,
     updateOrganization,
-    deleteOrganization
+    deleteOrganization,
+    changeOrganizationMemberRole
 };

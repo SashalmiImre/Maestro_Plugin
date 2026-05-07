@@ -8,7 +8,8 @@ const {
     NAME_MAX_LENGTH,
     SLUG_MAX_LENGTH,
     sanitizeString,
-    slugifyName
+    slugifyName,
+    fetchUserIdentity
 } = require('../helpers/util.js');
 const {
     CASCADE_BATCH_LIMIT,
@@ -298,7 +299,7 @@ async function leaveOrganization(ctx) {
  * best-effort visszatöröljük.
  */
 async function createEditorialOffice(ctx) {
-    const { databases, env, callerId, payload, error, res, fail, sdk, log, teamsApi } = ctx;
+    const { databases, env, callerId, payload, error, res, fail, sdk, log, teamsApi, usersApi, userIdentityCache } = ctx;
     const { organizationId } = payload;
     const sanitizedName = sanitizeString(payload.name, NAME_MAX_LENGTH);
     const sourceWorkflowId = typeof payload.sourceWorkflowId === 'string' && payload.sourceWorkflowId
@@ -415,6 +416,10 @@ async function createEditorialOffice(ctx) {
     }
 
     // 4. officeMembership — admin role a caller-hez.
+    //    2026-05-07: snapshot-at-join denormalizáció a `userName`/`userEmail`
+    //    mezőkre. A `fetchUserIdentity` failure-tolerant (404 / hálózati hiba
+    //    esetén `null` marad), és a per-request cache idempotens.
+    const callerIdentity = await fetchUserIdentity(usersApi, callerId, userIdentityCache, log);
     let newOfficeMembershipId = null;
     try {
         const memDoc = await databases.createDocument(
@@ -425,7 +430,9 @@ async function createEditorialOffice(ctx) {
                 editorialOfficeId: newOfficeId,
                 organizationId,
                 userId: callerId,
-                role: 'admin'
+                role: 'admin',
+                userName: callerIdentity.userName,
+                userEmail: callerIdentity.userEmail
             }
         );
         newOfficeMembershipId = memDoc.$id;

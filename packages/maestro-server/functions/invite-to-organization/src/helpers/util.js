@@ -49,9 +49,15 @@ const VALID_ACTIONS = new Set([
     'activate_publication', 'assign_workflow_to_publication',
     'create_publication_with_workflow',
     'update_organization',
+    // 2026-05-07: org-tag role változtatása (owner → admin → member). Az
+    // `org.member.role.change` org-scope slug + extra owner-touch guard.
+    'change_organization_member_role',
     'create_editorial_office', 'update_editorial_office',
     'delete_organization', 'delete_editorial_office',
     'backfill_tenant_acl',
+    // 2026-05-07 — `userName`/`userEmail` denormalizációs backfill az
+    // `organizationMemberships` + `editorialOfficeMemberships`-en. Owner-anywhere.
+    'backfill_membership_user_names',
     // A.3.3 — permission set CRUD (ADR 0008)
     'create_permission_set', 'update_permission_set',
     'archive_permission_set', 'restore_permission_set',
@@ -159,6 +165,60 @@ async function requireOwnerAnywhere(ctx) {
     return null;
 }
 
+/**
+ * 2026-05-07 — User identity denormalizáció helper.
+ *
+ * Visszaad egy `{ userName, userEmail }` objektumot az Appwrite Account
+ * lookup-jából, amit a `organizationMemberships` és `editorialOfficeMemberships`
+ * collection-ök denormalizált mezőibe írhatunk a create-flow-knál. Ezzel a UI
+ * (Dashboard `userIdentity.js` + `EditorialOfficeGroupsTab` / `OrganizationSettingsModal`
+ * / `UsersTab`) a tag nevét akkor is meg tudja jeleníteni, ha az adott felhasználó
+ * még egyetlen `groupMemberships` rekorddal sem rendelkezik.
+ *
+ * **Drift-stratégia**: snapshot-at-join (a `groupMemberships`-éhez igazodva).
+ * A user későbbi név/email változása a meglévő membership rekordon NEM jelenik meg
+ * automatikusan; a `backfill_membership_user_names` action manuálisan szinkronba
+ * hoz mindent. Ez egyszerűbb, mint event-handler-szinkron, és a `groupMemberships`
+ * collection mintáját követi.
+ *
+ * **Failure mode**: ha a `usersApi.get(userId)` bukik (hálózati / törölt user / 404),
+ * `{ userName: null, userEmail: null }`-t ad vissza — NEM dob errort. A hívó
+ * flow nem buknia szabad egy denormalizált mezőhiány miatt, mert az csak UI-cache.
+ *
+ * **Per-request cache**: ha a `cache` Map megadva, idempotens (egy request egy
+ * userId-re egyszer kérdezi az Appwrite-ot). A bootstrapnál a self-membership
+ * + office-membership ugyanazt a callerId-t hívja kétszer — cache nélkül 2 lookup,
+ * cache-szel 1.
+ *
+ * @param {Object} usersApi - `sdk.Users(client)` példány
+ * @param {string} userId - target user $id
+ * @param {Map<string, {userName: string|null, userEmail: string|null}>} [cache]
+ * @param {Function} [log] - optional log callback (fail-csendes)
+ * @returns {Promise<{userName: string|null, userEmail: string|null}>}
+ */
+async function fetchUserIdentity(usersApi, userId, cache, log) {
+    if (!userId) return { userName: null, userEmail: null };
+    if (cache && cache.has(userId)) return cache.get(userId);
+
+    let identity = { userName: null, userEmail: null };
+    try {
+        const userDoc = await usersApi.get(userId);
+        identity = {
+            userName: userDoc?.name || null,
+            userEmail: userDoc?.email || null
+        };
+    } catch (err) {
+        // 404 / hálózati hiba / törölt user → null marad. NEM propagáljuk:
+        // a denormalizált mező hiánya nem buktathatja a tényleges flow-t.
+        if (typeof log === 'function') {
+            log(`[fetchUserIdentity] user=${userId} lookup hiba (null marad): ${err?.message || err}`);
+        }
+    }
+
+    if (cache) cache.set(userId, identity);
+    return identity;
+}
+
 module.exports = {
     DEFAULT_WORKFLOW,
     INVITE_VALIDITY_DAYS,
@@ -168,6 +228,7 @@ module.exports = {
     SLUG_REGEX,
     SLUG_MAX_LENGTH,
     NAME_MAX_LENGTH,
+    fetchUserIdentity,
     HUN_ACCENT_MAP,
     fail,
     slugifyName,

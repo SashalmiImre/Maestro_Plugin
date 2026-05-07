@@ -43,15 +43,23 @@ const OFFICE_CHANNELS = [
     collectionChannel(COLLECTIONS.WORKFLOWS)
 ];
 
-// Org-szintű fogyasztók (`scopeField: 'organizationId'`) csak a 3 alapcsatornán.
+// Org-szintű fogyasztók (`scopeField: 'organizationId'`) csatornái.
 // A `permissionSets` / `groupPermissionSets` payload-jában ugyan szerepel
 // `organizationId` (denormalizált index-mező), de az org-szintű `OrganizationSettingsModal`
 // nem mutat permission set adatot — feleslegesen reagáltatná a child office
 // permission-set változásokra (`loadData()` = members + offices fetch).
+//
+// 2026-05-07: `ORGANIZATION_MEMBERSHIPS` hozzáadva a `change_organization_member_role`
+// (UsersTab role-dropdown) miatt. A modal `members` és `callerRole` state-je
+// erre épül; e nélkül a sikeres role-update Realtime push-a nem érte el a
+// modal-t, és a tagok listája stale maradt. Codex stop-time review (2026-05-07)
+// szerinti correctness fix; a 300ms debounce + silent-reload tompítja a többlet
+// fetch-zajt org-membership churn esetén.
 const ORG_CHANNELS = [
     collectionChannel(COLLECTIONS.GROUPS),
     collectionChannel(COLLECTIONS.GROUP_MEMBERSHIPS),
-    collectionChannel(COLLECTIONS.ORGANIZATION_INVITES)
+    collectionChannel(COLLECTIONS.ORGANIZATION_INVITES),
+    collectionChannel(COLLECTIONS.ORGANIZATION_MEMBERSHIPS)
 ];
 
 const DEBOUNCE_MS = 300;

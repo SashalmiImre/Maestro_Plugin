@@ -68,7 +68,19 @@ async function seedGroupsFromWorkflow(databases, env, compiled, editorialOfficeI
         } catch (err) {
             // Schema-fallback: ha a select() ismeretlen mezőre fut, retry
             // szelektáló nélkül (legacy schema, csak slug+name elérhető).
-            if (err?.code === 400 && /unknown attribute/i.test(err?.message || '')) {
+            //
+            // 2026-05-07 harden: az Appwrite hibaszöveg több formában érkezhet:
+            //   - "Unknown attribute: X" (régebbi document-validálás)
+            //   - "Invalid query: Attribute not found in schema: X" (Query.select
+            //      pre-validáció, ezt láttuk élesben a `groups.color` driftnél)
+            //   - egyéb "attribute not found" / "unknown column" variánsok
+            // A fallback regex mind a hármat fogja, így új SDK-frissítés vagy
+            // hibaüzenet-csere nem dönti el csendben a publication create-et
+            // a rollback ágba — ld. validate-publication-update SERVER_GUARD.
+            const isSchemaQueryError = err?.code === 400
+                && /unknown attribute|unknown column|attribute not found|invalid query/i
+                    .test(err?.message || '');
+            if (isSchemaQueryError) {
                 const fallbackQueries = [
                     sdk.Query.equal('editorialOfficeId', editorialOfficeId),
                     sdk.Query.limit(100)

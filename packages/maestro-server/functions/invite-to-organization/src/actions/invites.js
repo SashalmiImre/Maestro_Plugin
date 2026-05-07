@@ -285,7 +285,13 @@ async function acceptInvite(ctx) {
                 organizationId: invite.organizationId,
                 userId: callerId,
                 role: invite.role || 'member',
-                addedByUserId: invite.invitedByUserId
+                addedByUserId: invite.invitedByUserId,
+                // 2026-05-07 denormalizáció (snapshot-at-join). A `callerUserDoc`-ot
+                // amúgy is lekértük az e-mail-egyezés ellenőrzéshez (228-241.
+                // sor) — a mezőket onnan közvetlenül átvesszük, nincs külön
+                // `usersApi.get` hívás.
+                userName: callerUserDoc.name || null,
+                userEmail: callerUserDoc.email || null
             }
         );
     } catch (err) {

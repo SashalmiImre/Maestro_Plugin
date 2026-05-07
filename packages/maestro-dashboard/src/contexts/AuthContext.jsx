@@ -1004,6 +1004,41 @@ export function AuthProvider({ children }) {
     }, [user?.$id]);
 
     /**
+     * Org-tag role változtatása (`owner` ↔ `admin` ↔ `member`) — 2026-05-07.
+     *
+     * A CF `change_organization_member_role` action-jét hívja. Az action
+     * `org.member.role.change` slug-ot követel (owner / admin), de owner-
+     * érintettségű cseréhez (új role 'owner' VAGY régi role 'owner') a
+     * caller-nek owner-nek kell lennie — admin nem promote-olhat owner-ré
+     * és nem demote-olhat egy meglévő owner-t.
+     *
+     * Védelem:
+     *   - self-edit → 403 `cannot_change_own_role`
+     *   - last-owner demote → 409 `cannot_demote_last_owner`
+     *   - admin owner-touch → 403 `requires_owner_for_owner_role_change`
+     *
+     * Idempotens: ha a target már a kívánt role-lal rendelkezik → success no-op.
+     *
+     * UI refresh: a hívó a sikeres válasz után **explicit-en** frissítse a
+     * tagi listát (`UsersTab.handleRoleChange` az `onMembersRefresh()`
+     * callbackot hívja). Cross-tab szinkron a `useTenantRealtimeRefresh`
+     * hook `ORG_CHANNELS` listájában lévő `ORGANIZATION_MEMBERSHIPS`
+     * csatornán át megy (2026-05-07 retrofit, Codex stop-time fix).
+     *
+     * @param {string} organizationId
+     * @param {string} targetUserId
+     * @param {'owner'|'admin'|'member'} role
+     */
+    const changeOrganizationMemberRole = useCallback(async (organizationId, targetUserId, role) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'change_organization_member_role',
+            { organizationId, targetUserId, role },
+            'role_change_failed'
+        );
+    }, [user?.$id]);
+
+    /**
      * Szerkesztőség átnevezése (org owner/admin). A CF `update_editorial_office`
      * action-jét hívja. Slug NEM változik (stabilitás — cikkek / publikációk az
      * office $id-re hivatkoznak). A hívó maga futtassa a `reloadMemberships()`-t
@@ -1375,6 +1410,7 @@ export function AuthProvider({ children }) {
         createEditorialOffice,
         renameOrganization,
         renameEditorialOffice,
+        changeOrganizationMemberRole,
         addGroupMember,
         removeGroupMember,
         createGroup,
@@ -1424,6 +1460,7 @@ export function AuthProvider({ children }) {
         createEditorialOffice,
         renameOrganization,
         renameEditorialOffice,
+        changeOrganizationMemberRole,
         addGroupMember,
         removeGroupMember,
         createGroup,

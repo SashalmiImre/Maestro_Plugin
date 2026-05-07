@@ -16,12 +16,28 @@ const MAX_PAGE_SORT_FALLBACK = 99999;
 
 export default function ArticleTable({ filteredArticles }) {
     const { user } = useAuth();
-    const { deadlines, validations, getMemberName, publications, activePublicationId } = useData();
+    const { deadlines, validations, getMemberName, publications, activePublicationId, workflow } = useData();
     const [sortColumn, setSortColumn] = useState('range');
     const [sortDirection, setSortDirection] = useState('asc');
 
-    // Sürgősség-számítás
-    const { urgencyMap } = useUrgency(filteredArticles, deadlines);
+    // Aktív publikáció — a sürgősség-számítás `excludeWeekends` mezőjéhez
+    // (a publikáció saját beállítása felülírja a default true-t).
+    const activePublication = useMemo(
+        () => (activePublicationId
+            ? publications.find((p) => p.$id === activePublicationId) || null
+            : null),
+        [publications, activePublicationId]
+    );
+
+    // Sürgősség-számítás — a workflow compiled JSON-t a calculateUrgencyRatio
+    // a 3. paraméterben várja (terminal-state guard + remaining work minutes).
+    // A publikáció a 4. paraméter — innen olvasódik az `excludeWeekends`
+    // (a CreatePublicationModal / GeneralTab-on állított érték).
+    // A 2026-05-07 fix előtt mind a workflow, mind a publikáció hiányzott;
+    // a `{ holidays, excludeWeekends }` a workflow helyére csúszott, és
+    // a destructure undefined-on hibázott. A pótlás után az excludeWeekends
+    // is a publikációból jön (Codex stop-time review #2).
+    const { urgencyMap } = useUrgency(filteredArticles, deadlines, workflow, activePublication);
 
     // Validáció indexelés
     const validationIndex = useMemo(() => {

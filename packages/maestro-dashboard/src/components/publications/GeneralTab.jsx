@@ -368,22 +368,22 @@ export default function GeneralTab({ publication }) {
                 </div>
             </div>
 
-            {/* Gyökérmappa — csak olvasható. A Plugin folder picker (#34) állítja be
-                az első megnyitáskor; a Dashboard nem szerkesztheti. */}
+            {/* Gyökérmappa — info-only display, NEM input.
+                2026-05-07: a text-box eltávolítva (zavaró volt, mert úgy
+                nézett ki, mintha be lehetne ide írni). A label + hint
+                marad — ha a Plugin (InDesign) folder picker-rel beállította,
+                az érték a hint szöveg részeként jelenik meg.
+
+                Szemantika (set-publication-root-path CF, 2026-05-07 review):
+                a rootPath EGYSZER írható — null → kanonikus érték. Ha már
+                be van állítva, a CF `root_path_already_set` errorral
+                elutasít minden további írást, ezért az értéket úgy
+                jelezzük, hogy a beállítás végleges. */}
             <div className="form-group">
-                <label htmlFor="ps-rootpath">Gyökérmappa</label>
-                <input
-                    id="ps-rootpath"
-                    type="text"
-                    value={publication.rootPath || ''}
-                    readOnly
-                    className="form-input-readonly"
-                    placeholder="Még nincs beállítva"
-                    title="A gyökérmappa a Dashboard-ról nem módosítható."
-                />
+                <label>Gyökérmappa</label>
                 <div className="form-hint">
                     {publication.rootPath
-                        ? 'A Pluginból beállítva. A gyökérmappa nem módosítható.'
+                        ? `Beállítva: ${publication.rootPath}. A gyökérmappa nem módosítható.`
                         : 'Még nincs beállítva — a Pluginban a kiadvány „Gyökérmappa beállítása" gombjával állítható be.'}
                 </div>
             </div>

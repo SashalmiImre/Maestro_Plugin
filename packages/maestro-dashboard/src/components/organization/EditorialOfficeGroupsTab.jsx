@@ -27,6 +27,7 @@ import { useAuth } from '../../contexts/AuthContext.jsx';
 import { useData } from '../../contexts/DataContext.jsx';
 import { useConfirm } from '../ConfirmDialog.jsx';
 import { mapErrorReason } from '../../utils/inviteFunctionErrorMessages.js';
+import { buildUserIdentityMap } from '../../utils/userIdentity.js';
 import GroupRow from './GroupRow.jsx';
 
 const GROUP_ERROR_OVERRIDES = {
@@ -113,6 +114,7 @@ export default function EditorialOfficeGroupsTab({
     onReload
 }) {
     const {
+        user,
         addGroupMember,
         removeGroupMember,
         createGroup,
@@ -136,15 +138,16 @@ export default function EditorialOfficeGroupsTab({
 
     // --- Derived struktúrák ---
 
-    const userNameMap = useMemo(() => {
-        const map = new Map();
-        for (const gm of groupMemberships) {
-            if (!map.has(gm.userId)) {
-                map.set(gm.userId, { name: gm.userName || null, email: gm.userEmail || null });
-            }
-        }
-        return map;
-    }, [groupMemberships]);
+    // 2026-05-07: az `editorialOfficeMemberships` is denormalizál `userName`/`userEmail`-t
+    // (snapshot-at-join). Primary source: `officeMembers` — minden office-tag itt szerepel.
+    // Másodlagos: `groupMemberships` (frissebb / specifikusabb, ha valaki csoportot
+    // váltott). Self-fallback a `useAuth().user`-ből legacy rekordokra.
+    // A dependency mezőszintű (Codex: a teljes `user` referencia újraépül
+    // minden setUser hívásnál — felesleges memo-újraszámolás ellen).
+    const userNameMap = useMemo(
+        () => buildUserIdentityMap([officeMembers, groupMemberships], user),
+        [officeMembers, groupMemberships, user?.$id, user?.name, user?.email]
+    );
 
     const membershipLookup = useMemo(() => {
         const set = new Set();

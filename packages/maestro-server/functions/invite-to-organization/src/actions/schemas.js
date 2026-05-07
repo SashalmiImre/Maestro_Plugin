@@ -26,7 +26,8 @@ const {
 } = require('../teamHelpers.js');
 const {
     isAlreadyExists,
-    requireOwnerAnywhere
+    requireOwnerAnywhere,
+    fetchUserIdentity
 } = require('../helpers/util.js');
 
 /**
@@ -210,12 +211,20 @@ async function bootstrapWorkflowSchema(ctx) {
 }
 
 /**
- * ACTION='bootstrap_publication_schema' (#36 + B.3.3) — owner-only schema-
- * bővítés a `publications` collectionön: `compiledWorkflowSnapshot` és
- * `compiledExtensionSnapshot` (string ~1 MB, nullable). Aktiváláskor a
- * workflow `compiled` JSON pillanatképét + a workflow által hivatkozott
- * extension-ök kódját tároljuk — onnantól a publikáció élete a snapshoton
- * fut. Manuálisan triggerelendő (curl vagy Console). Idempotens.
+ * ACTION='bootstrap_publication_schema' (#36 + B.3.3 + 2026-05-07 retrofit) —
+ * owner-only schema-bővítés a `publications` collectionön:
+ *   - `compiledWorkflowSnapshot` és `compiledExtensionSnapshot` (string ~1 MB,
+ *     nullable). Aktiváláskor a workflow `compiled` JSON pillanatképét +
+ *     a workflow által hivatkozott extension-ök kódját tároljuk — onnantól
+ *     a publikáció élete a snapshoton fut.
+ *   - `modifiedByClientId` (string 36, nullable). A CF create/update
+ *     write-path (A.2.10 atomic, A.2.3 assign, B.3.3 activate) ezt a mezőt
+ *     ÍRJA, a `validate-publication-update` CF a SERVER_GUARD pattern-hez
+ *     OLVASSA. Az attribútum a `articles` collection-en már létezik
+ *     ugyanezekkel a paraméterekkel — drift-fix a `publications`-re,
+ *     mert a Console-ban manuálisan létrehozott séma kimaradt.
+ *
+ * Manuálisan triggerelendő (curl vagy Console). Idempotens.
  */
 async function bootstrapPublicationSchema(ctx) {
     const { databases, env, callerId, log, error, res, fail } = ctx;
@@ -270,6 +279,38 @@ async function bootstrapPublicationSchema(ctx) {
                     error: err.message
                 });
             }
+        }
+    }
+
+    // 4. modifiedByClientId — string(36), nullable. A CF write-path (A.2.10
+    //    atomic create, A.2.3 assign, B.3.3 activate) explicit beírja a
+    //    `callerId`-t (vagy SERVER_GUARD_ID-t a guard-flow-kban), és a
+    //    `validate-publication-update` Realtime-event handler erre alapoz
+    //    a self-echo szűréshez + szerver-oldali write detektáláshoz.
+    //    Drift-fix: a `articles`-en 2026-01-30 óta megvan, a `publications`-en
+    //    a manuális Console séma kihagyta — emiatt új publikáció create
+    //    `Invalid document structure: Unknown attribute "modifiedByClientId"`
+    //    500-as hibát adott (2026-05-07).
+    try {
+        await databases.createStringAttribute(
+            env.databaseId,
+            env.publicationsCollectionId,
+            'modifiedByClientId',
+            36,                                // size (Appwrite user $id)
+            false,                             // required
+            null,                              // default
+            false                              // array
+        );
+        created.push('modifiedByClientId');
+    } catch (err) {
+        if (isAlreadyExists(err)) {
+            skipped.push('modifiedByClientId');
+        } else {
+            error(`[BootstrapPublicationSchema] modifiedByClientId létrehozás hiba: ${err.message}`);
+            return fail(res, 500, 'schema_modified_by_client_failed', {
+                attribute: 'modifiedByClientId',
+                error: err.message
+            });
         }
     }
 
@@ -1051,11 +1092,143 @@ async function backfillTenantAcl(ctx) {
     return res.json({ success: true, action: 'backfilled', stats });
 }
 
+/**
+ * ACTION='backfill_membership_user_names' (2026-05-07) — global owner-only
+ * migrációs action. Az `organizationMemberships` és `editorialOfficeMemberships`
+ * collection-ök minden rekordjára `usersApi.get(userId)`-t hív, és írja a
+ * `userName` + `userEmail` denormalizált mezőket — a 2026-05-07 schema
+ * bővítés (snapshot-at-join) backfill-je.
+ *
+ * **Idempotens**: ha a rekordon mindkét mező MÁR ki van töltve (nem null,
+ * nem üres), átugorjuk. Egy második futtatás csak az időközben létrejött
+ * vagy meghibásodott rekordokra hat.
+ *
+ * **Failure-tolerant**: a `fetchUserIdentity` 404 / hálózati hiba esetén
+ * `{ userName: null, userEmail: null }`-t ad vissza, és NEM dob errort.
+ * A backfill ilyenkor nem írja át a mezőket (mert nincs új info), csak
+ * `errors[]`-be sorolja a userId-t. A flow tovább megy.
+ *
+ * **Pagination**: `CASCADE_BATCH_LIMIT` (100/req) cursor-pagination, mind
+ * a két collection-en. A `userIdentityCache` ctx-szintű cache-t reuse-olja
+ * — ha ugyanaz a userId mindkét collectionben szerepel (tipikus org+office
+ * tagság), egyetlen `usersApi.get` hívás van.
+ *
+ * **Auth**: `requireOwnerAnywhere` — a caller legalább egy szervezet
+ * `owner`-e. Globális (cross-tenant) hatású, mint a `bootstrap_*_schema`
+ * action-ök.
+ *
+ * **Payload**: `{ dryRun?: boolean }` — ha `true`, csak számolja, nem ír.
+ * Hasznos staging-validációhoz.
+ *
+ * @param {Object} ctx
+ * @returns {Promise<Object>} `{ success: true, stats: {...} }`
+ */
+async function backfillMembershipUserNames(ctx) {
+    const { databases, env, callerId, payload, log, error, res, sdk, usersApi, userIdentityCache } = ctx;
+    const dryRun = payload && payload.dryRun === true;
+
+    // Auth — owner-anywhere (a `requireOwnerAnywhere` 403-mat ad vissza, ha nincs).
+    const denied = await requireOwnerAnywhere(ctx);
+    if (denied) return denied;
+
+    const stats = {
+        dryRun,
+        organizationMemberships: { scanned: 0, updated: 0, skipped: 0, lookupFailed: 0 },
+        editorialOfficeMemberships: { scanned: 0, updated: 0, skipped: 0, lookupFailed: 0 },
+        errors: []
+    };
+
+    // Az updateDocument-pattern egy collection-en: paginated scan + idempotens
+    // mező-update. A `kind` csak a stats-ban + log-ban különbözik.
+    const processCollection = async (collectionId, kind) => {
+        const bucket = stats[kind];
+        let cursor = null;
+        while (true) {
+            const queries = [sdk.Query.limit(CASCADE_BATCH_LIMIT)];
+            if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
+
+            let batch;
+            try {
+                batch = await databases.listDocuments(env.databaseId, collectionId, queries);
+            } catch (err) {
+                error(`[BackfillMembershipUserNames] ${kind} list hiba: ${err.message}`);
+                stats.errors.push({ kind, phase: 'list', message: err.message });
+                return;
+            }
+            if (batch.documents.length === 0) break;
+
+            for (const doc of batch.documents) {
+                bucket.scanned++;
+                // Idempotens: ha mindkét mező KI van töltve, skip.
+                const hasName = typeof doc.userName === 'string' && doc.userName.length > 0;
+                const hasEmail = typeof doc.userEmail === 'string' && doc.userEmail.length > 0;
+                if (hasName && hasEmail) {
+                    bucket.skipped++;
+                    continue;
+                }
+
+                if (!doc.userId) {
+                    // Defensive — egy korrupt rekord nélkül `userId`-vel nem
+                    // tudunk lookupolni. Skipoljuk, hibát logolunk.
+                    stats.errors.push({
+                        kind, phase: 'doc', $id: doc.$id, message: 'missing userId'
+                    });
+                    continue;
+                }
+
+                const identity = await fetchUserIdentity(usersApi, doc.userId, userIdentityCache, log);
+                if (!identity.userName && !identity.userEmail) {
+                    // A user-lookup bukott (törölt user / hálózati hiba) —
+                    // nem írunk null-t felül egy meglévő részleges adatra.
+                    bucket.lookupFailed++;
+                    continue;
+                }
+
+                if (dryRun) {
+                    bucket.updated++;
+                    continue;
+                }
+
+                try {
+                    await databases.updateDocument(
+                        env.databaseId,
+                        collectionId,
+                        doc.$id,
+                        {
+                            userName: hasName ? doc.userName : (identity.userName || null),
+                            userEmail: hasEmail ? doc.userEmail : (identity.userEmail || null)
+                        }
+                    );
+                    bucket.updated++;
+                } catch (err) {
+                    stats.errors.push({
+                        kind, phase: 'update', $id: doc.$id, message: err.message
+                    });
+                }
+            }
+
+            if (batch.documents.length < CASCADE_BATCH_LIMIT) break;
+            cursor = batch.documents[batch.documents.length - 1].$id;
+        }
+    };
+
+    await processCollection(env.membershipsCollectionId, 'organizationMemberships');
+    await processCollection(env.officeMembershipsCollectionId, 'editorialOfficeMemberships');
+
+    log(`[BackfillMembershipUserNames] User ${callerId} — dryRun=${dryRun}, ` +
+        `org={scanned:${stats.organizationMemberships.scanned},updated:${stats.organizationMemberships.updated},skipped:${stats.organizationMemberships.skipped},lookupFailed:${stats.organizationMemberships.lookupFailed}}, ` +
+        `office={scanned:${stats.editorialOfficeMemberships.scanned},updated:${stats.editorialOfficeMemberships.updated},skipped:${stats.editorialOfficeMemberships.skipped},lookupFailed:${stats.editorialOfficeMemberships.lookupFailed}}, ` +
+        `errors=${stats.errors.length}`);
+
+    return res.json({ success: true, action: 'backfilled', stats });
+}
+
 module.exports = {
     bootstrapWorkflowSchema,
     bootstrapPublicationSchema,
     bootstrapGroupsSchema,
     bootstrapPermissionSetsSchema,
     bootstrapWorkflowExtensionSchema,
-    backfillTenantAcl
+    backfillTenantAcl,
+    backfillMembershipUserNames
 };

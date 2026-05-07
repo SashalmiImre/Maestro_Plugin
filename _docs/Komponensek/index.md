@@ -33,6 +33,9 @@ Egy fájl = egy domain fogalom. Mély, lefelé linkel a kódra (`fájl:sor`), ol
 ## Hookok
 - [[useOrgRole]] — Dashboard
 
+## Utility-helperek
+- [[UserIdentityMap]] — Dashboard név-cache (org/office/group memberships → `Map<userId, {name, email}>`)
+
 ## Jogosultság
 - [[PermissionTaxonomy]] — permission slug-lista logikai csoportokba (Proposed)
 - [[PermissionHelpers]] — `permissions.js` modul (shared + server-only async lookup) — Implemented (A.3.5)

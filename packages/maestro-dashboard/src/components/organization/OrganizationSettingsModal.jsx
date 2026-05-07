@@ -23,6 +23,7 @@ import { useTenantRealtimeRefresh } from '../../hooks/useTenantRealtimeRefresh.j
 import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 import Tabs from '../Tabs.jsx';
 import AnimatedAutoHeight from '../AnimatedAutoHeight.jsx';
+import { buildUserIdentityMap } from '../../utils/userIdentity.js';
 import GeneralTab from './GeneralTab.jsx';
 import UsersTab from './UsersTab.jsx';
 
@@ -163,16 +164,15 @@ export default function OrganizationSettingsModal({ organizationId, initialTab }
             const myMembership = membersResult.documents.find(m => m.userId === user?.$id);
             setCallerRole(myMembership?.role || null);
 
-            const nameMap = new Map();
-            for (const gm of groupMembersResult.documents) {
-                if (!nameMap.has(gm.userId)) {
-                    nameMap.set(gm.userId, {
-                        name: gm.userName || null,
-                        email: gm.userEmail || null
-                    });
-                }
-            }
-            setUserNameMap(nameMap);
+            // 2026-05-07: a `organizationMemberships` is denormalizál `userName`/`userEmail`-t
+            // (snapshot-at-join). Primary source: `membersResult` (org-szintű tagok).
+            // Másodlagos: `groupMembersResult` (csoporttagság-cache, friss is lehet
+            // ha valaki közben csoportot váltott). Self-fallback a `useAuth().user`-ből
+            // legacy rekordokra (még nem futott a `backfill_membership_user_names`).
+            setUserNameMap(buildUserIdentityMap(
+                [membersResult.documents, groupMembersResult.documents],
+                user
+            ));
         } catch (err) {
             if (gen !== loadGenRef.current) return;
             console.error('[OrganizationSettingsModal] Adatok betöltése sikertelen:', err);
@@ -267,6 +267,7 @@ export default function OrganizationSettingsModal({ organizationId, initialTab }
                             pendingInvites={pendingInvites}
                             userNameMap={userNameMap}
                             onInviteSent={reloadInvites}
+                            onMembersRefresh={loadData}
                         />
                     )}
                 </div>

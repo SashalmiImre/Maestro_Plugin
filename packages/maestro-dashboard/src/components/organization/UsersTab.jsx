@@ -23,8 +23,25 @@ function errorMessage(reason) {
     if (reason.includes('invalid_role')) return 'Érvénytelen szerepkör.';
     if (reason.includes('not_a_member')) return 'Nem vagy tagja ennek a szervezetnek.';
     if (reason.includes('insufficient_role')) return 'Nincs jogosultságod ehhez a művelethez.';
+    if (reason.includes('insufficient_permission')) return 'Nincs jogosultságod ehhez a művelethez.';
     if (reason.includes('already_member')) return 'A felhasználó már tagja a szervezetnek.';
     if (reason.includes('already_invited')) return 'Ehhez az e-mail címhez már van függőben lévő meghívó.';
+    // 2026-05-07: org-role változtatáshoz tartozó hibakódok.
+    if (reason.includes('cannot_change_own_role')) {
+        return 'A saját szerepköröd nem módosíthatod. Egy másik tulajdonosnak kell elvégeznie.';
+    }
+    if (reason.includes('cannot_demote_last_owner')) {
+        return 'Ez a szervezet utolsó tulajdonosa — előbb promote-olj egy másik tagot tulajdonosra.';
+    }
+    if (reason.includes('requires_owner_for_owner_role_change')) {
+        return 'Tulajdonosi szerepkör változtatásához tulajdonosi jogosultság szükséges.';
+    }
+    if (reason.includes('membership_not_found')) {
+        return 'A felhasználó már nem tagja ennek a szervezetnek.';
+    }
+    if (reason.includes('role_change_failed')) {
+        return 'A szerepkör módosítása nem sikerült. Próbáld újra.';
+    }
     if (reason.includes('Failed to fetch') || reason.includes('NetworkError')) {
         return 'Hálózati hiba. Ellenőrizd a kapcsolatot, és próbáld újra.';
     }
@@ -57,6 +74,14 @@ function groupMembersByRole(members) {
  * @param {Array} props.pendingInvites — pending invite rekordok
  * @param {Map} props.userNameMap — userId → { name, email } (groupMemberships-ből)
  * @param {Function} props.onInviteSent — callback a pending invite lista újratöltésére
+ * @param {Function} [props.onMembersRefresh] — opcionális teljes loadData() trigger.
+ *   A `handleRoleChange` ezt hívja a sikeres CF response után, hogy az
+ *   azonos tab-ban azonnal lássuk a `role` mező változását — az `ORG_CHANNELS`
+ *   `ORGANIZATION_MEMBERSHIPS` Realtime csatornája ugyan szintén reload-olna,
+ *   de az 300ms debounce-on át, és a same-tab UX-hez azonnal kell.
+ *   Codex review (2026-05-07): a kódbázis preferált mintája "explicit reload
+ *   saját mutáció után + Realtime cross-tab szinkronra" — `GroupsRoute.jsx`
+ *   precedensét követjük.
  */
 export default function UsersTab({
     org,
@@ -64,9 +89,10 @@ export default function UsersTab({
     members,
     pendingInvites,
     userNameMap,
-    onInviteSent
+    onInviteSent,
+    onMembersRefresh
 }) {
-    const { user, createInvite } = useAuth();
+    const { user, createInvite, changeOrganizationMemberRole } = useAuth();
     const copyDialog = useCopyDialog();
 
     const [inviteEmail, setInviteEmail] = useState('');
@@ -122,6 +148,53 @@ export default function UsersTab({
         }
     }
 
+    /**
+     * Org-tag role változtatása (2026-05-07). A backend hárítja a
+     * privilege escalation-t (admin nem nyúl owner-hez, last-owner nem
+     * demote-olható, self-edit blokkolva), itt csak az UX-szintű
+     * azonnali eldobható eseteket szűrjük (pl. azonos role).
+     *
+     * Refresh stratégia (Codex review 2026-05-07):
+     *   1. Sikeres CF response után **explicit `onMembersRefresh()`** — a
+     *      same-tab UX-hez azonnal frissít, nem várjuk a 300ms Realtime
+     *      debounce-ot. Ezt a kódbázis preferált mintája (GroupsRoute,
+     *      AuthContext.reloadMemberships) is így használja.
+     *   2. Cross-tab szinkron a `useTenantRealtimeRefresh` hook
+     *      `ORGANIZATION_MEMBERSHIPS` csatornáján át, debounce-olva.
+     */
+    async function handleRoleChange(member, newRole) {
+        if (member.role === newRole) return;
+        if (member.userId === user?.$id) {
+            // UX-szintű early return — a backend is 403-mal védekezne, de
+            // ezt soha ne is kelljen körberöptetnünk.
+            setActionError('A saját szerepköröd nem módosíthatod.');
+            return;
+        }
+
+        setActionPending(`role:${member.$id}`);
+        setActionError('');
+        setInviteSuccess('');
+
+        try {
+            await changeOrganizationMemberRole(org.$id, member.userId, newRole);
+            // Same-tab azonnali refresh — a Realtime debounce nélkül.
+            if (onMembersRefresh) {
+                try {
+                    await onMembersRefresh();
+                } catch (refreshErr) {
+                    // A reload hibáját nem propagáljuk a user felé — a
+                    // mutáció sikeres volt, és a Realtime fallback úgyis
+                    // legkésőbb 300ms múlva frissít.
+                    console.warn('[UsersTab] onMembersRefresh sikertelen:', refreshErr);
+                }
+            }
+        } catch (err) {
+            setActionError(errorMessage(err.message || err.code || ''));
+        } finally {
+            setActionPending(null);
+        }
+    }
+
     async function handleCopyLink(invite) {
         const link = `${DASHBOARD_URL}/invite?token=${invite.token}`;
         try {
@@ -146,6 +219,14 @@ export default function UsersTab({
             || (isSelf ? (user.name || user.email || m.userId) : m.userId);
         const displayEmail = resolved?.name && resolved?.email ? resolved.email : null;
 
+        // Role-dropdown 2026-05-07. Csak owner-caller láthatja, és csak
+        // más tagra. Az admin-flow-t most kihagyjuk (admin csak meghívót
+        // küldhet adott role-lal — a meglévő tag role-ját owner módosítja).
+        // Self soha nem kap dropdown-ot — backend self-edit guard fedi le,
+        // a UI-szintű visszafogás csak konzisztens UX-ért van.
+        const canChangeThisMemberRole = callerRole === 'owner' && !isSelf;
+        const isProcessingRole = actionPending === `role:${m.$id}`;
+
         return (
             <li key={m.$id} style={{
                 display: 'flex', alignItems: 'center', gap: 8,
@@ -162,6 +243,30 @@ export default function UsersTab({
                     }}>
                         te
                     </span>
+                )}
+                {canChangeThisMemberRole && (
+                    <select
+                        value={m.role}
+                        onChange={(e) => handleRoleChange(m, e.target.value)}
+                        disabled={!!actionPending}
+                        title="Szerepkör módosítása"
+                        aria-label={`${displayName} szerepkörének módosítása`}
+                        style={{
+                            marginLeft: 'auto',
+                            fontSize: 11, padding: '2px 6px',
+                            background: 'var(--bg-base)', color: 'var(--text-primary)',
+                            border: '1px solid var(--outline-variant)',
+                            borderRadius: 3,
+                            cursor: actionPending ? 'wait' : 'pointer'
+                        }}
+                    >
+                        <option value="owner">Tulajdonos</option>
+                        <option value="admin">Admin</option>
+                        <option value="member">Tag</option>
+                    </select>
+                )}
+                {isProcessingRole && (
+                    <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>…</span>
                 )}
             </li>
         );
