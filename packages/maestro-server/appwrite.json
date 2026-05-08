@@ -286,6 +286,34 @@
             "buildSpecification": "s-0.5vcpu-512mb",
             "runtimeSpecification": "s-0.5vcpu-512mb",
             "deploymentRetention": 0
+        },
+        {
+            "$id": "user-cascade-delete",
+            "name": "User Cascade Delete",
+            "runtime": "node-18.0",
+            "entrypoint": "src/main.js",
+            "commands": "npm install",
+            "timeout": 30,
+            "enabled": true,
+            "logging": true,
+            "path": "functions/user-cascade-delete",
+            "scopes": [
+                "databases.read",
+                "databases.write",
+                "documents.read",
+                "documents.write",
+                "teams.read",
+                "teams.write"
+            ],
+            "events": [
+                "users.*.delete"
+            ],
+            "specification": "s-0.5vcpu-512mb",
+            "execute": [],
+            "schedule": "",
+            "buildSpecification": "s-0.5vcpu-512mb",
+            "runtimeSpecification": "s-0.5vcpu-512mb",
+            "deploymentRetention": 0
         }
     ]
 }
