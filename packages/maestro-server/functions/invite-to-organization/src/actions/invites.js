@@ -83,7 +83,7 @@ async function _createInviteCore(ctx, params) {
     if (existingPending.documents.length > 0) {
         let existing = existingPending.documents[0];
         if (new Date(existing.expiresAt) > new Date()) {
-            // 2026-05-09 (Codex stop-time #2 fix — customMessage durability):
+            // 2026-05-09 (Codex stop-time #2 + #3 fix — customMessage durability + render fallback):
             // ha az admin új `customMessage`-et adott meg az `existing` ágon,
             // persistáljuk az invite doc-on is. Eddig csak az e-mail rendert
             // override-oltuk (241f15c), de a tárolt érték a régi maradt →
@@ -91,6 +91,16 @@ async function _createInviteCore(ctx, params) {
             // Üres string === explicit "nincs üzenet"; null/undefined ===
             // "ne változtass". A customMessage paraméter már normalizált
             // (`normalizeCustomMessage` `null`-ozza az üres trimmed-stringet).
+            //
+            // A 299e0fe simplification eltávolította a `customMessageOverride`
+            // propagálást a `sendOneInviteEmail`-ig, ezzel csak az
+            // `updateDocument` sikere garantálta a friss render-tartalmat.
+            // Codex stop-time #3 jelezte: ha az update bukik, a render
+            // STALE doc-ra esik vissza → fix: a catch ágon IN-MEMORY
+            // patch-eljük az `existing` objektumot, így a hívó (és
+            // `_autoSendInviteEmail`) friss `customMessage`-t lát perszisztens
+            // doc-update nélkül is. Persistálási drift külön TODO az audit-
+            // trail collection-ben (deferred A) lesz teljesen megoldva.
             if (customMessage !== undefined && customMessage !== existing.customMessage) {
                 try {
                     existing = await databases.updateDocument(
@@ -101,10 +111,10 @@ async function _createInviteCore(ctx, params) {
                     );
                     log(`[CreateCore] Idempotens — customMessage frissítve: invite ${existing.$id}`);
                 } catch (updateErr) {
-                    // Non-blocking: az e-mail rendert már override-oljuk az
-                    // `_autoSendInviteEmail` szintjén, csak a perzisztens UI-state
-                    // fog drift-elni. Loggoljuk.
-                    log(`[CreateCore] Idempotens — customMessage update bukott (non-blocking): ${updateErr.message}`);
+                    // Non-blocking persistálás, DE in-memory patch-eljük az
+                    // `existing` objektumot, hogy a render friss-re menjen.
+                    log(`[CreateCore] Idempotens — customMessage update bukott (in-memory patch alkalmazva): ${updateErr.message}`);
+                    existing = { ...existing, customMessage: customMessage };
                 }
             }
             log(`[CreateCore] Idempotens — meglévő pending invite ${existing.$id} (${email})`);
@@ -174,8 +184,9 @@ async function _createInviteCore(ctx, params) {
             );
             if (raceWinner.documents.length > 0) {
                 let existing = raceWinner.documents[0];
-                // 2026-05-09 (Codex stop-time #2 fix): customMessage durability
-                // a race-winner ágon is. (Lásd a fő existing-ágon a hosszabb komment.)
+                // 2026-05-09 (Codex stop-time #2 + #3): customMessage durability
+                // a race-winner ágon is, IN-MEMORY patch fallback-kel.
+                // (Lásd a fő existing-ágon a hosszabb komment.)
                 if (customMessage !== undefined && customMessage !== existing.customMessage) {
                     try {
                         existing = await databases.updateDocument(
@@ -186,7 +197,8 @@ async function _createInviteCore(ctx, params) {
                         );
                         log(`[CreateCore] Race — customMessage frissítve: invite ${existing.$id}`);
                     } catch (updateErr) {
-                        log(`[CreateCore] Race — customMessage update bukott (non-blocking): ${updateErr.message}`);
+                        log(`[CreateCore] Race — customMessage update bukott (in-memory patch alkalmazva): ${updateErr.message}`);
+                        existing = { ...existing, customMessage: customMessage };
                     }
                 }
                 log(`[CreateCore] Race — meglévő pending invite ${existing.$id} (${email})`);
