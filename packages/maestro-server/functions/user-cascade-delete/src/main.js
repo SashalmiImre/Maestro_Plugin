@@ -162,6 +162,14 @@ module.exports = async ({ req, res, log, error }) => {
 
     const stats = {
         userId,
+        // Codex stop-time #2 (2026-05-09): a Pass 1 list-failure-öket és a
+        // Pass 4 verification-failure-öket EXPLICIT követjük. Ha a list
+        // bukik, üres tömbbel mennénk tovább, és HTTP 200-zal nyugtáznánk,
+        // miközben semmilyen cleanup nem történt — orphan rekordok
+        // permanensek maradnak. Ezért a `listFailures` és `verificationFailures`
+        // is hozzáadódik a `totalFailed` számhoz a 500-as ágon.
+        listFailures: [],
+        verificationFailures: [],
         organizationMemberships: { found: 0, deleted: 0, failed: 0 },
         editorialOfficeMemberships: { found: 0, deleted: 0, failed: 0 },
         groupMemberships: { found: 0, deleted: 0, failed: 0 },
@@ -176,13 +184,22 @@ module.exports = async ({ req, res, log, error }) => {
     let groupMems = [];
 
     try { orgMems = await listAllDocuments(databases, databaseId, orgMemsCol, userId); }
-    catch (err) { error(`[UserCascade] orgMemberships list bukott: ${err.message}`); }
+    catch (err) {
+        error(`[UserCascade] orgMemberships list bukott: ${err.message}`);
+        stats.listFailures.push({ collection: 'organizationMemberships', error: err.message });
+    }
 
     try { officeMems = await listAllDocuments(databases, databaseId, officeMemsCol, userId); }
-    catch (err) { error(`[UserCascade] officeMemberships list bukott: ${err.message}`); }
+    catch (err) {
+        error(`[UserCascade] officeMemberships list bukott: ${err.message}`);
+        stats.listFailures.push({ collection: 'editorialOfficeMemberships', error: err.message });
+    }
 
     try { groupMems = await listAllDocuments(databases, databaseId, groupMemsCol, userId); }
-    catch (err) { error(`[UserCascade] groupMemberships list bukott: ${err.message}`); }
+    catch (err) {
+        error(`[UserCascade] groupMemberships list bukott: ${err.message}`);
+        stats.listFailures.push({ collection: 'groupMemberships', error: err.message });
+    }
 
     const orgIds = new Set(orgMems.map(m => m.organizationId).filter(Boolean));
     const officeIds = new Set(officeMems.map(m => m.editorialOfficeId).filter(Boolean));
@@ -224,6 +241,11 @@ module.exports = async ({ req, res, log, error }) => {
     // ── Pass 4: Last-owner detection ────────────────────────────────────
     // Az `organizationMemberships` már törölve van; megnézzük orgenként,
     // hogy maradt-e legalább 1 owner. Ha nem → admin attention!
+    //
+    // Codex stop-time #2 (2026-05-09): a check kivétele NEM cleanup-failure
+    // (a delete megtörtént), DE verification-gap — admin nem tudja, hogy
+    // az org owner nélkül maradt-e. A `verificationFailures`-be tesszük,
+    // és a totalFailed-be is beleszámoljuk → HTTP 500 + admin figyelem.
     for (const orgId of ownedOrgIds) {
         try {
             const remainingOwners = await databases.listDocuments(databaseId, orgMemsCol, [
@@ -237,6 +259,7 @@ module.exports = async ({ req, res, log, error }) => {
             }
         } catch (err) {
             error(`[UserCascade] last-owner check dobott (org=${orgId}): ${err.message}`);
+            stats.verificationFailures.push({ check: 'last_owner', organizationId: orgId, error: err.message });
         }
     }
 
@@ -245,12 +268,20 @@ module.exports = async ({ req, res, log, error }) => {
     // log szerint minden OK, miközben orphan rekord maradt. Az admin a 5xx
     // status-t látja a function executions list-en, és tud reagálni
     // (manual MCP cleanup vagy a Phase 2 backstop orphan-sweeper cron).
+    //
+    // Codex stop-time #2 (2026-05-09): a `listFailures` (Pass 1) és
+    // `verificationFailures` (Pass 4) is hozzáadódik a totalFailed-hez —
+    // mert egy bukott listázás cleanup-bypass-t jelent (orphan permanens
+    // marad, üres tömbből 0 delete = nem cleanup), egy bukott verifikáció
+    // pedig admin-attention-igénylő gap (org owner nélkül maradhatott).
     const totalFailed =
         (stats.organizationMemberships.failed || 0) +
         (stats.editorialOfficeMemberships.failed || 0) +
         (stats.groupMemberships.failed || 0) +
         (stats.orgTeams.failed || 0) +
-        (stats.officeTeams.failed || 0);
+        (stats.officeTeams.failed || 0) +
+        stats.listFailures.length +
+        stats.verificationFailures.length;
 
     if (totalFailed > 0) {
         error(`[UserCascade] PARTIAL FAILURE — userId=${userId}, totalFailed=${totalFailed}, stats=${JSON.stringify(stats)}`);
