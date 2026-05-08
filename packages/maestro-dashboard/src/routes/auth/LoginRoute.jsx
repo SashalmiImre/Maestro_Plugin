@@ -37,11 +37,11 @@ const LABELS = {
     submitIdle: 'Belépés',
     submitBusy: 'Belépés...',
     errorInvalidCredentials: 'Hibás e-mail vagy jelszó.',
-    // 2026-05-09 (E2E user feedback): Chrome néha a felhasználó nevét húzza
-    // be az email mezőbe (autofill cache mismatch). Ha az input nem
-    // email-szerű, visszajelzést adunk a Belépés előtt, hogy a user
-    // észrevegye a hibát mielőtt 401-et kap a szervertől.
-    errorEmailFormat: 'Az e-mail-cím @-jelet kell tartalmazzon. (Tipp: a Chrome néha a nevedet húzza be ide automatikusan — írd át a teljes e-mail-címedre.)',
+    // 2026-05-09 (E2E user feedback + iteration-guardian #5): client-side
+    // hint a 401 helyett, ha az input nem email-szerű. Az autofill-quirk
+    // említését eltávolítottuk — átlagfelhasználó nem tudja mi az; az
+    // egyszerű formátum-emlékeztető elég.
+    errorEmailFormat: 'Add meg az e-mail-címedet érvényes formátumban (pl. nev@pelda.hu).',
     errorUnverified: 'Hibás bejelentkezési adatok vagy megerősítetlen fiók.',
     errorActiveSession: 'Már van aktív bejelentkezés. Frissítsd az oldalt.',
     errorGeneric: 'Bejelentkezési hiba. Próbáld újra később.',
