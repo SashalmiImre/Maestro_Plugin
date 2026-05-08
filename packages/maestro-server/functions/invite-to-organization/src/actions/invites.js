@@ -443,7 +443,10 @@ async function createBatchInvites(ctx) {
  * 4. E-mail match (`usersApi.get(callerId)` → caller.email vs invite.email).
  * 5. Membership létrehozás API key-jel (race-védelmes idempotens flow).
  * 6. Invitee az org team-be (best-effort).
- * 7. Invite status frissítés `accepted`-re.
+ * 7. Invite TÖRLÉS (Codex review 2026-05-08 BLOCKER 2 fix — a `pending →
+ *    accepted` updateDocument a `(organizationId, email, status)` unique
+ *    indexen ütközött, ezért a membership létrehozása után az invite
+ *    egyszerűen disposable, deleteDocument-tel takarítjuk).
  */
 async function acceptInvite(ctx) {
     const { databases, env, callerId, payload, log, error, res, fail, sdk, usersApi, teamsApi } = ctx;
@@ -518,9 +521,19 @@ async function acceptInvite(ctx) {
     );
 
     if (existingMembership.documents.length > 0) {
-        await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
-            status: 'accepted'
-        });
+        // 2026-05-08 (Codex review BLOCKER 2 fix): a `pending → accepted`
+        // updateDocument a `(organizationId, email, status)` unique indexen
+        // ütközhet, ha ugyanahhoz a párhoz már létezik `accepted` rekord
+        // (több korábbi meghívás, már egy elfogadott). A membership a
+        // source of truth — az invite-rekord eldobható. DELETE flow:
+        // ha a delete bukik (permission / network), a user TAG marad
+        // (idempotens), és egy következő accept-call vagy cron-cleanup
+        // pótolja.
+        try {
+            await databases.deleteDocument(env.databaseId, env.invitesCollectionId, invite.$id);
+        } catch (deleteErr) {
+            log(`[Accept] Idempotens — invite ${invite.$id} delete hiba (non-blocking): ${deleteErr.message}`);
+        }
         log(`[Accept] Idempotens — user ${callerId} már tagja az org ${invite.organizationId}-nak`);
         return res.json({
             success: true,
@@ -573,14 +586,15 @@ async function acceptInvite(ctx) {
             );
             if (raceWinner.documents.length > 0) {
                 const existing = raceWinner.documents[0];
-                // Még frissítjük az invite-ot is accepted-re, hogy a
-                // status ne ragadjon pending-en.
+                // 2026-05-08 (Codex review BLOCKER 2 fix): a status-update
+                // ugyanazon a unique indexen ütközhet, mint a fő ágon — a
+                // race-loser hívás itt ugyanúgy DELETE-tel takarít. Ha
+                // bukik, non-blocking — a membership már megvan, ami a
+                // source of truth.
                 try {
-                    await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
-                        status: 'accepted'
-                    });
-                } catch (updateErr) {
-                    log(`[Accept] Race — invite status frissítés hiba: ${updateErr.message}`);
+                    await databases.deleteDocument(env.databaseId, env.invitesCollectionId, invite.$id);
+                } catch (deleteErr) {
+                    log(`[Accept] Race — invite ${invite.$id} delete hiba (non-blocking): ${deleteErr.message}`);
                 }
                 log(`[Accept] Race — user ${callerId} már tagja az org ${invite.organizationId}-nak`);
                 return res.json({
@@ -609,10 +623,24 @@ async function acceptInvite(ctx) {
         error(`[Accept] org team membership hiba (non-blocking): ${err.message}`);
     }
 
-    // 8. Invite státusz frissítés
-    await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
-        status: 'accepted'
-    });
+    // 8. Invite cleanup (Codex review 2026-05-08 BLOCKER 2 fix)
+    //
+    // A korábbi `updateDocument(status='accepted')` a
+    // `(organizationId, email, status)` unique indexen ütközött, ha
+    // ugyanahhoz az `(org, email)` párhoz már létezett egy `accepted`
+    // rekord (pl. több korábbi meghívás-iteráció). Megoldás: az invite
+    // egyszerűen TÖRÖLŐDIK az accept után — a membership a source of truth,
+    // az invite-rekordra már nincs szükség a UI-ban (a `listMyInvites`
+    // csak `pending`-eket ad vissza, audit-trail nincs konzumálva).
+    //
+    // Ha a delete bukik (permission / network), a user TAG marad —
+    // a következő accept-call az 5-ös idempotens-membership ágon fogja
+    // pótolni a cleanup-ot.
+    try {
+        await databases.deleteDocument(env.databaseId, env.invitesCollectionId, invite.$id);
+    } catch (deleteErr) {
+        error(`[Accept] invite ${invite.$id} delete hiba (non-blocking — membership létrejött): ${deleteErr.message}`);
+    }
 
     log(`[Accept] User ${callerId} elfogadta az invite ${invite.$id}-t → membership ${membership.$id}`);
 
