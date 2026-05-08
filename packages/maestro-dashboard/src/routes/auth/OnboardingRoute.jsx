@@ -25,14 +25,47 @@
  * - `errorMessage()` kibővítve az összes CF hibakóddal.
  * - Submit előtti ellenőrzés: a `slugify()` után üres slugok lokálisan
  *   elakadnak (pl. ha a user csak emojit vagy nem-ASCII karaktert ír).
+ *
+ * 2026-05-08 UX javítások (Codex review):
+ * - Auto-trigger: ha van pending token, automatikusan meghívjuk az
+ *   acceptInvite()-t mount-kor (nem várunk explicit kattintásra). A user
+ *   ezt érzi „a rendszer már elfogadta a meghívót"-nak — ami egyezik a
+ *   mentális modelljével (a meghívó link kattintása óta minden lépést
+ *   megcsinált).
+ * - Retryable vs. non-retryable: a hibákat 2 csoportra osztjuk. Final-state
+ *   hibáknál (invite_not_found / expired / not_pending / email_mismatch)
+ *   a tokent töröljük localStorage-ből (értelmetlen újrapróbálkozni).
+ *   Retryable hibáknál (rate_limit, network, generic 500) a token marad,
+ *   és „Újra" gombbal lehet ismét próbálkozni.
+ * - email_mismatch CTA: explicit „Jelentkezz ki és regisztrálj a meghívás
+ *   e-mail-címével" gomb — a user enélkül zsákutcában érezné magát.
  */
 
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext.jsx';
 import { useScope } from '../../contexts/ScopeContext.jsx';
 
 const PENDING_INVITE_KEY = 'maestro.pendingInviteToken';
+
+/**
+ * Hibakódok, amelyek után értelmetlen ugyanazzal a tokennel újrapróbálkozni.
+ * Ezekre cleanup-oljuk a localStorage-t. Minden más hiba (network, 500-as
+ * generic „accept_failed", rate_limit) retryable — a token marad.
+ */
+const NON_RETRYABLE_INVITE_REASONS = [
+    'invite_not_found',
+    'invite_expired',
+    'invite_not_pending',
+    'email_mismatch',
+    'missing_token',
+    'invalid_payload'
+];
+
+function isNonRetryableInviteError(err) {
+    const code = err?.code || '';
+    return NON_RETRYABLE_INVITE_REASONS.some(r => code.includes(r));
+}
 
 // A szerver-oldali szabály tükre — invite-to-organization CF SLUG_REGEX.
 // Anchor-ok nélkül, mert a HTML5 `pattern` attribútum implicit ^/$-ra zár.
@@ -146,6 +179,10 @@ export default function OnboardingRoute() {
 
     const [submitting, setSubmitting] = useState(false);
     const [error, setError] = useState('');
+    // Final-state flag az email_mismatch UX-hez. Ha a hiba végleges (a token
+    // többé nem használható ezzel a userrel), explicit CTA-t mutatunk a user
+    // következő lépéséhez (kijelentkezés + más e-maillel regisztráció).
+    const [finalError, setFinalError] = useState(null); // null | 'email_mismatch' | 'invite_consumed'
 
     // Auto slug generálás, ha a felhasználó még nem nyúlt hozzá a slug mezőhöz
     useEffect(() => {
@@ -195,6 +232,7 @@ export default function OnboardingRoute() {
     const handleAcceptInvite = useCallback(async () => {
         if (!pendingToken) return;
         setError('');
+        setFinalError(null);
         setSubmitting(true);
         try {
             const result = await acceptInvite(pendingToken);
@@ -207,24 +245,86 @@ export default function OnboardingRoute() {
         } catch (err) {
             console.warn('[OnboardingRoute] acceptInvite sikertelen:', err);
             setError(errorMessage(err));
-            // Ha a token hibás vagy lejárt, töröljük localStorage-ből, hogy ne ragadjon
-            if (err?.code && (err.code.includes('invite_not_found') ||
-                              err.code.includes('invite_expired') ||
-                              err.code.includes('invite_not_pending') ||
-                              err.code.includes('email_mismatch'))) {
+            // Final-state vs. retryable hibák szétválasztása. Final-state-nél
+            // a token disposable → cleanup. Retryable-nél (network, 500-as
+            // generic „accept_failed", rate_limit) hagyjuk, hogy a user
+            // ismét próbálkozhasson „Újra" gombbal.
+            if (isNonRetryableInviteError(err)) {
                 try { localStorage.removeItem(PENDING_INVITE_KEY); } catch { /* nem baj */ }
                 setPendingToken(null);
+                // Email-mismatch külön UX-ot kap (logout + register másik fiókkal CTA)
+                if (err?.code?.includes('email_mismatch')) {
+                    setFinalError('email_mismatch');
+                } else {
+                    // invite_not_found / expired / not_pending → a user már
+                    // nem tud mit kezdeni a tokennel. „Folytatás új szervezet
+                    // létrehozásával" gombot a sima error-ág adja (a form
+                    // automatikusan megjelenik, mert pendingToken=null lett).
+                    setFinalError('invite_consumed');
+                }
             }
         } finally {
             setSubmitting(false);
         }
     }, [pendingToken, acceptInvite, setActiveOrganization, navigate]);
 
+    // Auto-trigger acceptInvite mount-kor: ha van pending token, ne kelljen
+    // a usernek külön kattintania a „Meghívó elfogadása" gombra. A user
+    // mentális modellje szerint a meghívó link kattintásakor + regisztrációval
+    // + email-verifikációval már „mindent elfogadott" — itt csak a CF hívást
+    // kell befejezni a háttérben.
+    //
+    // StrictMode dupla-mount védelem: ranRef biztosítja, hogy az auto-call
+    // csak egyszer fusson le. A retry gomb manual handleAcceptInvite-ot hív,
+    // ami nem nézi a ranRef-et.
+    const autoTriggerRanRef = useRef(false);
+    useEffect(() => {
+        if (autoTriggerRanRef.current) return;
+        if (!pendingToken) return;
+        if (!user?.$id) return; // Kell a session, hogy a CF hívás authentikált legyen
+        autoTriggerRanRef.current = true;
+        handleAcceptInvite();
+    }, [pendingToken, user?.$id, handleAcceptInvite]);
+
     const handleDismissInvite = useCallback(() => {
         try { localStorage.removeItem(PENDING_INVITE_KEY); } catch { /* nem baj */ }
         setPendingToken(null);
         setError('');
+        setFinalError(null);
     }, []);
+
+    // ─── email_mismatch FINAL UX ─────────────────────────────────────────
+    // A token egy másik e-mail-címre szólt. A user a kijelentkezés gombbal
+    // tud új fiókot regisztrálni a megfelelő e-maillel. A „Folytatás
+    // szervezet létrehozással" gomb is elérhető, ha mégis csak a saját
+    // orgját akarja létrehozni.
+    if (finalError === 'email_mismatch') {
+        return (
+            <div className="login-card">
+                <div className="form-heading">Más e-mail-címre szóló meghívó</div>
+                <p className="auth-help">
+                    Ez a meghívó nem a te fiókod e-mail-címére érkezett. Az
+                    elfogadáshoz jelentkezz ki, és regisztrálj a meghívóban
+                    szereplő e-mail-címmel — vagy folytasd új szervezet
+                    létrehozásával a saját fiókod alatt.
+                </p>
+                <button
+                    type="button"
+                    className="login-btn"
+                    onClick={handleLogout}
+                >
+                    Kijelentkezés és regisztráció másik fiókkal
+                </button>
+                <button
+                    type="button"
+                    className="auth-link-button"
+                    onClick={() => setFinalError(null)}
+                >
+                    Inkább új szervezetet hozok létre
+                </button>
+            </div>
+        );
+    }
 
     return (
         <div className="login-card">
@@ -232,31 +332,55 @@ export default function OnboardingRoute() {
 
             {pendingToken && (
                 <>
-                    <p className="auth-info">
-                        Egy meghívó vár az elfogadásodra. Kattints az alábbi gombra a csatlakozáshoz.
-                    </p>
-                    <button
-                        type="button"
-                        className="login-btn"
-                        onClick={handleAcceptInvite}
-                        disabled={submitting}
-                    >
-                        {submitting ? 'Folyamatban...' : 'Meghívó elfogadása'}
-                    </button>
-                    <button
-                        type="button"
-                        className="auth-link-button"
-                        onClick={handleDismissInvite}
-                        disabled={submitting}
-                    >
-                        Inkább új szervezetet hozok létre
-                    </button>
-                    {error && <div className="login-error">{error}</div>}
+                    {/* Két állapot:
+                        1) Folyamatban (submitting=true VAGY első render előtt
+                           az auto-trigger lefutása) — „Meghívó feldolgozása..."
+                        2) Retryable hiba (submitting=false + error) — „Újra"
+                           gomb + „Mégis új szervezet" link.
+                        Sikeres acceptInvite esetén a navigate('/') miatt
+                        a komponens unmount-ol, nem ér ide. Final-state
+                        hibák (email_mismatch / invite_consumed) a setPendingToken(null)
+                        után a !pendingToken ágra esnek vissza, ahol az
+                        invite_consumed üzenet a form fölött jelenik meg. */}
+                    {!error ? (
+                        <p className="auth-info">Meghívó feldolgozása...</p>
+                    ) : (
+                        <>
+                            <p className="auth-info">
+                                A meghívó elfogadása nem sikerült. Próbáld újra,
+                                vagy hozz létre új szervezetet helyette.
+                            </p>
+                            <div className="login-error">{error}</div>
+                            <button
+                                type="button"
+                                className="login-btn"
+                                onClick={handleAcceptInvite}
+                                disabled={submitting}
+                                style={{ marginTop: 8 }}
+                            >
+                                {submitting ? 'Folyamatban...' : 'Újra'}
+                            </button>
+                            <button
+                                type="button"
+                                className="auth-link-button"
+                                onClick={handleDismissInvite}
+                                disabled={submitting}
+                            >
+                                Inkább új szervezetet hozok létre
+                            </button>
+                        </>
+                    )}
                 </>
             )}
 
             {!pendingToken && (
                 <form onSubmit={handleSubmit}>
+                    {finalError === 'invite_consumed' && error && (
+                        // A token már nem használható (not_found / expired /
+                        // not_pending). A felhasználónak megmutatjuk a hibát,
+                        // de a form-ot is kínáljuk: hozzon létre új orgot.
+                        <div className="login-error" style={{ marginBottom: 12 }}>{error}</div>
+                    )}
                     <p className="auth-help">
                         Még nincs szervezeted. Hozz létre egyet — az első
                         szerkesztőséget utána a dashboardról tudod hozzáadni.
@@ -295,7 +419,12 @@ export default function OnboardingRoute() {
                         {submitting ? 'Létrehozás...' : 'Szervezet létrehozása'}
                     </button>
 
-                    {error && <div className="login-error">{error}</div>}
+                    {/* A bootstrap_organization hibája — finalError nem
+                        invite_consumed. A bootstrap-hibát NEM mutatjuk újra,
+                        ha már fent kiírtuk az invite_consumed üzenetet. */}
+                    {error && finalError !== 'invite_consumed' && (
+                        <div className="login-error">{error}</div>
+                    )}
                 </form>
             )}
 

@@ -17,7 +17,10 @@
 import React, { useState } from 'react';
 import { useNavigate, useLocation, NavLink, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext.jsx';
-import PendingInviteBanner from './PendingInviteBanner.jsx';
+// 2026-05-08 (UX feedback): a PendingInviteBanner csak a /register-en marad
+// (ott actionable: „add meg a meghívás e-mail-címét"). A /login-on a user már
+// regisztrált, a banner nem ad új információt, csak ismétli magát a verifikáció
+// után — ezért szándékosan nem importáljuk be ide.
 
 const LABELS = {
     tabLogin: 'Bejelentkezés',
@@ -111,7 +114,6 @@ export default function LoginRoute() {
             {resetFlag === '1' && (
                 <div className="auth-success">{LABELS.resetNotice}</div>
             )}
-            <PendingInviteBanner />
             <form onSubmit={handleSubmit}>
                 <div className="form-group">
                     <label htmlFor="email">{LABELS.emailLabel}</label>
