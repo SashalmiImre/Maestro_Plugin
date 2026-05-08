@@ -17,6 +17,7 @@ Sorrend = időbeli (`NNNN` szekvencia).
 | 0007 | [[0007-workflow-extensions]] | 2026-05-01 | Proposed |
 | 0008 | [[0008-permission-system-and-workflow-driven-groups]] | 2026-05-01 | Proposed |
 | 0009 | [[0009-membership-user-identity-denormalization]] | 2026-05-07 | Accepted |
+| 0010 | [[0010-meghivasi-flow-redesign]] | 2026-05-08 | Proposed |
 
 ## Új ADR
 1. Másold a [[Templates/decision-template]] tartalmát.

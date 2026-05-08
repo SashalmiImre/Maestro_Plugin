@@ -1,0 +1,9 @@
+{
+    "name": "resend-webhook",
+    "version": "0.1.0",
+    "description": "Resend bounce/delivery webhook handler — ADR 0010 W3",
+    "main": "src/main.js",
+    "dependencies": {
+        "node-appwrite": "^11.0.0"
+    }
+}

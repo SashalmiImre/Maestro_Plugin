@@ -1,0 +1,25 @@
+Maestro — Meghívó
+
+Meghívást kaptál a(z) {{organizationName}} szervezetbe.
+
+{{inviterName}} ({{inviterEmail}}) {{role}} szerepkörrel hívott meg a Maestro szerkesztőségi rendszerbe.
+
+{{#if customMessage}}
+─────────────────────────────────────────
+Üzenet:
+{{customMessage}}
+─────────────────────────────────────────
+{{/if}}
+
+A meghívó elfogadásához kattints az alábbi linkre:
+
+{{inviteLink}}
+
+Ez a meghívó {{expiryDays}} napig érvényes — lejárat: {{expiresAtFormatted}}.
+Lejárat után új meghívót kell kérned a szervezet adminisztrátorától.
+
+──
+
+Ezt az e-mailt a Maestro Plugin küldte automatikusan a(z) {{organizationName}} szervezet részéről. Ha nem ismered a feladót, nyugodtan figyelmen kívül hagyhatod ezt az üzenetet — a meghívó tőled függetlenül lejár.
+
+Maestro · https://maestro.emago.hu

@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meghívó — Maestro</title>
+<!--
+  Maestro meghívó e-mail template (magyar)
+  Helyettesítendő placeholderek (CF action server-side renderelés):
+    {{organizationName}}  — pl. "Central Médiacsoport"
+    {{inviterName}}       — pl. "Sashalmi Imre"
+    {{inviterEmail}}      — pl. "imre.sashalmi@centralmediacsoport.hu"
+    {{role}}              — "Tag" vagy "Admin" (CF már magyarra fordítja)
+    {{customMessage}}     — opcionális szöveg, ha üres → blokk elhagyva
+    {{inviteLink}}        — https://maestro.emago.hu/invite?token=...
+    {{expiresAtFormatted}} — pl. "2026. 05. 15."
+    {{expiryDays}}        — 1 / 3 / 7 (a magyarázathoz: "Ez a meghívó 7 napig érvényes")
+  Stitch design token TODO (Stitch merge után behúzandó):
+    --bg-base, --bg-elevated, --text-primary, --text-secondary, --text-muted,
+    --accent-solid, --accent-solid-hover, --outline-variant, --c-success
+  Inline CSS használata kötelező (sok mail kliens nem támogat <style>-t).
+  Maximális szélesség 600px (Outlook-friendly).
+-->
+</head>
+<body style="margin:0; padding:0; background-color:#0f1115; color:#e6e8ec; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;">
+
+  <!-- Outer wrapper -->
+  <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="100%" style="background-color:#0f1115;">
+    <tr>
+      <td align="center" style="padding: 40px 20px;">
+
+        <!-- Email card (glassmorphism-szerű, ahogy a Stitch dashboardban) -->
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" width="600" style="max-width:600px; background-color:#1a1d24; border-radius: 16px; border: 1px solid rgba(255,255,255,0.06); overflow:hidden;">
+
+          <!-- Header — logo placeholder -->
+          <tr>
+            <td style="padding: 32px 40px 24px; text-align:left; border-bottom: 1px solid rgba(255,255,255,0.06);">
+              <div style="font-size: 20px; font-weight: 700; color: #ffffff; letter-spacing: -0.02em;">
+                Maestro
+              </div>
+              <div style="font-size: 12px; color: #8a8f99; margin-top: 2px;">
+                Digital Curator
+              </div>
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="padding: 40px;">
+
+              <!-- Greeting -->
+              <h1 style="margin: 0 0 16px; font-size: 24px; font-weight: 700; color: #ffffff; line-height: 1.3;">
+                Meghívást kaptál a(z) {{organizationName}} szervezetbe
+              </h1>
+
+              <p style="margin: 0 0 24px; font-size: 15px; line-height: 1.6; color: #c8ccd4;">
+                <strong style="color:#ffffff;">{{inviterName}}</strong>
+                (<a href="mailto:{{inviterEmail}}" style="color:#7e8694; text-decoration:none;">{{inviterEmail}}</a>)
+                <strong style="color:#ffffff;">{{role}}</strong> szerepkörrel hívott meg a Maestro szerkesztőségi rendszerbe.
+              </p>
+
+              <!-- Custom message block (ha üres, ezt a CF NE rendereli) -->
+              <!-- {{#if customMessage}} -->
+              <div style="margin: 0 0 24px; padding: 16px 20px; background-color: rgba(255,255,255,0.03); border-left: 3px solid #5b8cff; border-radius: 8px;">
+                <div style="font-size: 12px; color: #8a8f99; margin-bottom: 6px; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600;">
+                  Üzenet
+                </div>
+                <p style="margin: 0; font-size: 14px; line-height: 1.6; color: #c8ccd4; white-space: pre-wrap;">{{customMessage}}</p>
+              </div>
+              <!-- {{/if}} -->
+
+              <!-- CTA gomb -->
+              <table role="presentation" cellspacing="0" cellpadding="0" border="0" style="margin: 32px 0;">
+                <tr>
+                  <td style="border-radius: 10px; background-color: #5b8cff;">
+                    <a href="{{inviteLink}}" style="display:inline-block; padding: 14px 32px; font-size: 15px; font-weight: 600; color: #ffffff; text-decoration: none; border-radius: 10px;">
+                      Meghívó elfogadása
+                    </a>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Fallback link szöveggel -->
+              <p style="margin: 0 0 8px; font-size: 12px; color: #8a8f99;">
+                Ha a gomb nem működik, másold be ezt a linket a böngésződbe:
+              </p>
+              <p style="margin: 0 0 32px; font-size: 12px; color: #7e8694; word-break: break-all;">
+                <a href="{{inviteLink}}" style="color:#5b8cff; text-decoration:none;">{{inviteLink}}</a>
+              </p>
+
+              <!-- Lejárati információ -->
+              <div style="padding: 16px 20px; background-color: rgba(255,200,80,0.06); border: 1px solid rgba(255,200,80,0.16); border-radius: 8px;">
+                <p style="margin: 0; font-size: 13px; line-height: 1.5; color: #d8c089;">
+                  ⏱ Ez a meghívó <strong>{{expiryDays}} napig érvényes</strong> — lejárat: <strong>{{expiresAtFormatted}}</strong>.
+                  Lejárat után új meghívót kell kérned a szervezet adminisztrátorától.
+                </p>
+              </div>
+
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="padding: 24px 40px; border-top: 1px solid rgba(255,255,255,0.06); background-color: rgba(0,0,0,0.2);">
+              <p style="margin: 0; font-size: 11px; line-height: 1.5; color: #6c727d;">
+                Ezt az e-mailt a Maestro Plugin küldte automatikusan a(z) <strong>{{organizationName}}</strong> szervezet részéről.
+                Ha nem ismered a feladót, nyugodtan figyelmen kívül hagyhatod ezt az üzenetet — a meghívó tőled függetlenül lejár.
+              </p>
+              <p style="margin: 12px 0 0; font-size: 11px; color: #6c727d;">
+                Maestro · <a href="https://maestro.emago.hu" style="color:#7e8694; text-decoration:none;">maestro.emago.hu</a>
+              </p>
+            </td>
+          </tr>
+
+        </table>
+
+        <!-- Tail spacing -->
+        <p style="margin: 24px 0 0; font-size: 11px; color: #4a4f58;">
+          A meghívót automatikusan generálta a Maestro Plugin — nem kell rá válaszolni.
+        </p>
+
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>
