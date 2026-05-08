@@ -596,6 +596,20 @@ export function AuthProvider({ children }) {
      * reked az „account already exists" zsákutcában.
      */
     const register = useCallback(async (name, email, password) => {
+        // 2026-05-09 (E2E user feedback — Codex stop-time #5):
+        // a `login` flow korábban már beépítette a meglévő-session-clear-t
+        // (line ~487), de a `register` NEM. Ha a user előtte runtime-ban
+        // törölve lett (pl. admin Appwrite-konzolon), a böngésző session-
+        // cookie-jában még ott maradhat egy érvénytelen token. Az `account.create`
+        // utáni `createEmailPasswordSession` ezzel ütközhet → catchall
+        // "Regisztrációs hiba" üzenet. Defenzív clear: ha nincs session,
+        // a delete amúgy is no-op.
+        try {
+            await account.deleteSession({ sessionId: 'current' });
+        } catch {
+            // Nincs aktív session vagy érvénytelen — nem baj
+        }
+
         // 1. Fiók — ha ez elszáll, nincs mit visszaforgatni
         await account.create({ userId: ID.unique(), email, password, name });
 
