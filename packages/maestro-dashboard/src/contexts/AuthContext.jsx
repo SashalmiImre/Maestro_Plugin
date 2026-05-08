@@ -508,13 +508,15 @@ export function AuthProvider({ children }) {
         } catch {
             // Ha a session már nem létezik, nem baj
         }
-        // 2026-05-08 (Codex review UX): logout-kor takarítjuk a meghívó-tokent.
-        // Különben a user a kijelentkezés után visszamegy a /login-ra, ahol egy
-        // korábbi flow-ból ottragadt token alapján a rendszer újra fel akarná
-        // ajánlani egy idegen meghívó elfogadását. A token disposable, a CF
-        // úgyis elutasítaná email_mismatch-csel — jobb a kijelentkezésnél
-        // tisztán hagyni az állapotot.
-        try { localStorage.removeItem('maestro.pendingInviteToken'); } catch { /* nem baj */ }
+        // 2026-05-08 (E2E smoke teszt feedback + Codex review #2): a korábbi
+        // localStorage.removeItem('maestro.pendingInviteToken') REVERT-elve
+        // van. Race-condition forrása volt a `handleLogoutForReregister`
+        // flow-val: a token a /register első mount-ja előtt eltűnt
+        // localStorage-ből → PendingInviteBanner üres state-ben renderelt,
+        // és a re-save (logout után) már nem triggerelt re-rendert. A
+        // tokent SZÁNDÉKOSAN hagyjuk a localStorage-ban logout után —
+        // a következő login OnboardingRoute auto-triggere helyesen kezeli
+        // (success / already_member / invite_not_found / email_mismatch).
         setUser(null);
         setOrganizations([]);
         setEditorialOffices([]);

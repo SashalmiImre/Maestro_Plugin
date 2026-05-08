@@ -281,22 +281,25 @@ export default function OnboardingRoute() {
     }, [pendingToken, acceptInvite, setActiveOrganization, navigate]);
 
     /**
-     * email_mismatch recovery: kijelentkezés úgy, hogy a meghívó-token
-     * túléli a logout()-ban beépített localStorage cleanup-ot. A user a
-     * /register oldalon új fiókot hoz létre a meghívó e-mail-címével;
-     * a következő login után az OnboardingRoute auto-trigger feldolgozza
-     * a tokent.
+     * email_mismatch recovery: kijelentkezés úgy, hogy a /register oldal
+     * első mount-jánál a PendingInviteBanner ELŐRE látja a localStorage
+     * tokent.
+     *
+     * 2026-05-08 (Codex review #2 + E2E smoke teszt): a SORREND kritikus.
+     * Ha logout() előbb fut, akkor a setUser(null) → ProtectedRoute
+     * `<Navigate to="/login" replace />` deklaratív redirektje verseng
+     * az imperatív navigate('/register')-rel és felülírja. React Router v6
+     * nem ad kemény garanciát az imperatív navigate „commitjára" a
+     * konkurens deklaratív redirekttel szemben. Megoldás: navigate
+     * ELŐSZÖR — /register public route, kilépünk a ProtectedRoute fa
+     * alól, mire a logout state-update beüt. A token a localStorage-ban
+     * marad logout után is (lásd AuthContext.logout()), így a /register
+     * első mount-ja friss bannert lát.
      */
     const handleLogoutForReregister = useCallback(async () => {
-        const tokenToPreserve = pendingToken;
-        await logout();
-        // logout() takarítja a localStorage-t (lásd AuthContext) — ezért
-        // a token visszamentése EXPLICIT lépés, közvetlenül logout után.
-        if (tokenToPreserve) {
-            try { localStorage.setItem(PENDING_INVITE_KEY, tokenToPreserve); } catch { /* nem baj */ }
-        }
         navigate('/register', { replace: true });
-    }, [pendingToken, logout, navigate]);
+        await logout();
+    }, [logout, navigate]);
 
     // Auto-trigger acceptInvite mount-kor: ha van pending token, ne kelljen
     // a usernek külön kattintania a „Meghívó elfogadása" gombra. A user
