@@ -112,12 +112,16 @@ const STATUS_MAP = {
 // ─── Function entry point ──────────────────────────────────────────────
 
 module.exports = async ({ req, res, log, error }) => {
+    // Appwrite dynamic API key: a `function.scopes` alapján a függvényhíváskor
+    // a `x-appwrite-key` headerben érkezik egy frissen generált, scope-szűkített
+    // kulcs. Ez biztonságosabb mint egy hardcoded `APPWRITE_API_KEY` env var,
+    // ezért a header-fallback-en első helyen.
     const env = {
-        endpoint: process.env.APPWRITE_FUNCTION_API_ENDPOINT,
+        endpoint: process.env.APPWRITE_FUNCTION_API_ENDPOINT || 'https://cloud.appwrite.io/v1',
         projectId: process.env.APPWRITE_FUNCTION_PROJECT_ID,
-        apiKey: process.env.APPWRITE_API_KEY,
-        databaseId: process.env.APPWRITE_DATABASE_ID,
-        invitesCollectionId: process.env.INVITES_COLLECTION_ID || 'organizationInvites',
+        apiKey: req?.headers?.['x-appwrite-key'] || process.env.APPWRITE_API_KEY || '',
+        databaseId: process.env.APPWRITE_DATABASE_ID || process.env.DATABASE_ID,
+        invitesCollectionId: process.env.INVITES_COLLECTION_ID || process.env.ORGANIZATION_INVITES_COLLECTION_ID || 'organizationInvites',
         webhookSecret: process.env.RESEND_WEBHOOK_SECRET
     };
 
