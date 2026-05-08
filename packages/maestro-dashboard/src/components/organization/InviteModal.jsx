@@ -117,22 +117,40 @@ export default function InviteModal({ organizationId, onInviteSent }) {
 
     // ─── Chip-input handlers ───────────────────────────────────────────────
 
+    /**
+     * Codex review 2026-05-08 MINOR 7 — paste-elt CSV/sortörés-elválasztott
+     * lista is splitelődik. A user `a@b.com,c@d.com` vagy több soros paste-ot
+     * is bekerítheti egy chip-be — most tokenizálunk vessző/pontosvessző/
+     * sortörés/whitespace mentén.
+     */
     function commitEmailChip() {
-        const trimmed = emailInput.trim().toLowerCase();
-        if (!trimmed) return;
-        if (!EMAIL_REGEX.test(trimmed)) {
-            setSubmitError(`Érvénytelen e-mail formátum: ${trimmed}`);
+        const raw = emailInput.trim();
+        if (!raw) return;
+        const tokens = raw.split(/[\s,;]+/).map(t => t.trim().toLowerCase()).filter(Boolean);
+        if (tokens.length === 0) return;
+
+        const next = [...emails];
+        let invalid = null;
+        for (const token of tokens) {
+            if (!EMAIL_REGEX.test(token)) {
+                invalid = token;
+                break;
+            }
+            if (next.includes(token)) continue; // csendes duplikáció-szűrés
+            if (next.length >= MAX_EMAILS) {
+                setSubmitError(`Maximum ${MAX_EMAILS} e-mail cím egyszerre.`);
+                break;
+            }
+            next.push(token);
+        }
+
+        if (invalid) {
+            setSubmitError(`Érvénytelen e-mail formátum: ${invalid}`);
             return;
         }
-        if (emails.includes(trimmed)) {
-            setEmailInput(''); // csendes duplikáció-szűrés
-            return;
+        if (next.length !== emails.length) {
+            setEmails(next);
         }
-        if (emails.length >= MAX_EMAILS) {
-            setSubmitError(`Maximum ${MAX_EMAILS} e-mail cím egyszerre.`);
-            return;
-        }
-        setEmails([...emails, trimmed]);
         setEmailInput('');
         setSubmitError('');
     }
@@ -154,11 +172,24 @@ export default function InviteModal({ organizationId, onInviteSent }) {
 
     async function handleSubmit(e) {
         e.preventDefault();
-        // Last-chance commit ha az inputban van még egy be nem chipezett cím
-        if (emailInput.trim()) commitEmailChip();
-        const finalEmails = emails.length > 0
-            ? emails
-            : (emailInput.trim() ? [emailInput.trim().toLowerCase()] : []);
+
+        // Codex review 2026-05-08 MAJOR 5 — szinkron finalEmails számolás.
+        // A korábbi `commitEmailChip()` hívás után a `setEmails(...)` async
+        // setStateAction NEM érvényesül a current render-ben, így a régi
+        // `emails` state-ből számolt `finalEmails` lenyelhette az utolsó
+        // chipnek nem commitált címet. Most szinkron-számolás:
+        const trimmedInput = emailInput.trim().toLowerCase();
+        const finalEmails = [...emails];
+        if (trimmedInput) {
+            if (!EMAIL_REGEX.test(trimmedInput)) {
+                setSubmitError(`Érvénytelen e-mail formátum: ${trimmedInput}`);
+                return;
+            }
+            if (!finalEmails.includes(trimmedInput) && finalEmails.length < MAX_EMAILS) {
+                finalEmails.push(trimmedInput);
+            }
+        }
+
         if (finalEmails.length === 0 || hasErrors) return;
 
         setIsSubmitting(true);

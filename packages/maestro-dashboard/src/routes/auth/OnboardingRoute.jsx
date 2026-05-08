@@ -100,6 +100,8 @@ function errorMessage(err) {
     if (code.includes('invite_expired')) return 'A meghívó lejárt. Kérj egy újat az adminisztrátortól.';
     if (code.includes('email_mismatch')) return 'Ez a meghívó egy másik e-mail címre szól. Jelentkezz be a megfelelő fiókkal.';
     if (code.includes('caller_lookup_failed')) return 'Nem sikerült a felhasználó adatait ellenőrizni. Próbáld újra.';
+    // ADR 0010 W2 (Codex review 2026-05-08 MINOR 8) — IP-rate-limit a accept_invite-on
+    if (code.includes('rate_limited')) return 'Túl sok próbálkozás erről az IP-címről. Próbáld újra később (kb. 1 óra múlva).';
 
     // ── Auth / session
     if (code.includes('not_authenticated') || code === 'unauthenticated') {

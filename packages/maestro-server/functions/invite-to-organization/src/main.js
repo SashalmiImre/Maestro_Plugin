@@ -101,9 +101,10 @@ const ACTION_HANDLERS = {
     'list_my_invites': inviteActions.listMyInvites,
     'decline_invite': inviteActions.declineInvite,
     'leave_organization': officeActions.leaveOrganization,
-    // ADR 0010 W3 — e-mail kiküldés (resend / újraküldés)
+    // ADR 0010 W3 — e-mail újraküldés (admin manuális gomb).
+    // (`send_invite_email_batch` törölve — Codex review 2026-05-08 BLOCKER 1
+    // miatt; a multi-invite flow a createBatchInvites belső auto-send-et használ.)
     'send_invite_email': sendEmailActions.sendInviteEmail,
-    'send_invite_email_batch': sendEmailActions.sendInviteEmailBatch,
 
     // Group CRUD (A.2 + A.3.6)
     'add_group_member': groupActions.addGroupMember,

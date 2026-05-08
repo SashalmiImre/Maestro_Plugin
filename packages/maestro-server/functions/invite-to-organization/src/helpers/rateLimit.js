@@ -90,51 +90,51 @@ async function isIpBlocked(ctx, ip, endpoint) {
 }
 
 /**
- * Counter-doc upsert. Ha még nincs az adott IP+endpoint+window párra,
- * létrehozza count=1-gyel. Ha van, increment.
+ * Counter-doc append: minden próbálkozás új doc-ot ír (random `$id`).
+ * Counter érték = az adott `(ip, endpoint, windowStart)` triplethez
+ * tartozó összes doc darabszáma (`listDocuments.total`).
  *
- * Race condition védelem: a custom `$id` (`${ip}::${endpoint}::${windowStart}`)
- * unique, két párhuzamos request közül az egyik kap `document_already_exists`
- * hibát → fallback get + update. Ez nem teljesen atomikus (két párhuzamos
- * update double-count-olhat), de a 5-ös limit + 1 órás block toleráns
- * a +/-1 hibára.
+ * Codex review 2026-05-08 MAJOR 4 fix: az előző `createDocument-or-getUpdate`
+ * minta `count`-stale-update race-t engedett (két paralel request a `count+1`
+ * értékkel írt vissza, egy update lost). Az "új doc per attempt" minta
+ * race-mentes: minden írás független, a számolás atomic snapshot a list-en.
+ *
+ * Cleanup: a régi (24h-nál régebbi) attempt-doc-okat egy cron CF takarítja
+ * (TBD — a `cleanup-orphaned-locks` mintáját követve).
  *
  * @returns {Promise<number>} a counter értéke (0 ha hiba történt — best-effort)
  */
 async function incrementCounter(ctx, ip, endpoint) {
     const { databases, env, sdk, log } = ctx;
     const windowStart = currentWindowStart();
-    const docId = `${ip}::${endpoint}::${windowStart}`;
 
     try {
-        const created = await databases.createDocument(
+        await databases.createDocument(
             env.databaseId,
             env.ipRateLimitCountersCollectionId,
-            docId,
+            sdk.ID.unique(),
             { ip, endpoint, windowStart, count: 1 }
         );
-        return created.count;
     } catch (err) {
-        if (err?.type === 'document_already_exists' || /unique|duplicate/i.test(err?.message || '')) {
-            try {
-                const existing = await databases.getDocument(
-                    env.databaseId,
-                    env.ipRateLimitCountersCollectionId,
-                    docId
-                );
-                const updated = await databases.updateDocument(
-                    env.databaseId,
-                    env.ipRateLimitCountersCollectionId,
-                    docId,
-                    { count: existing.count + 1 }
-                );
-                return updated.count;
-            } catch (innerErr) {
-                log(`[RateLimit] counter update fallback failed: ${innerErr.message}`);
-                return 0;
-            }
-        }
         log(`[RateLimit] counter create error: ${err.message}`);
+        return 0;
+    }
+
+    // Atomic snapshot: hány attempt érkezett ebben az ablakban erről az IP-ről.
+    try {
+        const result = await databases.listDocuments(
+            env.databaseId,
+            env.ipRateLimitCountersCollectionId,
+            [
+                sdk.Query.equal('ip', ip),
+                sdk.Query.equal('endpoint', endpoint),
+                sdk.Query.equal('windowStart', windowStart),
+                sdk.Query.limit(1) // csak `total` kell
+            ]
+        );
+        return result.total || 0;
+    } catch (err) {
+        log(`[RateLimit] counter listDocuments error: ${err.message}`);
         return 0;
     }
 }

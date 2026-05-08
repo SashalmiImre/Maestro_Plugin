@@ -18,6 +18,11 @@
 const fs = require('fs');
 const path = require('path');
 const { Resend } = require('resend');
+const permissions = require('../permissions.js');
+
+// MAJOR 6 (Codex review 2026-05-08) — backend cooldown a manuális resend
+// gombra. 60 másodpercen belül ugyanarra az invite-ra nem küldünk újra.
+const RESEND_COOLDOWN_MS = 60 * 1000;
 
 const TEMPLATE_DIR = path.join(__dirname, '..', '..', 'templates');
 const HTML_TEMPLATE = fs.readFileSync(path.join(TEMPLATE_DIR, 'invite-email.html'), 'utf-8');
@@ -90,7 +95,25 @@ async function sendOneInviteEmail(ctx, invite, options) {
     const { databases, env, log, error } = ctx;
     const { organizationName, inviterName, inviterEmail, customMessage, dashboardUrl } = options;
 
-    const inviteLink = `${dashboardUrl}/invite?token=${invite.token}`;
+    // BLOCKER 3 (Codex review 2026-05-08) — DASHBOARD_URL hiánya esetén
+    // hard-fail: ne küldjünk olyan e-mailt, amelyben a link relatív
+    // (``/invite?token=…``) — a kattintás visszairányítaná a Resend domain-re.
+    if (!dashboardUrl || !/^https?:\/\//i.test(dashboardUrl)) {
+        const errMsg = 'invalid_dashboard_url';
+        error(`[SendEmail] DASHBOARD_URL hiányzik vagy érvénytelen ("${dashboardUrl}") — invite=${invite.$id}`);
+        try {
+            await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
+                lastDeliveryStatus: 'failed',
+                lastDeliveryError: errMsg,
+                lastSentAt: new Date().toISOString()
+            });
+        } catch (updateErr) {
+            error(`[SendEmail] status update failed (DASHBOARD_URL invalid): ${updateErr.message}`);
+        }
+        return { success: false, error: errMsg };
+    }
+
+    const inviteLink = `${dashboardUrl.replace(/\/$/, '')}/invite?token=${invite.token}`;
     const expiresAtDate = new Date(invite.expiresAt);
     const now = Date.now();
     const expiryDays = Math.max(1, Math.round((expiresAtDate.getTime() - now) / (1000 * 60 * 60 * 24)));
@@ -118,7 +141,14 @@ async function sendOneInviteEmail(ctx, invite, options) {
         return { success: true, skeleton: true };
     }
 
+    // BLOCKER 2 (Codex review 2026-05-08) — két külön try-blokk:
+    //   (1) Resend SDK hívás — ha hibázik, a `failed` status szerinti írás
+    //       jelzi a UI-nak.
+    //   (2) DB bookkeeping — sikeres provider call után KÜLÖN try, hogy
+    //       egy update-hiba NE minősítsen tévesen `failed`-re egy ténylegesen
+    //       kiküldött e-mailt (ld. duplikált resend és félrevezető UI).
     const resend = new Resend(env.resendApiKey);
+    let resendId = null;
     try {
         const result = await resend.emails.send({
             from: FROM_ADDRESS,
@@ -126,24 +156,16 @@ async function sendOneInviteEmail(ctx, invite, options) {
             subject,
             html,
             text,
-            // Resend metadata — a bounce/delivery webhook payloadban visszakapjuk
             tags: [
                 { name: 'invite_id', value: invite.$id },
                 { name: 'organization_id', value: invite.organizationId }
             ]
         });
-
-        await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
-            lastDeliveryStatus: 'sent',
-            sendCount: (invite.sendCount || 0) + 1,
-            lastSentAt: new Date().toISOString(),
-            lastDeliveryError: null
-        });
-
-        log(`[SendEmail] OK invite=${invite.$id} email=${invite.email} resend_id=${result.data?.id}`);
-        return { success: true };
+        resendId = result?.data?.id || null;
+        log(`[SendEmail] Resend OK invite=${invite.$id} email=${invite.email} resend_id=${resendId}`);
     } catch (err) {
         const errMsg = err?.message || 'unknown_error';
+        // Provider hiba — bookkeeping külön try, hogy ne dupla-eskedjen
         try {
             await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
                 lastDeliveryStatus: 'failed',
@@ -152,21 +174,42 @@ async function sendOneInviteEmail(ctx, invite, options) {
                 lastDeliveryError: errMsg.substring(0, 512)
             });
         } catch (updateErr) {
-            // Ha a status frissítés hibázik (pl. séma még nem bővült), a kiküldés
-            // hibáját akkor is jelezzük — non-blocking.
-            error(`[SendEmail] status update failed: ${updateErr.message}`);
+            error(`[SendEmail] status update failed (after Resend error): ${updateErr.message}`);
         }
         error(`[SendEmail] FAILED invite=${invite.$id} email=${invite.email} err=${errMsg}`);
         return { success: false, error: errMsg };
     }
+
+    // (2) Bookkeeping — sikeres küldés után. Ha ez is bukik, az e-mail
+    // AKKOR IS sikeres, csak a UI nem mutatja a "Kiküldve" badge-et.
+    // Ezt NEM minősítjük failed-re (ld. BLOCKER 2).
+    try {
+        await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
+            lastDeliveryStatus: 'sent',
+            sendCount: (invite.sendCount || 0) + 1,
+            lastSentAt: new Date().toISOString(),
+            lastDeliveryError: null
+        });
+    } catch (updateErr) {
+        // A mail már elment — log-warning, de visszaadjuk success: true-t.
+        // Az adminnak max nem mutatja a UI a "Kiküldve" badge-et, de
+        // duplikált resend nem indul.
+        error(`[SendEmail] post-send status update failed (e-mail kiment ${resendId}): ${updateErr.message}`);
+    }
+    return { success: true, resendId };
 }
 
 /**
- * ACTION='send_invite_email' — egyetlen meghívóhoz e-mail küldés.
- * (A `createInvite` action-ből hívható, vagy önállóan is — pl. resend gomb.)
+ * ACTION='send_invite_email' — egyetlen meghívóhoz e-mail újraküldés
+ * (admin "Újraküldés" gomb). NEM auto-flow — a `createInvite` saját
+ * maga hívja a `sendOneInviteEmail` belső helpert, NEM ezt az action-t.
+ *
+ * Codex review 2026-05-08:
+ *   BLOCKER 1: `org.member.invite` permission check + invite status / expiry guard.
+ *   MAJOR 6: 60s cooldown a `lastSentAt` alapján.
  */
 async function sendInviteEmail(ctx) {
-    const { databases, env, payload, res, fail, sdk, log } = ctx;
+    const { databases, env, callerId, callerUser, payload, res, fail, log, permissionEnv, permissionContext } = ctx;
     const { inviteId } = payload;
 
     if (!inviteId) {
@@ -180,8 +223,45 @@ async function sendInviteEmail(ctx) {
         return fail(res, 404, 'invite_not_found');
     }
 
-    // Org + inviter denormalizációhoz — ezeket a CF saját maga szedi össze, hogy
-    // a frontend ne tudjon manipulálni az e-mail tartalmán.
+    // BLOCKER 1 — `org.member.invite` permission guard. A frontend
+    // `resendInviteEmail` az invite-ot tartó org-on belül futtatja, de a
+    // backend nem feltételezhet jogosultságot — minden caller-t ellenőrzünk.
+    const allowed = await permissions.userHasOrgPermission(
+        databases,
+        permissionEnv,
+        callerUser,
+        'org.member.invite',
+        invite.organizationId,
+        permissionContext.orgRoleByOrg
+    );
+    if (!allowed) {
+        log(`[SendEmail] Caller ${callerId} — nincs org.member.invite jogosultság az org ${invite.organizationId}-ra`);
+        return fail(res, 403, 'insufficient_permission', {
+            slug: 'org.member.invite',
+            scope: 'org'
+        });
+    }
+
+    // BLOCKER 1 (folytatás) — csak `pending` és nem lejárt invite mehet
+    // resend-ágon. Lejárt / accepted / declined / expired esetén a UI-nak
+    // jeleznie kell hogy a meghívó már nem aktív.
+    if (invite.status !== 'pending') {
+        return fail(res, 409, 'invite_not_pending', { status: invite.status });
+    }
+    if (new Date(invite.expiresAt) < new Date()) {
+        return fail(res, 410, 'invite_expired');
+    }
+
+    // MAJOR 6 — cooldown a manuális resend gombra (60s).
+    if (invite.lastSentAt) {
+        const elapsed = Date.now() - new Date(invite.lastSentAt).getTime();
+        if (elapsed < RESEND_COOLDOWN_MS) {
+            const retryInSec = Math.ceil((RESEND_COOLDOWN_MS - elapsed) / 1000);
+            return fail(res, 429, 'resend_cooldown', { retryAfterSec: retryInSec });
+        }
+    }
+
+    // Org + inviter denormalizációhoz — ezeket a CF saját maga szedi össze.
     let organizationName = 'a szervezeted';
     try {
         const org = await databases.getDocument(env.databaseId, env.organizationsCollectionId, invite.organizationId);
@@ -222,101 +302,14 @@ async function sendInviteEmail(ctx) {
     });
 }
 
-/**
- * ACTION='send_invite_email_batch' — több meghívóhoz párhuzamosan kiküldés.
- * Promise.all 10-es csomagokban hívja a `sendOneInviteEmail`-t — frontend
- * max 20 e-mail-t küldhet egy modalból (ADR 0010 W2).
- */
-async function sendInviteEmailBatch(ctx) {
-    const { databases, env, payload, res, fail, log } = ctx;
-    const { inviteIds } = payload;
-
-    if (!Array.isArray(inviteIds) || inviteIds.length === 0) {
-        return fail(res, 400, 'missing_fields', { required: ['inviteIds[]'] });
-    }
-    if (inviteIds.length > 20) {
-        return fail(res, 400, 'batch_too_large', { max: 20, given: inviteIds.length });
-    }
-
-    // Invite-ok lekérése + dedup org/inviter cache (több invite ugyanahhoz az
-    // org-hoz / ugyanattól az inviter-tol — egyetlen lookup elég).
-    const invites = [];
-    const orgCache = new Map();
-    const inviterCache = new Map();
-
-    for (const id of inviteIds) {
-        try {
-            const inv = await databases.getDocument(env.databaseId, env.invitesCollectionId, id);
-            invites.push(inv);
-        } catch (err) {
-            log(`[SendBatch] invite ${id} not found, skip`);
-        }
-    }
-
-    async function fetchOrg(orgId) {
-        if (orgCache.has(orgId)) return orgCache.get(orgId);
-        try {
-            const org = await databases.getDocument(env.databaseId, env.organizationsCollectionId, orgId);
-            orgCache.set(orgId, org);
-            return org;
-        } catch {
-            orgCache.set(orgId, null);
-            return null;
-        }
-    }
-    async function fetchInviter(uid) {
-        if (!uid) return null;
-        if (inviterCache.has(uid)) return inviterCache.get(uid);
-        try {
-            const u = await ctx.usersApi.get(uid);
-            inviterCache.set(uid, u);
-            return u;
-        } catch {
-            inviterCache.set(uid, null);
-            return null;
-        }
-    }
-
-    // 10-es batchekben Promise.all
-    const results = [];
-    const BATCH_SIZE = 10;
-    for (let i = 0; i < invites.length; i += BATCH_SIZE) {
-        const slice = invites.slice(i, i + BATCH_SIZE);
-        const sliceResults = await Promise.all(slice.map(async (invite) => {
-            const [org, inviter] = await Promise.all([
-                fetchOrg(invite.organizationId),
-                fetchInviter(invite.invitedByUserId)
-            ]);
-            const r = await sendOneInviteEmail(ctx, invite, {
-                organizationName: org?.name || 'a szervezeted',
-                inviterName: inviter?.name || null,
-                inviterEmail: inviter?.email || null,
-                customMessage: invite.customMessage || '',
-                dashboardUrl: env.dashboardUrl
-            });
-            return { inviteId: invite.$id, email: invite.email, ...r };
-        }));
-        results.push(...sliceResults);
-    }
-
-    const successCount = results.filter(r => r.success).length;
-    const failCount = results.length - successCount;
-
-    log(`[SendBatch] ${successCount}/${results.length} sikeres (${failCount} hiba)`);
-
-    return res.json({
-        success: true,
-        action: 'batch_sent',
-        total: results.length,
-        successCount,
-        failCount,
-        results
-    });
-}
+// `sendInviteEmailBatch` action TÖRÖLVE (Codex review 2026-05-08 BLOCKER 1):
+// authz nélkül futott + ki nem használt. A multi-invite flow a
+// `actions/invites.js` `createBatchInvites` action-ön át megy, ami belsőleg
+// minden createolt invite-ra hívja a `sendOneInviteEmail`-t — annak az org-
+// szintű permission-check már megtörtént a hívóban.
 
 module.exports = {
     sendInviteEmail,
-    sendInviteEmailBatch,
     // ADR 0010 W3 — actions/invites.js auto-send flow használja:
     sendOneInviteEmail,
     // Helper export-ok teszteléshez:

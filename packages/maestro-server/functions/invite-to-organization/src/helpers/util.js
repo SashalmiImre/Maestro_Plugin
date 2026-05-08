@@ -78,8 +78,7 @@ const VALID_ACTIONS = new Set([
     'archive_workflow_extension',
     // ADR 0010 W2/W3 — meghívási flow redesign
     'create_batch_invites',           // multi-invite (max 20)
-    'send_invite_email',              // egyetlen invite e-mail (re-send)
-    'send_invite_email_batch',        // batch e-mail
+    'send_invite_email',              // egyetlen invite e-mail újraküldés (admin gomb)
     'bootstrap_invites_schema_v2',    // 4 új mező (lastDeliveryStatus, ...)
     'bootstrap_rate_limit_schema'     // 2 új collection (counters + blocks)
 ]);

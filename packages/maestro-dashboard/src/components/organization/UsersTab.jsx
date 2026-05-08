@@ -30,6 +30,10 @@ function errorMessage(reason) {
     if (reason.includes('already_invited')) return 'Ehhez az e-mail címhez már van függőben lévő meghívó.';
     // ADR 0010 W2/W3 — meghívási flow hibakódok
     if (reason.includes('rate_limited')) return 'Túl sok próbálkozás — próbáld meg később.';
+    if (reason.includes('resend_cooldown')) return 'Az utolsó kiküldés óta kevesebb mint egy perc telt el — várj egy kicsit az újraküldéssel.';
+    if (reason.includes('invite_not_pending')) return 'Ez a meghívó már nem aktív (elfogadták vagy visszavonták).';
+    if (reason.includes('invite_expired')) return 'A meghívó lejárt — generálj új meghívót.';
+    if (reason.includes('email_send_failed')) return 'Az e-mail kiküldése sikertelen. Próbáld újra később.';
     if (reason.includes('invite_resend_failed')) return 'A meghívó újraküldése sikertelen. Próbáld újra később.';
     // 2026-05-07: org-role változtatáshoz tartozó hibakódok.
     if (reason.includes('cannot_change_own_role')) {
