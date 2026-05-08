@@ -17,6 +17,7 @@
 import React, { useState } from 'react';
 import { useNavigate, useLocation, NavLink, Link, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext.jsx';
+import PendingInviteBanner from './PendingInviteBanner.jsx';
 
 const LABELS = {
     tabLogin: 'Bejelentkezés',
@@ -110,6 +111,7 @@ export default function LoginRoute() {
             {resetFlag === '1' && (
                 <div className="auth-success">{LABELS.resetNotice}</div>
             )}
+            <PendingInviteBanner />
             <form onSubmit={handleSubmit}>
                 <div className="form-group">
                     <label htmlFor="email">{LABELS.emailLabel}</label>

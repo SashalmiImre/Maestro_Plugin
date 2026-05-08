@@ -22,6 +22,7 @@
 import React, { useState } from 'react';
 import { NavLink, Link } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext.jsx';
+import PendingInviteBanner from './PendingInviteBanner.jsx';
 
 export default function RegisterRoute() {
     const { register, resendVerification } = useAuth();
@@ -168,6 +169,7 @@ export default function RegisterRoute() {
                 <NavLink to="/login" className="auth-tab">Bejelentkezés</NavLink>
                 <NavLink to="/register" className="auth-tab active">Regisztráció</NavLink>
             </div>
+            <PendingInviteBanner />
             <form onSubmit={handleSubmit}>
                 <div className="form-group">
                     <label htmlFor="reg-name">Név</label>
