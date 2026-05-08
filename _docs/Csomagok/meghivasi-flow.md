@@ -23,6 +23,18 @@ Discord-szerű felugró ablakos meghívási rendszer Resend EU e-mail-küldésse
 
 ## Deploy útmutató (W2 + W3 élesítés)
 
+> **⚠️ KRITIKUS SORREND**: A backend kód már feltételezi a séma-bővítést (`createInvite`
+> ír `customMessage`, `lastDeliveryStatus`, `sendCount` mezőket). Ha a frontend
+> hamarabb deploy-olódik mint a séma-bootstrap, az új `create` hívások hibázhatnak.
+> A javasolt sorrend:
+>
+> 1. **Backend CF deploy** (új kóddal) — még nincs hívás, csak a kód feltöltve
+> 2. **Séma-bootstrap CF action-hívások** — `bootstrap_invites_schema_v2` + `bootstrap_rate_limit_schema`
+> 3. **Env varok** — `DASHBOARD_URL`, `RESEND_API_KEY`, `IP_RATE_LIMIT_*_COLLECTION_ID`
+> 4. **Új `resend-webhook` CF deploy** + Resend Dashboard webhook URL
+> 5. **Frontend deploy** (vagy SPA reload — a meglévő tabok 1-2 percen belül megkapják)
+> 6. **Smoke teszt**
+
 ### 1) Appwrite Cloud — séma-bővítés (CF action-ön át)
 
 Az `invite-to-organization` CF függvényt **az új kóddal deploy-old** (Appwrite CLI vagy Console). Utána egy bejelentkezett owner egy admin POST hívással hívja:
@@ -101,6 +113,22 @@ Aztán deploy a `packages/maestro-server/functions/resend-webhook/` tartalmábó
 ### 6) IP-rate-limit teszt
 
 Egy másik IP-ről (pl. mobil hotspot) próbálj egymás után 6× érvénytelen tokennel `accept_invite`-ot hívni. A 6. hívás 429 `rate_limited` választ kell, hogy adjon.
+
+## Rollback-stratégia (vész esetén)
+
+### Frontend
+A frontend kódot a `feature/invite-redesign-prep`-ről visszamergerelni a `main` előző commitjára (`git revert`-tel). A meglévő `useAuth().createInvite` 5-paraméteres szignatúra **backward-compatible** — a régi 4-paraméteres hívások (org, email, role, message) is működnek (`expiryDays` opcionális). Nincs frontend-side breaking change.
+
+### Backend CF
+Az `invite-to-organization` CF előző deployment-jére visszaállítás: Appwrite Console → Functions → invite-to-organization → Deployments → korábbi (pre-W2/W3) verzió → "Activate". A `create` action és `accept` action így is működni fog, csak a 4 új mező nem íródik (és a séma-bootstrap action sosem fut).
+
+### Séma
+Ha a séma-bootstrap végrehajtódott, és a frontend mégse deployolódik / kell visszafordítás: a 4 új mező default-ja `pending`/`null`/`0`/`null`, nem törnek meg sem a régi sem új invite rekordok. **Schema rollback NEM kell** — additive változás.
+
+### Env varok
+Ha az env varokat törölni kell:
+- `RESEND_API_KEY` törlése → `sendOneInviteEmail` skeleton-fallback (admin manuálisan másolja)
+- `IP_RATE_LIMIT_*_COLLECTION_ID` törlése → `checkRateLimit` log-warningot ad és átengedi a request-et (best-effort)
 
 ## Architektúra-jegyzetek
 
