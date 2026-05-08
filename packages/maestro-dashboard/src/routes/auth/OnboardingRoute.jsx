@@ -250,16 +250,28 @@ export default function OnboardingRoute() {
             // generic „accept_failed", rate_limit) hagyjuk, hogy a user
             // ismét próbálkozhasson „Újra" gombbal.
             if (isNonRetryableInviteError(err)) {
-                try { localStorage.removeItem(PENDING_INVITE_KEY); } catch { /* nem baj */ }
-                setPendingToken(null);
-                // Email-mismatch külön UX-ot kap (logout + register másik fiókkal CTA)
                 if (err?.code?.includes('email_mismatch')) {
+                    // Codex stop-time review (2026-05-08): email_mismatch
+                    // esetén a tokent NEM töröljük localStorage-ből — a CTA
+                    // ("Kijelentkezés és regisztráció másik fiókkal") arra
+                    // épít, hogy a user új e-maillel re-register-elve a
+                    // tokent a localStorage-ből megtalálja a következő
+                    // login után. Ha itt törölnénk, a recovery path
+                    // betarthatatlan ígéret lenne.
+                    //
+                    // A pendingToken state-et SEM nullázzuk, mert a JSX
+                    // early return finalError==='email_mismatch'-en
+                    // amúgy is fut, és így a token a re-register CTA
+                    // handler-jébe lokálisan elérhető.
                     setFinalError('email_mismatch');
                 } else {
-                    // invite_not_found / expired / not_pending → a user már
-                    // nem tud mit kezdeni a tokennel. „Folytatás új szervezet
-                    // létrehozásával" gombot a sima error-ág adja (a form
-                    // automatikusan megjelenik, mert pendingToken=null lett).
+                    // invite_not_found / expired / not_pending / missing_token /
+                    // invalid_payload → a token végleg használhatatlan, töröljük.
+                    // A „Folytatás új szervezet létrehozásával" gombot a sima
+                    // error-ág adja (a form automatikusan megjelenik, mert
+                    // pendingToken=null lett).
+                    try { localStorage.removeItem(PENDING_INVITE_KEY); } catch { /* nem baj */ }
+                    setPendingToken(null);
                     setFinalError('invite_consumed');
                 }
             }
@@ -267,6 +279,24 @@ export default function OnboardingRoute() {
             setSubmitting(false);
         }
     }, [pendingToken, acceptInvite, setActiveOrganization, navigate]);
+
+    /**
+     * email_mismatch recovery: kijelentkezés úgy, hogy a meghívó-token
+     * túléli a logout()-ban beépített localStorage cleanup-ot. A user a
+     * /register oldalon új fiókot hoz létre a meghívó e-mail-címével;
+     * a következő login után az OnboardingRoute auto-trigger feldolgozza
+     * a tokent.
+     */
+    const handleLogoutForReregister = useCallback(async () => {
+        const tokenToPreserve = pendingToken;
+        await logout();
+        // logout() takarítja a localStorage-t (lásd AuthContext) — ezért
+        // a token visszamentése EXPLICIT lépés, közvetlenül logout után.
+        if (tokenToPreserve) {
+            try { localStorage.setItem(PENDING_INVITE_KEY, tokenToPreserve); } catch { /* nem baj */ }
+        }
+        navigate('/register', { replace: true });
+    }, [pendingToken, logout, navigate]);
 
     // Auto-trigger acceptInvite mount-kor: ha van pending token, ne kelljen
     // a usernek külön kattintania a „Meghívó elfogadása" gombra. A user
@@ -294,10 +324,14 @@ export default function OnboardingRoute() {
     }, []);
 
     // ─── email_mismatch FINAL UX ─────────────────────────────────────────
-    // A token egy másik e-mail-címre szólt. A user a kijelentkezés gombbal
-    // tud új fiókot regisztrálni a megfelelő e-maillel. A „Folytatás
-    // szervezet létrehozással" gomb is elérhető, ha mégis csak a saját
-    // orgját akarja létrehozni.
+    // A token egy másik e-mail-címre szólt. A user a re-register gombbal
+    // tud új fiókot regisztrálni a megfelelő e-maillel — a kijelentkezést
+    // a `handleLogoutForReregister` végzi, ami a logout-cleanup ellenére
+    // is megőrzi a tokent localStorage-ben (Codex stop-time review
+    // 2026-05-08).
+    //
+    // A „Inkább új szervezetet hozok létre" gomb a `handleDismissInvite`
+    // útján takarít — explicit user-szándék a meghívó eldobására.
     if (finalError === 'email_mismatch') {
         return (
             <div className="login-card">
@@ -311,14 +345,14 @@ export default function OnboardingRoute() {
                 <button
                     type="button"
                     className="login-btn"
-                    onClick={handleLogout}
+                    onClick={handleLogoutForReregister}
                 >
                     Kijelentkezés és regisztráció másik fiókkal
                 </button>
                 <button
                     type="button"
                     className="auth-link-button"
-                    onClick={() => setFinalError(null)}
+                    onClick={handleDismissInvite}
                 >
                     Inkább új szervezetet hozok létre
                 </button>
