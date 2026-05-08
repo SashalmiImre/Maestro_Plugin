@@ -70,9 +70,23 @@ export default function RegisterRoute() {
             setPassword('');
             setPasswordConfirm('');
             const msg = err?.message || '';
-            if (msg.includes('user with the same email')) {
+            const code = err?.code;
+            const type = err?.type;
+            // 2026-05-09 (E2E user feedback): a 409-es Appwrite error
+            // (user_already_exists) eddig a catchall-ba esett, mert a
+            // matcher csak a `'user with the same email'` substring-et nézte,
+            // ami nem mindig egyezik az Appwrite tényleges üzenetével.
+            // Most: ha a status-code 409 VAGY a type matches → specifikus
+            // üzenet. A msg.includes ellenőrzés is megmarad mint fallback.
+            if (
+                code === 409 ||
+                type === 'user_already_exists' ||
+                type === 'user_email_already_exists' ||
+                msg.toLowerCase().includes('user with the same') ||
+                (msg.toLowerCase().includes('email') && msg.toLowerCase().includes('already'))
+            ) {
                 setError('Ez az e-mail cím már regisztrált. Próbálj bejelentkezni vagy használd az „Elfelejtett jelszó" linket.');
-            } else if (msg.includes('Invalid `email`')) {
+            } else if (msg.includes('Invalid `email`') || type === 'general_argument_invalid' && /email/i.test(msg)) {
                 setError('Érvénytelen e-mail cím.');
             } else if (msg.toLowerCase().includes('password')) {
                 setError('Érvénytelen jelszó (min. 8 karakter).');

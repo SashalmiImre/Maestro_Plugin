@@ -595,39 +595,55 @@ export function AuthProvider({ children }) {
      * létezik, és felajánlhatja a verifikáció újraküldését — a user nem
      * reked az „account already exists" zsákutcában.
      */
-    // 2026-05-09 (Codex stop-time #5 + #6 — conditional stale-session clear):
-    // A `5bfba4b` commit unconditionally deleteSession-t hívott a register
-    // flow elején, ami a stale-session-bug-ot megoldotta, DE Codex jelezte:
-    // egy VALID logged-in user (aki pl. második fiókot regisztrál) érvényes
-    // session-jét pre-emptíven megöli. Ha aztán a `account.create` bukik
-    // (pl. email duplikáció), a user feleslegesen kilépett.
+    // 2026-05-09 (Codex stop-time #5/#6/#7 — proper session handling):
     //
-    // Pontosabb fix: a session-clear csak akkor fusson, ha az `account.get()`
-    // auth-error-t ad (stale token, pl. deleted user). Valid session esetén
-    // hagyjuk békén — a `createEmailPasswordSession` képes felülírni.
+    // Iteráció-történet:
+    // - `5bfba4b`: unconditionally `deleteSession` a register elején →
+    //   Codex #6: valid logged-in user pre-emptíven kilépett, ha az
+    //   `account.create` bukott, feleslegesen logged-out állapot.
+    // - `9cc92cf`: conditional clear (account.get probe alapján) →
+    //   Codex #7: tévesen feltételezte, hogy a `createEmailPasswordSession`
+    //   active session-t felülír. NEM. Az Appwrite ezt nem támogatja —
+    //   a `login` flow épp ezért hívja először a `deleteSession`-t.
+    //
+    // Ez (`9cc92cf` után): helyes sorrend.
+    //   1. `account.create` ELŐSZÖR (guest endpoint, sikertelen create
+    //      esetén megőrzi a session-t — Codex #6 concern).
+    //   2. `deleteSession` UTÁNA (csak ha sikerült a create — most már
+    //      indokolt: createEmailPasswordSession active session-be ütközik).
+    //   3. `createEmailPasswordSession` (clean slate, biztonsággal megy).
+    //
+    // Stale-cookie edge case (Codex #5/#7): ha a stale cookie blokkolja
+    // az `account.create`-et 401-gyel, `deleteSession + retry` oldja meg.
     const register = useCallback(async (name, email, password) => {
+        // 1. Fiók — ha ez elszáll (nem 401), nincs mit visszaforgatni.
+        //    Stale-cookie eset: 401 → clear + retry.
         try {
-            await account.get();
-            // Valid session — NE töröljük (Codex stop-time #6).
-            // A `createEmailPasswordSession` lent felülírja amennyiben szükséges.
-        } catch (probeErr) {
-            const code = probeErr?.code;
-            const type = probeErr?.type;
-            if (code === 401 || code === 404 || type === 'user_not_found' || type === 'general_unauthorized_scope') {
-                // Stale cookie (pl. törölt user session-tokenje) — takarítjuk,
-                // különben a `createEmailPasswordSession` 401-be ütközhet.
+            await account.create({ userId: ID.unique(), email, password, name });
+        } catch (createErr) {
+            const code = createErr?.code;
+            if (code === 401) {
+                console.warn('[AuthContext] register: stale session-cookie blokkolta a create-et, takarítok és újra');
                 try {
                     await account.deleteSession({ sessionId: 'current' });
                 } catch {
-                    // Nem baj — már nincs session, vagy minden bukás non-fatal
+                    // Nem baj
                 }
+                await account.create({ userId: ID.unique(), email, password, name });
+            } else {
+                throw createErr;
             }
-            // Egyéb hiba (pl. network) — ne avatkozzunk be, hadd bukjon a
-            // megfelelő helyen, részletes hibaüzenettel.
         }
 
-        // 1. Fiók — ha ez elszáll, nincs mit visszaforgatni
-        await account.create({ userId: ID.unique(), email, password, name });
+        // 2. Most már létrejött a fiók. A `createEmailPasswordSession`
+        //    NEM visel el active session-t (Appwrite docs / login flow
+        //    referencia) — explicit clear minden previous session-re.
+        //    Try/catch — ha nincs active session, no-op.
+        try {
+            await account.deleteSession({ sessionId: 'current' });
+        } catch {
+            // Nincs active session — no-op
+        }
 
         // 2-3. Ideiglenes session + verifikációs e-mail. Ha bármi elszáll
         //      itt, a fiók már létrejött → speciális hiba a hívónak.
