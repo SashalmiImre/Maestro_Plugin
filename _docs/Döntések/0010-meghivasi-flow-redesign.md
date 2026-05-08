@@ -1,6 +1,6 @@
 ---
 tags: [adr]
-status: Proposed
+status: Accepted
 date: 2026-05-08
 ---
 
@@ -149,32 +149,34 @@ A user (2026-05-08, üzenet) belegondolás után megerősítette: "valóban lehe
 - Bounce-statisztika monitorozása Resend dashboardon (havi limit 3000 e-mail).
 - Az `accept_invite` rate-limit window-eit rendszeresen takarítani egy cron CF-fel (vagy TTL-mintával az `ipRateLimitCounters`-en).
 
-## Implementációs sorrend
+## Implementációs status (2026-05-08)
 
-1. **Most (Stitch merge ELŐTT, csak draft / előkészítés)**:
-   - ADR 0010 (ez a fájl) ✓
-   - E-mail template váz HTML + text (`templates/invite-email.html` + `.txt`) — Stitch-token placeholder-ekkel
-   - `sendEmail.js` CF action skeleton (Resend SDK use-case-szel, de még nem hívva)
-   - Resend domain DNS verifikálva ✓
-   - Resend API key generálva (admin manuálisan) — Appwrite env-be NEM most
+### Kész (W2 + W3 + Security)
+1. **ADR + draft munka** (commit `6e22baa`): ADR 0010, e-mail template HTML+text, sendEmail.js skeleton, rateLimit.js skeleton, resend-webhook CF skeleton, InviteModal.jsx skeleton.
+2. **W2 backend** (commit `e493bb8`):
+   - `helpers/util.js`: `INVITE_VALIDITY_DAYS_OPTIONS [1,3,7]` + `_DEFAULT 7`
+   - `actions/invites.js` `createInvite`: `expiryDays` + `customMessage` + auto-send
+   - `actions/invites.js` új `createBatchInvites` (max 20, 10-es Promise.all batch)
+   - `actions/invites.js` `acceptInvite`: `checkRateLimit('accept_invite')` guard
+   - `actions/schemas.js` új `bootstrapInvitesSchemaV2` (4+1 új mező)
+   - `actions/schemas.js` új `bootstrapRateLimitSchema` (2 új collection)
+3. **W3 backend** (commit `e493bb8`):
+   - `package.json`: `resend ^4.0.0` dep
+   - `actions/sendEmail.js`: Resend SDK élesítve (skeleton-fallback ha env hiányzik)
+   - `main.js`: 5 új ACTION_HANDLER + ctx.req + env bővítés
+4. **Frontend** (commit `cabdaaa`):
+   - `AuthContext.jsx`: `createInvite expiryDays` + `createBatchInvites` + `resendInviteEmail`
+   - `UsersTab.jsx`: modal-launcher gomb + delivery status badge + Újraküldés gomb
+   - `InviteModal.jsx`: `createBatchInvites`-re átállítva (1 round-trip)
 
-2. **Stitch merge UTÁN (W2)**:
-   - `InviteModal.jsx` komponens létrehozása
-   - `UsersTab.jsx` inline form lecserélése modal-launcher gombra
-   - `useAuth().createInvite` API kiterjesztése `expiryDays` + `emails[]` paraméterekkel
-   - Invite collection séma-bővítés Appwrite Cloud-on
-   - `createInvite` + új `createBatchInvites` CF action
+### Hátralévő (deploy + Appwrite Cloud + Resend webhook)
+A részletes lépések: [[Csomagok/meghivasi-flow]] dokumentum.
 
-3. **W3 — E-mail kiküldés élesítés**:
-   - `RESEND_API_KEY` env var Appwrite Function-be
-   - `sendEmail.js` SDK-hívás aktiválása
-   - `resend-webhook` Cloud Function deploy
-   - Resend Dashboard → Webhooks beállítás
-   - End-to-end teszt (saját email-cím, bounce-szimuláció `bounce@simulator.amazonses.com`-mal)
-
-4. **Biztonsági réteg (W2-vel együtt vagy külön)**:
-   - `ipRateLimitCounters` + `ipRateLimitBlocks` collection séma
-   - `accept_invite` action middleware (vagy külön action)
+1. **CF deploy**: `invite-to-organization` (új kóddal) + új `resend-webhook` function
+2. **Appwrite Cloud séma-bootstrap**: `bootstrap_invites_schema_v2` + `bootstrap_rate_limit_schema` action-hívások
+3. **Env varok**: `DASHBOARD_URL`, `RESEND_API_KEY`, `IP_RATE_LIMIT_*_COLLECTION_ID` az `invite-to-organization`-höz; `RESEND_WEBHOOK_SECRET` az új webhook function-höz
+4. **Resend Dashboard → Webhooks**: URL beállítás + secret másolás
+5. **End-to-end teszt**: saját Gmail-re küldés + bounce-szimuláció + rate-limit teszt
 
 ## Kapcsolódó
 
