@@ -141,6 +141,29 @@ async function sendOneInviteEmail(ctx, invite, options) {
         return { success: true, skeleton: true };
     }
 
+    // 2026-05-09 (Codex roast review BLOCKER): TOCTOU race mitigáció.
+    // A `_maybeAutoSendInviteEmail` (invites.js) snapshot-on ellenőrzi a 60s
+    // cooldown-t — két párhuzamos request mindkettő átcsúszhatott, mert a
+    // korábbi `lastSentAt` írás csak a Resend HTTP call UTÁN történt
+    // (~hundreds of ms race window). Itt elő-foglaljuk a slot-ot, mielőtt
+    // belépnénk a slow Resend hívásba: ezzel a race window ~30ms-re zsugorodik
+    // (single DB write idő). Megj.: a teljesen atomikus megoldáshoz separate
+    // unique-index lock collection kéne (`(inviteId, bucket)`) — TODO follow-up
+    // ha a 30ms is túl sok lenne (pl. botspam ellen).
+    //
+    // Ha a Resend hibázik, a lenti catch-ág AKKOR IS frissíti a
+    // lastSentAt-t (post-failure timestamp) — semmi nem törlődik.
+    const claimSentAt = new Date().toISOString();
+    try {
+        await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
+            lastSentAt: claimSentAt
+        });
+    } catch (claimErr) {
+        // Non-blocking: ha az írás bukik (permission/network), folytatjuk.
+        // A worst case ugyanaz, mint a régi viselkedés (TOCTOU lehetséges).
+        log(`[SendEmail] pre-send lastSentAt claim failed (non-blocking, TOCTOU possible): ${claimErr.message}`);
+    }
+
     // BLOCKER 2 (Codex review 2026-05-08) — két külön try-blokk:
     //   (1) Resend SDK hívás — ha hibázik, a `failed` status szerinti írás
     //       jelzi a UI-nak.

@@ -190,8 +190,15 @@ async function _createInviteCore(ctx, params) {
  *   - `'failed'`: kiment-próba bukott (deliveryStatus=failed)
  *   - `'cooldown'`: cooldown alatt vagyunk, skipped (deliveryStatus=cooldown)
  *   - `'skipped'`: nincs invite doc (régi action vagy hibás return)
+ *
+ * 2026-05-09 (Codex roast review #2 fix — customMessage drift): a
+ * `customMessage` paraméter az ÚJ user-input. Ha az admin új üzenetet ír
+ * az idempotens ágra, azt használjuk a régi invite doc `customMessage`-e
+ * helyett. A persistálás a payload-ban már megtörtént a `_createInviteCore`
+ * `created` ágon — `existing` ágon az invite doc maradék fizetségként
+ * tartja a régi szöveget, de az ÚJ e-mail-be a friss `customMessage` megy.
  */
-async function _maybeAutoSendInviteEmail(ctx, result, organizationName, inviterName, inviterEmail) {
+async function _maybeAutoSendInviteEmail(ctx, result, organizationName, inviterName, inviterEmail, customMessage) {
     if (!result.invite) return 'skipped';
     if (result.action === 'existing' && result.invite.lastSentAt) {
         const elapsed = Date.now() - new Date(result.invite.lastSentAt).getTime();
@@ -200,7 +207,7 @@ async function _maybeAutoSendInviteEmail(ctx, result, organizationName, inviterN
             return 'cooldown';
         }
     }
-    const sendResult = await _autoSendInviteEmail(ctx, result.invite, organizationName, inviterName, inviterEmail);
+    const sendResult = await _autoSendInviteEmail(ctx, result.invite, organizationName, inviterName, inviterEmail, customMessage);
     return sendResult.success ? 'sent' : 'failed';
 }
 
@@ -211,13 +218,21 @@ async function _maybeAutoSendInviteEmail(ctx, result, organizationName, inviterN
  *
  * @returns {Promise<{success: boolean, error?: string, skeleton?: boolean}>}
  */
-async function _autoSendInviteEmail(ctx, inviteDoc, organizationName, inviterName, inviterEmail) {
+async function _autoSendInviteEmail(ctx, inviteDoc, organizationName, inviterName, inviterEmail, customMessageOverride) {
     try {
         return await sendOneInviteEmail(ctx, inviteDoc, {
             organizationName: organizationName || 'a szervezeted',
             inviterName,
             inviterEmail,
-            customMessage: inviteDoc.customMessage || '',
+            // 2026-05-09 (Codex roast #2): customMessage forrás — ha a hívó
+            // explicit `customMessageOverride`-ot adott (az új user-input a
+            // create_batch_invites payloadból), azt használjuk; egyébként a
+            // tárolt invite doc szövegét. Az `'' === falsy` miatt a `??`-et
+            // használjuk, hogy az üres string EXPLICIT „nincs üzenet"-ként
+            // értelmezhető legyen, ne legyen fall-back a régi értékre.
+            customMessage: (customMessageOverride !== undefined && customMessageOverride !== null)
+                ? customMessageOverride
+                : (inviteDoc.customMessage || ''),
             dashboardUrl: ctx.env.dashboardUrl
         });
     } catch (err) {
@@ -314,7 +329,7 @@ async function createInvite(ctx) {
                 log(`[Create] inviter lookup hiba (non-blocking): ${err.message}`);
             }
         }
-        deliveryStatus = await _maybeAutoSendInviteEmail(ctx, result, organizationName, inviterName, inviterEmail);
+        deliveryStatus = await _maybeAutoSendInviteEmail(ctx, result, organizationName, inviterName, inviterEmail, customMessage);
     }
 
     return res.json({
@@ -429,7 +444,8 @@ async function createBatchInvites(ctx) {
                 });
                 // 2026-05-09 E2E smoke #2 fix — `existing` action-ön is auto-send,
                 // 60s cooldown-nal. (Lásd `_maybeAutoSendInviteEmail`.)
-                const deliveryStatus = await _maybeAutoSendInviteEmail(ctx, result, organizationName, inviterName, inviterEmail);
+                // Codex roast #2 — customMessage override-olva a payload-os értékkel.
+                const deliveryStatus = await _maybeAutoSendInviteEmail(ctx, result, organizationName, inviterName, inviterEmail, customMessage);
                 return {
                     email,
                     status: 'ok',
