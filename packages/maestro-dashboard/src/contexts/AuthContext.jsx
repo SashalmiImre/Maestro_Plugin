@@ -305,6 +305,28 @@ export function AuthProvider({ children }) {
             return memberships;
         } catch (err) {
             if (token !== reloadTokenRef.current) throw err;
+
+            // 2026-05-09 (Codex stop-time #4 — defense-in-depth):
+            // ha a memberships fetch auth-loss-szal tér vissza (401 /
+            // user_not_found), a runtime user-deletion-t ezzel a réteggel is
+            // elkapjuk, függetlenül attól, hogy a `scheduleReload` előzetes
+            // `account.get()` validációja kihagyott-e. Force logout, ne
+            // membershipsError retry-screent mutassunk (azt csak átmeneti
+            // backend-hibára szánjuk).
+            const code = err?.code;
+            const type = err?.type;
+            if (code === 401 || type === 'user_not_found' || type === 'general_unauthorized_scope') {
+                console.warn('[AuthContext] memberships fetch auth-loss — force logout (kód=%s, type=%s)', code, type);
+                setUser(null);
+                setOrganizations([]);
+                setEditorialOffices([]);
+                setOrgMemberships([]);
+                setMembershipsError(null);
+                organizationIdsRef.current = new Set();
+                editorialOfficeIdsRef.current = new Set();
+                return; // NEM dobjuk tovább — auth-loss kezelve
+            }
+
             console.warn('[AuthContext] fetchMemberships sikertelen:', err?.message);
             if (!silent) {
                 setOrganizations([]);
@@ -405,13 +427,46 @@ export function AuthProvider({ children }) {
             if (!relevant) return;
             if (destructive) pendingDestructive = true;
             if (timer) clearTimeout(timer);
-            timer = setTimeout(() => {
+            timer = setTimeout(async () => {
                 timer = null;
                 const silent = !pendingDestructive;
+                const wasDestructive = pendingDestructive;
                 pendingDestructive = false;
-                loadAndSetMemberships(userId, { silent }).catch(err =>
-                    console.warn('[AuthContext] Realtime memberships reload sikertelen:', err?.message)
-                );
+
+                // 2026-05-09 (Codex stop-time #4 — runtime user-deletion UX):
+                // ha a destructive realtime event a `user-cascade-delete`
+                // CF-ből jön (admin Appwrite-konzolon törölt), a user-rekord
+                // már nincs, de a frontend cached `user` state érvényes maradna.
+                // A `loadAndSetMemberships` 200-zal jönne vissza üres orgs-szal,
+                // és a ProtectedRoute /onboarding-ra redirektelne (user létezik
+                // + 0 org). A javítás: destructive event-nél előbb `account.get()`
+                // validáljuk a user-t, és ha auth-loss → force logout /login-ra.
+                if (wasDestructive) {
+                    try {
+                        await account.get();
+                    } catch (err) {
+                        const code = err?.code;
+                        const type = err?.type;
+                        if (code === 401 || code === 404 || type === 'user_not_found' || type === 'general_unauthorized_scope') {
+                            console.warn('[AuthContext] User runtime-deleted — force logout to /login (kód=%s, type=%s)', code, type);
+                            setUser(null);
+                            setOrganizations([]);
+                            setEditorialOffices([]);
+                            setOrgMemberships([]);
+                            setMembershipsError(null);
+                            return;
+                        }
+                        // Non-auth error: continue with memberships reload, hagyjuk
+                        // hogy a `loadAndSetMemberships` saját catch-je kezelje.
+                        console.warn('[AuthContext] account.get failure during destructive reload (non-auth):', err?.message);
+                    }
+                }
+
+                try {
+                    await loadAndSetMemberships(userId, { silent });
+                } catch (err) {
+                    console.warn('[AuthContext] Realtime memberships reload sikertelen:', err?.message);
+                }
             }, 300);
         };
 
