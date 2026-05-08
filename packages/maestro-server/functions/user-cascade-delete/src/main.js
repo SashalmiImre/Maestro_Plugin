@@ -240,6 +240,26 @@ module.exports = async ({ req, res, log, error }) => {
         }
     }
 
+    // Codex stop-time review (2026-05-09): a partial failure-öket NEM
+    // szabad `success: true`-val visszaadni — különben az Appwrite execution
+    // log szerint minden OK, miközben orphan rekord maradt. Az admin a 5xx
+    // status-t látja a function executions list-en, és tud reagálni
+    // (manual MCP cleanup vagy a Phase 2 backstop orphan-sweeper cron).
+    const totalFailed =
+        (stats.organizationMemberships.failed || 0) +
+        (stats.editorialOfficeMemberships.failed || 0) +
+        (stats.groupMemberships.failed || 0) +
+        (stats.orgTeams.failed || 0) +
+        (stats.officeTeams.failed || 0);
+
+    if (totalFailed > 0) {
+        error(`[UserCascade] PARTIAL FAILURE — userId=${userId}, totalFailed=${totalFailed}, stats=${JSON.stringify(stats)}`);
+        return res.json(
+            { success: false, action: 'user_cascade_delete', partial: true, totalFailed, ...stats },
+            500
+        );
+    }
+
     log(`[UserCascade] Done userId=${userId}: ${JSON.stringify(stats)}`);
 
     return res.json({ success: true, action: 'user_cascade_delete', ...stats });
