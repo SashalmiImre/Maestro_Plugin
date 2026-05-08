@@ -1,10 +1,5 @@
 // ADR 0010 — Meghívási flow redesign / W3 (e-mail kiküldés)
 //
-// SKELETON — nem hívja még a Resend API-t (a `RESEND_API_KEY` env var még nincs
-// élesben, és a függőséget se telepítettük). A struktúra implementáció-kész:
-// a Stitch merge utáni W3 fázisban a `dependencies.resend` package.json-be kerül,
-// és az alábbi `// TODO(W3 live):` jelölésű blokkok aktiválhatóak.
-//
 // Felelősségek:
 //   1. Single invite e-mail kiküldés Resend SDK-n át (`send_invite_email`).
 //   2. Multi-invite batch (`send_invite_email_batch`) — a frontend-ből jövő
@@ -15,11 +10,14 @@
 //      `lastDeliveryError` mezők frissítése a kiküldés eredménye szerint.
 //
 // Bounce/delivery webhook NEM ide tartozik — külön CF function (`resend-webhook`).
+//
+// **Live mód**: `env.resendApiKey` jelen → Resend SDK hívás éles.
+// **Skeleton fallback**: env hiányzik → log warn, invite-ot `lastDeliveryStatus='pending'`-en
+//   hagyja, success-szel tér vissza (admin kézzel másolhatja a linket).
 
 const fs = require('fs');
 const path = require('path');
-
-// TODO(W3 live): const { Resend } = require('resend');
+const { Resend } = require('resend');
 
 const TEMPLATE_DIR = path.join(__dirname, '..', '..', 'templates');
 const HTML_TEMPLATE = fs.readFileSync(path.join(TEMPLATE_DIR, 'invite-email.html'), 'utf-8');
@@ -113,8 +111,13 @@ async function sendOneInviteEmail(ctx, invite, options) {
 
     const subject = `Meghívást kaptál a(z) ${organizationName} szervezetbe — Maestro`;
 
-    // TODO(W3 live): aktiválás után az alábbi blokk élesedik
-    /*
+    // Skeleton fallback: ha nincs API kulcs, NE küldjünk semmit (admin
+    // kézzel másolhatja a linket a UsersTab pending invites listán).
+    if (!env.resendApiKey) {
+        log(`[SendEmail] SKELETON (RESEND_API_KEY hiányzik) — to=${invite.email} subject="${subject}"`);
+        return { success: true, skeleton: true };
+    }
+
     const resend = new Resend(env.resendApiKey);
     try {
         const result = await resend.emails.send({
@@ -123,7 +126,7 @@ async function sendOneInviteEmail(ctx, invite, options) {
             subject,
             html,
             text,
-            // Resend metadata — bounce-webhook payloadban visszakapjuk
+            // Resend metadata — a bounce/delivery webhook payloadban visszakapjuk
             tags: [
                 { name: 'invite_id', value: invite.$id },
                 { name: 'organization_id', value: invite.organizationId }
@@ -141,20 +144,21 @@ async function sendOneInviteEmail(ctx, invite, options) {
         return { success: true };
     } catch (err) {
         const errMsg = err?.message || 'unknown_error';
-        await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
-            lastDeliveryStatus: 'failed',
-            sendCount: (invite.sendCount || 0) + 1,
-            lastSentAt: new Date().toISOString(),
-            lastDeliveryError: errMsg.substring(0, 512)
-        });
+        try {
+            await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
+                lastDeliveryStatus: 'failed',
+                sendCount: (invite.sendCount || 0) + 1,
+                lastSentAt: new Date().toISOString(),
+                lastDeliveryError: errMsg.substring(0, 512)
+            });
+        } catch (updateErr) {
+            // Ha a status frissítés hibázik (pl. séma még nem bővült), a kiküldés
+            // hibáját akkor is jelezzük — non-blocking.
+            error(`[SendEmail] status update failed: ${updateErr.message}`);
+        }
         error(`[SendEmail] FAILED invite=${invite.$id} email=${invite.email} err=${errMsg}`);
         return { success: false, error: errMsg };
     }
-    */
-
-    // SKELETON STUB — visszaadja hogy a struktúra működik, de nem küld semmit
-    log(`[SendEmail] SKELETON — would send to=${invite.email} subject="${subject}" htmlBytes=${html.length}`);
-    return { success: true, skeleton: true };
 }
 
 /**
@@ -313,6 +317,8 @@ async function sendInviteEmailBatch(ctx) {
 module.exports = {
     sendInviteEmail,
     sendInviteEmailBatch,
+    // ADR 0010 W3 — actions/invites.js auto-send flow használja:
+    sendOneInviteEmail,
     // Helper export-ok teszteléshez:
     _renderTemplate: renderTemplate,
     _formatDateHu: formatDateHu,

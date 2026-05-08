@@ -8,6 +8,8 @@ const crypto = require('crypto');
 const {
     EMAIL_REGEX,
     INVITE_VALIDITY_DAYS,
+    INVITE_VALIDITY_DAYS_OPTIONS,
+    INVITE_VALIDITY_DAYS_DEFAULT,
     TOKEN_BYTES
 } = require('../helpers/util.js');
 const {
@@ -16,22 +18,198 @@ const {
     ensureTeamMembership
 } = require('../teamHelpers.js');
 const permissions = require('../permissions.js');
+// ADR 0010 W2/W3 — meghívási flow redesign:
+//   - sendOneInviteEmail: auto-send a sikeres createInvite után (best-effort)
+//   - checkRateLimit: brute-force védelem az acceptInvite-on (IP-rate-limit)
+const { sendOneInviteEmail } = require('./sendEmail.js');
+const { checkRateLimit } = require('../helpers/rateLimit.js');
+
+const MAX_BATCH_INVITES = 20;
+const MAX_CUSTOM_MESSAGE_LENGTH = 500;
 
 /**
- * ACTION='create' — admin meghívó küldés.
+ * `expiryDays` payload-mező validálása. Whitelist (1 / 3 / 7), default 7.
+ * Visszaadja a validált napok számát, vagy null-t ha az érték érvénytelen.
+ */
+function normalizeExpiryDays(value) {
+    if (value === undefined || value === null || value === '') {
+        return INVITE_VALIDITY_DAYS_DEFAULT;
+    }
+    const num = Number(value);
+    if (!Number.isFinite(num) || !INVITE_VALIDITY_DAYS_OPTIONS.includes(num)) {
+        return null;
+    }
+    return num;
+}
+
+/**
+ * `customMessage` sanitizáció — opcionális string, max 500 karakter.
+ * Visszaad: null (üres / nem string) | trimmed string. Ha túl hosszú: null + caller dönt.
+ */
+function normalizeCustomMessage(value) {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (trimmed.length > MAX_CUSTOM_MESSAGE_LENGTH) return undefined; // sentinel: too long
+    return trimmed;
+}
+
+/**
+ * ADR 0010 W2 — Belső core helper: egyetlen invite létrehozása.
  *
- * 1. A.3.6 — `org.member.invite` org-scope permission guard (owner+admin).
- * 2. Idempotencia: ha létezik pending invite ugyanerre az email+org-ra
- *    a lejárat előtt, a meglévő tokent adjuk vissza. Lejárt invite →
- *    `expired`, új invite generálva.
- * 3. Token: crypto.randomBytes(32).toString('hex') — 64 char.
- * 4. Expiry: now + 7 nap ISO.
- * 5. Race: composite unique index → újraolvasás idempotens válaszhoz.
+ * **NEM** ír `res.json`-t — ezt a hívó (createInvite single vagy
+ * createBatchInvites) végzi. Permission check **MÁR megtörtént** a hívóban.
  *
- * NINCS messaging.* hívás (Fázis 6 hatáskör).
+ * Returns:
+ *   { ok: true, action: 'created'|'existing', inviteId, token, expiresAt, role, email, organizationId }
+ *   { ok: false, reason: string, statusCode: number, extra?: object }
+ */
+async function _createInviteCore(ctx, params) {
+    const { databases, env, callerId, log, sdk } = ctx;
+    const { organizationId, email, role, expiryDays, customMessage } = params;
+
+    // 1) Idempotencia: létezik-e már pending invite ugyanerre az email+org párra?
+    const existingPending = await databases.listDocuments(
+        env.databaseId,
+        env.invitesCollectionId,
+        [
+            sdk.Query.equal('organizationId', organizationId),
+            sdk.Query.equal('email', email),
+            sdk.Query.equal('status', 'pending'),
+            sdk.Query.limit(1)
+        ]
+    );
+
+    if (existingPending.documents.length > 0) {
+        const existing = existingPending.documents[0];
+        if (new Date(existing.expiresAt) > new Date()) {
+            log(`[CreateCore] Idempotens — meglévő pending invite ${existing.$id} (${email})`);
+            return {
+                ok: true,
+                action: 'existing',
+                inviteId: existing.$id,
+                token: existing.token,
+                expiresAt: existing.expiresAt,
+                role: existing.role,
+                email: existing.email,
+                organizationId
+            };
+        }
+        // Lejárt — frissítjük expired-re és új invite-ot hozunk létre
+        await databases.updateDocument(env.databaseId, env.invitesCollectionId, existing.$id, {
+            status: 'expired'
+        });
+        log(`[CreateCore] Lejárt invite ${existing.$id} expired-re állítva`);
+    }
+
+    // 2) Token + expiry generálás
+    const token = crypto.randomBytes(TOKEN_BYTES).toString('hex');
+    const expiresAt = new Date(Date.now() + expiryDays * 24 * 60 * 60 * 1000).toISOString();
+
+    // 3) Invite rekord létrehozása race-védelemmel.
+    //    A composite unique index `(organizationId, email, status='pending')`
+    //    miatt két párhuzamos request közül egyik 409-et kap.
+    let invite;
+    try {
+        invite = await databases.createDocument(
+            env.databaseId,
+            env.invitesCollectionId,
+            sdk.ID.unique(),
+            {
+                organizationId,
+                email,
+                token,
+                role,
+                status: 'pending',
+                expiresAt,
+                invitedByUserId: callerId,
+                customMessage: customMessage || null,
+                // ADR 0010 W2 — kiküldés-status mezők. Default `pending` ↔ még nem
+                // sendOlt; a sendOneInviteEmail() majd átírja `sent`/`failed`-re.
+                lastDeliveryStatus: 'pending',
+                sendCount: 0
+            },
+            buildOrgAclPerms(organizationId)
+        );
+    } catch (err) {
+        if (err?.type === 'document_already_exists' || /unique/i.test(err?.message || '')) {
+            const raceWinner = await databases.listDocuments(
+                env.databaseId,
+                env.invitesCollectionId,
+                [
+                    sdk.Query.equal('organizationId', organizationId),
+                    sdk.Query.equal('email', email),
+                    sdk.Query.equal('status', 'pending'),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (raceWinner.documents.length > 0) {
+                const existing = raceWinner.documents[0];
+                log(`[CreateCore] Race — meglévő pending invite ${existing.$id} (${email})`);
+                return {
+                    ok: true,
+                    action: 'existing',
+                    inviteId: existing.$id,
+                    token: existing.token,
+                    expiresAt: existing.expiresAt,
+                    role: existing.role,
+                    email: existing.email,
+                    organizationId
+                };
+            }
+        }
+        throw err;
+    }
+
+    log(`[CreateCore] Új invite ${invite.$id} ${organizationId} → ${email} (role=${role}, expiryDays=${expiryDays})`);
+
+    return {
+        ok: true,
+        action: 'created',
+        inviteId: invite.$id,
+        token,
+        expiresAt,
+        role,
+        email,
+        organizationId,
+        invite // teljes invite doc — auto-send-hez kell
+    };
+}
+
+/**
+ * Auto-send wrapper: best-effort e-mail küldés a frissen létrehozott invite-ra.
+ * Hibát NEM propagál — a sendOneInviteEmail saját maga frissíti a `lastDeliveryStatus`-t
+ * `failed`-re és tárolja az error message-et.
+ *
+ * @returns {Promise<{success: boolean, error?: string, skeleton?: boolean}>}
+ */
+async function _autoSendInviteEmail(ctx, inviteDoc, organizationName, inviterName, inviterEmail) {
+    try {
+        return await sendOneInviteEmail(ctx, inviteDoc, {
+            organizationName: organizationName || 'a szervezeted',
+            inviterName,
+            inviterEmail,
+            customMessage: inviteDoc.customMessage || '',
+            dashboardUrl: ctx.env.dashboardUrl
+        });
+    } catch (err) {
+        ctx.error?.(`[AutoSend] sendOneInviteEmail dobott (non-blocking): ${err.message}`);
+        return { success: false, error: err.message };
+    }
+}
+
+/**
+ * ACTION='create' — admin meghívó küldés (single, ADR 0010 W2/W3).
+ *
+ * Bővítések 2026-05-08 ADR 0010-hez:
+ *   - `expiryDays` payload (1 / 3 / 7, default 7)
+ *   - `customMessage` payload (max 500 karakter)
+ *   - **Auto-send**: sikeres invite után best-effort sendOneInviteEmail() hívás
+ *
+ * Permission: `org.member.invite` org-scope guard (owner+admin).
  */
 async function createInvite(ctx) {
-    const { databases, env, callerId, callerUser, payload, log, res, fail, sdk, permissionEnv, permissionContext } = ctx;
+    const { databases, env, callerId, callerUser, payload, log, res, fail, permissionEnv, permissionContext, usersApi } = ctx;
     const { organizationId } = payload;
     const email = typeof payload.email === 'string'
         ? payload.email.trim().toLowerCase()
@@ -41,18 +219,23 @@ async function createInvite(ctx) {
     if (!organizationId || !email) {
         return fail(res, 400, 'missing_fields', { required: ['organizationId', 'email'] });
     }
-
     if (!EMAIL_REGEX.test(email)) {
         return fail(res, 400, 'invalid_email');
     }
-
     if (role !== 'admin' && role !== 'member') {
         return fail(res, 400, 'invalid_role', { allowed: ['admin', 'member'] });
     }
 
-    // 1. A.3.6 — `org.member.invite` org-scope permission guard
-    //    (owner + admin egyaránt jogosult; az `ADMIN_EXCLUDED_ORG_SLUGS`
-    //    nem tartalmazza ezt a slugot).
+    const expiryDays = normalizeExpiryDays(payload.expiryDays);
+    if (expiryDays === null) {
+        return fail(res, 400, 'invalid_expiry_days', { allowed: INVITE_VALIDITY_DAYS_OPTIONS });
+    }
+    const customMessage = normalizeCustomMessage(payload.customMessage ?? payload.message);
+    if (customMessage === undefined) {
+        return fail(res, 400, 'message_too_long', { max: MAX_CUSTOM_MESSAGE_LENGTH });
+    }
+
+    // Permission guard: `org.member.invite` (owner + admin)
     const allowed = await permissions.userHasOrgPermission(
         databases,
         permissionEnv,
@@ -69,113 +252,185 @@ async function createInvite(ctx) {
         });
     }
 
-    // 2. Idempotencia: létezik-e már pending invite ugyanerre az email+org párra?
-    const existingPending = await databases.listDocuments(
-        env.databaseId,
-        env.invitesCollectionId,
-        [
-            sdk.Query.equal('organizationId', organizationId),
-            sdk.Query.equal('email', email),
-            sdk.Query.equal('status', 'pending'),
-            sdk.Query.limit(1)
-        ]
-    );
+    // Core create
+    const result = await _createInviteCore(ctx, {
+        organizationId, email, role, expiryDays, customMessage
+    });
 
-    if (existingPending.documents.length > 0) {
-        const existing = existingPending.documents[0];
-        // Lejárat ellenőrzés — ha még él, visszaadjuk a meglévő tokent
-        if (new Date(existing.expiresAt) > new Date()) {
-            log(`[Create] Idempotens — meglévő pending invite ${existing.$id} visszaadva`);
-            return res.json({
-                success: true,
-                action: 'existing',
-                inviteId: existing.$id,
-                token: existing.token,
-                expiresAt: existing.expiresAt
-            });
+    // Auto-send a sikeres új invite-ra (best-effort, NEM propagálja a hibát).
+    // Az 'existing' eseteknél nem küldünk újra — a frontend külön resend
+    // gombbal indíthat send_invite_email action-t.
+    let deliveryStatus = null;
+    if (result.action === 'created' && result.invite) {
+        // Org és inviter denormalizáció az e-mailhez
+        let organizationName = 'a szervezeted';
+        let inviterName = null;
+        let inviterEmail = null;
+        try {
+            const org = await databases.getDocument(env.databaseId, env.organizationsCollectionId, organizationId);
+            organizationName = org.name || organizationName;
+        } catch (err) {
+            log(`[Create] org lookup hiba (non-blocking): ${err.message}`);
         }
-        // Lejárt — frissítjük expired-re és új invite-ot hozunk létre
-        await databases.updateDocument(env.databaseId, env.invitesCollectionId, existing.$id, {
-            status: 'expired'
-        });
-        log(`[Create] Lejárt invite ${existing.$id} expired-re állítva`);
-    }
-
-    // 3. Token + expiry generálás
-    const token = crypto.randomBytes(TOKEN_BYTES).toString('hex');
-    const expiresAt = new Date(Date.now() + INVITE_VALIDITY_DAYS * 24 * 60 * 60 * 1000).toISOString();
-
-    // 4. Invite rekord létrehozása
-    //
-    // Race condition védelem: a `organizationInvites` collectionön
-    // létezik egy composite unique index `(organizationId, email,
-    // status)` kulcson. Ha két admin párhuzamosan küld meghívót
-    // ugyanarra az email+org párra, mindkettő átmehet a fenti
-    // idempotencia check-en, de a DB insert ütközni fog. Ilyenkor
-    // a már létrejött rekordot újra lekérdezzük és idempotens
-    // success-szel visszaadjuk — a hívó szemszögéből nincs különbség
-    // „én hoztam létre" és „valaki más hozta létre velem egy időben"
-    // között.
-    let invite;
-    try {
-        invite = await databases.createDocument(
-            env.databaseId,
-            env.invitesCollectionId,
-            sdk.ID.unique(),
-            {
-                organizationId,
-                email,
-                token,
-                role,
-                status: 'pending',
-                expiresAt,
-                invitedByUserId: callerId
-            },
-            buildOrgAclPerms(organizationId)
-        );
-    } catch (err) {
-        if (err?.type === 'document_already_exists' || /unique/i.test(err?.message || '')) {
-            // Újraolvassuk — a másik kérés már létrehozta
-            const raceWinner = await databases.listDocuments(
-                env.databaseId,
-                env.invitesCollectionId,
-                [
-                    sdk.Query.equal('organizationId', organizationId),
-                    sdk.Query.equal('email', email),
-                    sdk.Query.equal('status', 'pending'),
-                    sdk.Query.limit(1)
-                ]
-            );
-            if (raceWinner.documents.length > 0) {
-                const existing = raceWinner.documents[0];
-                log(`[Create] Race — meglévő pending invite ${existing.$id} visszaadva`);
-                return res.json({
-                    success: true,
-                    action: 'existing',
-                    inviteId: existing.$id,
-                    token: existing.token,
-                    expiresAt: existing.expiresAt
-                });
+        if (callerUser) {
+            inviterName = callerUser.name || null;
+            inviterEmail = callerUser.email || null;
+        } else {
+            try {
+                const inviter = await usersApi.get(callerId);
+                inviterName = inviter.name || null;
+                inviterEmail = inviter.email || null;
+            } catch (err) {
+                log(`[Create] inviter lookup hiba (non-blocking): ${err.message}`);
             }
-            // Nem találtuk meg — a unique violation máshonnan jött, dobjuk tovább
         }
-        throw err;
+        const sendResult = await _autoSendInviteEmail(ctx, result.invite, organizationName, inviterName, inviterEmail);
+        deliveryStatus = sendResult.success ? 'sent' : 'failed';
     }
-
-    log(`[Create] Új invite ${invite.$id} az org ${organizationId} → ${email} (role=${role})`);
-
-    // FÁZIS 6: itt jön majd a messaging.createEmail() hívás.
-    // Most a frontend megkapja a tokent és építi a linket.
 
     return res.json({
         success: true,
-        action: 'created',
-        inviteId: invite.$id,
-        token,
-        expiresAt,
-        role,
-        email,
-        organizationId
+        action: result.action,
+        inviteId: result.inviteId,
+        token: result.token,
+        expiresAt: result.expiresAt,
+        role: result.role,
+        email: result.email,
+        organizationId: result.organizationId,
+        ...(deliveryStatus ? { deliveryStatus } : {})
+    });
+}
+
+/**
+ * ACTION='create_batch_invites' — multi-invite (max 20, ADR 0010 W2).
+ *
+ * Frontend egy modalon belül több e-mailt küldhet egyszerre. A CF iterál
+ * 10-es Promise.all batchekben (rate-limit barát, sub-second), és visszaad
+ * egy per-email status listát.
+ *
+ * Permission check egyszer történik az org-ra (org.member.invite).
+ */
+async function createBatchInvites(ctx) {
+    const { databases, env, callerId, callerUser, payload, log, res, fail, permissionEnv, permissionContext, usersApi } = ctx;
+    const { organizationId, emails } = payload;
+    const role = payload.role || 'member';
+
+    if (!organizationId || !Array.isArray(emails) || emails.length === 0) {
+        return fail(res, 400, 'missing_fields', { required: ['organizationId', 'emails[]'] });
+    }
+    if (emails.length > MAX_BATCH_INVITES) {
+        return fail(res, 400, 'batch_too_large', { max: MAX_BATCH_INVITES, given: emails.length });
+    }
+    if (role !== 'admin' && role !== 'member') {
+        return fail(res, 400, 'invalid_role', { allowed: ['admin', 'member'] });
+    }
+
+    const expiryDays = normalizeExpiryDays(payload.expiryDays);
+    if (expiryDays === null) {
+        return fail(res, 400, 'invalid_expiry_days', { allowed: INVITE_VALIDITY_DAYS_OPTIONS });
+    }
+    const customMessage = normalizeCustomMessage(payload.customMessage ?? payload.message);
+    if (customMessage === undefined) {
+        return fail(res, 400, 'message_too_long', { max: MAX_CUSTOM_MESSAGE_LENGTH });
+    }
+
+    // Permission guard egyszer
+    const allowed = await permissions.userHasOrgPermission(
+        databases,
+        permissionEnv,
+        callerUser,
+        'org.member.invite',
+        organizationId,
+        permissionContext.orgRoleByOrg
+    );
+    if (!allowed) {
+        log(`[CreateBatch] Caller ${callerId} — nincs org.member.invite jogosultság az org ${organizationId}-ra`);
+        return fail(res, 403, 'insufficient_permission', {
+            slug: 'org.member.invite',
+            scope: 'org'
+        });
+    }
+
+    // Org + inviter cache (egy fetch per batch — lookup költség minimalizálás)
+    let organizationName = 'a szervezeted';
+    let inviterName = null;
+    let inviterEmail = null;
+    try {
+        const org = await databases.getDocument(env.databaseId, env.organizationsCollectionId, organizationId);
+        organizationName = org.name || organizationName;
+    } catch (err) {
+        log(`[CreateBatch] org lookup hiba (non-blocking): ${err.message}`);
+    }
+    if (callerUser) {
+        inviterName = callerUser.name || null;
+        inviterEmail = callerUser.email || null;
+    } else {
+        try {
+            const inviter = await usersApi.get(callerId);
+            inviterName = inviter.name || null;
+            inviterEmail = inviter.email || null;
+        } catch (err) {
+            log(`[CreateBatch] inviter lookup hiba (non-blocking): ${err.message}`);
+        }
+    }
+
+    // Normalize + dedup emaileket
+    const normalizedEmails = [];
+    const seen = new Set();
+    for (const raw of emails) {
+        if (typeof raw !== 'string') continue;
+        const normalized = raw.trim().toLowerCase();
+        if (!normalized || seen.has(normalized)) continue;
+        seen.add(normalized);
+        normalizedEmails.push(normalized);
+    }
+
+    // 10-es Promise.all batchekben
+    const BATCH_SIZE = 10;
+    const results = [];
+    for (let i = 0; i < normalizedEmails.length; i += BATCH_SIZE) {
+        const slice = normalizedEmails.slice(i, i + BATCH_SIZE);
+        const sliceResults = await Promise.all(slice.map(async (email) => {
+            if (!EMAIL_REGEX.test(email)) {
+                return { email, status: 'error', reason: 'invalid_email' };
+            }
+            try {
+                const result = await _createInviteCore(ctx, {
+                    organizationId, email, role, expiryDays, customMessage
+                });
+                let deliveryStatus = null;
+                if (result.action === 'created' && result.invite) {
+                    const sendResult = await _autoSendInviteEmail(ctx, result.invite, organizationName, inviterName, inviterEmail);
+                    deliveryStatus = sendResult.success ? 'sent' : 'failed';
+                }
+                return {
+                    email,
+                    status: 'ok',
+                    action: result.action,
+                    inviteId: result.inviteId,
+                    expiresAt: result.expiresAt,
+                    ...(deliveryStatus ? { deliveryStatus } : {})
+                };
+            } catch (err) {
+                ctx.error?.(`[CreateBatch] ${email} hiba: ${err.message}`);
+                return { email, status: 'error', reason: err.message || 'create_failed' };
+            }
+        }));
+        results.push(...sliceResults);
+    }
+
+    const successCount = results.filter(r => r.status === 'ok').length;
+    const failCount = results.length - successCount;
+
+    log(`[CreateBatch] org=${organizationId} ${successCount}/${results.length} sikeres (${failCount} hiba)`);
+
+    return res.json({
+        success: true,
+        action: 'batch_created',
+        total: results.length,
+        successCount,
+        failCount,
+        results
     });
 }
 
@@ -195,6 +450,17 @@ async function acceptInvite(ctx) {
     const { token } = payload;
     if (!token) {
         return fail(res, 400, 'missing_fields', { required: ['token'] });
+    }
+
+    // ADR 0010 W2 — IP-rate-limit (5 attempt / 15 perc, 1h block).
+    // Token-szivárgás esetén egy támadó tetszőleges tokent próbálhat
+    // guess-elni — a 256-bit token bruteforce-olhatatlan, de DDoS-szerű
+    // próbálkozást így is fogjuk vissza. Ha nincs X-Forwarded-For
+    // header (pl. közvetlen Appwrite hívás), a checkRateLimit null-t
+    // ad — best-effort átengedés.
+    const blockedUntil = await checkRateLimit(ctx, 'accept_invite');
+    if (blockedUntil) {
+        return fail(res, 429, 'rate_limited', { retryAfter: blockedUntil });
     }
 
     // 1. Token lookup
@@ -576,6 +842,7 @@ async function declineInvite(ctx) {
 
 module.exports = {
     createInvite,
+    createBatchInvites,
     acceptInvite,
     listMyInvites,
     declineInvite

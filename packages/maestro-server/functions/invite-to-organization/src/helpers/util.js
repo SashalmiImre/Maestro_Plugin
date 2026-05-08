@@ -20,7 +20,12 @@ const crypto = require('crypto');
  */
 const DEFAULT_WORKFLOW = require('../defaultWorkflow.json');
 
-const INVITE_VALIDITY_DAYS = 7;
+// ADR 0010 W2 — meghívó lejárat választható (1 / 3 / 7 nap, default 7).
+// A `INVITE_VALIDITY_DAYS` backward-compat re-export az alapértelmezett értékre,
+// hogy a meglévő hivatkozások (pl. createInvite default) ne törjenek.
+const INVITE_VALIDITY_DAYS_OPTIONS = [1, 3, 7];
+const INVITE_VALIDITY_DAYS_DEFAULT = 7;
+const INVITE_VALIDITY_DAYS = INVITE_VALIDITY_DAYS_DEFAULT;
 const TOKEN_BYTES = 32;
 
 // Egyszerű e-mail formátum-ellenőrzés (a részletes validáció B.10-ben kézzel)
@@ -70,7 +75,13 @@ const VALID_ACTIONS = new Set([
     // action vagy az `update_workflow_extension` `archivedAt: null`-lal
     // implicit visszaállít).
     'create_workflow_extension', 'update_workflow_extension',
-    'archive_workflow_extension'
+    'archive_workflow_extension',
+    // ADR 0010 W2/W3 — meghívási flow redesign
+    'create_batch_invites',           // multi-invite (max 20)
+    'send_invite_email',              // egyetlen invite e-mail (re-send)
+    'send_invite_email_batch',        // batch e-mail
+    'bootstrap_invites_schema_v2',    // 4 új mező (lastDeliveryStatus, ...)
+    'bootstrap_rate_limit_schema'     // 2 új collection (counters + blocks)
 ]);
 
 // Slug formátum: kisbetű, szám, kötőjel. A frontend is ugyanezt alkalmazza.
@@ -222,6 +233,8 @@ async function fetchUserIdentity(usersApi, userId, cache, log) {
 module.exports = {
     DEFAULT_WORKFLOW,
     INVITE_VALIDITY_DAYS,
+    INVITE_VALIDITY_DAYS_OPTIONS,
+    INVITE_VALIDITY_DAYS_DEFAULT,
     TOKEN_BYTES,
     EMAIL_REGEX,
     VALID_ACTIONS,

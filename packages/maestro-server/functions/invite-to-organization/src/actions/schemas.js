@@ -1223,6 +1223,244 @@ async function backfillMembershipUserNames(ctx) {
     return res.json({ success: true, action: 'backfilled', stats });
 }
 
+/**
+ * ACTION='bootstrap_invites_schema_v2' (ADR 0010 W2) — owner-only séma-bővítés
+ * a meglévő `organizationInvites` collectionön.
+ *
+ * 4+1 új mező:
+ *   - lastDeliveryStatus  string(32)  default='pending'  required=false
+ *   - lastDeliveryError   string(512)                    required=false
+ *   - sendCount           integer     default=0  min=0   required=false
+ *   - lastSentAt          datetime                       required=false
+ *   - customMessage       string(500)                    required=false  (ha még nincs)
+ *
+ * Idempotens (already_exists → skip).
+ */
+async function bootstrapInvitesSchemaV2(ctx) {
+    const { databases, env, log, error, res, fail } = ctx;
+
+    const denied = await requireOwnerAnywhere(ctx);
+    if (denied) return denied;
+
+    const created = [];
+    const skipped = [];
+
+    // 1) lastDeliveryStatus — Appwrite 1.9+: required=false + default OK
+    try {
+        await databases.createStringAttribute(
+            env.databaseId, env.invitesCollectionId,
+            'lastDeliveryStatus', 32, false, 'pending', false
+        );
+        created.push('lastDeliveryStatus');
+    } catch (err) {
+        if (isAlreadyExists(err)) skipped.push('lastDeliveryStatus');
+        else {
+            error(`[BootstrapInvitesSchemaV2] lastDeliveryStatus hiba: ${err.message}`);
+            return fail(res, 500, 'schema_lastDeliveryStatus_failed', { error: err.message });
+        }
+    }
+
+    // 2) lastDeliveryError
+    try {
+        await databases.createStringAttribute(
+            env.databaseId, env.invitesCollectionId,
+            'lastDeliveryError', 512, false, null, false
+        );
+        created.push('lastDeliveryError');
+    } catch (err) {
+        if (isAlreadyExists(err)) skipped.push('lastDeliveryError');
+        else {
+            error(`[BootstrapInvitesSchemaV2] lastDeliveryError hiba: ${err.message}`);
+            return fail(res, 500, 'schema_lastDeliveryError_failed', { error: err.message });
+        }
+    }
+
+    // 3) sendCount integer
+    try {
+        await databases.createIntegerAttribute(
+            env.databaseId, env.invitesCollectionId,
+            'sendCount', false, 0, undefined, 0, false
+        );
+        created.push('sendCount');
+    } catch (err) {
+        if (isAlreadyExists(err)) skipped.push('sendCount');
+        else {
+            error(`[BootstrapInvitesSchemaV2] sendCount hiba: ${err.message}`);
+            return fail(res, 500, 'schema_sendCount_failed', { error: err.message });
+        }
+    }
+
+    // 4) lastSentAt datetime
+    try {
+        await databases.createDatetimeAttribute(
+            env.databaseId, env.invitesCollectionId,
+            'lastSentAt', false, null, false
+        );
+        created.push('lastSentAt');
+    } catch (err) {
+        if (isAlreadyExists(err)) skipped.push('lastSentAt');
+        else {
+            error(`[BootstrapInvitesSchemaV2] lastSentAt hiba: ${err.message}`);
+            return fail(res, 500, 'schema_lastSentAt_failed', { error: err.message });
+        }
+    }
+
+    // 5) customMessage — ha valamiért nem létezik, vegyük fel.
+    try {
+        await databases.createStringAttribute(
+            env.databaseId, env.invitesCollectionId,
+            'customMessage', 500, false, null, false
+        );
+        created.push('customMessage');
+    } catch (err) {
+        if (isAlreadyExists(err)) skipped.push('customMessage');
+        else {
+            error(`[BootstrapInvitesSchemaV2] customMessage hiba: ${err.message}`);
+            return fail(res, 500, 'schema_customMessage_failed', { error: err.message });
+        }
+    }
+
+    log(`[BootstrapInvitesSchemaV2] created=[${created.join(',')}] skipped=[${skipped.join(',')}]`);
+    return res.json({ success: true, action: 'invites_schema_v2_bootstrapped', created, skipped });
+}
+
+/**
+ * ACTION='bootstrap_rate_limit_schema' (ADR 0010 W2) — owner-only séma-bootstrap
+ * a 2 új IP-rate-limit collectionnek.
+ *
+ * Collection-ök:
+ *   - ipRateLimitCounters: { ip(64), endpoint(32), windowStart(datetime), count(int) }
+ *   - ipRateLimitBlocks:   { ip(64), endpoint(32), blockedAt(datetime), blockedUntil(datetime) }
+ *
+ * Az env változók (`IP_RATE_LIMIT_COUNTERS_COLLECTION_ID`,
+ * `IP_RATE_LIMIT_BLOCKS_COLLECTION_ID`) megadják a használandó collection
+ * ID-t. Ha az env nincs beállítva → 400 `missing_env_var` error.
+ *
+ * A `helpers/rateLimit.js` `incrementCounter` és `blockIp` custom doc-ID-t
+ * használ (`${ip}::${endpoint}::${windowStart}` és `${ip}::${endpoint}`),
+ * ezért a collection `documentSecurity=false` és nincs ACL-szűrés —
+ * a CF API key-jel ír.
+ */
+async function bootstrapRateLimitSchema(ctx) {
+    const { databases, env, log, error, res, fail } = ctx;
+
+    const denied = await requireOwnerAnywhere(ctx);
+    if (denied) return denied;
+
+    if (!env.ipRateLimitCountersCollectionId || !env.ipRateLimitBlocksCollectionId) {
+        return fail(res, 400, 'missing_env_var', {
+            required: ['IP_RATE_LIMIT_COUNTERS_COLLECTION_ID', 'IP_RATE_LIMIT_BLOCKS_COLLECTION_ID']
+        });
+    }
+
+    const created = [];
+    const skipped = [];
+
+    // ── 1) ipRateLimitCounters collection ──
+    try {
+        await databases.createCollection(
+            env.databaseId,
+            env.ipRateLimitCountersCollectionId,
+            'IP Rate Limit Counters',
+            [],     // permissions — csak server-side írás (API key)
+            false,  // documentSecurity
+            true    // enabled
+        );
+        created.push('collection:ipRateLimitCounters');
+    } catch (err) {
+        if (isAlreadyExists(err)) skipped.push('collection:ipRateLimitCounters');
+        else {
+            error(`[BootstrapRateLimitSchema] counters collection hiba: ${err.message}`);
+            return fail(res, 500, 'rate_counters_collection_failed', { error: err.message });
+        }
+    }
+
+    const countersAttrs = [
+        { name: 'ip', type: 'string', size: 64 },
+        { name: 'endpoint', type: 'string', size: 32 },
+        { name: 'windowStart', type: 'datetime' },
+        { name: 'count', type: 'integer', min: 0, default: 0 }
+    ];
+    for (const attr of countersAttrs) {
+        try {
+            if (attr.type === 'string') {
+                await databases.createStringAttribute(
+                    env.databaseId, env.ipRateLimitCountersCollectionId,
+                    attr.name, attr.size, false, null, false
+                );
+            } else if (attr.type === 'integer') {
+                await databases.createIntegerAttribute(
+                    env.databaseId, env.ipRateLimitCountersCollectionId,
+                    attr.name, false, attr.default ?? 0, undefined, attr.min ?? 0, false
+                );
+            } else if (attr.type === 'datetime') {
+                await databases.createDatetimeAttribute(
+                    env.databaseId, env.ipRateLimitCountersCollectionId,
+                    attr.name, false, null, false
+                );
+            }
+            created.push(`counters.${attr.name}`);
+        } catch (err) {
+            if (isAlreadyExists(err)) skipped.push(`counters.${attr.name}`);
+            else {
+                error(`[BootstrapRateLimitSchema] counters.${attr.name} hiba: ${err.message}`);
+                return fail(res, 500, 'rate_counters_attr_failed', { attr: attr.name, error: err.message });
+            }
+        }
+    }
+
+    // ── 2) ipRateLimitBlocks collection ──
+    try {
+        await databases.createCollection(
+            env.databaseId,
+            env.ipRateLimitBlocksCollectionId,
+            'IP Rate Limit Blocks',
+            [],
+            false,
+            true
+        );
+        created.push('collection:ipRateLimitBlocks');
+    } catch (err) {
+        if (isAlreadyExists(err)) skipped.push('collection:ipRateLimitBlocks');
+        else {
+            error(`[BootstrapRateLimitSchema] blocks collection hiba: ${err.message}`);
+            return fail(res, 500, 'rate_blocks_collection_failed', { error: err.message });
+        }
+    }
+
+    const blocksAttrs = [
+        { name: 'ip', type: 'string', size: 64 },
+        { name: 'endpoint', type: 'string', size: 32 },
+        { name: 'blockedAt', type: 'datetime' },
+        { name: 'blockedUntil', type: 'datetime' }
+    ];
+    for (const attr of blocksAttrs) {
+        try {
+            if (attr.type === 'string') {
+                await databases.createStringAttribute(
+                    env.databaseId, env.ipRateLimitBlocksCollectionId,
+                    attr.name, attr.size, false, null, false
+                );
+            } else if (attr.type === 'datetime') {
+                await databases.createDatetimeAttribute(
+                    env.databaseId, env.ipRateLimitBlocksCollectionId,
+                    attr.name, false, null, false
+                );
+            }
+            created.push(`blocks.${attr.name}`);
+        } catch (err) {
+            if (isAlreadyExists(err)) skipped.push(`blocks.${attr.name}`);
+            else {
+                error(`[BootstrapRateLimitSchema] blocks.${attr.name} hiba: ${err.message}`);
+                return fail(res, 500, 'rate_blocks_attr_failed', { attr: attr.name, error: err.message });
+            }
+        }
+    }
+
+    log(`[BootstrapRateLimitSchema] created=[${created.join(',')}] skipped=[${skipped.join(',')}]`);
+    return res.json({ success: true, action: 'rate_limit_schema_bootstrapped', created, skipped });
+}
+
 module.exports = {
     bootstrapWorkflowSchema,
     bootstrapPublicationSchema,
@@ -1230,5 +1468,8 @@ module.exports = {
     bootstrapPermissionSetsSchema,
     bootstrapWorkflowExtensionSchema,
     backfillTenantAcl,
-    backfillMembershipUserNames
+    backfillMembershipUserNames,
+    // ADR 0010 W2 — meghívási flow redesign
+    bootstrapInvitesSchemaV2,
+    bootstrapRateLimitSchema
 };

@@ -62,6 +62,10 @@ const {
 const schemaActions = require("./actions/schemas.js");
 const orgActions = require("./actions/orgs.js");
 const inviteActions = require("./actions/invites.js");
+// ADR 0010 W3 — Resend e-mail kiküldés (külön action-modul, mert a Resend
+// SDK csak a sendEmail.js-ben él; az invites.js belsőleg hívja a
+// sendOneInviteEmail-t auto-send flow-ban).
+const sendEmailActions = require("./actions/sendEmail.js");
 const groupActions = require("./actions/groups.js");
 const permissionSetActions = require("./actions/permissionSets.js");
 const workflowActions = require("./actions/workflows.js");
@@ -92,10 +96,14 @@ const ACTION_HANDLERS = {
     'bootstrap_organization': orgActions.bootstrapOrCreateOrganization,
     'create_organization': orgActions.bootstrapOrCreateOrganization,
     'create': inviteActions.createInvite,
+    'create_batch_invites': inviteActions.createBatchInvites,
     'accept': inviteActions.acceptInvite,
     'list_my_invites': inviteActions.listMyInvites,
     'decline_invite': inviteActions.declineInvite,
     'leave_organization': officeActions.leaveOrganization,
+    // ADR 0010 W3 — e-mail kiküldés (resend / újraküldés)
+    'send_invite_email': sendEmailActions.sendInviteEmail,
+    'send_invite_email_batch': sendEmailActions.sendInviteEmailBatch,
 
     // Group CRUD (A.2 + A.3.6)
     'add_group_member': groupActions.addGroupMember,
@@ -116,6 +124,9 @@ const ACTION_HANDLERS = {
     'backfill_tenant_acl': schemaActions.backfillTenantAcl,
     // 2026-05-07 — userName/userEmail denormalizáció backfill (owner-anywhere).
     'backfill_membership_user_names': schemaActions.backfillMembershipUserNames,
+    // ADR 0010 W2 — invite collection séma-bővítés (4 új mező) + rate-limit collectionök.
+    'bootstrap_invites_schema_v2': schemaActions.bootstrapInvitesSchemaV2,
+    'bootstrap_rate_limit_schema': schemaActions.bootstrapRateLimitSchema,
 
     // Permission set CRUD (A.3 + A.3.6)
     'create_permission_set': permissionSetActions.createPermissionSet,
@@ -452,6 +463,20 @@ module.exports = async function ({ req, res, log, error }) {
         // 500 `misconfigured`-et ad mindenfaj action-re.
         const workflowExtensionsCollectionId = process.env.WORKFLOW_EXTENSIONS_COLLECTION_ID;
 
+        // ADR 0010 W2/W3 (2026-05-08) — invite redesign env vars.
+        //
+        // Mindegyik OPCIONÁLIS (NEM fail-fast):
+        //   - `DASHBOARD_URL`: a Resend e-mail link `${url}/invite?token=...` épít.
+        //     Hiányzik → e-mail kiküldés `failed` (link nem épül).
+        //   - `RESEND_API_KEY`: a Resend SDK auth. Hiányzik → sendOneInviteEmail
+        //     skeleton-stubbal jár (invite létrejön, e-mail NEM ment ki, log warn).
+        //   - `IP_RATE_LIMIT_*_COLLECTION_ID`: ha a 2 collection nincs felvéve, a
+        //     `checkRateLimit` log-warningot ad és átenged — best-effort védelem.
+        const dashboardUrl = process.env.DASHBOARD_URL || '';
+        const resendApiKey = process.env.RESEND_API_KEY || '';
+        const ipRateLimitCountersCollectionId = process.env.IP_RATE_LIMIT_COUNTERS_COLLECTION_ID || '';
+        const ipRateLimitBlocksCollectionId = process.env.IP_RATE_LIMIT_BLOCKS_COLLECTION_ID || '';
+
         // ── Fail-fast env var guard ──
         const missingEnvVars = [];
         if (!databaseId) missingEnvVars.push('DATABASE_ID');
@@ -554,7 +579,12 @@ module.exports = async function ({ req, res, log, error }) {
             articlesCollectionId,
             permissionSetsCollectionId,
             groupPermissionSetsCollectionId,
-            workflowExtensionsCollectionId
+            workflowExtensionsCollectionId,
+            // ADR 0010 W2/W3 (opcionális, ld. fent)
+            dashboardUrl,
+            resendApiKey,
+            ipRateLimitCountersCollectionId,
+            ipRateLimitBlocksCollectionId
         };
         const ctx = {
             databases,
@@ -569,6 +599,7 @@ module.exports = async function ({ req, res, log, error }) {
             log,
             error,
             res,
+            req, // ADR 0010 W2 — rate-limit middleware (extractClientIp) a x-forwarded-for headert olvassa
             fail,
             permissionEnv,
             permissionContext,
