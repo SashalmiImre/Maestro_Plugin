@@ -81,8 +81,32 @@ async function _createInviteCore(ctx, params) {
     );
 
     if (existingPending.documents.length > 0) {
-        const existing = existingPending.documents[0];
+        let existing = existingPending.documents[0];
         if (new Date(existing.expiresAt) > new Date()) {
+            // 2026-05-09 (Codex stop-time #2 fix — customMessage durability):
+            // ha az admin új `customMessage`-et adott meg az `existing` ágon,
+            // persistáljuk az invite doc-on is. Eddig csak az e-mail rendert
+            // override-oltuk (241f15c), de a tárolt érték a régi maradt →
+            // a `send_invite_email` action vagy a UI a régi szöveget mutatja.
+            // Üres string === explicit "nincs üzenet"; null/undefined ===
+            // "ne változtass". A customMessage paraméter már normalizált
+            // (`normalizeCustomMessage` `null`-ozza az üres trimmed-stringet).
+            if (customMessage !== undefined && customMessage !== existing.customMessage) {
+                try {
+                    existing = await databases.updateDocument(
+                        env.databaseId,
+                        env.invitesCollectionId,
+                        existing.$id,
+                        { customMessage: customMessage }
+                    );
+                    log(`[CreateCore] Idempotens — customMessage frissítve: invite ${existing.$id}`);
+                } catch (updateErr) {
+                    // Non-blocking: az e-mail rendert már override-oljuk az
+                    // `_autoSendInviteEmail` szintjén, csak a perzisztens UI-state
+                    // fog drift-elni. Loggoljuk.
+                    log(`[CreateCore] Idempotens — customMessage update bukott (non-blocking): ${updateErr.message}`);
+                }
+            }
             log(`[CreateCore] Idempotens — meglévő pending invite ${existing.$id} (${email})`);
             return {
                 ok: true,
@@ -149,7 +173,22 @@ async function _createInviteCore(ctx, params) {
                 ]
             );
             if (raceWinner.documents.length > 0) {
-                const existing = raceWinner.documents[0];
+                let existing = raceWinner.documents[0];
+                // 2026-05-09 (Codex stop-time #2 fix): customMessage durability
+                // a race-winner ágon is. (Lásd a fő existing-ágon a hosszabb komment.)
+                if (customMessage !== undefined && customMessage !== existing.customMessage) {
+                    try {
+                        existing = await databases.updateDocument(
+                            env.databaseId,
+                            env.invitesCollectionId,
+                            existing.$id,
+                            { customMessage: customMessage }
+                        );
+                        log(`[CreateCore] Race — customMessage frissítve: invite ${existing.$id}`);
+                    } catch (updateErr) {
+                        log(`[CreateCore] Race — customMessage update bukott (non-blocking): ${updateErr.message}`);
+                    }
+                }
                 log(`[CreateCore] Race — meglévő pending invite ${existing.$id} (${email})`);
                 return {
                     ok: true,

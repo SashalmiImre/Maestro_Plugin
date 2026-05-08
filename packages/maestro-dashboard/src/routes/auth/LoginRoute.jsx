@@ -27,7 +27,7 @@ const LABELS = {
     tabRegister: 'Regisztráció',
     verifiedNotice: 'E-mail megerősítve. Most már bejelentkezhetsz.',
     resetNotice: 'Jelszavad sikeresen módosítva. Jelentkezz be az új jelszóval.',
-    emailLabel: 'Email',
+    emailLabel: 'E-mail cím',
     emailPlaceholder: 'pelda@email.com',
     passwordLabel: 'Jelszó',
     passwordPlaceholder: '••••••••',
@@ -36,11 +36,21 @@ const LABELS = {
     forgotLink: 'Elfelejtett jelszó?',
     submitIdle: 'Belépés',
     submitBusy: 'Belépés...',
-    errorInvalidCredentials: 'Hibás email vagy jelszó.',
+    errorInvalidCredentials: 'Hibás e-mail vagy jelszó.',
+    // 2026-05-09 (E2E user feedback): Chrome néha a felhasználó nevét húzza
+    // be az email mezőbe (autofill cache mismatch). Ha az input nem
+    // email-szerű, visszajelzést adunk a Belépés előtt, hogy a user
+    // észrevegye a hibát mielőtt 401-et kap a szervertől.
+    errorEmailFormat: 'Az e-mail-cím @-jelet kell tartalmazzon. (Tipp: a Chrome néha a nevedet húzza be ide automatikusan — írd át a teljes e-mail-címedre.)',
     errorUnverified: 'Hibás bejelentkezési adatok vagy megerősítetlen fiók.',
     errorActiveSession: 'Már van aktív bejelentkezés. Frissítsd az oldalt.',
     errorGeneric: 'Bejelentkezési hiba. Próbáld újra később.',
 };
+
+// Egyszerű email-format-check (NEM teljes RFC, csak alap heuristic).
+// Tartalmaz @-et, és előtte/utána van legalább 1 karakter, valamint a
+// utána van pont. A részletes validáció a szervernél történik.
+const EMAIL_LIKE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 export default function LoginRoute() {
     const { login } = useAuth();
@@ -58,10 +68,20 @@ export default function LoginRoute() {
     async function handleSubmit(e) {
         e.preventDefault();
         setError('');
+
+        // 2026-05-09 (E2E user feedback) — előzetes email-formátum check.
+        // Chrome autofill néha a nevet húzza be az email mezőbe; egy
+        // korai client-side hint a usernek tisztább, mint egy szerver-401.
+        const trimmedEmail = email.trim();
+        if (!EMAIL_LIKE.test(trimmedEmail)) {
+            setError(LABELS.errorEmailFormat);
+            return;
+        }
+
         setIsSubmitting(true);
 
         try {
-            await login(email.trim(), password);
+            await login(trimmedEmail, password);
             // Bejelentkezés után visszanavigálunk az eredeti deep link-re
             // (pathname + search + hash mind megőrződik), vagy a `/`-ra ha
             // nem onnan jött a user.
