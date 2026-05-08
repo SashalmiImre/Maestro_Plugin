@@ -21,7 +21,7 @@ const permissions = require('../permissions.js');
 // ADR 0010 W2/W3 — meghívási flow redesign:
 //   - sendOneInviteEmail: auto-send a sikeres createInvite után (best-effort)
 //   - checkRateLimit: brute-force védelem az acceptInvite-on (IP-rate-limit)
-const { sendOneInviteEmail } = require('./sendEmail.js');
+const { sendOneInviteEmail, RESEND_COOLDOWN_MS } = require('./sendEmail.js');
 const { checkRateLimit } = require('../helpers/rateLimit.js');
 
 const MAX_BATCH_INVITES = 20;
@@ -92,7 +92,12 @@ async function _createInviteCore(ctx, params) {
                 expiresAt: existing.expiresAt,
                 role: existing.role,
                 email: existing.email,
-                organizationId
+                organizationId,
+                // 2026-05-09 (E2E smoke #2 fix): a hívó (createInvite /
+                // createBatchInvites) auto-send-elhet az idempotens ágon is,
+                // 60s cooldown védelemmel. Ehhez kell a teljes invite doc
+                // (lastSentAt, customMessage stb.).
+                invite: existing
             };
         }
         // Lejárt — frissítjük expired-re és új invite-ot hozunk létre
@@ -154,7 +159,8 @@ async function _createInviteCore(ctx, params) {
                     expiresAt: existing.expiresAt,
                     role: existing.role,
                     email: existing.email,
-                    organizationId
+                    organizationId,
+                    invite: existing  // 2026-05-09 — auto-send-hez
                 };
             }
         }
@@ -174,6 +180,28 @@ async function _createInviteCore(ctx, params) {
         organizationId,
         invite // teljes invite doc — auto-send-hez kell
     };
+}
+
+/**
+ * 2026-05-09 (E2E smoke #2 fix): cooldown-checked auto-send az idempotens
+ * (action='existing') ágra. A `created` esetén lastSentAt=null → mindig megy,
+ * `existing` esetén pedig csak ha a 60s cooldown letelt. Visszatér:
+ *   - `'sent'`: e-mail kiment (deliveryStatus=sent)
+ *   - `'failed'`: kiment-próba bukott (deliveryStatus=failed)
+ *   - `'cooldown'`: cooldown alatt vagyunk, skipped (deliveryStatus=cooldown)
+ *   - `'skipped'`: nincs invite doc (régi action vagy hibás return)
+ */
+async function _maybeAutoSendInviteEmail(ctx, result, organizationName, inviterName, inviterEmail) {
+    if (!result.invite) return 'skipped';
+    if (result.action === 'existing' && result.invite.lastSentAt) {
+        const elapsed = Date.now() - new Date(result.invite.lastSentAt).getTime();
+        if (elapsed < RESEND_COOLDOWN_MS) {
+            ctx.log?.(`[AutoSend] Cooldown — invite ${result.invite.$id} (${result.invite.email}), letelt: ${Math.ceil((RESEND_COOLDOWN_MS - elapsed)/1000)}s múlva`);
+            return 'cooldown';
+        }
+    }
+    const sendResult = await _autoSendInviteEmail(ctx, result.invite, organizationName, inviterName, inviterEmail);
+    return sendResult.success ? 'sent' : 'failed';
 }
 
 /**
@@ -257,11 +285,13 @@ async function createInvite(ctx) {
         organizationId, email, role, expiryDays, customMessage
     });
 
-    // Auto-send a sikeres új invite-ra (best-effort, NEM propagálja a hibát).
-    // Az 'existing' eseteknél nem küldünk újra — a frontend külön resend
-    // gombbal indíthat send_invite_email action-t.
+    // Auto-send: 2026-05-09 E2E smoke #2 fix — az 'existing' ágon is auto-send,
+    // a `_maybeAutoSendInviteEmail` 60s cooldown-nal védi a spam ellen. A user
+    // mentális modellje: „rákattintok a Send-re, megy az e-mail" — a korábbi
+    // semmittevés idempotens ágon zavart okozott (lásd execution log
+    // 21:58:45-kor: `[CreateCore] Idempotens` után NINCS [SendEmail] log).
     let deliveryStatus = null;
-    if (result.action === 'created' && result.invite) {
+    if (result.invite) {
         // Org és inviter denormalizáció az e-mailhez
         let organizationName = 'a szervezeted';
         let inviterName = null;
@@ -284,8 +314,7 @@ async function createInvite(ctx) {
                 log(`[Create] inviter lookup hiba (non-blocking): ${err.message}`);
             }
         }
-        const sendResult = await _autoSendInviteEmail(ctx, result.invite, organizationName, inviterName, inviterEmail);
-        deliveryStatus = sendResult.success ? 'sent' : 'failed';
+        deliveryStatus = await _maybeAutoSendInviteEmail(ctx, result, organizationName, inviterName, inviterEmail);
     }
 
     return res.json({
@@ -398,18 +427,16 @@ async function createBatchInvites(ctx) {
                 const result = await _createInviteCore(ctx, {
                     organizationId, email, role, expiryDays, customMessage
                 });
-                let deliveryStatus = null;
-                if (result.action === 'created' && result.invite) {
-                    const sendResult = await _autoSendInviteEmail(ctx, result.invite, organizationName, inviterName, inviterEmail);
-                    deliveryStatus = sendResult.success ? 'sent' : 'failed';
-                }
+                // 2026-05-09 E2E smoke #2 fix — `existing` action-ön is auto-send,
+                // 60s cooldown-nal. (Lásd `_maybeAutoSendInviteEmail`.)
+                const deliveryStatus = await _maybeAutoSendInviteEmail(ctx, result, organizationName, inviterName, inviterEmail);
                 return {
                     email,
                     status: 'ok',
                     action: result.action,
                     inviteId: result.inviteId,
                     expiresAt: result.expiresAt,
-                    ...(deliveryStatus ? { deliveryStatus } : {})
+                    ...(deliveryStatus && deliveryStatus !== 'skipped' ? { deliveryStatus } : {})
                 };
             } catch (err) {
                 ctx.error?.(`[CreateBatch] ${email} hiba: ${err.message}`);

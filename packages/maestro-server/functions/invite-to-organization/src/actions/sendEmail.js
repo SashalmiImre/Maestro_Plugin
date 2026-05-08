@@ -312,6 +312,10 @@ module.exports = {
     sendInviteEmail,
     // ADR 0010 W3 — actions/invites.js auto-send flow használja:
     sendOneInviteEmail,
+    // 2026-05-09 (E2E smoke #2 fix): a createBatchInvites idempotens
+    // ágán is meghívjuk a sendOneInviteEmail-t, de a 60s cooldown-t
+    // ott is alkalmaznunk kell. A konstans single-source-on van itt.
+    RESEND_COOLDOWN_MS,
     // Helper export-ok teszteléshez:
     _renderTemplate: renderTemplate,
     _formatDateHu: formatDateHu,
