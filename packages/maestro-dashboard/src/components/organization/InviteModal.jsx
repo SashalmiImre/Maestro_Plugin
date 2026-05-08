@@ -72,7 +72,7 @@ function errorMessage(code) {
  * @param {Function} [props.onInviteSent] — sikeres kiküldés utáni callback
  */
 export default function InviteModal({ organizationId, onInviteSent }) {
-    const { createInvite } = useAuth();
+    const { createBatchInvites } = useAuth();
     const { closeModal } = useModal();
     const { showToast } = useToast();
 
@@ -164,52 +164,41 @@ export default function InviteModal({ organizationId, onInviteSent }) {
         setIsSubmitting(true);
         setSubmitError('');
 
-        // Frontend-batch: 10-es Promise.all csomagokban (W2 élesítéskor egyetlen
-        // createBatchInvites CF-action lép a helyébe — egy round-trip).
-        const perEmail = [];
+        // ADR 0010 W2 — egy CF round-trip a teljes batch-re.
+        // A backend (createBatchInvites action) iterál 10-es Promise.all
+        // csomagokban + per-email auto-send-ekkel. Visszaad egy results
+        // tömböt (`{email, status: 'ok'|'error', deliveryStatus?, ...}`).
         try {
-            for (let i = 0; i < finalEmails.length; i += FRONTEND_BATCH_SIZE) {
-                const slice = finalEmails.slice(i, i + FRONTEND_BATCH_SIZE);
-                const sliceResults = await Promise.all(slice.map(async (email) => {
-                    try {
-                        // SKELETON: az `expiryDays` paramétert W2 élesítéskor adjuk át
-                        await createInvite(
-                            organizationId,
-                            email,
-                            role,
-                            message || undefined
-                            // , expiryDays  // ← W2 élesítés
-                        );
-                        return { email, status: 'ok' };
-                    } catch (err) {
-                        return {
-                            email,
-                            status: 'error',
-                            error: errorMessage(err?.message || err?.code || '')
-                        };
-                    }
-                }));
-                perEmail.push(...sliceResults);
+            const response = await createBatchInvites(
+                organizationId,
+                finalEmails,
+                role,
+                message || undefined,
+                expiryDays
+            );
+            if (!isMountedRef.current) return;
+            const perEmail = (response.results || []).map(r => ({
+                email: r.email,
+                status: r.status,
+                error: r.status === 'error' ? errorMessage(r.reason || '') : undefined,
+                deliveryStatus: r.deliveryStatus
+            }));
+            setResults({
+                successCount: response.successCount || 0,
+                failCount: response.failCount || 0,
+                perEmail
+            });
+            setIsSubmitting(false);
+            if ((response.successCount || 0) > 0) {
+                showToast(`${response.successCount} meghívó kiküldve.`, 'success');
+                if (onInviteSent) {
+                    try { await onInviteSent(); } catch { /* non-blocking */ }
+                }
             }
         } catch (err) {
             if (isMountedRef.current) {
                 setSubmitError(errorMessage(err?.message || err?.code || ''));
-            }
-        } finally {
-            if (isMountedRef.current) {
-                const successCount = perEmail.filter(r => r.status === 'ok').length;
-                setResults({
-                    successCount,
-                    failCount: perEmail.length - successCount,
-                    perEmail
-                });
                 setIsSubmitting(false);
-                if (successCount > 0) {
-                    showToast(`${successCount} meghívó kiküldve.`, 'success');
-                    if (onInviteSent) {
-                        try { await onInviteSent(); } catch { /* non-blocking */ }
-                    }
-                }
             }
         }
     }
@@ -246,10 +235,16 @@ export default function InviteModal({ organizationId, onInviteSent }) {
                         }}>
                             <span>{r.email}</span>
                             <span style={{
-                                color: r.status === 'ok' ? 'var(--c-success)' : 'var(--c-error)',
+                                color: r.status === 'ok'
+                                    ? (r.deliveryStatus === 'failed' ? 'var(--c-error)' : 'var(--c-success)')
+                                    : 'var(--c-error)',
                                 fontSize: 11
                             }}>
-                                {r.status === 'ok' ? 'Kiküldve' : (r.error || 'Hiba')}
+                                {r.status === 'ok'
+                                    ? (r.deliveryStatus === 'failed'
+                                        ? 'Létrejött, e-mail hiba'
+                                        : (r.deliveryStatus === 'sent' ? 'Kiküldve' : 'Létrejött'))
+                                    : (r.error || 'Hiba')}
                             </span>
                         </li>
                     ))}

@@ -846,14 +846,20 @@ export function AuthProvider({ children }) {
      *
      * @returns {Promise<{inviteId: string, token: string, expiresAt: string}>}
      */
-    const createInvite = useCallback(async (organizationId, email, role = 'member', message) => {
+    const createInvite = useCallback(async (organizationId, email, role = 'member', message, expiryDays) => {
         if (!user?.$id) {
             throw new Error('not_authenticated');
         }
 
         const response = await callInviteFunction(
             'create',
-            { organizationId, email, role, ...(message ? { message } : {}) },
+            {
+                organizationId,
+                email,
+                role,
+                ...(message ? { message } : {}),
+                ...(expiryDays !== undefined && expiryDays !== null ? { expiryDays } : {})
+            },
             'create_failed'
         );
 
@@ -863,8 +869,59 @@ export function AuthProvider({ children }) {
             expiresAt: response.expiresAt,
             role: response.role,
             email: response.email,
-            organizationId: response.organizationId
+            organizationId: response.organizationId,
+            // ADR 0010 W3 — auto-send kimenete (`'sent'` | `'failed'` | undefined ha existing/skeleton)
+            deliveryStatus: response.deliveryStatus
         };
+    }, [user?.$id]);
+
+    /**
+     * ADR 0010 W2 — Batch invite createolás (multi-invite).
+     *
+     * A frontend egyetlen modalból több e-mailt küldhet (max 20). A CF
+     * iterál 10-es Promise.all batchekben, és visszaad egy per-email
+     * status listát (`results: [{email, status: 'ok'|'error', ...}]`).
+     *
+     * Az auto-send minden sikeres invite-on automatikusan megtörténik
+     * (best-effort) — a `deliveryStatus` a per-email result-ban jön vissza.
+     *
+     * @param {string} organizationId
+     * @param {string[]} emails — max 20, lower-case dedupolva, EMAIL_REGEX
+     * @param {'member'|'admin'} role
+     * @param {string} [message]
+     * @param {number} [expiryDays] — 1 / 3 / 7 (default 7)
+     * @returns {Promise<{total, successCount, failCount, results: Array}>}
+     */
+    const createBatchInvites = useCallback(async (organizationId, emails, role = 'member', message, expiryDays) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'create_batch_invites',
+            {
+                organizationId,
+                emails,
+                role,
+                ...(message ? { message } : {}),
+                ...(expiryDays !== undefined && expiryDays !== null ? { expiryDays } : {})
+            },
+            'create_batch_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * ADR 0010 W3 — Pending invite e-mail újraküldés (admin gomb a UsersTab
+     * függő meghívók listán). Ha a kézbesítés sikertelen volt vagy a
+     * meghívott elveszítette a linket, az admin re-trigger-elheti.
+     *
+     * @param {string} inviteId
+     * @returns {Promise<{success: boolean, action: 'sent', skeleton?: boolean}>}
+     */
+    const resendInviteEmail = useCallback(async (inviteId) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'send_invite_email',
+            { inviteId },
+            'invite_resend_failed'
+        );
     }, [user?.$id]);
 
     /**
@@ -1405,6 +1462,8 @@ export function AuthProvider({ children }) {
         declineInvite,
         leaveOrganization,
         createInvite,
+        createBatchInvites,
+        resendInviteEmail,
         deleteOrganization,
         deleteEditorialOffice,
         createEditorialOffice,
@@ -1455,6 +1514,8 @@ export function AuthProvider({ children }) {
         declineInvite,
         leaveOrganization,
         createInvite,
+        createBatchInvites,
+        resendInviteEmail,
         deleteOrganization,
         deleteEditorialOffice,
         createEditorialOffice,

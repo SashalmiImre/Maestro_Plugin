@@ -13,8 +13,10 @@
 
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useAuth } from '../../contexts/AuthContext.jsx';
+import { useModal } from '../../contexts/ModalContext.jsx';
 import { DASHBOARD_URL } from '../../config.js';
 import { useCopyDialog } from '../CopyDialog.jsx';
+import InviteModal from './InviteModal.jsx';
 
 function errorMessage(reason) {
     if (typeof reason !== 'string') return 'Ismeretlen hiba történt.';
@@ -26,6 +28,9 @@ function errorMessage(reason) {
     if (reason.includes('insufficient_permission')) return 'Nincs jogosultságod ehhez a művelethez.';
     if (reason.includes('already_member')) return 'A felhasználó már tagja a szervezetnek.';
     if (reason.includes('already_invited')) return 'Ehhez az e-mail címhez már van függőben lévő meghívó.';
+    // ADR 0010 W2/W3 — meghívási flow hibakódok
+    if (reason.includes('rate_limited')) return 'Túl sok próbálkozás — próbáld meg később.';
+    if (reason.includes('invite_resend_failed')) return 'A meghívó újraküldése sikertelen. Próbáld újra később.';
     // 2026-05-07: org-role változtatáshoz tartozó hibakódok.
     if (reason.includes('cannot_change_own_role')) {
         return 'A saját szerepköröd nem módosíthatod. Egy másik tulajdonosnak kell elvégeznie.';
@@ -54,6 +59,18 @@ function roleLabel(role) {
         case 'admin': return 'Admin';
         case 'member': return 'Tag';
         default: return role;
+    }
+}
+
+/** ADR 0010 W3 — meghívó kézbesítési-status badge címke + szín. */
+function deliveryStatusBadge(status) {
+    switch (status) {
+        case 'sent':      return { label: 'Kiküldve',      color: 'var(--text-secondary)', bg: 'var(--bg-elevated)' };
+        case 'delivered': return { label: 'Kézbesítve',    color: 'var(--c-success)',      bg: 'var(--bg-elevated)' };
+        case 'bounced':   return { label: 'Visszapattant', color: 'var(--c-error)',        bg: 'var(--bg-elevated)' };
+        case 'failed':    return { label: 'Kézbesítési hiba', color: 'var(--c-error)',     bg: 'var(--bg-elevated)' };
+        case 'pending':   return { label: 'Várakozik',     color: 'var(--text-muted)',     bg: 'var(--bg-elevated)' };
+        default:          return null; // legacy invite — nincs status mező
     }
 }
 
@@ -92,13 +109,10 @@ export default function UsersTab({
     onInviteSent,
     onMembersRefresh
 }) {
-    const { user, createInvite, changeOrganizationMemberRole } = useAuth();
+    const { user, resendInviteEmail, changeOrganizationMemberRole } = useAuth();
+    const { openModal } = useModal();
     const copyDialog = useCopyDialog();
 
-    const [inviteEmail, setInviteEmail] = useState('');
-    const [inviteRole, setInviteRole] = useState('member');
-    const [inviteMessage, setInviteMessage] = useState('');
-    const [inviteSuccess, setInviteSuccess] = useState('');
     const [actionError, setActionError] = useState('');
     const [actionPending, setActionPending] = useState(null);
     const [copiedId, setCopiedId] = useState(null);
@@ -112,34 +126,28 @@ export default function UsersTab({
 
     const grouped = useMemo(() => groupMembersByRole(members), [members]);
 
-    async function handleInvite(e) {
-        e.preventDefault();
-        const trimmedEmail = inviteEmail.trim().toLowerCase();
-        if (!trimmedEmail) return;
+    /**
+     * ADR 0010 W2 — InviteModal-launcher. A meglévő inline form
+     * lecserélődött egy felugró ablakra, amely multi-invite + lejárat-
+     * választással + üzenettel támogatja a flow-t.
+     */
+    function handleOpenInviteModal() {
+        openModal(
+            <InviteModal organizationId={org.$id} onInviteSent={onInviteSent} />,
+            { size: 'md', title: 'Új meghívó', closeOnBackdrop: false }
+        );
+    }
 
-        setActionPending('invite');
+    /**
+     * ADR 0010 W3 — pending invite e-mail újraküldése (admin gomb a függő
+     * meghívók listán). A CF a `lastSentAt` és `lastDeliveryStatus` mezőket
+     * frissíti, a Realtime cross-tab szinkron a UI-t.
+     */
+    async function handleResendInvite(invite) {
+        setActionPending(`resend:${invite.$id}`);
         setActionError('');
-        setInviteSuccess('');
-
         try {
-            const result = await createInvite(
-                org.$id,
-                trimmedEmail,
-                inviteRole,
-                inviteMessage.trim() || undefined
-            );
-            const link = `${DASHBOARD_URL}/invite?token=${result.token}`;
-
-            try {
-                await navigator.clipboard.writeText(link);
-                setInviteSuccess('Meghívó link a vágólapra másolva!');
-            } catch {
-                setInviteSuccess(`Meghívó link: ${link}`);
-            }
-
-            setInviteEmail('');
-            setInviteRole('member');
-            setInviteMessage('');
+            await resendInviteEmail(invite.$id);
             if (onInviteSent) await onInviteSent();
         } catch (err) {
             setActionError(errorMessage(err.message || err.code || ''));
@@ -173,7 +181,6 @@ export default function UsersTab({
 
         setActionPending(`role:${member.$id}`);
         setActionError('');
-        setInviteSuccess('');
 
         try {
             await changeOrganizationMemberRole(org.$id, member.userId, newRole);
@@ -298,71 +305,32 @@ export default function UsersTab({
                 <div className="login-error" style={{ marginBottom: 12 }}>{actionError}</div>
             )}
 
-            {/* ═══ Felhasználó meghívása ═══ */}
+            {/* ═══ Felhasználó meghívása (ADR 0010 W2 — modal-launcher gomb) ═══ */}
             {isOrgAdmin && (
-                <div style={{ marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
-                    <h3 style={{ margin: '0 0 8px 0', fontSize: 14, fontWeight: 600 }}>
-                        Felhasználó meghívása
-                    </h3>
-
-                    <form onSubmit={handleInvite} style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                        <input
-                            type="email"
-                            placeholder="E-mail cím"
-                            value={inviteEmail}
-                            onChange={e => setInviteEmail(e.target.value)}
-                            disabled={!!actionPending}
-                            required
-                            style={{
-                                flex: '1 1 200px', fontSize: 12, padding: '6px 8px',
-                                background: 'var(--bg-base)', color: 'var(--text-primary)', border: '1px solid var(--outline-variant)',
-                                borderRadius: 4
-                            }}
-                        />
-                        <select
-                            value={inviteRole}
-                            onChange={e => setInviteRole(e.target.value)}
-                            disabled={!!actionPending}
-                            style={{
-                                fontSize: 12, padding: '6px 8px',
-                                background: 'var(--bg-base)', color: 'var(--text-primary)', border: '1px solid var(--outline-variant)',
-                                borderRadius: 4
-                            }}
-                        >
-                            <option value="member">Tag</option>
-                            <option value="admin">Admin</option>
-                        </select>
-                        <textarea
-                            placeholder="Opcionális üzenet a meghívottnak"
-                            value={inviteMessage}
-                            onChange={e => setInviteMessage(e.target.value)}
-                            disabled={!!actionPending}
-                            maxLength={500}
-                            rows={2}
-                            style={{
-                                flex: '1 1 100%', fontSize: 12, padding: '6px 8px',
-                                background: 'var(--bg-base)', color: 'var(--text-primary)', border: '1px solid var(--outline-variant)',
-                                borderRadius: 4, resize: 'vertical', fontFamily: 'inherit'
-                            }}
-                        />
-                        <button
-                            type="submit"
-                            disabled={!!actionPending}
-                            style={{
-                                background: 'var(--accent-solid)', color: '#fff', border: 'none',
-                                padding: '6px 14px', borderRadius: 4, cursor: 'pointer',
-                                fontSize: 12
-                            }}
-                        >
-                            {actionPending === 'invite' ? '...' : 'Meghívó küldése'}
-                        </button>
-                    </form>
-
-                    {inviteSuccess && (
-                        <div style={{ color: 'var(--c-success)', fontSize: 12, marginTop: 6 }}>
-                            {inviteSuccess}
-                        </div>
-                    )}
+                <div style={{
+                    marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 16,
+                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12
+                }}>
+                    <div>
+                        <h3 style={{ margin: '0 0 4px 0', fontSize: 14, fontWeight: 600 }}>
+                            Felhasználó meghívása
+                        </h3>
+                        <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>
+                            E-mail meghívót küldhetsz egy vagy több címre, választható lejárattal.
+                        </p>
+                    </div>
+                    <button
+                        type="button"
+                        onClick={handleOpenInviteModal}
+                        disabled={!!actionPending}
+                        style={{
+                            background: 'var(--accent-solid)', color: '#fff', border: 'none',
+                            padding: '8px 16px', borderRadius: 4, cursor: actionPending ? 'wait' : 'pointer',
+                            fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap'
+                        }}
+                    >
+                        + Új meghívó
+                    </button>
                 </div>
             )}
 
@@ -373,35 +341,66 @@ export default function UsersTab({
                         Függő meghívók <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 12 }}>({pendingInvites.length})</span>
                     </h3>
                     <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                        {pendingInvites.map(inv => (
-                            <li key={inv.$id} style={{
-                                display: 'flex', alignItems: 'center', gap: 8,
-                                fontSize: 13, padding: '4px 0'
-                            }}>
-                                <span>{inv.email}</span>
-                                <span style={{
-                                    fontSize: 10, color: 'var(--text-muted)', background: 'var(--bg-elevated)',
-                                    padding: '1px 6px', borderRadius: 3
+                        {pendingInvites.map(inv => {
+                            const badge = deliveryStatusBadge(inv.lastDeliveryStatus);
+                            const isResending = actionPending === `resend:${inv.$id}`;
+                            return (
+                                <li key={inv.$id} style={{
+                                    display: 'flex', alignItems: 'center', gap: 8,
+                                    fontSize: 13, padding: '4px 0'
                                 }}>
-                                    {roleLabel(inv.role)}
-                                </span>
-                                <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>
-                                    Lejár: {new Date(inv.expiresAt).toLocaleDateString('hu-HU')}
-                                </span>
-                                <button
-                                    onClick={() => handleCopyLink(inv)}
-                                    disabled={!!actionPending}
-                                    style={{
-                                        marginLeft: 'auto', background: 'none',
-                                        border: '1px solid var(--outline-variant)', color: 'var(--text-secondary)',
-                                        padding: '2px 8px', borderRadius: 4, cursor: 'pointer',
-                                        fontSize: 11
-                                    }}
-                                >
-                                    {copiedId === inv.$id ? 'Másolva!' : 'Link másolása'}
-                                </button>
-                            </li>
-                        ))}
+                                    <span>{inv.email}</span>
+                                    <span style={{
+                                        fontSize: 10, color: 'var(--text-muted)', background: 'var(--bg-elevated)',
+                                        padding: '1px 6px', borderRadius: 3
+                                    }}>
+                                        {roleLabel(inv.role)}
+                                    </span>
+                                    {/* ADR 0010 W3 — kézbesítési state badge (csak ha a CF visszaadta) */}
+                                    {badge && (
+                                        <span
+                                            title={inv.lastDeliveryError || badge.label}
+                                            style={{
+                                                fontSize: 10, color: badge.color, background: badge.bg,
+                                                padding: '1px 6px', borderRadius: 3
+                                            }}
+                                        >
+                                            {badge.label}
+                                        </span>
+                                    )}
+                                    <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>
+                                        Lejár: {new Date(inv.expiresAt).toLocaleDateString('hu-HU')}
+                                    </span>
+                                    <button
+                                        onClick={() => handleResendInvite(inv)}
+                                        disabled={!!actionPending}
+                                        title="E-mail újraküldése"
+                                        style={{
+                                            marginLeft: 'auto', background: 'none',
+                                            border: '1px solid var(--outline-variant)', color: 'var(--text-secondary)',
+                                            padding: '2px 8px', borderRadius: 4,
+                                            cursor: actionPending ? 'wait' : 'pointer',
+                                            fontSize: 11
+                                        }}
+                                    >
+                                        {isResending ? 'Küldés…' : 'Újraküldés'}
+                                    </button>
+                                    <button
+                                        onClick={() => handleCopyLink(inv)}
+                                        disabled={!!actionPending}
+                                        style={{
+                                            background: 'none',
+                                            border: '1px solid var(--outline-variant)', color: 'var(--text-secondary)',
+                                            padding: '2px 8px', borderRadius: 4,
+                                            cursor: actionPending ? 'wait' : 'pointer',
+                                            fontSize: 11
+                                        }}
+                                    >
+                                        {copiedId === inv.$id ? 'Másolva!' : 'Link másolása'}
+                                    </button>
+                                </li>
+                            );
+                        })}
                     </ul>
                 </div>
             )}
