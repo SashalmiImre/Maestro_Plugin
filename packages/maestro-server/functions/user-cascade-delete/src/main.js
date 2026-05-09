@@ -51,26 +51,34 @@ const BATCH_LIMIT = 100;
 function buildOrgTeamId(organizationId) { return `org_${organizationId}`; }
 function buildOfficeTeamId(officeId) { return `office_${officeId}`; }
 
-// ── Helper: listDocuments + cascade-delete pattern ──────────────────────
-// 2026-05-09 (CF execution log debug): a korábbi cursorAfter-es paginálás
-// `request cannot have request body` hibával bukott. A `cascade-delete`
-// CF-fel azonos pattern-t alkalmazzuk: listDocuments egy batch-re,
-// majd minden iterációnál újra listDocuments (deleted docs eltűnnek a
-// következő list eredményből, így természetes lapozást kapunk).
+// ── Helper: paginated listDocuments userId-szűréssel ───────────────────
+// 2026-05-09 (Codex stop-time #8): a `da54129` egyszerűsítés eltávolította
+// a paginálást → ha egy user-nek >100 membership-je van egy típusból, a
+// `da54129` csak az első 100-at takarítja, a többi orphan marad. Most
+// visszaállítjuk a `cursorAfter`-paginálást — a v3 deploy alatt érzékelt
+// `request cannot have request body` hiba **NEM** a cursor miatt jött,
+// hanem a `fra.cloud.appwrite.io` regionális endpoint-tól (fix: a setup-ban
+// a default `cloud.appwrite.io`-ra állítva).
 //
-// FONTOS: a felhasználói scope-ban ritkán van >100 membership egy típusból,
-// ezért egyetlen list-call elég gyakorlatban; a függvény mégis lapozott,
-// hogy outlier-eseteket is kezeljen.
+// A `cascade-delete` CF a `delete + re-list` patternt használja, ami nem
+// igényel cursort — ott a list+delete egy iteráción belül történik. Itt
+// szétválasztjuk: Pass 1 list (cache orgIds + ownership), Pass 2 delete.
+// Cursor-paginálás a Pass 1 helyes módja.
 async function listAllByUserId(databases, databaseId, collectionId, userId) {
-    const result = await databases.listDocuments(
-        databaseId,
-        collectionId,
-        [
+    const all = [];
+    let cursor = null;
+    while (true) {
+        const queries = [
             sdk.Query.equal('userId', userId),
             sdk.Query.limit(BATCH_LIMIT)
-        ]
-    );
-    return result.documents;
+        ];
+        if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
+        const result = await databases.listDocuments(databaseId, collectionId, queries);
+        all.push(...result.documents);
+        if (result.documents.length < BATCH_LIMIT) break;
+        cursor = result.documents[result.documents.length - 1].$id;
+    }
+    return all;
 }
 
 async function deleteDocs(databases, databaseId, collectionId, docs, log, error) {
