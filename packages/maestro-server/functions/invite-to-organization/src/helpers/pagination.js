@@ -80,13 +80,14 @@ async function paginateByQuery(databases, databaseId, collectionId, queries, sdk
     const batchSize = options.batchSize || DEFAULT_BATCH_LIMIT;
     const maxRunMs = options.maxRunMs;
     const startedAt = options.startedAt || Date.now();
+    const isOverBudget = () => maxRunMs && (Date.now() - startedAt) > maxRunMs;
     let cursor = options.fromCursor || null;
     let pagesProcessed = 0;
     let total = 0;
     let incomplete = false;
 
     while (true) {
-        if (maxRunMs && (Date.now() - startedAt) > maxRunMs) {
+        if (isOverBudget()) {
             incomplete = true;
             break;
         }
@@ -105,16 +106,20 @@ async function paginateByQuery(databases, databaseId, collectionId, queries, sdk
             lastDocId,
             totalSoFar: total
         });
-        // Csak akkor advance-oljuk a `lastCursor`-t és a `pagesProcessed`-et,
-        // ha a processor ténylegesen lefutott a teljes oldalra. Egy early-stop
-        // jelzés (`false` / `{stop:true}`) esetén a current cursor az ELŐZŐ
-        // page lastDocId-ja, mert ezen az oldalon a feldolgozás megszakadt
-        // (resume innen kezdődik az új futáson).
+        // Early-stop esetén a `lastCursor` az ELŐZŐ page-é marad — a feldolgozás
+        // ezen az oldalon megszakadt, resume innen kezdődik.
         if (result === false || (result && result.stop === true)) break;
 
         cursor = lastDocId;
         pagesProcessed++;
         if (batch.documents.length < batchSize) break;
+
+        // Post-processor budget-check: enélkül a loop-start-only check
+        // 1-page túlhaladást engedne (page-fetch + processor a deadline után).
+        if (isOverBudget()) {
+            incomplete = true;
+            break;
+        }
     }
 
     return { pages: pagesProcessed, total, lastCursor: cursor, incomplete };

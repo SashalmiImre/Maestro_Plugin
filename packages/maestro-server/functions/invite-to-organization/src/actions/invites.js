@@ -99,9 +99,13 @@ async function _archiveInvite(ctx, invite, finalStatus, finalReason, finalUserId
         return { status: 'env_missing' };
     }
 
-    // G.2 (Phase 2, 2026-05-09): a `deterministicId`-t a try-blokkon kívül
-    // számítjuk, hogy a 504 timeout recovery probe a catch-ben hozzáférjen.
+    // `deterministicId` a try-blokkon kívül, hogy a recovery probe is lássa.
     const deterministicId = invite.$id;
+
+    // Per-attempt UUID a 504 recovery probe correlation-jéhez (ADR 0011 Harden
+    // Ph3): csak ha az `existing.attemptId` matchel, írhatjuk saját siker
+    // jelzéssel. Legacy doc (attemptId hiányzik) → konzervatív race-loser.
+    const currentAttemptId = crypto.randomUUID();
 
     try {
         const tokenHash = invite.token
@@ -125,7 +129,8 @@ async function _archiveInvite(ctx, invite, finalStatus, finalReason, finalUserId
             lastDeliveryStatus: invite.lastDeliveryStatus || null,
             finalStatus,
             finalReason: finalReason || null,
-            finalAt
+            finalAt,
+            attemptId: currentAttemptId
         };
         // Codex simplify Q1 (2026-05-09): per-finalStatus mező direkt
         // assign — 3 ternary spread helyett 1 if-cascade.
@@ -172,26 +177,23 @@ async function _archiveInvite(ctx, invite, finalStatus, finalReason, finalUserId
             throw createErr;
         }
     } catch (err) {
-        // G.2 (Phase 2, 2026-05-09) — 504 timeout recovery probe.
-        // Egy hálózati hiba / timeout után az Appwrite írás backend-oldalon
-        // lehet, hogy lefutott. A deterministic doc-ID-vel megnézzük: ha
-        // létezik, az előző write nyert — visszahelyettesítjük az `error`-t
-        // `created` (idempotent) vagy `already_exists` (race-loser) jelzésre.
+        // 504 recovery probe — saját siker CSAK attemptId-match esetén
+        // (különben a racer nyert vagy a saját write meg sem érkezett).
         error(`[ArchiveInvite] write hiba (recovery probe következik, invite=${invite.$id}): ${err.message}`);
         try {
             const existing = await databases.getDocument(
                 env.databaseId, inviteHistoryCollectionId, deterministicId
             );
             if (existing && existing.finalStatus) {
-                if (existing.finalStatus === finalStatus) {
-                    log(`[ArchiveInvite] recovery probe: invite=${invite.$id} doc megvan (${finalStatus}) — idempotent created`);
+                if (existing.attemptId === currentAttemptId) {
+                    log(`[ArchiveInvite] recovery probe: invite=${invite.$id} attemptId match (${finalStatus}) — saját write committed`);
                     return { status: 'created', recovered: true };
                 }
-                log(`[ArchiveInvite] recovery probe: invite=${invite.$id} doc megvan más finalStatus-szal (${existing.finalStatus}) — race-loser`);
+                log(`[ArchiveInvite] recovery probe: invite=${invite.$id} doc megvan más attemptId-vel (winner=${existing.finalStatus}) — race-loser`);
                 return { status: 'already_exists', existingFinalStatus: existing.finalStatus, recovered: true };
             }
         } catch (probeErr) {
-            // Probe is bukott — valódi tartós hiba, fall through `error` ágra.
+            // Probe is bukott — valódi tartós hiba.
         }
         return { status: 'error', error: err };
     }
@@ -240,7 +242,7 @@ function _assertCasGateConfigured(ctx) {
 }
 
 async function _archiveAndUpdateExpiredInvite(ctx, invite, reason, contextLabel) {
-    const { databases, env, log } = ctx;
+    const { databases, env, log, error } = ctx;
     const archiveResult = await _archiveInvite(ctx, invite, 'expired', reason);
     if (archiveResult.status === 'already_exists') {
         log(`${contextLabel} invite ${invite.$id} race-loser (winner=${archiveResult.existingFinalStatus || '?'}) — status update skipping`);
@@ -248,6 +250,16 @@ async function _archiveAndUpdateExpiredInvite(ctx, invite, reason, contextLabel)
             updated: false,
             archiveStatus: archiveResult.status,
             existingFinalStatus: archiveResult.existingFinalStatus
+        };
+    }
+    // Csak `created` archive után update-elünk: transient hiba (`env_missing` /
+    // `error`) esetén az invite `pending` marad, a következő opportunista
+    // expire újrapróbálja — különben az audit-rés véglegesedne (ADR 0011).
+    if (archiveResult.status !== 'created') {
+        error(`${contextLabel} invite ${invite.$id} archive nem committed (status=${archiveResult.status}) — status update skipping, retry next time`);
+        return {
+            updated: false,
+            archiveStatus: archiveResult.status
         };
     }
     await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {

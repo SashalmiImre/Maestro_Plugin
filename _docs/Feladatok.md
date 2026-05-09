@@ -872,6 +872,16 @@ A 2026-05-09 session-3 (F+E+G + Harden) NEM zárta le a teljes kockázat-felüle
 - **F.8** strict ACL-szintű invariáns (ADR 0011 — Phase 3 trigger: élesben race-corrupcio incident).
 - **E.6 hívó action-integráció** — `backfill_admin_team_acl` `payload.fromInviteCursor` + `nextCursor` return + a hívó (admin) iteratív retry-pattern. A `paginateByQuery` ready (`maxRunMs` + `fromCursor` + `incomplete`).
 
+#### Phase 2 Harden Ph3 follow-upok (2026-05-09 session-5)
+
+A `5ce596e` Phase 2 commit-on a `/harden` skill 4 fix-et ALKALMAZOTT a Codex baseline + adversarial review-k alapján (ld. [[Naplók/2026-05-09#Session-5 (Harden pass a Phase 2 commit-on, deploy ELŐTT)]] és [[Döntések/0011-cas-gate-and-orphan-guard-invariants]] Harden Ph3 szakaszok). A javítások deploy ELŐTT alkalmazódtak — KÉSZ.
+
+**Halasztott Phase 3 follow-upok**:
+- **CI generator drift** (Codex SHOULD): pre-commit hook (husky/lefthook) + GitHub Actions PR-validator a `check:cf-orphan-guard` + `check:cf-validator` script-ekre. Trigger: ha generator-out-of-sync deploy bug történik. (Phase 3, process-szintű.)
+- **Audit completeness** (Codex DESIGN): a G.5 race-loser audit-loss formálisan pótolható lenne egy "race-attempt-log" collection-nel (mind a két ágat append-only logolja). Trigger: külső compliance-regulátor explicit event-log követelménye (jelenleg nincs). A jelenlegi membership-rekord-alapú reconstruction (G.5) elegendő.
+- **Cursor invalidation** (Codex DESIGN): a `paginateByQuery(fromCursor)` opaque cursor-t használ — ha az adott cursor-doc törlődik a futások között, undefined behavior. Trigger: élesben checkpoint-resume bukik. Mitigation: monotonic sort key + explicit `>` filter — Phase 2.x checkpoint-pattern implementációkor merge-elendő.
+- **CAS-gate config-check vs auth precedence** (Codex DESIGN): az `_assertCasGateConfigured()` az auth ELŐTT fut → unauthorized hívók info-disclosure-t kaphatnak a config-misconfig state-ről. A jelenlegi sorrend a fail-closed elv miatt elfogadható (NEM mehet semmilyen DB-mutáció a CAS-gate hiánya alatt). Trigger: ha info-disclosure security audit ezt explicit ki-jelzi.
+
 ---
 
 ## Kész — hivatkozások

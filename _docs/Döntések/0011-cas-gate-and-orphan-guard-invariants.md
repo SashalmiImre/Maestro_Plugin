@@ -51,19 +51,58 @@ A Phase 1.6 orphan-guard (`getOrgStatus()` → `isOrgWriteBlocked()`) `update-ar
 
 **Mérlegelés**:
 - ACL-szintű write-tilt collection-en (`status='orphaned'` orgon a collection ACL-jét update-elni `[]`-ra) megoldaná a race-t **strict invariánssal** — de minden orphan→active recovery flow kétszeres ACL-rewrite-ot igényelne, és a backfill (`backfill_admin_team_acl`) ACL-rewrite-jával összeütközne.
-- A jelenlegi best-effort guard a praktikus esetben elegendő: az árvulás → recovery flow admin-felügyelt, a race-window 30s-on belüli (F.9 cache TTL).
+- A jelenlegi best-effort guard a praktikus esetben elegendő: az árvulás → recovery flow admin-felügyelt, a race-window minimális (F.9 deny-cache nem növeli; a friss-read minden write-on `active`-state mellett azonnal hat).
 
-**Döntés**: a F.8 strict ACL-szintű invariáns NEM implementálódik a Phase 2-ben. Az app-szintű best-effort guard + F.9 hot-path cache + Codex Konstrukció C invite-szintű CAS-gate (D.3) együtt megfelelő védelmet ad.
+**Döntés**: a F.8 strict ACL-szintű invariáns NEM implementálódik a Phase 2-ben. Az app-szintű best-effort guard + F.9 deny-state-only cache + Codex Konstrukció C invite-szintű CAS-gate (D.3) együtt megfelelő védelmet ad.
 
 **Phase 3 trigger**: ha élesben race-corrupcio incident keletkezik (org-szintű write a `transfer_orphaned_org_ownership` futás közben), revisit ezt az ADR-t és tervezzünk strict ACL-write-tilt invariáns-t.
+
+### Harden Ph3 — F.9 cache deny-state-only refinement (2026-05-09 session-4)
+
+A Codex baseline + adversarial review fail-open windowt azonosított a 30s allow-cache-elésnél:
+
+**Tünet**: ha egy org `active → orphaned` tranzíción keresztül megy, a már-warm CF-instance 30s-ig stale `active`-cache-t ad vissza, és az `update-article` / `set-publication-root-path` átengedi a write-ot, miközben az orphan-guard invariáns szerint blokkolnia kéne.
+
+**Korrekció**: az F.9 cache CSAK deny state-eket (`orphaned`, `archived`) cache-el. Allow states (`active`, `null` legacy) minden write-on fresh `getDocument`. Trade-off: az `active` allow-path nem kap perf benefit-et, de ez az orphan-guard alapinvariánsa — biztonság > perf.
+
+**Codex egyetértés**: mindkét review (baseline + adversarial) MUST-szintű deploy-blockerként azonosította; harden Ph4 javította, a verifikáló Ph6 review tisztának ítélte.
+
+### Harden Ph3 — _archiveAndUpdateExpiredInvite() archive-success-required (2026-05-09 session-4)
+
+A Codex adversarial finding: a `_archiveAndUpdateExpiredInvite()` korábbi viselkedése `env_missing` / `error` archive-eredményen is `expired`-re állította az invite-ot — egy transient timeout vagy probe-bukás véglegesen lezárta volna a state-et megfelelő audit nélkül.
+
+**Korrekció**: csak `created` archive-eredmény után update-el az invite-status. `env_missing` / `error` ágon az invite `pending` marad, a következő opportunista expire újrapróbálja az archive-ot.
+
+**G.4 invariáns érintettség**: az `env_missing` az opportunista expire-on át nem jut el ide — az action-eleji `_assertCasGateConfigured()` 500-zal lefulladna a fő flow-n. Defenzív védelem mégis: ha valami későbbi refaktor megengedne ide `env_missing`-et, a state-of-record konzervatív marad.
+
+### Harden Ph3 — _archiveInvite() per-attempt requestId correlation (2026-05-09 session-4)
+
+A Codex adversarial finding: a 504 recovery probe nem tudta megkülönböztetni a saját write-ját egy concurrent racer-étől — mindkettőnél `existing.finalStatus` és `existing.invite.$id` egyezik, így a probe HAMISAN saját siker tűnt.
+
+**Korrekció**: minden `_archiveInvite()` call generál egy `crypto.randomUUID()` `attemptId`-t, ami a payload mezőjében perszisztálódik. A recovery probe `existing.attemptId === currentAttemptId`-t matcheli; csak match esetén `recovered: true, status: 'created'`. Ha nincs match (vagy missing — pre-fix legacy doc), konzervatív race-loser ágon halad tovább.
+
+**Schema migration**: az `organizationInviteHistory` collection-be új `attemptId` (string, 36 char, optional) oszlop került. Deploy ELŐTT a `bootstrap_invite_history` schema action-t újra futtatni kell (idempotens).
+
+**Korlátok**: a fix csak az ÚJ history docra terjed ki. A pre-fix élesben létrehozott rekordok `attemptId === null` — ezekre a probe konzervatívan race-loser-t mond, így false-positive saját siker NINCS. Visszafelé kompatibilis.
 
 ## Következmények
 
 - **Pozitív**: a CAS-gate konfiguráció hibakonfigurációra explicit 500 `service_misconfigured` hibakódot ad, NEM csendben elvesző audit-rést. Egy újonnan deployolt környezetben a hiányzó env-var azonnal észrevehető a deploy-smoke-on.
-- **Pozitív**: a recovery probe (G.2) elimináli a 504 timeout után az audit-duplikációt és ad-hoc retry-state-corruption esélyt.
-- **Pozitív**: az F.9 hot-path cache 30s TTL-szel a 2 CF DB-load-ját 50-100x csökkenti hot-szakaszon.
+- **Pozitív**: a recovery probe (G.2 + Harden Ph3 attemptId correlation) elimináli a 504 timeout után az audit-duplikációt ÉS a "saját write-nak hisszük a racer-ét" false-positive-et.
+- **Pozitív**: az F.9 deny-state-only cache 30s TTL-szel a már-blokkolt orgokra spórol DB-readet, miközben az allow-state path fail-closed marad.
+- **Pozitív**: a `_archiveAndUpdateExpiredInvite()` archive-success-required: transient hiba esetén az invite `pending` marad, az audit gap NEM véglegesedik.
 - **Negatív**: a state-of-record vs audit-trail divergence egy edge-case-ben race-loser audit-veszteséget enged. Ez kommunikálandó a compliance-team felé (snapshot a membership $createdAt + a denormalizált `acceptedByUserId` alapján).
-- **Negatív**: a F.8 strict invariáns hiányában a 30s-os F.9 cache TTL-t nem szabad megnövelni — különben a recovery flow → orphan-guard késleltetés idiopath race-corrupcio-t engedne.
+- **Negatív**: a F.8 strict invariáns hiányában a deny-cache 30s-os TTL-t nem szabad megnövelni — különben a recovery flow → orphan-guard késleltetés idiopath race-corrupcio-t engedne.
+
+## Halasztott Codex finding-ok (Phase 3 follow-up)
+
+A Harden Ph2 Codex adversarial review két DESIGN-szintű és egy SHOULD-szintű finding-ot talált, amik nem deploy-blockerek, és Phase 3-ra halasztottak:
+
+1. **Generator drift CI** (SHOULD): a `check:cf-orphan-guard` és `check:cf-validator` script-only — nincs pre-commit hook vagy GitHub Actions PR-validator. **Trigger**: ha a vault-ban szerepel egy CF-deploy bug, ami a generator-out-of-sync-ből származik. **Mitigation tervezve**: husky/lefthook pre-commit + GHA workflow.
+2. **Audit completeness** (DESIGN): a G.5 race-loser audit-loss formálisan pótolható egy "race-attempt-log" collection-nel (mind a két ágat append-only logolja). **Trigger**: külső compliance-regulátor explicit event-log követelménye (jelenleg nincs). A jelenlegi membership-rekord-alapú reconstruction (G.5) elegendő.
+3. **Cursor invalidation** (DESIGN): a `paginateByQuery(fromCursor)` a `lastCursor`-t opaque token-nek kezeli — ha az adott cursor-doc törlődik a futások között, undefined behavior (Appwrite validációtól függ). **Trigger**: ha élesben checkpoint-resume bukik egy backfill-en. **Mitigation tervezve**: monotonic sort key + explicit `>` filter (nem cursor-based) — a checkpoint-pattern Phase 2.x implementációkor merge-eljük.
+
+**(a) CAS-gate config-check vs auth precedence**: az `_assertCasGateConfigured()` az auth ELŐTT fut, ami unauthorized hívóknak kifedheti a config-misconfig state-et. A jelenlegi sorrend a fail-closed elv miatt elfogadható (NEM mehet semmilyen DB-mutáció a CAS-gate hiánya alatt). Phase 3 trigger: ha info-disclosure security audit ezt explicit ki-jelzi. A jelenlegi gate ON deploy-smoke-on minden hiánnyal kifedhető.
 
 ## Tesztelhető invariánsok (smoke-teszt)
 

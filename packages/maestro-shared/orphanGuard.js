@@ -1,26 +1,12 @@
-/**
- * H.2 (Phase 2, 2026-05-09) — single-source orphan-guard helper.
- *
- * Az `organizations.status` 3-érték enumot olvasó CF-ek (`set-publication-root-path`,
- * `update-article`, `validate-publication-update` audit-only) Phase 1.6 fail-closed
- * írás-blokkolójához. A korábbi inline mása a 2 fő CF-ben drift-veszélyes — ez a
- * shared modul a kanonikus forrás, a `scripts/build-cf-orphan-guard.mjs` generálja
- * a CF-mappákba `_generated_orphanGuard.js`-ként a `compiledValidator.js` mintájára.
- *
- * **Vanilla ES kötelező** — csak named-export function / const. Top-level await,
- * dynamic import-call, ESM module-meta tilos. A generator post-transform
- * token-guarddal véd a drift ellen.
- *
- * **Signature kontraktus** (SDK-paraméter): a hívó saját sdk-példányát adja át.
- * Az `invite-to-organization` `permissions.js` `getOrgStatus()` _belső_ verziója
- * (per-request cache + `env`-paraméter) NEM cserélődik erre — más kontextus,
- * más invariánsok.
- *
- * Konvenciók:
- *   - `null` return → legacy active (60+ legacy org backwards-compat).
- *   - `'lookup_failed'` → env-hiány VAGY DB-hiba sentinel — fail-closed.
- *   - Codex MAJOR fix (2026-05-09): NE legyen implicit `active` fallback DB-hibára.
- */
+// Single-source orphan-guard helper az `organizations.status` enum-ot olvasó
+// CF-eknek. Vanilla ES (named exports, no top-level await): a generator
+// `_generated_orphanGuard.js`-ként emit-eli a CF-mappákba (build-cf-orphan-guard.mjs).
+// Az `invite-to-organization/permissions.js` `getOrgStatus()` _belső_ verziója
+// per-request cache + `env`-paraméterrel — más invariánsok, NEM cserélődik erre.
+//
+// Konvenciók:
+//   - `null` return: legacy active (60+ legacy org backwards-compat).
+//   - `'lookup_failed'`: env-hiány VAGY DB-hiba — fail-closed (NEM implicit active).
 
 export const ORG_STATUS = Object.freeze({
     ACTIVE: 'active',
@@ -30,28 +16,21 @@ export const ORG_STATUS = Object.freeze({
 
 export const ORG_STATUS_LOOKUP_FAILED = 'lookup_failed';
 
+const _DENY_CACHEABLE_STATES = new Set([
+    ORG_STATUS.ORPHANED,
+    ORG_STATUS.ARCHIVED
+]);
+
 export function isOrgWriteBlocked(status) {
-    return status === ORG_STATUS.ORPHANED
-        || status === ORG_STATUS.ARCHIVED
-        || status === ORG_STATUS_LOOKUP_FAILED;
+    return _DENY_CACHEABLE_STATES.has(status) || status === ORG_STATUS_LOOKUP_FAILED;
 }
 
-// F.9 (Phase 2, 2026-05-09) — module-szintű hot-path cache.
-//
-// A `update-article` és `set-publication-root-path` CF-eken minden hívás
-// extra `getDocument`-et futtatott a Phase 1.6 orphan-guard-on. Egy CF
-// warm-szakasz alatt (perces-órás) ugyanaz az org-status sokszor lekérdezésre
-// kerül — a TTL-cache ezt egy szintetikus DB-readre redukálja per-org.
-//
-// Invalidálás: a `transfer_orphaned_org_ownership` (recovery flow, másik CF)
-// `orphaned → active` transition után az itt rögzült érték elavul. A 30s
-// TTL elfogadható késleltetés (admin-felügyelt recovery; a user retry-olja a
-// blokkolt írást, vagy a 30s-on belül a CF cold-startol).
-//
-// `lookup_failed` szándékosan NEM cache-elt — transient (env-flap, DB-glitch),
-// a következő hívás újraprobálkozik.
+// Csak DENY state-eket cache-elünk. Allow states (`active`, `null`) fresh-read,
+// hogy az `active → orphaned` átmenet a warm CF-instance-okon azonnal hasson —
+// a 30s allow-cache fail-open window volt (Harden Ph3, ADR 0011).
 const _ORG_STATUS_CACHE = new Map();
 const _ORG_STATUS_CACHE_TTL_MS = 30000;
+const _ORG_STATUS_CACHE_MAX_ENTRIES = 1000;
 
 export function clearOrgStatusCache(organizationId) {
     if (organizationId) _ORG_STATUS_CACHE.delete(organizationId);
@@ -72,11 +51,11 @@ export async function getOrgStatus(databases, databaseId, organizationsCollectio
         return ORG_STATUS_LOOKUP_FAILED;
     }
 
-    // F.9 hot-path cache — TTL-alapú, transient hibákra fallback DB-fetch.
     const cached = _ORG_STATUS_CACHE.get(organizationId);
     if (cached && (Date.now() - cached.at) < _ORG_STATUS_CACHE_TTL_MS) {
         return cached.value;
     }
+    if (cached) _ORG_STATUS_CACHE.delete(organizationId);
 
     try {
         const orgDoc = await databases.getDocument(
@@ -86,10 +65,16 @@ export async function getOrgStatus(databases, databaseId, organizationsCollectio
             [sdk.Query.select(['$id', 'status'])]
         );
         const value = orgDoc?.status || null;
-        _ORG_STATUS_CACHE.set(organizationId, { value, at: Date.now() });
+        if (_DENY_CACHEABLE_STATES.has(value)) {
+            // Egyszerű FIFO eviction a CF warm-process unbounded-növekedés ellen.
+            if (_ORG_STATUS_CACHE.size >= _ORG_STATUS_CACHE_MAX_ENTRIES) {
+                const oldest = _ORG_STATUS_CACHE.keys().next().value;
+                if (oldest !== undefined) _ORG_STATUS_CACHE.delete(oldest);
+            }
+            _ORG_STATUS_CACHE.set(organizationId, { value, at: Date.now() });
+        }
         return value;
     } catch (e) {
-        // Transient hibát NEM cache-elünk.
         return ORG_STATUS_LOOKUP_FAILED;
     }
 }

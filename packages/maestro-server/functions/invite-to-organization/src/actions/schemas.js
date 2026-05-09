@@ -1962,7 +1962,9 @@ async function bootstrapOrganizationInviteHistorySchema(ctx) {
         ['finalStatus', 16, true, null],
         ['finalReason', 128, false, null],
         ['acceptedByUserId', 36, false, null],
-        ['declinedByUserId', 36, false, null]
+        ['declinedByUserId', 36, false, null],
+        // 504 recovery probe correlation (ADR 0011 Harden Ph3).
+        ['attemptId', 36, false, null]
     ];
     for (const [name, size, required, defaultValue] of stringFields) {
         try {
