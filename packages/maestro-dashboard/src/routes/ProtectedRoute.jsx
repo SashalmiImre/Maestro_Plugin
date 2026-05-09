@@ -105,25 +105,35 @@ export default function ProtectedRoute() {
     // szerint publikus (AuthSplitLayout alatt), így sosem éri el ezt a guardot
     // — kizárólag az /onboarding-ot kell kivételként kezelni, hogy ne dobja
     // önmagára vissza a usert egy redirect ciklusban.
-    if (organizations.length === 0 && location.pathname !== '/onboarding') {
+    const orgList = organizations || [];
+    if (orgList.length === 0 && location.pathname !== '/onboarding') {
         return <Navigate to="/onboarding" replace />;
     }
 
-    // D.2.3 (2026-05-09) — orphan org block view. Codex Q3 review: az org
-    // látható marad a `organizations` listán (NEM filterelünk az
-    // AuthContext-en), de az aktív org `status === 'orphaned'` esetén a
-    // dashboard helyett egy speciális blokkoló view jelenik meg. A user
-    // másik orgra válthat (ha van) vagy kijelentkezhet. A backend
-    // `userHasOrgPermission()` orphan-guard úgyis 403-mal ad vissza minden
-    // `org.*` write-műveletet, de a UI-szintű tisztázás megelőzi a "minden
-    // gomb 403"-os UX-zavart. Az `/onboarding` és `/settings/*` route-okat
-    // engedjük át, hogy az "új szervezet létrehozása" út továbbra is járható
-    // legyen — egy másik orgban a user lehet aktív.
-    const activeOrg = (organizations || []).find((o) => o.$id === activeOrganizationId);
-    const isOrphan = activeOrg?.status === 'orphaned';
+    // D.2.3 (2026-05-09) — frozen-tenant block view. A backend a `status` enum
+    // két értékét write-blockolja: `orphaned` (utolsó owner törölte magát) és
+    // `archived` (admin manuális). Mindkettőre a `userHasOrgPermission()`
+    // orphan-guard 403-mal ad vissza minden `org.*` write-et, ezért UI-szinten
+    // is egy speciális blokkoló view jelenik meg a "minden gomb 403"-os zavar
+    // megelőzéséhez.
+    //
+    // Aux route-ok (átengedjük a blockerből):
+    //   - `/onboarding` — új org létrehozása (recovery út, ha a user másik
+    //     orgban admin)
+    //   - `/settings/password` — saját jelszó-csere (self-mgmt, NEM org-szintű)
+    // Minden más settings (`/settings/groups` / `/settings/organization` /
+    // `/settings/editorial-office`) blokkolt — ezek tenant-write-műveletek,
+    // amiket a backend úgyis 403-mal eldob.
+    //
+    // TODO(D-blokk follow-up — shared `orgStatus` modul): az `isFrozen`
+    // OR-chain duplikálja a backend `isOrgWriteBlocked()`-et. Egy shared
+    // `packages/maestro-shared/orgStatus.js` modul után ide is `isOrgWriteBlocked(activeOrg?.status)`
+    // hívást kell tenni, single-source-of-truth-tal.
+    const activeOrg = orgList.find((o) => o.$id === activeOrganizationId);
+    const isFrozen = activeOrg?.status === 'orphaned' || activeOrg?.status === 'archived';
     const isAuxRoute = location.pathname.startsWith('/onboarding') ||
-                       location.pathname.startsWith('/settings');
-    if (isOrphan && !isAuxRoute) {
+                       location.pathname.startsWith('/settings/password');
+    if (isFrozen && !isAuxRoute) {
         return <OrganizationOrphanedView />;
     }
 

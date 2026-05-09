@@ -51,6 +51,12 @@ const sdk = require("node-appwrite");
 
 const BATCH_LIMIT = 100;
 const MAX_USER_CHECKS_PER_RUN = 500; // ~5 perc 100/min throttle-lal; 5min CF timeout-on belül
+// Codex harden adversarial fix (2026-05-09): per-collection user-check budget.
+// Korábban egy busy `organizationMemberships` head megette mind az 500-at, és
+// a 2 másik collection (office/group) sosem került sweepelésre. Most minden
+// collection saját 1/3 budget-et kap; ha bármelyik nem használja el, a
+// reziduum a többinek nem cumulál (egyszerűbb a tisztán izolált budget).
+const COLLECTION_CHECK_BUDGET = Math.floor(MAX_USER_CHECKS_PER_RUN / 3);
 const ADMIN_ALERT_THRESHOLD = 50;
 const DEFAULT_GRACE_WINDOW_MS = 60 * 60 * 1000; // 1 óra
 
@@ -100,16 +106,22 @@ module.exports = async function ({ req, res, log, error }) {
         // futtat + status writeback-et.
         const ownerDeletedOrgIds = new Set();
         const stats = {
-            organizationMemberships: { scanned: 0, orphaned: 0, deleted: 0, failed: 0 },
-            editorialOfficeMemberships: { scanned: 0, orphaned: 0, deleted: 0, failed: 0 },
-            groupMemberships: { scanned: 0, orphaned: 0, deleted: 0, failed: 0 },
+            organizationMemberships: { scanned: 0, orphaned: 0, deleted: 0, failed: 0, cappedAtBudget: false },
+            editorialOfficeMemberships: { scanned: 0, orphaned: 0, deleted: 0, failed: 0, cappedAtBudget: false },
+            groupMemberships: { scanned: 0, orphaned: 0, deleted: 0, failed: 0, cappedAtBudget: false },
             userChecks: 0,
             cappedAtMaxChecks: false,
             // Codex adversarial review fix (BLOCKER): a sweeper által törölt
             // owner-rekordok után az érintett org-ok status-watch-a.
             orphanedOrgsMarked: 0,
             orphanMarkerSkipped: 0,
-            orphanMarkerFailed: 0
+            orphanMarkerFailed: 0,
+            // Codex harden adversarial fix (2026-05-09): a sweep-collection
+            // listDocuments hibák korábban silent-fail-eltek (return; +
+            // success:true a CF végen). Most a stats track-eli az érintett
+            // collection-eket, és a CF végén `success: false`-t ad vissza,
+            // ha bármi failed.
+            collectionScanFailed: []
         };
 
         async function isUserOrphan(userId) {
@@ -135,10 +147,17 @@ module.exports = async function ({ req, res, log, error }) {
         }
 
         async function sweepCollection(collectionId, statKey) {
+            // Codex harden adversarial fix (2026-05-09): per-collection user-
+            // check budget — a busy head ne starve-olja a kisebb collection-öket.
+            const startChecks = stats.userChecks;
             let cursorAfter = null;
             let safety = 0;
             while (safety++ < 1000) {
                 if (stats.cappedAtMaxChecks) break;
+                if ((stats.userChecks - startChecks) >= COLLECTION_CHECK_BUDGET) {
+                    stats[statKey].cappedAtBudget = true;
+                    break;
+                }
 
                 const queries = [
                     sdk.Query.lessThan('$createdAt', cutoffIso), // grace window
@@ -150,7 +169,11 @@ module.exports = async function ({ req, res, log, error }) {
                 try {
                     page = await databases.listDocuments(databaseId, collectionId, queries);
                 } catch (err) {
+                    // Codex harden adversarial fix (2026-05-09): NEM silent
+                    // return — track-eljük a collection scan failure-t és a
+                    // CF végén `success: false`-t adunk vissza.
                     error(`[OrphanSweeper] listDocuments(${collectionId}) hiba: ${err.message}`);
+                    stats.collectionScanFailed.push({ collection: collectionId, error: err.message });
                     return;
                 }
 
@@ -159,6 +182,10 @@ module.exports = async function ({ req, res, log, error }) {
 
                 for (const doc of page.documents) {
                     if (stats.cappedAtMaxChecks) break;
+                    if ((stats.userChecks - startChecks) >= COLLECTION_CHECK_BUDGET) {
+                        stats[statKey].cappedAtBudget = true;
+                        break;
+                    }
                     if (!doc.userId) continue;
                     const orphan = await isUserOrphan(doc.userId);
                     if (!orphan) continue;
@@ -245,13 +272,25 @@ module.exports = async function ({ req, res, log, error }) {
             }
         }
 
-        return res.json({
-            success: true,
+        // Codex harden adversarial fix (2026-05-09): success:false ha bármi
+        // collection-scan failed VAGY orphan-marker skipped (misconfig).
+        // Ezzel az ops-policy egységes a `user-cascade-delete`-tel
+        // (verificationFailures.push + 5xx admin-attention-mintát követve).
+        const hasFailure = stats.collectionScanFailed.length > 0
+            || stats.orphanMarkerSkipped > 0
+            || stats.orphanMarkerFailed > 0;
+        const responsePayload = {
+            success: !hasFailure,
             elapsedMs,
             stats,
             totalOrphaned,
             totalDeleted
-        });
+        };
+        if (hasFailure) {
+            responsePayload.reason = 'partial_failure';
+            return res.json(responsePayload, 500);
+        }
+        return res.json(responsePayload);
     } catch (err) {
         error(`[OrphanSweeper] uncaught: ${err.message}\n${err.stack}`);
         return res.json({ success: false, reason: 'internal_error', message: err.message }, 500);

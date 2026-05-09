@@ -920,16 +920,24 @@ async function changeOrganizationMemberRole(ctx) {
  *
  * Lépések:
  *   1. Caller global admin (`users.labels.includes('admin')`).
- *   2. Org létezik, `status === 'orphaned'` (idempotens fail-closed `active`-on).
+ *   2. Org létezik, `status === 'orphaned'` (a 2. hívás `409
+ *      organization_not_orphaned`-ot ad, mert az 5. lépés már aktiválta).
  *   3. `newOwnerUserId` tagja-e az orgnak (`organizationMemberships`).
  *   4. `organizationMemberships` updateDocument: `newOwnerUserId` role → `owner`.
- *   5. `organizations` updateDocument: `status: 'active'`.
+ *      Idempotens: ha már owner, no-op.
+ *   5. `organizations` updateDocument: `status: 'active'`. Idempotens: ha már
+ *      active, az Appwrite úgyis no-op-ot csinál.
  *
- * **Egyszeri recovery action — NEM idempotens** (Codex MINOR fix 2026-05-09):
- * a contract szerint a hívó CSAK egyszer hívja meg egy árva orgon. A második
- * azonos hívás `409 organization_not_orphaned`-ot ad (mert az 5. lépés már
- * `active`-ra állította). Ha a hívónak két különböző usert kell owner-ré
- * promote-olnia, az elsőhöz használja ezt az action-t, a másodikhoz a normál
+ * **Retry-safe** (Codex harden adversarial fix 2026-05-09): mind a 4. és 5.
+ * lépés idempotens önmagában, így a 4. és 5. közötti CF-timeout esetén a hívó
+ * SAFE retryolhatja az egészet — a 2. lépés gate-eli a már-aktivált orgokat.
+ * **EGY edge case** marad: ha a 4. sikeres (role=owner), de az 5. még NEM
+ * futott le → az org `orphaned` marad, miközben már van owner. A retry hívás
+ * a 4. lépésen átmegy (no-op `already owner`), majd az 5. status-write-tel
+ * lezárja a recovery-t. NEM blocking, csak átmeneti inkonzisztencia.
+ *
+ * Ha a hívónak két különböző usert kell owner-ré promote-olnia, az elsőhöz
+ * használja ezt az action-t, a másodikhoz a normál
  * `change_organization_member_role`-t (immár orphan-mentes orgon működik).
  */
 async function transferOrphanedOrgOwnership(ctx) {
