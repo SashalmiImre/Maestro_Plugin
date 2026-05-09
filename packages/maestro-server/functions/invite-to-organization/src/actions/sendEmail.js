@@ -188,38 +188,59 @@ async function sendOneInviteEmail(ctx, invite, options) {
         log(`[SendEmail] Resend OK invite=${invite.$id} email=${invite.email} resend_id=${resendId}`);
     } catch (err) {
         const errMsg = err?.message || 'unknown_error';
-        // Provider hiba — bookkeeping külön try, hogy ne dupla-eskedjen
+        // Provider hiba — bookkeeping külön try, hogy ne dupla-eskedjen.
+        // D.5.2 — `nextSendCount` egyszer számolva, mind a doc-ra mind a
+        // CF response-ra ugyanaz a fixed érték kerüljön. Codex review fix
+        // (2026-05-09 MAJOR): a `sendCount` csak akkor megy a returnbe, ha
+        // a bookkeeping doc-update is átment — különben a kliens olyan
+        // értéket látna, amit a tartós invite-doc nem vett át.
+        const nextSendCount = (invite.sendCount || 0) + 1;
+        let bookkept = false;
         try {
             await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
                 lastDeliveryStatus: 'failed',
-                sendCount: (invite.sendCount || 0) + 1,
+                sendCount: nextSendCount,
                 lastSentAt: new Date().toISOString(),
                 lastDeliveryError: errMsg.substring(0, 512)
             });
+            bookkept = true;
         } catch (updateErr) {
             error(`[SendEmail] status update failed (after Resend error): ${updateErr.message}`);
         }
         error(`[SendEmail] FAILED invite=${invite.$id} email=${invite.email} err=${errMsg}`);
-        return { success: false, error: errMsg };
+        return {
+            success: false,
+            error: errMsg,
+            ...(bookkept ? { sendCount: nextSendCount } : {})
+        };
     }
 
     // (2) Bookkeeping — sikeres küldés után. Ha ez is bukik, az e-mail
     // AKKOR IS sikeres, csak a UI nem mutatja a "Kiküldve" badge-et.
     // Ezt NEM minősítjük failed-re (ld. BLOCKER 2).
+    // Codex review fix (2026-05-09 MAJOR): csak akkor adjuk vissza a
+    // `sendCount`-ot, ha az invite-doc tartósan átvette.
+    const nextSendCount = (invite.sendCount || 0) + 1;
+    let bookkept = false;
     try {
         await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
             lastDeliveryStatus: 'sent',
-            sendCount: (invite.sendCount || 0) + 1,
+            sendCount: nextSendCount,
             lastSentAt: new Date().toISOString(),
             lastDeliveryError: null
         });
+        bookkept = true;
     } catch (updateErr) {
         // A mail már elment — log-warning, de visszaadjuk success: true-t.
         // Az adminnak max nem mutatja a UI a "Kiküldve" badge-et, de
         // duplikált resend nem indul.
         error(`[SendEmail] post-send status update failed (e-mail kiment ${resendId}): ${updateErr.message}`);
     }
-    return { success: true, resendId };
+    return {
+        success: true,
+        resendId,
+        ...(bookkept ? { sendCount: nextSendCount } : {})
+    };
 }
 
 /**
@@ -255,7 +276,8 @@ async function sendInviteEmail(ctx) {
         callerUser,
         'org.member.invite',
         invite.organizationId,
-        permissionContext.orgRoleByOrg
+        permissionContext.orgRoleByOrg,
+        permissionContext.orgStatusByOrg // D.2.4 orphan-guard cache
     );
     if (!allowed) {
         log(`[SendEmail] Caller ${callerId} — nincs org.member.invite jogosultság az org ${invite.organizationId}-ra`);
@@ -314,14 +336,23 @@ async function sendInviteEmail(ctx) {
     });
 
     if (!result.success) {
-        return fail(res, 502, 'email_send_failed', { error: result.error });
+        // D.5.2 — `sendCount` propagáció a failed-ágon is (a doc bookkeeping
+        // tükrözése). Akkor hasznos a frontendnek, ha a vissza-tárolt
+        // sendCount alapján mutathatja, hányszor próbálkoztunk eddig.
+        return fail(res, 502, 'email_send_failed', {
+            error: result.error,
+            ...(typeof result.sendCount === 'number' ? { sendCount: result.sendCount } : {})
+        });
     }
 
     return res.json({
         success: true,
         action: 'sent',
         inviteId: invite.$id,
-        skeleton: result.skeleton || false
+        skeleton: result.skeleton || false,
+        // D.5.2 — a frontend a UsersTab Invitations során mutathat
+        // „N. próbálkozás" badge-et, vagy az InviteHistory tab forrása.
+        ...(typeof result.sendCount === 'number' ? { sendCount: result.sendCount } : {})
     });
 }
 

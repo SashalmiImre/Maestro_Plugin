@@ -30,6 +30,25 @@ const {
 const permissions = require('../permissions.js');
 
 /**
+ * D.2.4 (Codex simplify R3+Q7, 2026-05-09) — közös org-status reset helper.
+ * A `transfer_orphaned_org_ownership` (hard-fail) és a
+ * `change_organization_member_role` self-heal (best-effort) ugyanazt a
+ * `updateDocument(orgs, orgId, { status: 'active' })` write-ot csinálta. A
+ * helper egységesíti, a hívó dönti el, dob-e a hibára: ha hard-fail, nem
+ * fogja a hibát. Ha best-effort, a hívó saját try-be teszi.
+ *
+ * @returns {Promise<void>} dob, ha az updateDocument bukik
+ */
+async function _setOrgStatusActive(databases, env, organizationId) {
+    await databases.updateDocument(
+        env.databaseId,
+        env.organizationsCollectionId,
+        organizationId,
+        { status: permissions.ORG_STATUS.ACTIVE }
+    );
+}
+
+/**
  * ACTION='bootstrap_organization' | 'create_organization' (#40)
  *
  * Atomikus 4-collection write: organizations + organizationMemberships
@@ -439,7 +458,8 @@ async function updateOrganization(ctx) {
         callerUser,
         'org.rename',
         organizationId,
-        permissionContext.orgRoleByOrg
+        permissionContext.orgRoleByOrg,
+        permissionContext.orgStatusByOrg // D.2.4 orphan-guard cache
     );
     if (!allowed) {
         return fail(res, 403, 'insufficient_permission', {
@@ -524,7 +544,8 @@ async function deleteOrganization(ctx) {
         callerUser,
         'org.delete',
         organizationId,
-        permissionContext.orgRoleByOrg
+        permissionContext.orgRoleByOrg,
+        permissionContext.orgStatusByOrg // D.2.4 orphan-guard cache
     );
     if (!allowed) {
         return fail(res, 403, 'insufficient_permission', {
@@ -733,7 +754,8 @@ async function changeOrganizationMemberRole(ctx) {
         callerUser,
         'org.member.role.change',
         organizationId,
-        permissionContext.orgRoleByOrg
+        permissionContext.orgRoleByOrg,
+        permissionContext.orgStatusByOrg // D.2.4 orphan-guard cache
     );
     if (!allowed) {
         return fail(res, 403, 'insufficient_permission', {
@@ -841,6 +863,33 @@ async function changeOrganizationMemberRole(ctx) {
         return fail(res, 500, 'role_update_failed');
     }
 
+    // D.2.4 (Codex adversarial review fix 2026-05-09 MAJOR): self-heal a
+    // race window stale `orphaned` status-ára. Ha a promote-ol owner-rel
+    // egy olyan org-ot, ami `userHasOrgPermission` orphan-guard cache miss-e
+    // miatt átengedte a write-ot, miközben a `user-cascade-delete` közben
+    // `orphaned`-re írta — az org most legitim owner-rel rendelkezik, ezért
+    // a status visszaállhat `active`-ra. Best-effort: ha bármelyik write
+    // dob, csak loggolunk (a role update már sikeres). Csak `role==='owner'`
+    // promote-on aktiválódik.
+    let orgStatusReset = false;
+    if (role === 'owner' && env.organizationsCollectionId) {
+        try {
+            const orgDoc = await databases.getDocument(
+                env.databaseId,
+                env.organizationsCollectionId,
+                organizationId,
+                [sdk.Query.select(['$id', 'status'])]
+            );
+            if (orgDoc.status === permissions.ORG_STATUS.ORPHANED) {
+                await _setOrgStatusActive(databases, env, organizationId);
+                orgStatusReset = true;
+                log(`[ChangeOrgMemberRole] org=${organizationId} status reset orphaned → active (legitim owner promote-tal)`);
+            }
+        } catch (statusErr) {
+            error(`[ChangeOrgMemberRole] org-status self-heal hiba (non-blocking): ${statusErr.message}`);
+        }
+    }
+
     log(`[ChangeOrgMemberRole] User ${callerId} → org=${organizationId} target=${targetUserId} role: ${currentRole} → ${role}`);
 
     return res.json({
@@ -849,7 +898,134 @@ async function changeOrganizationMemberRole(ctx) {
         organizationId,
         targetUserId,
         previousRole: currentRole,
-        role
+        role,
+        ...(orgStatusReset ? { orgStatusReset: true } : {})
+    });
+}
+
+/**
+ * ACTION='transfer_orphaned_org_ownership' (D.2.5b, 2026-05-09)
+ *
+ * Recovery flow egy `status === 'orphaned'` organizációra. Az utolsó owner
+ * törölte magát, ezzel az org árva állapotba került ([[user-cascade-delete]] v5+
+ * írta a markert). A `userHasOrgPermission()` orphan-guard minden `org.*`
+ * write-műveletet 403-mal zár — beleértve a normál owner-promote flow-t
+ * (`change_organization_member_role` → `org.member.role.change` slug).
+ *
+ * Ez az action **megkerüli az orphan-guard-ot** azzal, hogy NEM a
+ * `userHasOrgPermission()` slug helpert használja, hanem saját globális
+ * admin guard-dal fut. Codex tervi review (2026-05-09 BLOCKER ha b helyett):
+ * az org admin NEM kaphatja meg ezt a jogot, különben privilege-eszkalációs
+ * felület (org admin → owner csak azért, mert az org broken).
+ *
+ * Lépések:
+ *   1. Caller global admin (`users.labels.includes('admin')`).
+ *   2. Org létezik, `status === 'orphaned'` (idempotens fail-closed `active`-on).
+ *   3. `newOwnerUserId` tagja-e az orgnak (`organizationMemberships`).
+ *   4. `organizationMemberships` updateDocument: `newOwnerUserId` role → `owner`.
+ *   5. `organizations` updateDocument: `status: 'active'`.
+ *
+ * **Egyszeri recovery action — NEM idempotens** (Codex MINOR fix 2026-05-09):
+ * a contract szerint a hívó CSAK egyszer hívja meg egy árva orgon. A második
+ * azonos hívás `409 organization_not_orphaned`-ot ad (mert az 5. lépés már
+ * `active`-ra állította). Ha a hívónak két különböző usert kell owner-ré
+ * promote-olnia, az elsőhöz használja ezt az action-t, a másodikhoz a normál
+ * `change_organization_member_role`-t (immár orphan-mentes orgon működik).
+ */
+async function transferOrphanedOrgOwnership(ctx) {
+    const { databases, env, callerUser, payload, res, fail, log, error, sdk } = ctx;
+    const { organizationId, newOwnerUserId } = payload || {};
+
+    if (!organizationId || !newOwnerUserId) {
+        return fail(res, 400, 'missing_fields', { required: ['organizationId', 'newOwnerUserId'] });
+    }
+
+    // 1. Globális admin guard. NEM `userHasOrgPermission()` — az orphan-guard
+    // különben fail-closed-at adna minden hívóra. A `hasGlobalAdminLabel`
+    // helper a `permissions.js`-ből egységesíti a 3 hívási helyen szétszórt
+    // `Array.isArray + includes('admin')` mintát (Codex simplify Q6).
+    if (!permissions.hasGlobalAdminLabel(callerUser)) {
+        return fail(res, 403, 'insufficient_permission', {
+            slug: 'global.admin',
+            scope: 'global',
+            note: 'A `transfer_orphaned_org_ownership` művelethez globális admin label szükséges (`users.labels: ["admin"]`).'
+        });
+    }
+
+    // 2. Org létezik + orphan állapot.
+    let orgDoc;
+    try {
+        orgDoc = await databases.getDocument(
+            env.databaseId,
+            env.organizationsCollectionId,
+            organizationId
+        );
+    } catch (err) {
+        return fail(res, 404, 'organization_not_found');
+    }
+    if (orgDoc.status !== 'orphaned') {
+        return fail(res, 409, 'organization_not_orphaned', {
+            currentStatus: orgDoc.status || null,
+            note: 'A művelet kizárólag `status === "orphaned"` orgon érvényes. Aktív orgnál a normál `change_organization_member_role` action használandó.'
+        });
+    }
+
+    // 3. newOwnerUserId tagja-e az orgnak. Az orphan org-on belül kell egy
+    // tagot előléptetni — különben a recovery semmit sem érne.
+    let targetMembership;
+    try {
+        const list = await databases.listDocuments(
+            env.databaseId,
+            env.membershipsCollectionId,
+            [
+                sdk.Query.equal('organizationId', organizationId),
+                sdk.Query.equal('userId', newOwnerUserId),
+                sdk.Query.limit(1)
+            ]
+        );
+        if (list.documents.length === 0) {
+            return fail(res, 404, 'target_not_member', {
+                note: 'A `newOwnerUserId` jelenleg nem tagja a szervezetnek. Hívd meg, vagy add hozzá az `organizationMemberships`-hez közvetlenül.'
+            });
+        }
+        targetMembership = list.documents[0];
+    } catch (err) {
+        error(`[TransferOrphanedOwnership] target lookup hiba: ${err.message}`);
+        return fail(res, 500, 'target_lookup_failed');
+    }
+
+    // 4. Promote target membership-et owner-re. Idempotens (már owner → no-op).
+    if (targetMembership.role !== 'owner') {
+        try {
+            await databases.updateDocument(
+                env.databaseId,
+                env.membershipsCollectionId,
+                targetMembership.$id,
+                { role: 'owner' }
+            );
+        } catch (err) {
+            error(`[TransferOrphanedOwnership] role update hiba: ${err.message}`);
+            return fail(res, 500, 'role_update_failed');
+        }
+    }
+
+    // 5. Org status reset → active. A `userHasOrgPermission()` orphan-guard
+    // most már átengedi a normál `org.*` flow-t.
+    try {
+        await _setOrgStatusActive(databases, env, organizationId);
+    } catch (err) {
+        error(`[TransferOrphanedOwnership] org status update hiba: ${err.message}`);
+        return fail(res, 500, 'status_update_failed');
+    }
+
+    log(`[TransferOrphanedOwnership] org=${organizationId} new owner=${newOwnerUserId} (caller global-admin=${callerUser.id})`);
+    return res.json({
+        success: true,
+        action: 'orphaned_ownership_transferred',
+        organizationId,
+        newOwnerUserId,
+        previousStatus: 'orphaned',
+        currentStatus: 'active'
     });
 }
 
@@ -857,5 +1033,6 @@ module.exports = {
     bootstrapOrCreateOrganization,
     updateOrganization,
     deleteOrganization,
-    changeOrganizationMemberRole
+    changeOrganizationMemberRole,
+    transferOrphanedOrgOwnership
 };

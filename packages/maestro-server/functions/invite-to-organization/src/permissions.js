@@ -303,6 +303,94 @@ async function getOrgRole(databases, env, userId, organizationId, orgRoleByOrg) 
     }
 }
 
+/**
+ * D.2.4 (2026-05-09) — `organizations.status` enum értékek + write-block
+ * helper. A 6 hivatkozási helyen string-literál szétszórása drift-felület
+ * volt (typo `'orphand'` egy másik fail-closed branch lett volna). A
+ * konstans-pack lezárja, és az `isOrgWriteBlocked()` egy közös definíción
+ * tartja a 3 fail-closed értéket.
+ *
+ * Megjegyzés: a `'lookup_failed'` egy belső sentinel (NEM tárolt érték az
+ * `organizations.status` mezőben), csak a `getOrgStatus()` ad vissza ilyet.
+ * A `userHasPermission()`/`userHasOrgPermission()` viszont ezt is fail-closed
+ * kezeli (Codex MAJOR fix), ezért tagja az `isOrgWriteBlocked()` halmaznak.
+ */
+const ORG_STATUS = Object.freeze({
+    ACTIVE: 'active',
+    ORPHANED: 'orphaned',
+    ARCHIVED: 'archived'
+});
+const ORG_STATUS_LOOKUP_FAILED = 'lookup_failed';
+
+function isOrgWriteBlocked(status) {
+    return status === ORG_STATUS.ORPHANED
+        || status === ORG_STATUS.ARCHIVED
+        || status === ORG_STATUS_LOOKUP_FAILED;
+}
+
+/**
+ * D.2.4 (Codex simplify Q6 follow-up): a global admin label-check 3 helyen
+ * inline duplikált volt — itt egységesítve, hogy a privilege-eszkalációs
+ * felület nem tévedhet (`labels: ["admin"]` → match).
+ */
+function hasGlobalAdminLabel(user) {
+    return Array.isArray(user?.labels) && user.labels.includes('admin');
+}
+
+/**
+ * D.2.4 (2026-05-09) — `organizations.status` lookup orphan-guard-hoz.
+ *
+ * A `bootstrap_organization_status_schema` action a `organizations` collection-be
+ * `status` enum mezőt vesz fel (`active` | `orphaned` | `archived`). A
+ * `userHasOrgPermission()` helper minden `org.*` write-permission ellenőrzéskor
+ * ezt nézi: ha az org `orphaned`, az `org.*` write-műveletek fail-closed-ek
+ * (a `transfer_orphaned_org_ownership` action saját globális admin guard-dal
+ * fut, NEM a slug-helper-t használja).
+ *
+ * Cache-pattern azonos a `getOrgRole`-éval (per-request `orgStatusByOrg` Map).
+ * Hibás lookup nem kerül cache-be.
+ *
+ * **Codex MAJOR fix (2026-05-09)** — különbséget teszünk a:
+ *   - `null`: legacy (a `status` mező hiányzik a doc-ról, vagy a schema még
+ *     nem futott le). A hívó ezt `active`-ként kezeli (backwards-compat,
+ *     hogy ne brick-eljünk 60+ legacy orgot a backfill előtt).
+ *   - `'lookup_failed'`: env hiány VAGY DB-hiba. A hívó ezt **fail-closed**
+ *     kezelje (orphan-equivalent), különben egy átmeneti DB-hiba alatt a
+ *     guard fail-open lenne.
+ *
+ * @returns {Promise<'active'|'orphaned'|'archived'|null|'lookup_failed'>}
+ */
+async function getOrgStatus(databases, env, organizationId, orgStatusByOrg) {
+    if (!organizationId) return null;
+
+    if (orgStatusByOrg && orgStatusByOrg.has(organizationId)) {
+        return orgStatusByOrg.get(organizationId);
+    }
+
+    const { databaseId, organizationsCollectionId } = env;
+    if (!databaseId || !organizationsCollectionId) {
+        // Env config hiányzik — fail-closed signal (NEM legacy null!).
+        return 'lookup_failed';
+    }
+
+    try {
+        const orgDoc = await databases.getDocument(
+            databaseId,
+            organizationsCollectionId,
+            organizationId,
+            [sdk.Query.select(['$id', 'status'])]
+        );
+        const status = orgDoc?.status || null; // null = schema még nem volt a doc-on
+        if (orgStatusByOrg) orgStatusByOrg.set(organizationId, status);
+        return status;
+    } catch (err) {
+        // Codex MAJOR fix: NE legyen implicit `active` fallback DB-hibára.
+        // 'lookup_failed' sentinel — a hívó fail-closed kezeli.
+        // NEM cache-elünk hibát: a következő hívás újrapróbálkozhat.
+        return 'lookup_failed';
+    }
+}
+
 // ── Snapshot építés (office-scope) ──────────────────────────────────────────
 
 /**
@@ -333,27 +421,54 @@ async function getOrgRole(databases, env, userId, organizationId, orgRoleByOrg) 
  * @param {Map<string, string|'owner'|'admin'|'member'|null>} [orgRoleByOrg]
  * @returns {Promise<PermissionSnapshot>}
  */
-async function buildPermissionSnapshot(databases, env, user, editorialOfficeId, orgRoleByOrg) {
+async function buildPermissionSnapshot(databases, env, user, editorialOfficeId, orgRoleByOrg, orgStatusByOrg) {
     const userId = user?.id || user?.$id;
-    const hasGlobalAdminLabel = Array.isArray(user?.labels) && user.labels.includes('admin');
+    const userIsGlobalAdmin = hasGlobalAdminLabel(user);
 
     // 1) office → orgId
     const organizationId = await lookupOrgIdFromOffice(databases, env, editorialOfficeId);
 
-    // 2) user org-role (cache-elt)
-    const orgRole = userId && organizationId
-        ? await getOrgRole(databases, env, userId, organizationId, orgRoleByOrg)
-        : null;
+    // 1.5 + 2) D.2.4 (Codex adversarial fix BLOCKER + simplify F7 efficiency):
+    // az org status és a user org-role párhuzamosíthatóan futhat — mindkettő
+    // csak `organizationId`-t használ, nincs köztük függőség. Egy 50-100 ms
+    // cold-call latency-spórlás minden member-pathon. A `userHasPermission()`
+    // is fail-closed orphan / archived / lookup_failed org-on (korábban csak
+    // az `org.*` slug-okat fagyasztotta a guard, így egy `orphaned` org-ban
+    // egy admin tag továbbra is szerkeszthetett group-ot, workflow-t,
+    // permission-set-et — silent privilege-eszkalációs felület). A 33
+    // office-scope slug mindegyikét most ugyanaz az enforcement védi.
+    // A `transfer_orphaned_org_ownership` recovery action saját globális
+    // admin guard-dal megy, NEM ezzel a helperrel.
+    let status = null;
+    let orgRole = null;
+    if (organizationId) {
+        [status, orgRole] = await Promise.all([
+            getOrgStatus(databases, env, organizationId, orgStatusByOrg),
+            userId
+                ? getOrgRole(databases, env, userId, organizationId, orgRoleByOrg)
+                : Promise.resolve(null)
+        ]);
+        if (isOrgWriteBlocked(status)) {
+            return {
+                userId,
+                editorialOfficeId,
+                organizationId,
+                orgRole: null,
+                permissionSlugs: new Set(),
+                hasGlobalAdminLabel: false
+            };
+        }
+    }
 
     // 3) Owner/admin shortcut → mind a 33 office-scope slug
-    if (hasGlobalAdminLabel || orgRole === 'owner' || orgRole === 'admin') {
+    if (userIsGlobalAdmin || orgRole === 'owner' || orgRole === 'admin') {
         return {
             userId,
             editorialOfficeId,
             organizationId,
             orgRole,
             permissionSlugs: new Set(OFFICE_SCOPE_PERMISSION_SLUG_SET),
-            hasGlobalAdminLabel
+            hasGlobalAdminLabel: userIsGlobalAdmin
         };
     }
 
@@ -525,16 +640,19 @@ async function buildPermissionSnapshot(databases, env, user, editorialOfficeId, 
  * @param {string} editorialOfficeId
  * @param {Map} [snapshotsByOffice] - per-request cache
  * @param {Map} [orgRoleByOrg] - per-request cache
+ * @param {Map} [orgStatusByOrg] - per-request cache (D.2.4 orphan-guard)
  * @returns {Promise<boolean>}
  */
-async function userHasPermission(databases, env, user, permissionSlug, editorialOfficeId, snapshotsByOffice, orgRoleByOrg) {
+async function userHasPermission(databases, env, user, permissionSlug, editorialOfficeId, snapshotsByOffice, orgRoleByOrg, orgStatusByOrg) {
     assertOfficeScope(permissionSlug);
 
     if (!editorialOfficeId) return false;
 
-    // Global admin label shortcut — a snapshot build is ezt csinálja, de
-    // ha nincs cache, gyorsabb előbb itt eldönteni.
-    if (Array.isArray(user?.labels) && user.labels.includes('admin')) return true;
+    // D.2.4 (Codex adversarial review BLOCKER fix 2026-05-09): a global admin
+    // label shortcut KORÁBBAN itt true-t adott; most az orphan-guard miatt a
+    // snapshot-build-en megy keresztül, ahol az org status fail-closed-ja
+    // előbb futhat le. A `transfer_orphaned_org_ownership` recovery action
+    // saját globális admin guard-dal fut, NEM ezzel a helperrel.
 
     // Cache-kulcs userId-t is tartalmaz (Codex baseline review Critical):
     // multi-user CF flow-ban más user snapshot-jának öröklése auth leak-et
@@ -544,7 +662,7 @@ async function userHasPermission(databases, env, user, permissionSlug, editorial
 
     let snapshot = snapshotsByOffice ? snapshotsByOffice.get(cacheKey) : null;
     if (!snapshot) {
-        snapshot = await buildPermissionSnapshot(databases, env, user, editorialOfficeId, orgRoleByOrg);
+        snapshot = await buildPermissionSnapshot(databases, env, user, editorialOfficeId, orgRoleByOrg, orgStatusByOrg);
         if (snapshotsByOffice) snapshotsByOffice.set(cacheKey, snapshot);
     }
 
@@ -556,19 +674,38 @@ async function userHasPermission(databases, env, user, permissionSlug, editorial
  * Csak `organizationMemberships.role`-t használ — permission set lookup
  * NEM fut (a `permissionSets.permissions[]` org.* slug-ot nem tárolhat).
  *
+ * D.2.4 (2026-05-09) — orphan-guard: ha az org `status === 'orphaned'`,
+ * minden hívó (még a global admin label is) **fail-closed**, a recovery flow
+ * a `transfer_orphaned_org_ownership` action saját guard-dal fut, NEM ezzel
+ * a helperrel. A `null` status (legacy / backfill előtt) `active`-nak tekint.
+ *
  * @param {Object} databases - sdk.Databases
- * @param {Object} env - { databaseId, membershipsCollectionId }
+ * @param {Object} env - { databaseId, membershipsCollectionId, organizationsCollectionId }
  * @param {Object} user - { id, labels? }
  * @param {string} orgPermissionSlug - 5 org-scope slug egyike
  * @param {string} organizationId
  * @param {Map} [orgRoleByOrg]
+ * @param {Map} [orgStatusByOrg] - D.2.4 per-request cache az org-status-hoz
  * @returns {Promise<boolean>}
  */
-async function userHasOrgPermission(databases, env, user, orgPermissionSlug, organizationId, orgRoleByOrg) {
+async function userHasOrgPermission(databases, env, user, orgPermissionSlug, organizationId, orgRoleByOrg, orgStatusByOrg) {
     assertOrgScope(orgPermissionSlug);
 
     if (!organizationId) return false;
-    if (Array.isArray(user?.labels) && user.labels.includes('admin')) return true;
+
+    // D.2.4 — orphan-guard: az `org.*` write-műveletek fail-closed orphan
+    // org-on. A `null` status legacy fallback-nak `active` (pre-D.2.5
+    // backfill, hogy ne brickeljünk 60+ legacy orgot). A `'lookup_failed'`
+    // sentinel viszont **fail-closed** (Codex MAJOR fix 2026-05-09): egy
+    // átmeneti env-hiány vagy DB-hiba alatt NE engedjük át a write-ot.
+    // Codex tervi review (2026-05-09 BLOCKER ha skipped): a globális admin
+    // label-t is fail-closed-ra hozzuk orphan/archived-en — a recovery flow
+    // a `transfer_orphaned_org_ownership` action-en megy, ami saját
+    // globális admin guard-dal és bypass-szal fut.
+    const status = await getOrgStatus(databases, env, organizationId, orgStatusByOrg);
+    if (isOrgWriteBlocked(status)) return false;
+
+    if (hasGlobalAdminLabel(user)) return true;
 
     const userId = user?.id || user?.$id;
     if (!userId) return false;
@@ -592,7 +729,9 @@ async function userHasOrgPermission(databases, env, user, orgPermissionSlug, org
 function createPermissionContext() {
     return {
         snapshotsByOffice: new Map(),
-        orgRoleByOrg: new Map()
+        orgRoleByOrg: new Map(),
+        // D.2.4 — per-request cache a `userHasOrgPermission` orphan-guard-jához.
+        orgStatusByOrg: new Map()
     };
 }
 
@@ -603,6 +742,10 @@ module.exports = {
     OFFICE_SCOPE_PERMISSION_SLUGS,
     ADMIN_EXCLUDED_ORG_SLUGS,
     DEFAULT_PERMISSION_SETS,
+    // D.2.4 (Codex simplify Q4+Q5+Q6): orphan-guard konstansok + helperek
+    ORG_STATUS,
+    isOrgWriteBlocked,
+    hasGlobalAdminLabel,
     isOrgScopeSlug,
     isOfficeScopeSlug,
     assertOfficeScope,
@@ -613,6 +756,7 @@ module.exports = {
     lookupOrgIdFromOffice,
     isStillOfficeMember,
     getOrgRole,
+    getOrgStatus,
     buildPermissionSnapshot,
     userHasPermission,
     userHasOrgPermission,

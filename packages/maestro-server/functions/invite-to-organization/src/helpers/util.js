@@ -80,7 +80,12 @@ const VALID_ACTIONS = new Set([
     'create_batch_invites',           // multi-invite (max 20)
     'send_invite_email',              // egyetlen invite e-mail újraküldés (admin gomb)
     'bootstrap_invites_schema_v2',    // 4 új mező (lastDeliveryStatus, ...)
-    'bootstrap_rate_limit_schema'     // 2 új collection (counters + blocks)
+    'bootstrap_rate_limit_schema',    // 2 új collection (counters + blocks)
+    // D blokk (2026-05-09) — meghívási flow stabilizálás follow-up
+    'bootstrap_organization_status_schema',     // D.2.1 — organizations.status enum
+    'backfill_organization_status',             // D.2.5 — legacy orgok status='active'
+    'transfer_orphaned_org_ownership',          // D.2.5b — recovery action (global admin)
+    'bootstrap_organization_invite_history_schema' // D.3.1 — audit-trail collection schema
 ]);
 
 // Slug formátum: kisbetű, szám, kötőjel. A frontend is ugyanezt alkalmazza.

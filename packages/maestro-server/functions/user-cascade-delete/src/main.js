@@ -150,6 +150,10 @@ module.exports = async ({ req, res, log, error }) => {
     const orgMemsCol = process.env.ORGANIZATION_MEMBERSHIPS_COLLECTION_ID;
     const officeMemsCol = process.env.EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID;
     const groupMemsCol = process.env.GROUP_MEMBERSHIPS_COLLECTION_ID;
+    // D.2.2 (2026-05-09) — opcionális env var az orphan-marker write-hoz.
+    // Ha hiányzik, a last-owner detekció csak loggolt marad (v4 viselkedés);
+    // a Phase 1.5 deploy után állítandó `organizations`-re.
+    const orgsCol = process.env.ORGANIZATIONS_COLLECTION_ID;
     const apiKey = req.headers?.['x-appwrite-key'] || process.env.APPWRITE_API_KEY;
 
     const missing = [];
@@ -272,6 +276,49 @@ module.exports = async ({ req, res, log, error }) => {
             if (remainingOwners.total === 0) {
                 stats.lastOwnerOrgs.push(orgId);
                 error(`[UserCascade] ⚠️ LAST OWNER törölve — org=${orgId} most owner nélkül maradt (admin figyelmébe!)`);
+
+                // D.2.2 (2026-05-09) — orphan-marker write best-effort.
+                // Ha az `ORGANIZATIONS_COLLECTION_ID` env var be van állítva
+                // és a `organizations` collection a `status` mezővel rendelkezik
+                // (`bootstrap_organization_status_schema` action lefutott),
+                // ráírjuk az `orphaned` állapotot. A `userHasOrgPermission()`
+                // helper a következő hívástól fail-closed-ot ad org.* slug-okra
+                // ezen az org-on. Egy admin a `transfer_orphaned_org_ownership`
+                // action-en keresztül oldhatja fel.
+                if (orgsCol) {
+                    try {
+                        await databases.updateDocument(
+                            databaseId,
+                            orgsCol,
+                            orgId,
+                            { status: 'orphaned' }
+                        );
+                        log(`[UserCascade] org=${orgId} status='orphaned' (last-owner enforcement)`);
+                    } catch (markErr) {
+                        // Schema-missing (legacy collection) vagy egyéb hiba —
+                        // best-effort. NEM blokkoljuk a cascade-et, csak loggoljuk.
+                        // A `verificationFailures` listára kerül, hogy admin lássa.
+                        error(`[UserCascade] orphan marker write hiba (org=${orgId}): ${markErr.message}`);
+                        stats.verificationFailures.push({
+                            check: 'orphan_marker_write',
+                            organizationId: orgId,
+                            error: markErr.message
+                        });
+                    }
+                } else {
+                    // Codex MAJOR fix (2026-05-09): a SKIP NE legyen csendben
+                    // log-only, mert a GDPR-cleanup így sikeresnek látszik
+                    // ORPHAN-MARKER NÉLKÜL — a Phase 1.5 enforcement csendben
+                    // kiesik. A `verificationFailures`-be tesszük → totalFailed
+                    // növekszik → 5xx HTTP → admin-attention. A Phase 1.5
+                    // deploy után az env var beállítandó.
+                    error(`[UserCascade] orphan marker SKIP (org=${orgId}) — ORGANIZATIONS_COLLECTION_ID env var nincs beállítva`);
+                    stats.verificationFailures.push({
+                        check: 'orphan_marker_skipped_misconfigured',
+                        organizationId: orgId,
+                        note: 'Last-owner detektálva, de az `ORGANIZATIONS_COLLECTION_ID` env var hiánya miatt nem írható az `organizations.status=orphaned` marker. Phase 1.5 enforcement nem aktív.'
+                    });
+                }
             }
         } catch (err) {
             error(`[UserCascade] last-owner check dobott (org=${orgId}): ${err.message}`);

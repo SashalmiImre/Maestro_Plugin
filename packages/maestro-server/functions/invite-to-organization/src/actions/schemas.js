@@ -1461,6 +1461,344 @@ async function bootstrapRateLimitSchema(ctx) {
     return res.json({ success: true, action: 'rate_limit_schema_bootstrapped', created, skipped });
 }
 
+/**
+ * ACTION='bootstrap_organization_status_schema' (D.2.1, 2026-05-09) — owner-only
+ * schema-bővítés a `organizations` collectionön egyetlen új mezővel:
+ *   - `status` enum (`active` | `orphaned` | `archived`), default `active`
+ *
+ * Codex tervi review (2026-05-09): a `pending_owner_transfer` enum-érték
+ * túlmodellezés most; az `active|orphaned|archived` 3-érték elég a Phase 1.5-höz.
+ *
+ * Idempotens (409 → skip). A backfill (legacy null-status orgokra) külön
+ * action: `backfill_organization_status` — Codex BLOCKER ha skip-ped, mert a
+ * meglévő 60+ org `null`-status maradna és a `userHasOrgPermission` orphan-
+ * guardja kétértelmű állapotban dolgozna.
+ *
+ * Aszinkron Appwrite attribute processing miatt az index-create első futáson
+ * 400-zal elbukhat (`indexesPending`) — a user 10s múlva újrafuttatja.
+ */
+async function bootstrapOrganizationStatusSchema(ctx) {
+    const { databases, env, log, error, res, fail } = ctx;
+
+    const denied = await requireOwnerAnywhere(ctx);
+    if (denied) return denied;
+
+    const created = [];
+    const skipped = [];
+    const indexesPending = [];
+
+    // 1) `status` enum attribútum — `active` | `orphaned` | `archived`,
+    // default `active`. Új org bootstrap-jén a `bootstrap_organization` és
+    // `create_organization` action-ök automatikusan `active`-ot kapnak.
+    try {
+        await databases.createEnumAttribute(
+            env.databaseId,
+            env.organizationsCollectionId,
+            'status',
+            ['active', 'orphaned', 'archived'],
+            false,        // required (false → default érvényes)
+            'active',     // default
+            false         // array
+        );
+        created.push('status');
+    } catch (err) {
+        if (isAlreadyExists(err)) skipped.push('status');
+        else {
+            error(`[BootstrapOrgStatus] status enum hiba: ${err.message}`);
+            return fail(res, 500, 'schema_status_failed', { error: err.message });
+        }
+    }
+
+    // 2) Index a `status` mezőre — a `transfer_orphaned_org_ownership` és
+    // jövőbeli admin tooling listázza orphan-orgot, ezért index gyorsít.
+    try {
+        await databases.createIndex(
+            env.databaseId,
+            env.organizationsCollectionId,
+            'status_idx',
+            'key',
+            ['status']
+        );
+        created.push('status_idx');
+    } catch (err) {
+        if (isAlreadyExists(err)) skipped.push('status_idx');
+        else if (/attribute|not.*ready|pending/i.test(err.message || '')) {
+            indexesPending.push('status_idx');
+            log(`[BootstrapOrgStatus] status_idx pending — re-run 10s múlva: ${err.message}`);
+        } else {
+            error(`[BootstrapOrgStatus] status_idx hiba: ${err.message}`);
+            return fail(res, 500, 'schema_status_idx_failed', { error: err.message });
+        }
+    }
+
+    log(`[BootstrapOrgStatus] created=[${created.join(',')}] skipped=[${skipped.join(',')}] indexesPending=[${indexesPending.join(',')}]`);
+    return res.json({
+        success: true,
+        action: 'organization_status_schema_bootstrapped',
+        created,
+        skipped,
+        indexesPending: indexesPending.length > 0,
+        ...(indexesPending.length > 0 ? { pendingIndexes: indexesPending } : {})
+    });
+}
+
+/**
+ * ACTION='backfill_organization_status' (D.2.5, 2026-05-09) — owner-only
+ * migrációs action. A `bootstrap_organization_status_schema` után futtatandó:
+ * a meglévő org-okra (`status` mező hiányzik vagy null) beírja az `active`-ot.
+ *
+ * Codex tervi review BLOCKER (Q5): a schema default csak az új doc-ra hat;
+ * a legacy org-ok null-status maradnának, ami fail-open / fail-closed
+ * választás közötti dilemmát teremtene a `userHasOrgPermission` helper-ben.
+ *
+ * Idempotens — paginated, csak null/missing-status org-ot ír felül.
+ * `dryRun: true` payload csak számol, nem ír.
+ */
+async function backfillOrganizationStatus(ctx) {
+    const { databases, env, payload, log, error, res, fail, sdk } = ctx;
+
+    const denied = await requireOwnerAnywhere(ctx);
+    if (denied) return denied;
+
+    const dryRun = payload?.dryRun === true;
+    const stats = { total: 0, alreadySet: 0, backfilled: 0, errors: [] };
+
+    let cursorAfter = null;
+    let safety = 0;
+    while (safety++ < 1000) {
+        // Codex simplify F6 (2026-05-09): `Query.isNull('status')` szűrő —
+        // egy 1000+ orgú prod-on csak a backfill-elendő doc-okat lapozza.
+        // Az `alreadySet` mindig 0 lesz (a kliens-oldali check belowmaradt
+        // mégis defenzíven, hátha az index még nem propagált).
+        const queries = [
+            sdk.Query.isNull('status'),
+            sdk.Query.limit(CASCADE_BATCH_LIMIT)
+        ];
+        if (cursorAfter) queries.push(sdk.Query.cursorAfter(cursorAfter));
+
+        let page;
+        try {
+            page = await databases.listDocuments(
+                env.databaseId,
+                env.organizationsCollectionId,
+                queries
+            );
+        } catch (err) {
+            error(`[BackfillOrgStatus] listDocuments hiba: ${err.message}`);
+            return fail(res, 500, 'org_list_failed', { error: err.message });
+        }
+
+        if (!page.documents || page.documents.length === 0) break;
+        stats.total += page.documents.length;
+
+        for (const orgDoc of page.documents) {
+            if (orgDoc.status === 'active' || orgDoc.status === 'orphaned' || orgDoc.status === 'archived') {
+                stats.alreadySet++;
+                continue;
+            }
+            if (dryRun) {
+                stats.backfilled++;
+                continue;
+            }
+            try {
+                await databases.updateDocument(
+                    env.databaseId,
+                    env.organizationsCollectionId,
+                    orgDoc.$id,
+                    { status: 'active' }
+                );
+                stats.backfilled++;
+            } catch (err) {
+                stats.errors.push({ orgId: orgDoc.$id, error: err.message });
+                error(`[BackfillOrgStatus] update ${orgDoc.$id} hiba: ${err.message}`);
+            }
+        }
+
+        if (page.documents.length < CASCADE_BATCH_LIMIT) break;
+        cursorAfter = page.documents[page.documents.length - 1].$id;
+    }
+
+    log(`[BackfillOrgStatus] dryRun=${dryRun} total=${stats.total} alreadySet=${stats.alreadySet} backfilled=${stats.backfilled} errors=${stats.errors.length}`);
+    return res.json({ success: true, action: 'organization_status_backfilled', dryRun, stats });
+}
+
+/**
+ * ACTION='bootstrap_organization_invite_history_schema' (D.3, 2026-05-09)
+ *
+ * Owner-only új collection: `organizationInviteHistory`. Audit-trail az
+ * `acceptInvite`/`declineInvite`/`expireInvite` destruktív kilépési ágain
+ * keletkező snapshot-okhoz. Codex tervi review (2026-05-09): a `token` raw
+ * értékét NEM tároljuk — `tokenHash` (SHA-256). GDPR-kompromisszum:
+ * incident-korreláció lehetséges (egy konkrét tokenes report → hash → lookup),
+ * de újrahasznosítás NEM.
+ *
+ * Mezők:
+ *   - organizationId (36)
+ *   - email (320)
+ *   - role (16) (member | admin)
+ *   - tokenHash (64) — SHA-256 hex, NULLABLE (esetleg nem volt token)
+ *   - expiresAt (datetime)
+ *   - customMessage (500, nullable)
+ *   - invitedByUserId (36, nullable)
+ *   - invitedByUserName (128, nullable)
+ *   - invitedByUserEmail (320, nullable)
+ *   - invitedAt (datetime, az eredeti $createdAt)
+ *   - sendCount (integer, default 0)
+ *   - lastSentAt (datetime, nullable)
+ *   - lastDeliveryStatus (32, nullable)
+ *   - finalStatus (16) — accepted | declined | expired
+ *   - finalReason (128, nullable)
+ *   - finalAt (datetime)
+ *   - acceptedByUserId (36, nullable)
+ *   - declinedByUserId (36, nullable)
+ *   - expiredAt (datetime, nullable)
+ *
+ * Indexek:
+ *   - org_email_finalAt — `(organizationId, email, finalStatus, finalAt)` — UI listához
+ *
+ * Read ACL: `team:org_${orgId}` ([[Döntések/0003-tenant-team-acl]] mintára).
+ * Write: kizárólag CF API key-jel.
+ *
+ * Idempotens (409 → skip). Action-szintű env var: `ORGANIZATION_INVITE_HISTORY_COLLECTION_ID`.
+ */
+async function bootstrapOrganizationInviteHistorySchema(ctx) {
+    const { databases, env, log, error, res, fail } = ctx;
+
+    const denied = await requireOwnerAnywhere(ctx);
+    if (denied) return denied;
+
+    const inviteHistoryCollectionId = env.organizationInviteHistoryCollectionId;
+    if (!inviteHistoryCollectionId) {
+        return fail(res, 500, 'misconfigured', { missing: ['ORGANIZATION_INVITE_HISTORY_COLLECTION_ID'] });
+    }
+
+    const created = [];
+    const skipped = [];
+    const indexesPending = [];
+
+    // Codex baseline review (2026-05-09 MAJOR fix): collection idempotens
+    // létrehozása a `bootstrapWorkflowExtensionSchema` mintáját követve.
+    // Az attribútum-create-ek `collection_not_found` hibára futnak, ha a
+    // collection nem létezik (a Console-szintű manuális create-et nem
+    // feltételezhetjük). `documentSecurity: true` kötelező — a doc-szintű
+    // ACL (`buildOrgAclPerms`) ad olvasási jogot az org-tagoknak.
+    try {
+        await databases.createCollection(
+            env.databaseId,
+            inviteHistoryCollectionId,
+            'organizationInviteHistory',
+            [],
+            true,   // documentSecurity
+            true    // enabled
+        );
+        created.push('collection:organizationInviteHistory');
+    } catch (err) {
+        if (isAlreadyExists(err)) {
+            skipped.push('collection:organizationInviteHistory');
+        } else {
+            error(`[BootstrapInviteHistory] collection létrehozás hiba: ${err.message}`);
+            return fail(res, 500, 'schema_collection_failed', { error: err.message });
+        }
+    }
+
+    const stringFields = [
+        ['organizationId', 36, true, null],
+        ['email', 320, true, null],
+        ['role', 16, true, null],
+        ['tokenHash', 64, false, null],
+        ['customMessage', 500, false, null],
+        ['invitedByUserId', 36, false, null],
+        ['invitedByUserName', 128, false, null],
+        ['invitedByUserEmail', 320, false, null],
+        ['lastDeliveryStatus', 32, false, null],
+        ['finalStatus', 16, true, null],
+        ['finalReason', 128, false, null],
+        ['acceptedByUserId', 36, false, null],
+        ['declinedByUserId', 36, false, null]
+    ];
+    for (const [name, size, required, defaultValue] of stringFields) {
+        try {
+            await databases.createStringAttribute(
+                env.databaseId, inviteHistoryCollectionId,
+                name, size, required, defaultValue, false
+            );
+            created.push(name);
+        } catch (err) {
+            if (isAlreadyExists(err)) skipped.push(name);
+            else {
+                error(`[BootstrapInviteHistory] ${name} hiba: ${err.message}`);
+                return fail(res, 500, `schema_${name}_failed`, { error: err.message });
+            }
+        }
+    }
+
+    const datetimeFields = [
+        ['expiresAt', true],
+        ['invitedAt', true],
+        ['lastSentAt', false],
+        ['finalAt', true],
+        ['expiredAt', false]
+    ];
+    for (const [name, required] of datetimeFields) {
+        try {
+            await databases.createDatetimeAttribute(
+                env.databaseId, inviteHistoryCollectionId, name, required, null, false
+            );
+            created.push(name);
+        } catch (err) {
+            if (isAlreadyExists(err)) skipped.push(name);
+            else {
+                error(`[BootstrapInviteHistory] ${name} hiba: ${err.message}`);
+                return fail(res, 500, `schema_${name}_failed`, { error: err.message });
+            }
+        }
+    }
+
+    try {
+        await databases.createIntegerAttribute(
+            env.databaseId, inviteHistoryCollectionId,
+            'sendCount', false, 0, undefined, 0, false
+        );
+        created.push('sendCount');
+    } catch (err) {
+        if (isAlreadyExists(err)) skipped.push('sendCount');
+        else {
+            error(`[BootstrapInviteHistory] sendCount hiba: ${err.message}`);
+            return fail(res, 500, 'schema_sendCount_failed', { error: err.message });
+        }
+    }
+
+    try {
+        await databases.createIndex(
+            env.databaseId,
+            inviteHistoryCollectionId,
+            'org_email_finalAt',
+            'key',
+            ['organizationId', 'email', 'finalStatus', 'finalAt']
+        );
+        created.push('org_email_finalAt');
+    } catch (err) {
+        if (isAlreadyExists(err)) skipped.push('org_email_finalAt');
+        else if (/attribute|not.*ready|pending/i.test(err.message || '')) {
+            indexesPending.push('org_email_finalAt');
+            log(`[BootstrapInviteHistory] org_email_finalAt pending — re-run 10s múlva: ${err.message}`);
+        } else {
+            error(`[BootstrapInviteHistory] org_email_finalAt hiba: ${err.message}`);
+            return fail(res, 500, 'schema_org_email_finalAt_failed', { error: err.message });
+        }
+    }
+
+    log(`[BootstrapInviteHistory] created=[${created.join(',')}] skipped=[${skipped.join(',')}] indexesPending=[${indexesPending.join(',')}]`);
+    return res.json({
+        success: true,
+        action: 'organization_invite_history_schema_bootstrapped',
+        created,
+        skipped,
+        indexesPending: indexesPending.length > 0,
+        ...(indexesPending.length > 0 ? { pendingIndexes: indexesPending } : {})
+    });
+}
+
 module.exports = {
     bootstrapWorkflowSchema,
     bootstrapPublicationSchema,
@@ -1471,5 +1809,10 @@ module.exports = {
     backfillMembershipUserNames,
     // ADR 0010 W2 — meghívási flow redesign
     bootstrapInvitesSchemaV2,
-    bootstrapRateLimitSchema
+    bootstrapRateLimitSchema,
+    // D.2 (2026-05-09) — last-owner enforcement Phase 1.5
+    bootstrapOrganizationStatusSchema,
+    backfillOrganizationStatus,
+    // D.3 (2026-05-09) — invite audit-trail collection
+    bootstrapOrganizationInviteHistorySchema
 };

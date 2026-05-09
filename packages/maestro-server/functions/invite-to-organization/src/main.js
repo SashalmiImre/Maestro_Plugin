@@ -128,6 +128,11 @@ const ACTION_HANDLERS = {
     // ADR 0010 W2 — invite collection séma-bővítés (4 új mező) + rate-limit collectionök.
     'bootstrap_invites_schema_v2': schemaActions.bootstrapInvitesSchemaV2,
     'bootstrap_rate_limit_schema': schemaActions.bootstrapRateLimitSchema,
+    // D.2 (2026-05-09) — last-owner enforcement Phase 1.5: organizations.status enum
+    'bootstrap_organization_status_schema': schemaActions.bootstrapOrganizationStatusSchema,
+    'backfill_organization_status': schemaActions.backfillOrganizationStatus,
+    // D.3 (2026-05-09) — invite audit-trail collection
+    'bootstrap_organization_invite_history_schema': schemaActions.bootstrapOrganizationInviteHistorySchema,
 
     // Permission set CRUD (A.3 + A.3.6)
     'create_permission_set': permissionSetActions.createPermissionSet,
@@ -156,6 +161,9 @@ const ACTION_HANDLERS = {
     // 2026-05-07: org-tag role változtatás (org.member.role.change slug,
     // self-edit + last-owner + owner-touch guardokkal). UsersTab role-dropdown.
     'change_organization_member_role': orgActions.changeOrganizationMemberRole,
+    // D.2.5b (2026-05-09) — recovery flow orphan org-ra. Globális admin auth,
+    // saját guard-dal (NEM userHasOrgPermission, mert az orphan-guard fail-closed).
+    'transfer_orphaned_org_ownership': orgActions.transferOrphanedOrgOwnership,
     'create_editorial_office': officeActions.createEditorialOffice,
     'update_editorial_office': officeActions.updateEditorialOffice,
     'delete_editorial_office': officeActions.deleteEditorialOffice,
@@ -477,6 +485,11 @@ module.exports = async function ({ req, res, log, error }) {
         const resendApiKey = process.env.RESEND_API_KEY || '';
         const ipRateLimitCountersCollectionId = process.env.IP_RATE_LIMIT_COUNTERS_COLLECTION_ID || '';
         const ipRateLimitBlocksCollectionId = process.env.IP_RATE_LIMIT_BLOCKS_COLLECTION_ID || '';
+        // D.3 (2026-05-09) — invite audit-trail collection. OPCIONÁLIS env var:
+        // ha hiányzik, a `_archiveInvite` helper csak loggol és skippel (a fő
+        // accept/decline flow nem blokkolódik). A `bootstrap_organization_invite_history_schema`
+        // action-höz kötelező.
+        const organizationInviteHistoryCollectionId = process.env.ORGANIZATION_INVITE_HISTORY_COLLECTION_ID || '';
 
         // ── Fail-fast env var guard ──
         const missingEnvVars = [];
@@ -516,7 +529,12 @@ module.exports = async function ({ req, res, log, error }) {
             officeMembershipsCollectionId,
             groupMembershipsCollectionId,
             groupPermissionSetsCollectionId,
-            permissionSetsCollectionId
+            permissionSetsCollectionId,
+            // D.2.4 (2026-05-09 Codex baseline BLOCKER fix): a `getOrgStatus()`
+            // orphan-guard a `organizations` doc `status` mezőjét olvassa.
+            // Hiánya esetén `'lookup_failed'` sentinel → `userHasOrgPermission()`
+            // fail-closed minden `org.*` slug-ra (5xx admin attention).
+            organizationsCollectionId
         };
         const permissionContext = permissions.createPermissionContext();
 
@@ -585,7 +603,9 @@ module.exports = async function ({ req, res, log, error }) {
             dashboardUrl,
             resendApiKey,
             ipRateLimitCountersCollectionId,
-            ipRateLimitBlocksCollectionId
+            ipRateLimitBlocksCollectionId,
+            // D.3 (2026-05-09) — invite audit-trail (opcionális, ld. fent)
+            organizationInviteHistoryCollectionId
         };
         const ctx = {
             databases,

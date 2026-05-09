@@ -28,6 +28,107 @@ const MAX_BATCH_INVITES = 20;
 const MAX_CUSTOM_MESSAGE_LENGTH = 500;
 
 /**
+ * D.3 (2026-05-09) — invite audit-trail helper.
+ *
+ * A `acceptInvite` (3 helyen: main / idempotens / race-winner), `declineInvite`
+ * és `expireInvite` (opportunista expire) destruktív kilépési ágain a
+ * helper egy `organizationInviteHistory` doc-ot ír (snapshot-at-archive).
+ * Ezzel rekonstruálható: ki hívta meg X-et, mikor, milyen role-lal, mi lett
+ * a végső sors (accepted/declined/expired).
+ *
+ * GDPR (Codex tervi review 2026-05-09): a `token` raw értéket NEM tároljuk —
+ * SHA-256 hash kerül a `tokenHash` mezőbe. Ez elég incident-korrelációhoz
+ * (egy konkrét tokenes report → hash → lookup), de NEM lehet újrahasznosítani.
+ *
+ * Best-effort: ha az `organizationInviteHistory` collection nincs beállítva
+ * (env var hiányzik) vagy a write bukik → loggolunk, nem blokkoljuk a
+ * destruktív flow-t. A history rekord elveszhet, de a fő lifecycle (accept /
+ * decline / expire) megy tovább.
+ *
+ * @param {Object} ctx - CF ctx
+ * @param {Object} invite - a teljes invite doc (a destrukció ELŐTT)
+ * @param {'accepted'|'declined'|'expired'} finalStatus
+ * @param {string} [finalReason] - opcionális magyarázat (pl. cleanup ok)
+ * @param {string} [finalUserId] - acceptedByUserId / declinedByUserId
+ */
+async function _archiveInvite(ctx, invite, finalStatus, finalReason, finalUserId) {
+    const { databases, env, log, error } = ctx;
+    const inviteHistoryCollectionId = env.organizationInviteHistoryCollectionId;
+    if (!inviteHistoryCollectionId) {
+        log(`[ArchiveInvite] SKIP — ORGANIZATION_INVITE_HISTORY_COLLECTION_ID env var nincs beállítva (invite=${invite.$id})`);
+        return;
+    }
+
+    try {
+        const tokenHash = invite.token
+            ? crypto.createHash('sha256').update(invite.token).digest('hex')
+            : null;
+
+        const finalAt = new Date().toISOString();
+        const payload = {
+            organizationId: invite.organizationId,
+            email: invite.email,
+            role: invite.role,
+            tokenHash, // SHA-256, NEM raw token
+            expiresAt: invite.expiresAt,
+            customMessage: invite.customMessage || null,
+            invitedByUserId: invite.invitedByUserId || null,
+            invitedByUserName: invite.invitedByUserName || null,
+            invitedByUserEmail: invite.invitedByUserEmail || null,
+            invitedAt: invite.$createdAt,
+            sendCount: invite.sendCount || 0,
+            lastSentAt: invite.lastSentAt || null,
+            lastDeliveryStatus: invite.lastDeliveryStatus || null,
+            finalStatus,
+            finalReason: finalReason || null,
+            finalAt
+        };
+        // Codex simplify Q1 (2026-05-09): per-finalStatus mező direkt
+        // assign — 3 ternary spread helyett 1 if-cascade.
+        if (finalStatus === 'accepted') payload.acceptedByUserId = finalUserId || null;
+        else if (finalStatus === 'declined') payload.declinedByUserId = finalUserId || null;
+        else if (finalStatus === 'expired') payload.expiredAt = finalAt;
+
+        // Codex MINOR fix (2026-05-09) — deterministic doc ID a retry-idempotenciához.
+        // A korábbi `ID.unique()` minden hívásra új ID-t adott, ami a delete bukás
+        // utáni retry-on duplikált history rekordokat eredményezhetett. Most az
+        // `${invite.$id}__${finalStatus}` kompozit ID — egy invite egy
+        // finalStatus-szal csak EGYSZER kerül a history-be. Egy második (idempotens)
+        // hívás `document_already_exists` 409-cel jön → log skip.
+        //
+        // Codex adversarial review fix (2026-05-09 MINOR): Appwrite custom doc ID
+        // limit 36 char. Tipikus invite.$id `ID.unique()` ~20 char, `__accepted`
+        // 10 char = 30 char OK; DE egy custom (Phase 2) hosszabb invite ID
+        // overflow-t okozhatna. SHA-1 hash fallback ha a kompozit > 36 char —
+        // így a deterministic ID megőrződik, és a `(inviteId + finalStatus)`
+        // egyértelműen leképezhető. A hash-bázis hosszabb (40 char), ezért a
+        // 32-re vágjuk → `inv_<32 char>` formátum.
+        const compositeId = `${invite.$id}__${finalStatus}`;
+        const deterministicId = compositeId.length <= 36
+            ? compositeId
+            : `inv_${crypto.createHash('sha1').update(compositeId).digest('hex').slice(0, 32)}`;
+        try {
+            await databases.createDocument(
+                env.databaseId,
+                inviteHistoryCollectionId,
+                deterministicId,
+                payload,
+                buildOrgAclPerms(invite.organizationId)
+            );
+            log(`[ArchiveInvite] invite=${invite.$id} → history (finalStatus=${finalStatus})`);
+        } catch (createErr) {
+            if (createErr?.type === 'document_already_exists' || /already exist/i.test(createErr?.message || '')) {
+                log(`[ArchiveInvite] invite=${invite.$id} history (finalStatus=${finalStatus}) — már archiválva, idempotens skip`);
+                return;
+            }
+            throw createErr;
+        }
+    } catch (err) {
+        error(`[ArchiveInvite] write hiba (non-blocking, invite=${invite.$id}): ${err.message}`);
+    }
+}
+
+/**
  * `expiryDays` payload-mező validálása. Whitelist (1 / 3 / 7), default 7.
  * Visszaadja a validált napok számát, vagy null-t ha az érték érvénytelen.
  */
@@ -236,7 +337,12 @@ async function _createInviteCore(ctx, params) {
 /**
  * 2026-05-09 (E2E smoke #2 fix): cooldown-checked auto-send az idempotens
  * (action='existing') ágra. A `created` esetén lastSentAt=null → mindig megy,
- * `existing` esetén pedig csak ha a 60s cooldown letelt. Visszatér:
+ * `existing` esetén pedig csak ha a 60s cooldown letelt.
+ *
+ * D.5.2 (2026-05-09): a return type egységes objektum lett — `{ status, sendCount? }`.
+ * A `sendCount` a `sendOneInviteEmail` post-increment értékét tükrözi (vagy a
+ * meglévő `invite.sendCount`-ot cooldown / skipped ágon, hogy a frontend a
+ * helyes „N. próbálkozás" badge-et tudja mutatni). Status értékek:
  *   - `'sent'`: e-mail kiment (deliveryStatus=sent)
  *   - `'failed'`: kiment-próba bukott (deliveryStatus=failed)
  *   - `'cooldown'`: cooldown alatt vagyunk, skipped (deliveryStatus=cooldown)
@@ -249,16 +355,19 @@ async function _createInviteCore(ctx, params) {
  * legújabb értéket tartja. A render azt olvassa.
  */
 async function _maybeAutoSendInviteEmail(ctx, result, organizationName, inviterName, inviterEmail) {
-    if (!result.invite) return 'skipped';
+    if (!result.invite) return { status: 'skipped' };
     if (result.action === 'existing' && result.invite.lastSentAt) {
         const elapsed = Date.now() - new Date(result.invite.lastSentAt).getTime();
         if (elapsed < RESEND_COOLDOWN_MS) {
             ctx.log?.(`[AutoSend] Cooldown — invite ${result.invite.$id} (${result.invite.email}), letelt: ${Math.ceil((RESEND_COOLDOWN_MS - elapsed)/1000)}s múlva`);
-            return 'cooldown';
+            return { status: 'cooldown', sendCount: result.invite.sendCount || 0 };
         }
     }
     const sendResult = await _autoSendInviteEmail(ctx, result.invite, organizationName, inviterName, inviterEmail);
-    return sendResult.success ? 'sent' : 'failed';
+    return {
+        status: sendResult.success ? 'sent' : 'failed',
+        ...(typeof sendResult.sendCount === 'number' ? { sendCount: sendResult.sendCount } : {})
+    };
 }
 
 /**
@@ -331,7 +440,8 @@ async function createInvite(ctx) {
         callerUser,
         'org.member.invite',
         organizationId,
-        permissionContext.orgRoleByOrg
+        permissionContext.orgRoleByOrg,
+        permissionContext.orgStatusByOrg // D.2.4 orphan-guard cache
     );
     if (!allowed) {
         log(`[Create] Caller ${callerId} — nincs org.member.invite jogosultság az org ${organizationId}-ra`);
@@ -351,7 +461,8 @@ async function createInvite(ctx) {
     // mentális modellje: „rákattintok a Send-re, megy az e-mail" — a korábbi
     // semmittevés idempotens ágon zavart okozott (lásd execution log
     // 21:58:45-kor: `[CreateCore] Idempotens` után NINCS [SendEmail] log).
-    let deliveryStatus = null;
+    // D.5.2 — `_maybeAutoSendInviteEmail` mostantól `{ status, sendCount? }`-ot ad.
+    let autoSend = null;
     if (result.invite) {
         // Org és inviter denormalizáció az e-mailhez
         let organizationName = 'a szervezeted';
@@ -375,7 +486,7 @@ async function createInvite(ctx) {
                 log(`[Create] inviter lookup hiba (non-blocking): ${err.message}`);
             }
         }
-        deliveryStatus = await _maybeAutoSendInviteEmail(ctx, result, organizationName, inviterName, inviterEmail);
+        autoSend = await _maybeAutoSendInviteEmail(ctx, result, organizationName, inviterName, inviterEmail);
     }
 
     return res.json({
@@ -387,7 +498,8 @@ async function createInvite(ctx) {
         role: result.role,
         email: result.email,
         organizationId: result.organizationId,
-        ...(deliveryStatus ? { deliveryStatus } : {})
+        ...(autoSend?.status ? { deliveryStatus: autoSend.status } : {}),
+        ...(typeof autoSend?.sendCount === 'number' ? { sendCount: autoSend.sendCount } : {})
     });
 }
 
@@ -431,7 +543,8 @@ async function createBatchInvites(ctx) {
         callerUser,
         'org.member.invite',
         organizationId,
-        permissionContext.orgRoleByOrg
+        permissionContext.orgRoleByOrg,
+        permissionContext.orgStatusByOrg // D.2.4 orphan-guard cache
     );
     if (!allowed) {
         log(`[CreateBatch] Caller ${callerId} — nincs org.member.invite jogosultság az org ${organizationId}-ra`);
@@ -492,14 +605,16 @@ async function createBatchInvites(ctx) {
                 // 60s cooldown-nal. (Lásd `_maybeAutoSendInviteEmail`.)
                 // 2026-05-09 simplification (iteration-guardian #6): a fresh
                 // invite-doc már tartja az új customMessage-t, nem kell override.
-                const deliveryStatus = await _maybeAutoSendInviteEmail(ctx, result, organizationName, inviterName, inviterEmail);
+                // D.5.2 — autoSend mostantól `{ status, sendCount? }` objektum.
+                const autoSend = await _maybeAutoSendInviteEmail(ctx, result, organizationName, inviterName, inviterEmail);
                 return {
                     email,
                     status: 'ok',
                     action: result.action,
                     inviteId: result.inviteId,
                     expiresAt: result.expiresAt,
-                    ...(deliveryStatus && deliveryStatus !== 'skipped' ? { deliveryStatus } : {})
+                    ...(autoSend?.status && autoSend.status !== 'skipped' ? { deliveryStatus: autoSend.status } : {}),
+                    ...(typeof autoSend?.sendCount === 'number' ? { sendCount: autoSend.sendCount } : {})
                 };
             } catch (err) {
                 ctx.error?.(`[CreateBatch] ${email} hiba: ${err.message}`);
@@ -619,6 +734,8 @@ async function acceptInvite(ctx) {
         // ha a delete bukik (permission / network), a user TAG marad
         // (idempotens), és egy következő accept-call vagy cron-cleanup
         // pótolja.
+        // D.3 — audit-trail: a delete ELŐTT mentjük a history-ba.
+        await _archiveInvite(ctx, invite, 'accepted', 'idempotent_already_member', callerId);
         try {
             await databases.deleteDocument(env.databaseId, env.invitesCollectionId, invite.$id);
         } catch (deleteErr) {
@@ -681,6 +798,8 @@ async function acceptInvite(ctx) {
                 // race-loser hívás itt ugyanúgy DELETE-tel takarít. Ha
                 // bukik, non-blocking — a membership már megvan, ami a
                 // source of truth.
+                // D.3 — audit-trail: a delete ELŐTT mentjük a history-ba.
+                await _archiveInvite(ctx, invite, 'accepted', 'race_winner_already_member', callerId);
                 try {
                     await databases.deleteDocument(env.databaseId, env.invitesCollectionId, invite.$id);
                 } catch (deleteErr) {
@@ -719,13 +838,16 @@ async function acceptInvite(ctx) {
     // `(organizationId, email, status)` unique indexen ütközött, ha
     // ugyanahhoz az `(org, email)` párhoz már létezett egy `accepted`
     // rekord (pl. több korábbi meghívás-iteráció). Megoldás: az invite
-    // egyszerűen TÖRÖLŐDIK az accept után — a membership a source of truth,
-    // az invite-rekordra már nincs szükség a UI-ban (a `listMyInvites`
-    // csak `pending`-eket ad vissza, audit-trail nincs konzumálva).
+    // egyszerűen TÖRÖLŐDIK az accept után — a membership a source of truth.
+    //
+    // D.3 (2026-05-09) — audit-trail: a delete ELŐTT mentjük a history-ba,
+    // hogy az invite metadata (ki hívta, mikor, milyen role-lal) a token
+    // SHA-256 hash-szel együtt rekonstruálható legyen.
     //
     // Ha a delete bukik (permission / network), a user TAG marad —
     // a következő accept-call az 5-ös idempotens-membership ágon fogja
     // pótolni a cleanup-ot.
+    await _archiveInvite(ctx, invite, 'accepted', null, callerId);
     try {
         await databases.deleteDocument(env.databaseId, env.invitesCollectionId, invite.$id);
     } catch (deleteErr) {
@@ -947,6 +1069,10 @@ async function declineInvite(ctx) {
         error(`[DeclineInvite] status update hiba: ${e.message}`);
         return fail(res, 500, 'invite_update_failed');
     }
+
+    // D.3 — audit-trail: a status-update UTÁN, a doc megmarad. Best-effort,
+    // a history-be kerül a metadata.
+    await _archiveInvite(ctx, invite, 'declined', null, callerId);
 
     log(`[DeclineInvite] User ${callerId} elutasította invite ${invite.$id}-t (org=${invite.organizationId})`);
 
