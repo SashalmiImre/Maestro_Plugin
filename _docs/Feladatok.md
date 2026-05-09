@@ -186,7 +186,7 @@ tags: [feladatok]
 > Protokoll + automatizált logikai invariáns: [B6-smoke-test.md](B6-smoke-test.md). Hibrid approach (Codex 2026-05-05): manuális end-to-end checklist + `node scripts/b6-snapshot-invariant.mjs` (31 assert a snapshot-only invariánsra, Codex follow-up review CLEAN — ship verdict 2026-05-05).
 
 - [ ] **B.6.1** End-to-end: extension létrehozás → workflow hivatkozás → publikáció aktiválás → plugin futtatás → eredmény. (Manuális, InDesign + Dashboard + Appwrite — a felhasználó futtatja saját InDesign hoston.)
-- [ ] **B.6.2** Snapshot-védelem: aktivált publikáció alól az extension módosítás ne fusson le (a snapshot-ban rögzített kód fut). (Kódszintű bizonyítás + automatizált logikai invariáns 2026-05-05 kész — `scripts/b6-snapshot-invariant.mjs` 31/31 OK; a manuális live ellenőrzés opcionális.)
+- [x] **B.6.2** Snapshot-védelem: aktivált publikáció alól az extension módosítás ne fusson le (a snapshot-ban rögzített kód fut). (Kódszintű bizonyítás + automatizált logikai invariáns 2026-05-05 kész — `scripts/b6-snapshot-invariant.mjs` 31/31 OK; a manuális live ellenőrzés opcionális.)
 
 ---
 
@@ -278,6 +278,8 @@ tags: [feladatok]
 
 ### D. Meghívási flow stabilizálás — follow-up (2026-05-09 session után)
 
+> **2026-05-09 SESSION ÁLLAPOTFRISSÍTÉS** ([[Naplók/2026-05-09]]): a teljes D blokk **kódoldalon kész**, **0 deploy megtörtént**. A backend változtatások (D.2/D.3/D.4) shared production system módosítások (új CF, schema-bővítés, új collection), explicit user-confirmation szükséges. A deploy roadmap a blokk végén: [[#D — Deploy roadmap (következő session)]]. Ami már most él és push-ölhető (csak Dashboard cPanel `./deploy.sh`): D.5.4 + D.6.1 (frontend cooldown UX + UsersTab clarity). Ami már megírt és új CF deploy után élne: D.2 (last-owner enforcement), D.3 (audit-trail), D.4 (orphan-sweeper), D.5.2 (sendCount).
+
 > Cél: a 2026-05-08 → 2026-05-09 session 18 commit + 11 CF deploy után fennmaradó adat-konzisztencia, automatizálás, audit-trail és fejlesztői workflow kérdések rendezése. Az ÉLES flow (invite-küldés + accept + verify + login + auto-trigger acceptInvite + runtime user-deletion → /login) **stabil**, ezek a follow-upok a robusztusság/governance/DX fronton dolgoznak.
 
 > **Session-záró állapot**: 18 commit főágon (`7fac5b8` → `da54129`), 11 Appwrite CF deploy a `invite-to-organization` (élesben: `69fe698eb5cce9519275`) és `user-cascade-delete` (élesben: `69fe79421d1f3f3738ea`) function-ökre, dashboard frontend `./deploy.sh`-val cPanel-re kihelyezve. Memory: [[meghivasi-flow-redesign]] (vault-pointer rövidített). Részletek: [[Naplók/2026-05-08]] / [[Naplók/2026-05-09]] (új daily note kell).
@@ -314,25 +316,22 @@ A 2026-05-09 session ~80%-ban kapacitásvesztés volt a deploy-mechanizmus félr
 
 Megelőzés:
 
-- [ ] **D.1.1** Railway MCP setup. Install: `claude mcp add Railway npx @railway/mcp-server`. Auth: a Railway CLI (4.30.5 telepítve) tokent használ. Új session-elején: `railway link` (project: `successful-mindfulness`, service: `gallant-balance`). Tools: `deploy`, `service list`, `logs`, `status`, `variables`. **Why**: a proxy jövőbeli változtatásait és a CF deploy-mintával analóg automatizálással kezelhetjük (én MCP-n át deploy + log-ot ellenőrzök, NEM a user manual CLI). **How to apply**: minden új session, ahol proxy-érintő commit van.
+- [x] **D.1.1** Railway MCP setup — **doc** ([[Komponensek/SessionPreflight#Railway MCP setup]]). User-szintű install: `claude mcp add Railway npx @railway/mcp-server`. Auth: a Railway CLI (4.30.5 telepítve) tokent használ. Új session-elején: `railway link` (project: `successful-mindfulness`, service: `gallant-balance`). Tools: `deploy`, `service list`, `logs`, `status`, `variables`.
 
 - [ ] **D.1.2** Dashboard auto-deploy webhook (cPanel). A `deploy.sh` egy SSH/SCP script — ezt GitHub Actions-szel automatizálni lehet (push-on-main → workflow → SSH-deploy). Bemenet: `secrets.SSH_PRIVATE_KEY` + `secrets.REMOTE_HOST`. Példa workflow: `npm run build` → `appleboy/scp-action`. **Why**: a session-szintű forget-to-deploy cost megszűnik, minden push immediately megy. **Trade-off**: SSH key in GitHub secrets (nem ideal — alternative: deploy-key-only user a cPanel-en, restricted-shell). **Scope**: ~30 perc setup + 1-2 iteráció a SSH-konfigon. Külön session.
 
-- [ ] **D.1.3** Session-elején infra-check rule a CLAUDE.md-be (vagy a [[Munkafolyamat]]-ba). Minden új coding-session elsõ 5 percében:
-    - `cat packages/*/package.json | jq .scripts` — nézd meg a deploy script-eket
-    - `find . -name "railway*" -o -name "*.toml" -o -name "Procfile" -o -name "deploy.sh"` — deploy-konfig file-ok
-    - `cat *deploy.sh` — értsd meg a célhost-ot
-    - **Soha** ne feltételezz „auto-deploy on git push"-t ellenőrzés nélkül.
+- [x] **D.1.3** Session-elején infra-check rule — **doc** ([[Komponensek/SessionPreflight]]). `CLAUDE.md` Fejlesztési alapszabályok szekcióba is bekötve, [[Munkafolyamat]] hivatkozással. Minden új coding-session első 5 percében: deploy script-ek (`cat packages/*/package.json | jq .scripts`), deploy-konfig fájlok (`find ... railway* / *.toml / deploy.sh`), célhost megértése (`cat *deploy.sh`). **Soha** ne feltételezz „auto-deploy on git push"-t ellenőrzés nélkül.
 
 #### D.2 user-cascade-delete Phase 1.5 — last-owner enforcement
 
 A current Phase 1 (`69fe79421d1f3f3738ea` deploy) a last-owner deletion-t **csak loggolja** (`error()` szinten figyelmeztet). Tényleges enforcement nincs:
 
-- [ ] **D.2.1** `organizations` collection schema-bővítés: új `status` field (`active` | `orphaned` | `archived`). Default `active`. Indexed.
-- [ ] **D.2.2** `user-cascade-delete` CF: a last-owner detekció után `databases.updateDocument(orgs, orgId, { status: 'orphaned' })`. Best-effort, try/catch (admin később hand-fix-eli ha kell).
-- [ ] **D.2.3** Frontend ProtectedRoute: ha az aktív org `status === 'orphaned'` → speciális UI (admin contact info), NEM hagyjuk a usert dolgozni az adat-inkonzisztens orgon.
-- [ ] **D.2.4** Permission helper: `org.*` write-műveletek `status='orphaned'` orgnál fail-closed (új CF guard).
-- [ ] **D.2.5** Admin recovery action: `transfer_orphaned_org_ownership` CF action — egy admin (Appwrite-szintű) átadhatja az orgot egy másik user-nek owner-szerepkörben.
+- [x] **D.2.1** `organizations.status` enum + `status_idx` schema — **kód kész** (`bootstrap_organization_status_schema` action a `actions/schemas.js`-ben). Deploy hátra: D-roadmap 1. lépés.
+- [x] **D.2.2** `user-cascade-delete` orphan-marker writer — **kód kész** (`functions/user-cascade-delete/src/main.js`, opcionális `ORGANIZATIONS_COLLECTION_ID` env). Codex MAJOR fix: env hiányt `verificationFailures.push`-tel jelzi (5xx → admin-attention). Deploy hátra: D-roadmap 4. lépés.
+- [x] **D.2.3** ProtectedRoute orphan-block UI — **kód kész** (`routes/ProtectedRoute.jsx` + új `routes/OrganizationOrphanedView.jsx`). NEM filtereljük az `AuthContext.organizations`-t (Codex Q3 review): az org látható, csak az aktív org-ra blokkoljuk a dashboardot. Deploy hátra: D-roadmap 5. lépés (cPanel `./deploy.sh`).
+- [x] **D.2.4** `userHasOrgPermission()` orphan-guard — **kód kész** (`permissions.js` `getOrgStatus()` + `'lookup_failed'` sentinel — Codex MAJOR fix). 6 hívási hely 7-paraméteresre frissítve. Deploy hátra: D-roadmap 4. lépés (`invite-to-organization` CF redeploy).
+- [x] **D.2.5** Schema backfill — **kód kész** (`backfill_organization_status` action, paginated, dryRun). Deploy hátra: D-roadmap 2. lépés.
+- [x] **D.2.5b** `transfer_orphaned_org_ownership` recovery action — **kód kész** (`actions/orgs.js`, globális admin label guard, NEM `userHasOrgPermission`). Codex MINOR fix: explicit "egyszeri recovery action" contract. Deploy hátra: D-roadmap 4. lépés.
 
 **Why**: data-integrity. Egy owner nélküli org árva: a tagok nem tudnak permission set-et szerkeszteni, új user-t hívni, stb. A jelenlegi state silent-broken.
 
@@ -344,15 +343,11 @@ Az `acceptInvite` 7fac5b8-os fix óta a sikeres meghívás-elfogadás `deleteDoc
 - „Ki hívta meg X-et 6 hónapja, milyen role-lal?" → rekonstruálhatatlan (Resend webhook-log 30 nap)
 - „Mikor accept-elte X a meghívást?" → membership `$createdAt` közelít, de nem expliciten tartalmazza
 
-- [ ] **D.3.1** Új collection: `organizationInviteHistory`. Mezők: invite teljes copy (`organizationId`, `email`, `role`, `token` (hashed?), `expiresAt`, `customMessage`, `invitedByUserId`, `invitedByUserName`, `invitedByUserEmail`) + `finalStatus` (`accepted` | `declined` | `expired`) + `finalReason` + `acceptedByUserId`/`declinedByUserId`/`expiredAt`/`finalAt`. Read ACL: `team:org_${orgId}` ([[Döntések/0003-tenant-team-acl]]). Index: `organizationId + email + finalStatus + finalAt`.
-- [ ] **D.3.2** Új helper `_archiveInvite(ctx, invite, finalStatus, ...)` az `actions/invites.js`-ben. A helper minden destruktív kilépési ágra fusson:
-    - `acceptInvite` (3 helyen — main, idempotens, race-winner)
-    - `declineInvite`
-    - `expireInvite` (opportunista expire-nél)
-    - `cron-cleanup` ha lesz ilyen
-- [ ] **D.3.3** GDPR-kérdés: invite token-t hashed-en mentsük-e (one-way), vagy egyáltalán ne (csak a metadata)? Codex: nem lát kötelező requirement-et a tokenre, de a customMessage és inviter identity governance-szempontból fontos.
-- [ ] **D.3.4** Retention policy: forever / N év / GDPR-kérelem törlés. Default forever, admin-kérésre törölhető.
-- [ ] **D.3.5** Frontend: a UsersTab `Invitations` szekcióhoz egy „Történet" tab — read-only listája az `organizationInviteHistory`-nak (min. owner role).
+- [x] **D.3.1** `organizationInviteHistory` collection schema — **kód kész** (`bootstrap_organization_invite_history_schema` action a `actions/schemas.js`-ben, 19 attributum + `org_email_finalAt` index). Console-szintű collection-create + `rowSecurity: true` hátra: D-roadmap 6–7. lépés.
+- [x] **D.3.2** `_archiveInvite(ctx, invite, finalStatus, finalReason, finalUserId)` helper — **kód kész** (`actions/invites.js`). Codex MINOR fix: deterministic doc ID `${invite.$id}__${finalStatus}` az idempotenciához (retry-on `document_already_exists` skip). Hívva 4 destruktív ágon: `acceptInvite` 3 helyen (main/idempotens/race-winner) + `declineInvite`. **Defer (Phase 2)**: `expireInvite` opportunista expire 3 ponton (`_createInviteCore` lejárt-expire, `acceptInvite` opportunista expire, `listMyInvites` opportunista expire) — alacsony prio, az archive ott metadata-only.
+- [x] **D.3.3** GDPR token kezelés — **megoldva** (Codex tervi review): `tokenHash` mező SHA-256 hex (NEM raw token), nullable. Incident-korreláció lehetséges (egy konkrét tokenes report → hash → lookup), újrahasznosítás nem.
+- [ ] **D.3.4** Retention policy — **deferred** (default forever, admin-kérésre törölhető a Console-ról). Phase 2: cron-alapú TTL ha kell.
+- [ ] **D.3.5** Frontend "Történet" tab a UsersTab-en — **deferred** (Phase 2). A history rekordok mostantól keletkeznek, de a UI nem listázza még őket.
 
 #### D.4 Backstop orphan-sweeper cron
 
@@ -360,25 +355,21 @@ A `user-cascade-delete` event-driven CF nem védett a race ellen:
 - User-delete + concurrent acceptInvite → membership létrejön a user-doc törlésével párhuzamosan, és a CF event utáni cleanup nem találja
 - Web-platform race: a Appwrite users.delete event sometimes előbb fut, mint az utolsó in-flight membership-create
 
-- [ ] **D.4.1** Új CF: `orphan-sweeper`. Schedule: `0 3 * * *` (napi 3:00). Scope:
-    - Iteráljon a 3 membership collection-ön (org/office/group)
-    - Minden rekord `userId`-jét nézze meg `usersApi.get(id)` → 404 = orphan → delete
-    - Iteráljon az org_${id} és office_${id} team-eken (ha van Appwrite Teams listing) → orphan-tagok delete
-    - Statisztika log
-- [ ] **D.4.2** Throttling: max 100 user-check / minute (Appwrite API rate limit). Ha sok orphan, lapozza több futásra.
-- [ ] **D.4.3** Notification: ha egy futás >50 orphan-t talál, küldjön Resend e-mailt a admin-nak (`admin@maestro.emago.hu`).
+- [x] **D.4.1** `orphan-sweeper` CF — **kód kész** (`packages/maestro-server/functions/orphan-sweeper/`, ~200 sor). Scope: 3 membership collection scan (org/office/group), `usersApi.get(userId)` 404 = orphan → delete, 1h grace window (`Query.lessThan('$createdAt', cutoffIso)`) a `user-cascade-delete` event-driven CF-fel való harc elkerüléshez. **Appwrite Teams listing kihagyva**: a Teams API `listMemberships` inkonzisztens cross-tenant scope-ban — defer Phase 2. Schedule `0 3 * * *`. Deploy hátra: D-roadmap 9–11. lépés.
+- [x] **D.4.2** Throttling — **kód kész**: `MAX_USER_CHECKS_PER_RUN=500` cap egy futáson, `userExistsCache` Map a duplikált `usersApi.get`-re. Codex MAJOR-2 fix: per-futás cache dokumentált, perzisztált deduplikáció Phase 2-be.
+- [x] **D.4.3** Resend admin alert — **kód kész** (best-effort, opcionális env var-ok `RESEND_API_KEY` + `ADMIN_NOTIFICATION_EMAIL`). >50 orphan-t talál egy futás → HTML riport e-mail.
 
 #### D.5 Hardening backlog (deferred B–E iteration-guardian roast-ból)
 
 Iteration-guardian 2026-05-09 hardening review (lásd memory `meghivasi-flow-redesign`) deferred 4 kockázat:
 
-- [ ] **D.5.1 (B) Atomic TOCTOU lock**: a `sendOneInviteEmail` 60s cooldown-ja jelenleg `lastSentAt` snapshot + pre-claim mitigáció (~30ms race window). True atomicitáshoz `(inviteId, secondsBucket)` unique-index lock collection — `inviteSendLocks` (CF-pattern azonos a `ipRateLimitCounters`-rel). **Trade-off**: új collection + komplexebb send-flow, viszont igazi atomic kapu. Csak akkor kell, ha botspam-vektor lesz.
+- [ ] **D.5.1 (B) Atomic TOCTOU lock** — **deferred** (Codex tervi review: első botspam incidentig, jelenlegi pre-claim ~30ms race window alacsony kockázat). `(inviteId, secondsBucket)` unique-index lock collection `inviteSendLocks`.
 
-- [ ] **D.5.2 (C) sendCount audit-mező a CF response-ban**: a `createInvite` / `createBatchInvites` válasza `deliveryStatus`-t ad (sent/failed/cooldown/skipped), de nem `sendCount`-ot. A frontend nem tudja, hányszor ment ki email egy invite-ra. Implementáció: `sendOneInviteEmail` returnje `sendCount` mezővel bővül; a hívó beemeli a response-ba.
+- [x] **D.5.2 (C) sendCount audit-mező** — **kód kész**. `sendOneInviteEmail()` returnje `{ success, sendCount? }`-szel bővül (Codex MAJOR fix: csak akkor `sendCount` ha bookkeeping `bookkept`). `_maybeAutoSendInviteEmail` returnje string → `{ status, sendCount? }` objektum (breaking, két hívási hely frissítve). `createInvite` / `createBatchInvites` / `sendInviteEmail` action-response propagálja. Deploy hátra: D-roadmap 4. lépés (`invite-to-organization` CF redeploy).
 
-- [ ] **D.5.3 (D) Race-test integration suite**: 0 automated teszt a 9-es BLOCKER 2 fix és a `_maybeAutoSendInviteEmail` TOCTOU mitigáció környékén. Codex tanácsadás: NEM `vitest --concurrent`, hanem Appwrite-közeli integrációs terhelés (k6 vagy custom load test 2-2 párhuzamos `acceptInvite` és `_autoSendInviteEmail`-re). **Scope**: ~1-2 óra setup, eseti futtatás (NEM CI minden PR-on, költséges).
+- [ ] **D.5.3 (D) Race-test integration suite** — **deferred** (Codex tervi review: eseti futtatás, NEM CI minden PR-on, költséges).
 
-- [ ] **D.5.4 (E) Frontend `deliveryStatus: 'cooldown'` UX-feedback**: a backend most `cooldown`-ot ad vissza, de a frontend (`InviteModal` + `UsersTab` Invitations row) nem renderel rá visszajelzést. A user csak silent failure-t lát (vagy ugyanaz a sent-state). Implementáció: per-invite delivery-status badge + tooltip (`60 másodpercen belül még egyszer kattintottál — várj fél percet`).
+- [x] **D.5.4 (E) Frontend `deliveryStatus: 'cooldown'` UX-feedback** — **kód kész** (push-able, csak Dashboard cPanel `./deploy.sh`). `InviteModal.jsx` `deliverySummary()` helper (sent/failed/cooldown/default + tooltip). `UsersTab.jsx` `errorMessage(reason, retryAfterSec)` 2-paraméteres signature, `handleResendInvite()` `err.response.retryAfterSec` propagálja, dinamikus „várj még N másodpercet" üzenet (Codex MINOR fix: `typeof === 'number'` a `retryAfterSec === 0` boundary-ra).
 
 #### D.6 Investigation: duplicate users a UsersTab UX-ban
 
@@ -390,16 +381,62 @@ User report 2026-05-09 ~02:10: „kidobta a usert a loginra, de maradt még egy 
 
 **Hipotézis**: a user a UsersTab-on 2 különböző Sashalmi-fiókot lát (sajáttal + a teszt-Sasi-val) és ezt „2 ugyanolyan user"-nek értelmezi. NEM valódi duplikátum, csak névbeli hasonlóság (két különböző email).
 
-- [ ] **D.6.1** UsersTab UI clarity: ha 2+ row ugyanazzal a `userName`-mel jelenik meg, mutassunk extra distinguishing info-t (pl. e-mail-cím prominentábban, vagy badge a másik mellett: „Te vagy ez a fiók").
+- [x] **D.6.1** UsersTab UI clarity — **kód kész** (push-able, csak Dashboard cPanel `./deploy.sh`). `duplicateDisplayNames` Set memo a `members` + `userNameMap` deps-en, dupla név → kötelező e-mail-megjelenítés (`resolved.email` vagy self-fallback `user.email`). Egyedi név → eredeti viselkedés (csak ha mindkét adat ismert).
 
-- [ ] **D.6.2** A test-account `69fe79e00022f3f9b2f6` (Sasi/`sashalmi.imre@gmail.com`) **maradhat** vagy törölhető — user döntés. Ha törlik, az új `user-cascade-delete` v4 (`69fe79421d1f3f3738ea`) most már működő endpoint-pal cleanup-ol.
+- [ ] **D.6.2** A test-account `69fe79e00022f3f9b2f6` (Sasi/`sashalmi.imre@gmail.com`) **user döntés** (maradhat vagy törölhető). Ha törlik, az új `user-cascade-delete` v4 (`69fe79421d1f3f3738ea`) most már működő endpoint-pal cleanup-ol.
 
 #### D.7 Lessons learned — session-szintű refleksiók
 
 - **Infrastructure-modell**: a session-elején NEM ellenőriztem a deploy-mechanizmust → 80% kapacitás-veszteség. Megelőzés D.1.3.
 - **Codex stop-time gate**: 11 stop-time iteráció mind valós kockázatot tárt fel. Megerősíti a D.0-as alapelvet.
 - **MCP-deploy mintája bevált**: `functions_create_deployment` → `functions_get_deployment` polling → `functions_list_executions` debug → automatizált 10 deploy egy session-ben siker. A Railway MCP ugyanezt fogja adni a proxy-ra (D.1.1).
-- **Endpoint-default mismatch (`fra.cloud.appwrite.io` vs `cloud.appwrite.io`)** — a `cascade-delete` és `invite-to-organization` mintáját kellett volna copy-paste-elni, NEM ad-hoc default-ot kreálni. Új CF-templét írunk a [[Komponensek]]-be: standard `setEndpoint` + `setProject` boilerplate.
+- **Endpoint-default mismatch (`fra.cloud.appwrite.io` vs `cloud.appwrite.io`)** — a `cascade-delete` és `invite-to-organization` mintáját kellett volna copy-paste-elni, NEM ad-hoc default-ot kreálni. **Új CF-templét** írunk a Komponensek-be: [[Komponensek/CFTemplate]].
+
+#### D — Deploy roadmap (következő session)
+
+> **Kontextus AI agentnek**: a 2026-05-09 session a teljes D blokk **kódoldali implementációját** elvégezte (D.0/D.1/D.2/D.3/D.4/D.5/D.6/D.7). Egyetlen deploy nem indult — auto mode user-confirmation szabálya a shared production system módosításokra. Ez a roadmap pontonként vezeti a következő sessiont a deploy-hoz. **Kötelező** új session-elején: [[Komponensek/SessionPreflight]] 5 perces infra-check + Codex co-reflection alapelv (D.0).
+
+**A) Frontend-only push (alacsony kockázat, gyors)**
+
+- [ ] **A.1** `git status` + `git log` ellenőrzés → a D-blokk frontend változtatásai (D.5.4 InviteModal/UsersTab + D.6.1 duplikált név + D.2.3 OrganizationOrphanedView/ProtectedRoute) commit-olva legyenek a `claude/agitated-herschel-1780f4` branchen. Merge-elés `main`-re.
+- [ ] **A.2** Dashboard deploy: `cd packages/maestro-dashboard && ./deploy.sh` — cPanel SSH/SCP kihelyezés a `maestro.emago.hu`-ra. **Megjegyzés**: a D.2.3 `OrganizationOrphanedView` BACKEND nélkül (D.2.4 guard NÉLKÜL) **inaktív** — a frontend nem fog detect-elni `status === 'orphaned'` orgot, mert a séma még nincs. NEM regresszió, csak no-op a deploy-ig. A D.5.4 + D.6.1 azonnal él.
+
+**B) D.2 Last-owner enforcement (Phase 1.5) — backend deploy**
+
+- [ ] **B.1** Codex előzetes review (kötelező a D.0 alapelv szerint backend deploy előtt) — deployment sorrend és env var változtatások hatása, regresszió-lista.
+- [ ] **B.2** `bootstrap_organization_status_schema` action futtatás (`appwrite functions create-execution invite-to-organization` payload `{"action":"bootstrap_organization_status_schema"}`, vagy MCP-vel). Owner-only, idempotens. `status` enum + `status_idx` jön létre. Ha `indexesPending: true`, várj 10s-t és újrafutás.
+- [ ] **B.3** `backfill_organization_status` action **DRY-RUN ELŐSZÖR** (`{"action":"backfill_organization_status","dryRun":true}`). Várt: `stats.total` = élő orgok száma, `stats.alreadySet` = 0 (nincs status), `stats.backfilled` = orgok száma, `stats.errors` = 0. Ha OK, futtasd `dryRun: false`-zal. Ezután minden élő org `status: 'active'`.
+- [ ] **B.4** `invite-to-organization` CF újradeploy (`appwrite functions create-deployment --code functions/invite-to-organization`). A új kód: `getOrgStatus()` orphan-guard, `userHasOrgPermission()` 7-paraméteres signature, `transferOrphanedOrgOwnership` action, `bootstrap_organization_status_schema` + `backfill_organization_status` action regisztráció. Deploy után `functions_get_deployment` polling.
+- [ ] **B.5** `user-cascade-delete` CF újradeploy (`appwrite functions create-deployment --code functions/user-cascade-delete`). Új env var: `ORGANIZATIONS_COLLECTION_ID = "organizations"` (ellenőrzés: `appwrite functions list-variables --function-id user-cascade-delete`). A deploy + env var KÖTELEZŐ — különben a `user-cascade-delete` `verificationFailures.push`-tel jelez minden last-owner cascade-en (Codex MAJOR fix), 5xx admin attention.
+- [ ] **B.6** Dashboard deploy (ha A.2 még nem futott le): `./deploy.sh`. Ezzel a `OrganizationOrphanedView` aktívvá válik.
+- [ ] **B.7** Smoke teszt:
+    - `transfer_orphaned_org_ownership` lista `appwrite.json`-ből vagy Console-ból, manuálisan teszteld egy izolált test-org-on
+    - Hozz létre egy test-orgot egy ad-hoc user-rel, töröld a usert (ne a tag, hanem az owner-egyetlen-tag-et)
+    - Ellenőrizd: `organizations.<orgId>.status === 'orphaned'`, `userHasOrgPermission()` 403-mat ad minden `org.*`-ra (próbálj a UI-ról invite-küldést egy másik tagból)
+    - `transfer_orphaned_org_ownership` action egy másik tagra promote-ol → `status === 'active'` visszaáll
+- [ ] **B.8** Codex stop-time review a deploy után: van-e edge-case a B.7 smoke-ban?
+
+**C) D.3 Audit-trail collection — opcionális, alacsonyabb prio**
+
+- [ ] **C.1** Új collection a Console-on: `organizationInviteHistory`. **Permissions**: `rowSecurity: true`, collection-szintű perms üres (csak a doc-szintű ACL érvényes). Documents permissions üresek (CF API key írja).
+- [ ] **C.2** Env var beállítás: `ORGANIZATION_INVITE_HISTORY_COLLECTION_ID = "<új collection $id>"` az `invite-to-organization` CF-en.
+- [ ] **C.3** `bootstrap_organization_invite_history_schema` action futtatás. 19 attributum + `org_email_finalAt` index. Ha `indexesPending: true`, várj 10s-t és újrafutás.
+- [ ] **C.4** Smoke: küldj egy test-meghívót, fogadd el, ellenőrizd az `organizationInviteHistory` collection-ben az új rekordot (`finalStatus: 'accepted'`, `tokenHash` SHA-256 hex). Második elfogadás-próba (idempotens) → `[ArchiveInvite] már archiválva` log + nincs duplikált rekord (deterministic doc ID).
+- [ ] **C.5** Codex stop-time review.
+
+**D) D.4 Orphan-sweeper cron CF — önálló deploy**
+
+- [ ] **D.1** Új CF létrehozás Console-on vagy `appwrite functions create`. Név: `orphan-sweeper`, runtime Node.js 18.0+, schedule `0 3 * * *`, timeout 300s (5 min, a 500-as user-check cap-hez).
+- [ ] **D.2** Env varok beállítása: `DATABASE_ID`, `ORGANIZATION_MEMBERSHIPS_COLLECTION_ID`, `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID`, `GROUP_MEMBERSHIPS_COLLECTION_ID`, `APPWRITE_API_KEY` (vagy headerből), `APPWRITE_ENDPOINT` (`https://fra.cloud.appwrite.io/v1`). **Opcionális**: `RESEND_API_KEY` + `ADMIN_NOTIFICATION_EMAIL` + `RESEND_FROM_EMAIL` (admin alert e-mailhez), `GRACE_WINDOW_MS` (default 1 óra).
+- [ ] **D.3** API key scope-ok: `databases.read`, `databases.write`, `users.read`. (A meglévő `MaestroFunctionsKey` lefedi.)
+- [ ] **D.4** Deploy: `appwrite functions create-deployment --function-id orphan-sweeper --code functions/orphan-sweeper --entrypoint src/main.js --activate true`.
+- [ ] **D.5** Manuális első futás (`appwrite functions create-execution`). Várt: `success: true, totalOrphaned: 0` (ha nincs valós orphan a 1h grace ablakban).
+- [ ] **D.6** 24h múlva (vagy `0 3 * * *` után) ellenőrizd a scheduled futás execution log-ját.
+- [ ] **D.7** Codex stop-time review.
+
+**Sorrend**: A → B → C → D. **A** azonnal mehet (frontend-only, alacsony kockázat). **B** a következő session core-ja (D.2 backend deploy). **C** és **D** opcionális governance/observability — később külön sessionben.
+
+**Memóriapont** (a következő AI agentnek): a `_maybeAutoSendInviteEmail` return-type breaking changed string → `{status, sendCount?}` objektum lett (D.5.2). Ha új helyen hívnád vagy tesztelnéd, ne string-egyezést várj — `result.status === 'sent'`. Az új permission helper signature: `userHasOrgPermission(databases, env, user, slug, orgId, orgRoleByOrg, orgStatusByOrg)` — 7 paraméter, az utolsó opcionális de kötelező a `permissionContext.orgStatusByOrg` átadása az orphan-guard cache-hez.
 
 ---
 

@@ -44,4 +44,8 @@ Egy fájl = egy domain fogalom. Mély, lefelé linkel a kódra (`fájl:sor`), ol
 ## Útvonal
 - [[CanonicalPath]]
 
+## DevOps / Workflow
+- [[SessionPreflight]] — kötelező infra-check minden új session elején (deploy-mechanizmus, Codex stop-time gate)
+- [[CFTemplate]] — Appwrite CF boilerplate (`setEndpoint` + env var-ok + fail-closed) — drift-megelőzés
+
 > A felület-szintű képért lásd a témakör-MOC-okat: [[Architektúra]], [[Hálózat]], [[Munkafolyamat]].

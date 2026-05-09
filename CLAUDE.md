@@ -32,6 +32,8 @@ A projekt egyben Obsidian vault is — a gyökér `.obsidian/` a vault root, az 
 Tudástár index: [_docs/Főoldal.md](_docs/Főoldal.md).
 
 ## Fejlesztési alapszabályok (összefoglaló)
+- **Session preflight** (kötelező új session első 5 percében): deploy script-ek + konfig fájlok + célhost megértése. Soha ne feltételezz „auto-deploy on git push"-t ellenőrzés nélkül. Részletek: [_docs/Komponensek/SessionPreflight.md](_docs/Komponensek/SessionPreflight.md)
+- **Codex co-reflection** (backend / auth / permission / Realtime témákra): BLOCKER észlelés ELŐTT + implementáció UTÁN + stop-time gate. Részletek: [_docs/Komponensek/SessionPreflight.md](_docs/Komponensek/SessionPreflight.md)
 - **Komment nyelv**: magyar
 - **Logger**: `log()` / `logError()` / `logWarn()` / `logDebug()`. Soha `console.*`
 - **Yarn**, nem npm install (workspace)

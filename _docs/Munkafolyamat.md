@@ -48,6 +48,10 @@ UI gomb `disabled` → handler toast → engine guard.
 - **WorkflowEngine** — `executeTransition()`, `lockDocument()`, `unlockDocument()`
 - **registerTask** minta — aszinkron koordináció documentClosed-nél
 
+## Session preflight
+
+Minden új coding-session **első 5 percében** infra-check kötelező — deploy script-ek, deploy-konfig fájlok, célhost megértése. Részletek + 5 perces parancslista: [[Komponensek/SessionPreflight]]. A 2026-05-09 incident ([[Naplók/2026-05-09]]) okán bevezetett alapelv.
+
 ## Manuális smoke teszt checklist
 
 > Valós InDesign környezetben végigkattintani — a kód review nem helyettesíti. Periodikusan, release előtt vagy nagyobb refaktor után érdemes futtatni.
