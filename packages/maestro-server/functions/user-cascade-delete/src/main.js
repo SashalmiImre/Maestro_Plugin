@@ -51,22 +51,26 @@ const BATCH_LIMIT = 100;
 function buildOrgTeamId(organizationId) { return `org_${organizationId}`; }
 function buildOfficeTeamId(officeId) { return `office_${officeId}`; }
 
-// ── Helper: lapozott listDocuments ──────────────────────────────────────
-async function listAllDocuments(databases, databaseId, collectionId, userId) {
-    const all = [];
-    let cursor = null;
-    while (true) {
-        const queries = [
+// ── Helper: listDocuments + cascade-delete pattern ──────────────────────
+// 2026-05-09 (CF execution log debug): a korábbi cursorAfter-es paginálás
+// `request cannot have request body` hibával bukott. A `cascade-delete`
+// CF-fel azonos pattern-t alkalmazzuk: listDocuments egy batch-re,
+// majd minden iterációnál újra listDocuments (deleted docs eltűnnek a
+// következő list eredményből, így természetes lapozást kapunk).
+//
+// FONTOS: a felhasználói scope-ban ritkán van >100 membership egy típusból,
+// ezért egyetlen list-call elég gyakorlatban; a függvény mégis lapozott,
+// hogy outlier-eseteket is kezeljen.
+async function listAllByUserId(databases, databaseId, collectionId, userId) {
+    const result = await databases.listDocuments(
+        databaseId,
+        collectionId,
+        [
             sdk.Query.equal('userId', userId),
             sdk.Query.limit(BATCH_LIMIT)
-        ];
-        if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
-        const result = await databases.listDocuments(databaseId, collectionId, queries);
-        all.push(...result.documents);
-        if (result.documents.length < BATCH_LIMIT) break;
-        cursor = result.documents[result.documents.length - 1].$id;
-    }
-    return all;
+        ]
+    );
+    return result.documents;
 }
 
 async function deleteDocs(databases, databaseId, collectionId, docs, log, error) {
@@ -151,8 +155,12 @@ module.exports = async ({ req, res, log, error }) => {
         return res.json({ success: false, reason: 'misconfigured', missing }, 500);
     }
 
+    // 2026-05-09 (CF execution log debug): az endpoint default-ot a working
+    // CF-ek mintájára `https://cloud.appwrite.io/v1`-re igazítom (a `fra.`
+    // regionális variáns nem támogatja az összes REST route-ot a node-appwrite
+    // SDK-számára → "request cannot have request body" hiba).
     const client = new sdk.Client()
-        .setEndpoint(process.env.APPWRITE_ENDPOINT || 'https://fra.cloud.appwrite.io/v1')
+        .setEndpoint(process.env.APPWRITE_ENDPOINT || 'https://cloud.appwrite.io/v1')
         .setProject(process.env.APPWRITE_FUNCTION_PROJECT_ID || req.headers?.['x-appwrite-project'])
         .setKey(apiKey);
     const databases = new sdk.Databases(client);
@@ -183,19 +191,19 @@ module.exports = async ({ req, res, log, error }) => {
     let officeMems = [];
     let groupMems = [];
 
-    try { orgMems = await listAllDocuments(databases, databaseId, orgMemsCol, userId); }
+    try { orgMems = await listAllByUserId(databases, databaseId, orgMemsCol, userId); }
     catch (err) {
         error(`[UserCascade] orgMemberships list bukott: ${err.message}`);
         stats.listFailures.push({ collection: 'organizationMemberships', error: err.message });
     }
 
-    try { officeMems = await listAllDocuments(databases, databaseId, officeMemsCol, userId); }
+    try { officeMems = await listAllByUserId(databases, databaseId, officeMemsCol, userId); }
     catch (err) {
         error(`[UserCascade] officeMemberships list bukott: ${err.message}`);
         stats.listFailures.push({ collection: 'editorialOfficeMemberships', error: err.message });
     }
 
-    try { groupMems = await listAllDocuments(databases, databaseId, groupMemsCol, userId); }
+    try { groupMems = await listAllByUserId(databases, databaseId, groupMemsCol, userId); }
     catch (err) {
         error(`[UserCascade] groupMemberships list bukott: ${err.message}`);
         stats.listFailures.push({ collection: 'groupMemberships', error: err.message });
