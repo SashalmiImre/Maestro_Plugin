@@ -11,6 +11,8 @@
   },
   "scripts": {
     "build:cf-validator": "node scripts/build-cf-validator.mjs",
-    "check:cf-validator": "node scripts/build-cf-validator.mjs --check"
+    "check:cf-validator": "node scripts/build-cf-validator.mjs --check",
+    "build:cf-orphan-guard": "node scripts/build-cf-orphan-guard.mjs",
+    "check:cf-orphan-guard": "node scripts/build-cf-orphan-guard.mjs --check"
   }
 }

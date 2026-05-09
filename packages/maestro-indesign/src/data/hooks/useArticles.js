@@ -8,7 +8,7 @@ import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 import { useAllGroupMembers } from "./useGroupMembers.js";
 
 // Segédprogramok (Utils)
-import { isNetworkError, isAuthError, getAPIErrorMessage } from "../../core/utils/errorUtils.js";
+import { isNetworkError, isAuthError, getAPIErrorMessage, OrphanedOrgError } from "../../core/utils/errorUtils.js";
 import { tables, DATABASE_ID, COLLECTIONS, Query } from "../../core/config/appwriteConfig.js";
 import { callUpdateArticleCF } from "../../core/utils/updateArticleClient.js";
 import {
@@ -295,6 +295,8 @@ export const useArticles = (publicationId, publicationRoot) => {
             
             if (isAuthError(error)) {
                 dispatchMaestroEvent(MaestroEvent.sessionExpired);
+            } else if (error instanceof OrphanedOrgError) {
+                showToast('Szervezet árva állapotban', TOAST_TYPES.WARNING, error.message);
             } else if (isNetworkError(error)) {
                 const attempts = incrementAttempts();
                 setOffline(error, attempts);
@@ -506,6 +508,11 @@ export const useArticles = (publicationId, publicationRoot) => {
                 throw dbError;
             }
 
+            // F.7+E.7 — orphan-blokkolás esetén a fizikai fájl már új néven van, de
+            // a DB-write blokkolt. A rollback minden nem-tranziens hibára szükséges,
+            // különben név-divergencia maradna; a toast üzenetét feltételesen formáljuk.
+            const isOrphan = dbError instanceof OrphanedOrgError;
+
             // --- Fázis 3: Visszavonás (Rollback) ---
             // Ha az adatbázis frissítés sikertelen, vissza kell nevezni a fájlt,
             // különben inkonzisztens állapotba kerül a rendszer.
@@ -513,9 +520,13 @@ export const useArticles = (publicationId, publicationRoot) => {
                 const app = require("indesign").app;
                 const rollbackScript = generateRollbackRenameScript(newNativePath, originalFileName);
                 const rollbackResult = app.doScript(rollbackScript, SCRIPT_LANGUAGE_JAVASCRIPT, []);
-                
+
                 if (rollbackResult === 'SUCCESS') {
-                    showToast('Adatbázis hiba történt', TOAST_TYPES.WARNING, 'A fájl átnevezése visszavonásra került, mivel az adatbázis frissítése sikertelen volt.');
+                    if (isOrphan) {
+                        showToast('Szervezet árva állapotban', TOAST_TYPES.WARNING, `${dbError.message} A fájl átnevezése visszavonásra került.`);
+                    } else {
+                        showToast('Adatbázis hiba történt', TOAST_TYPES.WARNING, 'A fájl átnevezése visszavonásra került, mivel az adatbázis frissítése sikertelen volt.');
+                    }
                 } else {
                     showToast('Súlyos hiba az átnevezés során', TOAST_TYPES.ERROR, 'Az adatbázis frissítése sikertelen, és a fájl eredeti nevének visszaállítása sem sikerült. Kérjük, ellenőrizd a fájlrendszert manuálisan.');
                 }
@@ -523,7 +534,7 @@ export const useArticles = (publicationId, publicationRoot) => {
                 logError("[useArticles] FATAL: Kivétel a visszaállítás közben:", revertError);
                 showToast('Súlyos hiba az átnevezés során', TOAST_TYPES.ERROR, 'Az adatbázis frissítése és a fájl visszaállítása is sikertelen. Kérjük, ellenőrizd a fájlrendszert manuálisan.');
             }
-            
+
             throw dbError;
         }
 

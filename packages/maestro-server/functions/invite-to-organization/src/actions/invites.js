@@ -54,20 +54,30 @@ const MAX_CUSTOM_MESSAGE_LENGTH = 500;
  *       - `_createInviteCore` recreate: re-read a latest invite-ot — ha még
  *         `pending`, 409 `invite_state_race_retry` (Codex stop-time MAJOR fix).
  *   - `env_missing`: az `ORGANIZATION_INVITE_HISTORY_COLLECTION_ID` env hiányzik.
- *     A hívó best-effort tovább megy a status update-tel (audit elvész).
- *   - `error`: write hiba (timeout, hálózat). A hívó best-effort tovább megy.
- *     Phase 2: recovery probe a deterministic ID-n.
+ *     **G.3 (Phase 2, ADR 0011) hard-fail kontraktus**: a 4 critical-path action
+ *     (`acceptInvite`, `declineInvite`, `createInvite`, `createBatchInvites`)
+ *     az `_assertCasGateConfigured(ctx)` action-eleji guarddal 500
+ *     `service_misconfigured`-ra fail-eli. A `_archiveInvite` `env_missing`
+ *     return-je így csak az opportunista `_archiveAndUpdateExpiredInvite`
+ *     ágon jut el — ott best-effort marad (a fő flow-t nem blokkolja).
+ *   - `error`: write hiba (timeout, hálózat). **G.2 (Phase 2)**: a recovery
+ *     probe `created` (idempotent) vagy `already_exists` (race-loser) jelzésre
+ *     konvertálja, ha az írás backend-oldalon mégis lefutott. A hívó tartós
+ *     hibára (`error`) best-effort továbbmegy — a final state (membership
+ *     létrejön) fontosabb, mint a transient audit-rés.
  *
  * GDPR: a `token` raw értéket NEM tároljuk — SHA-256 hash kerül a `tokenHash`
  * mezőbe. Ez elég incident-korrelációhoz (egy konkrét tokenes report → hash
  * → lookup), de NEM lehet újrahasznosítani.
  *
- * **Phase 2 follow-up (Codex pre-review fix 3)**:
- *   - 504 timeout után recovery probe: history `getDocument(deterministicId)`
- *     → ha létezik és ugyanaz a `finalStatus`, idempotens; ha más, race-loser.
- *     A jelenlegi `error` return ezt a hívóra hagyja.
- *   - History collection env required CAS-üzemmódban (most még opcionális,
- *     hiánya `env_missing`-et ad → a hívó best-effort tovább megy).
+ * **Phase 2 implementáció (2026-05-09 Session-4)**:
+ *   - G.2 recovery probe: a 504/timeout után az `error` ág `getDocument`-tel
+ *     megnézi, hogy a write backend-oldalon mégis lefutott-e — ha igen, a
+ *     hívó `created` (idempotent) vagy `already_exists` (race-loser) jelzést
+ *     kap a stale `error` helyett (lásd kód a `} catch (err) {` ágban).
+ *   - G.3 history collection env required: a 4 critical-path action eleji
+ *     `_assertCasGateConfigured(ctx)` 500 hard-fail-eli az env-hiányos
+ *     futást, mielőtt bármi DB mutáció történne (lásd ADR 0011).
  *
  * @param {Object} ctx - CF ctx
  * @param {Object} invite - a teljes invite doc (a destrukció ELŐTT)
@@ -81,9 +91,17 @@ async function _archiveInvite(ctx, invite, finalStatus, finalReason, finalUserId
     const { databases, env, log, error } = ctx;
     const inviteHistoryCollectionId = env.organizationInviteHistoryCollectionId;
     if (!inviteHistoryCollectionId) {
-        log(`[ArchiveInvite] SKIP — ORGANIZATION_INVITE_HISTORY_COLLECTION_ID env var nincs beállítva (invite=${invite.$id})`);
+        // G.3 (Phase 2, 2026-05-09): a CAS-gate hard-fail kontraktus szerint
+        // a hívó az `env_missing`-et 500 `service_misconfigured`-ként kezeli
+        // (NEM best-effort tovább). A return-jelzés diagnostikai célú, hogy
+        // a hívó megfelelő hibakódot adjon vissza.
+        error(`[ArchiveInvite] CAS-gate misconfigured — ORGANIZATION_INVITE_HISTORY_COLLECTION_ID env hiányzik (invite=${invite.$id})`);
         return { status: 'env_missing' };
     }
+
+    // G.2 (Phase 2, 2026-05-09): a `deterministicId`-t a try-blokkon kívül
+    // számítjuk, hogy a 504 timeout recovery probe a catch-ben hozzáférjen.
+    const deterministicId = invite.$id;
 
     try {
         const tokenHash = invite.token
@@ -120,14 +138,6 @@ async function _archiveInvite(ctx, invite, finalStatus, finalReason, finalUserId
         // két KÜLÖNBÖZŐ doc-ot engedett meg `accepted` vs `expired` race
         // esetén → audit-inkonzisztencia. A jelenlegi minta egyetlen doc-ot
         // enged meg invite-szinten — az első ág nyer, a második 409-et kap.
-        //
-        // Codex stop-time MINOR fix (2026-05-09): közvetlenül az `invite.$id`-t
-        // használjuk doc-ID-nak — `sdk.ID.unique()` ~20 char, az Appwrite 36 char
-        // limit alatt fér, collision-mentes (a 32 hex SHA-1 helyett kevesebb
-        // moving part, és a history doc-ot azonnal megfeleltethető az invite
-        // ID-nak debug-szempontból). Phase 2: ha a custom invite ID-k > 36 char-ra
-        // bővülnek (B.x), bevezetünk SHA-256 slice fallback-et.
-        const deterministicId = invite.$id;
         try {
             await databases.createDocument(
                 env.databaseId,
@@ -162,7 +172,27 @@ async function _archiveInvite(ctx, invite, finalStatus, finalReason, finalUserId
             throw createErr;
         }
     } catch (err) {
-        error(`[ArchiveInvite] write hiba (non-blocking, invite=${invite.$id}): ${err.message}`);
+        // G.2 (Phase 2, 2026-05-09) — 504 timeout recovery probe.
+        // Egy hálózati hiba / timeout után az Appwrite írás backend-oldalon
+        // lehet, hogy lefutott. A deterministic doc-ID-vel megnézzük: ha
+        // létezik, az előző write nyert — visszahelyettesítjük az `error`-t
+        // `created` (idempotent) vagy `already_exists` (race-loser) jelzésre.
+        error(`[ArchiveInvite] write hiba (recovery probe következik, invite=${invite.$id}): ${err.message}`);
+        try {
+            const existing = await databases.getDocument(
+                env.databaseId, inviteHistoryCollectionId, deterministicId
+            );
+            if (existing && existing.finalStatus) {
+                if (existing.finalStatus === finalStatus) {
+                    log(`[ArchiveInvite] recovery probe: invite=${invite.$id} doc megvan (${finalStatus}) — idempotent created`);
+                    return { status: 'created', recovered: true };
+                }
+                log(`[ArchiveInvite] recovery probe: invite=${invite.$id} doc megvan más finalStatus-szal (${existing.finalStatus}) — race-loser`);
+                return { status: 'already_exists', existingFinalStatus: existing.finalStatus, recovered: true };
+            }
+        } catch (probeErr) {
+            // Probe is bukott — valódi tartós hiba, fall through `error` ágra.
+        }
         return { status: 'error', error: err };
     }
 }
@@ -185,6 +215,30 @@ async function _archiveInvite(ctx, invite, finalStatus, finalReason, finalUserId
  *     false ha already_exists race-loser)
  *   - archiveStatus: a `_archiveInvite` return.status mező
  */
+/**
+ * G.3 (Phase 2, 2026-05-09) — CAS-gate hard-fail action-eleji guard.
+ *
+ * A `_archiveInvite()` history-kollekció env-jét a critical-path action-ek
+ * (acceptInvite, declineInvite, _createInviteCore) az ELSŐ DB-mutáció ELŐTT
+ * ellenőrzik. Ha hiányzik → 500 `service_misconfigured` — NEM mehet tovább
+ * a flow audit-rés mellett. A return ugyanaz mint a `requireOwnerAnywhere`-é:
+ * `null` ha OK, vagy a `fail()` által épített response objektum.
+ *
+ * Az opportunista expire (`_archiveAndUpdateExpiredInvite`) NEM használja —
+ * ott az archive bukása a fő flow-t nem blokkolja, és az env-hiány a
+ * critical-path action-ön már lefulladt volna.
+ */
+function _assertCasGateConfigured(ctx) {
+    const { env, res, fail: failFn, error } = ctx;
+    if (!env.organizationInviteHistoryCollectionId) {
+        error('[CAS-gate] ORGANIZATION_INVITE_HISTORY_COLLECTION_ID env hiányzik — service_misconfigured');
+        return failFn(res, 500, 'service_misconfigured', {
+            missing: 'ORGANIZATION_INVITE_HISTORY_COLLECTION_ID'
+        });
+    }
+    return null;
+}
+
 async function _archiveAndUpdateExpiredInvite(ctx, invite, reason, contextLabel) {
     const { databases, env, log } = ctx;
     const archiveResult = await _archiveInvite(ctx, invite, 'expired', reason);
@@ -518,6 +572,12 @@ async function createInvite(ctx) {
     if (!EMAIL_REGEX.test(email)) {
         return fail(res, 400, 'invalid_email');
     }
+
+    // G.3 (Phase 2, 2026-05-09) — CAS-gate konfig hard-fail. A `_createInviteCore`
+    // opportunistán expire-elheti a stale invite-okat (audit-trail), és az
+    // env nélkül ez bukna. Az invite-create flow-t NEM engedjük audit-rés mellett.
+    const casDenied = _assertCasGateConfigured(ctx);
+    if (casDenied) return casDenied;
     if (role !== 'admin' && role !== 'member') {
         return fail(res, 400, 'invalid_role', { allowed: ['admin', 'member'] });
     }
@@ -628,6 +688,10 @@ async function createBatchInvites(ctx) {
     if (emails.length > MAX_BATCH_INVITES) {
         return fail(res, 400, 'batch_too_large', { max: MAX_BATCH_INVITES, given: emails.length });
     }
+
+    // G.3 (Phase 2, 2026-05-09) — CAS-gate konfig hard-fail (lásd `createInvite`).
+    const casDenied = _assertCasGateConfigured(ctx);
+    if (casDenied) return casDenied;
     if (role !== 'admin' && role !== 'member') {
         return fail(res, 400, 'invalid_role', { allowed: ['admin', 'member'] });
     }
@@ -768,6 +832,12 @@ async function acceptInvite(ctx) {
     if (!token) {
         return fail(res, 400, 'missing_fields', { required: ['token'] });
     }
+
+    // G.3 (Phase 2, 2026-05-09) — CAS-gate konfig hard-fail az ELSŐ
+    // DB-mutáció ELŐTT (membership/team-add/expire). Audit-rés mellett
+    // NEM mehet tovább a flow.
+    const casDenied = _assertCasGateConfigured(ctx);
+    if (casDenied) return casDenied;
 
     // ADR 0010 W2 — IP-rate-limit (5 attempt / 15 perc, 1h block).
     // Token-szivárgás esetén egy támadó tetszőleges tokent próbálhat
@@ -1192,6 +1262,11 @@ async function declineInvite(ctx) {
         return fail(res, 400, 'missing_fields', { required: ['token'] });
     }
 
+    // G.3 (Phase 2, 2026-05-09) — CAS-gate konfig hard-fail. Audit-rés
+    // mellett NEM írunk `status='declined'`-et.
+    const casDenied = _assertCasGateConfigured(ctx);
+    if (casDenied) return casDenied;
+
     // 1) Token lookup
     let invite;
     try {
@@ -1252,8 +1327,11 @@ async function declineInvite(ctx) {
             existingFinalStatus: archiveResult.existingFinalStatus || null
         });
     }
-    // `created` | `env_missing` | `error` → status update fut (best-effort
-    // env_missing/error esetén az audit elvész, de a fő decline flow megy).
+    // `created` | `error` → status update fut. Az `env_missing` ágat az
+    // action-eleji `_assertCasGateConfigured` már 500-ra fail-elte (G.3
+    // hard-fail). A G.2 recovery probe az `error` ágat idempotent vagy
+    // race-loser jelzésre konvertálja, ha az írás backend-oldalon mégis
+    // lefutott.
     try {
         await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
             status: 'declined'

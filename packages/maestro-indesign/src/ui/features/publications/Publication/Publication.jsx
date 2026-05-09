@@ -18,7 +18,7 @@ import { buildPlaceholderRows } from "../../../../core/utils/pageGapUtils.js";
 import { isContributor } from "maestro-shared/contributorHelpers.js";
 import { toCanonicalPath, isUnderMountPrefix, currentMountPrefix } from "../../../../core/utils/pathUtils.js";
 import { callSetPublicationRootPathCF } from "../../../../core/utils/updatePublicationClient.js";
-import { PermissionDeniedError, isNetworkError } from "../../../../core/utils/errorUtils.js";
+import { PermissionDeniedError, OrphanedOrgError, isNetworkError } from "../../../../core/utils/errorUtils.js";
 
 export const Publication = React.memo(({ publication, onShowProperties, onOpenInDashboard, isExpanded, onToggle, isConfigured, isDriveAccessible, filterState }) => {
     // Két blokkoló ok egyesítve a fejléc színezéshez és a cikk-művelet tiltáshoz.
@@ -303,9 +303,9 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
             } else if (err.cfReason === 'publication_not_found') {
                 title = "Kiadvány nem található";
                 message = "A kiadvány időközben törölve lett.";
-            } else if (err.cfReason === 'org_orphaned_write_blocked') {
+            } else if (err instanceof OrphanedOrgError) {
                 title = "Szervezet árva állapotban";
-                message = "A szervezet jelenleg árva állapotban van — várd meg az új tulajdonos kijelölését, mielőtt módosítanál.";
+                message = err.message;
             } else if (isNetworkError(err)) {
                 title = "Hálózati hiba";
                 message = "A beállítás nem mentődött el — próbáld újra.";

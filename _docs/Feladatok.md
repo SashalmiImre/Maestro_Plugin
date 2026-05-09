@@ -840,32 +840,37 @@ A live state után 1 Codex `codex:codex-rescue` stop-time review az élő rendsz
 
 ### Phase 2 follow-upok (új session-elhelyzés, NEM blokkoló)
 
-A 2026-05-09 session-3 (F+E+G + Harden) NEM zárta le a teljes kockázat-felületet. Az alábbi 10 follow-up tétel egy későbbi sprintben futtatható:
+A 2026-05-09 session-3 (F+E+G + Harden) NEM zárta le a teljes kockázat-felületet. Session-4 (auto-mode + Codex pre-review + stop-time review) az alábbi 8 tételt **kódoldalon implementálta** (ld. [[Naplók/2026-05-09#Session-4 (este) — Phase 2 follow-upok kódoldali implementáció]]); a maradék F.8 + E.6 streaming-refactor Phase 2.x deferred. A G.4 + G.5 + F.8 DESIGN-szintű döntései az [[Döntések/0011-cas-gate-and-orphan-guard-invariants]] ADR-ben rögzítve.
 
 #### F. blokk Phase 2
 
-- **F.7** — `useArticles.js` / `ArticleProperties.jsx` raw `org_orphaned_write_blocked` szöveg cfReason-mapping. Új `OrphanedOrgError extends Error` osztály a Plugin `errorUtils.js`-ben (consistent CFError minta a `PermissionDeniedError`-ral). Becsült: 30 perc.
-- **F.8** — TOCTOU race-window strict invariáns ACL-szinten (Phase 2 pre-event guard / collection-szintű write-tilt orphan org-ra). A jelenlegi 2 CF best-effort guardja `getOrgStatus` → `updateDocument` közti race-ablakot meghagy. Becsült: 2-3 óra.
-- **F.9** — F-blokk CF-ek hot-path orphan-guard cache (publication-fetch JOIN vagy in-memory LRU). A `getOrgStatus` per-request, NEM cached → magas-throughput plugin esetén bottleneck. Becsült: 1-2 óra.
+- **F.7 [KÉSZ]** — `useArticles.js` raw `org_orphaned_write_blocked` szöveg cfReason-mapping. Új `OrphanedOrgError extends Error` osztály a Plugin [errorUtils.js](../packages/maestro-indesign/src/core/utils/errorUtils.js)-ben (consistent CFError minta a `PermissionDeniedError`-ral). 5 hívóhely átkapcsolt `instanceof` mintára.
+- **F.8 [DEFERRED → ADR 0011]** — TOCTOU race-window strict invariáns ACL-szinten. ADR 0011 elvet a strict ACL-szintű invariánst (Phase 3 trigger: élesben race-corrupcio incident); az app-szintű best-effort guard + F.9 cache + Konstrukció C invite-szintű CAS-gate elegendő.
+- **F.9 [KÉSZ]** — Hot-path orphan-guard cache (`maestro-shared/orphanGuard.js`-ben module-szintű 30s TTL). `clearOrgStatusCache(orgId?)` helper. A 2 hot-path CF process-szintű — recovery flow → 30s-os késleltetés.
 
 #### G. blokk Phase 2
 
-- **G.2** — `_archiveInvite()` 504 timeout recovery probe: a `error` return ágon `getDocument(deterministicId)` → ha létezik és ugyanaz a `finalStatus`, idempotens skip; ha más, race-loser. A jelenlegi `error` ág best-effort továbbmegy (CAS-gate opcionális hibaúton lekapcsol). Becsült: 1 óra.
-- **G.3** — `organizationInviteHistory` env-required CAS-üzemmódban (most még opcionális, hiánya `env_missing`-et ad → best-effort tovább). A teljes CAS invariáns érvényesüléshez kötelezővé kell tenni. Becsült: 30 perc + deploy guard.
-- **G.4** — DESIGN QUESTION: CAS-gate hard-fail vs best-effort (Adversarial BLOCKER 1). Döntés: a `_archiveInvite()` `env_missing` és `error` ág engedi-e a status-update-et (best-effort) vagy hard-fail-eli (strict CAS). Becsült: 1 óra Codex review + 30 perc kód.
-- **G.5** — DESIGN QUESTION: race-loser audit-veszteség (state-of-record vs event-log). Egy `accepted` vs `expired` race-en a winner `expired` lehet, miközben a user TAG. Compliance audit "missing accepted event"-et lát. Lehetséges megoldás: külön `terminal-claim` collection (CAS-gate) + `event-log` collection (mind a 2 ágat naplózza). Becsült: 2-3 óra refactor.
+- **G.2 [KÉSZ]** — `_archiveInvite()` 504 timeout recovery probe. Az `error` ágon `getDocument(deterministicId)` → `status: 'created', recovered: true` (idempotent) vagy `'already_exists', existingFinalStatus, recovered: true` (race-loser). A `deterministicId` a try-blokkon kívül helyezve, hogy a catch-ben hozzáférhető legyen.
+- **G.3 [KÉSZ]** — `organizationInviteHistory` env-required CAS-üzemmódban. Új helper `_assertCasGateConfigured(ctx)` action-eleji guard (500 `service_misconfigured` ha env hiányzik). 4 hívóhelyen (acceptInvite, declineInvite, createInvite, createBatchInvites) az ELSŐ DB-mutáció ELŐTT.
+- **G.4 [DÖNTÖTT → ADR 0011]** — Hard-fail CAS-gate `env_missing` esetén (G.3 implementációval). Az `error` ág NEM hard-fail (G.2 recovery probe konvertálja idempotent/race-loser-re).
+- **G.5 [DÖNTÖTT → ADR 0011]** — State-of-record authoritative; race-loser audit-veszteség elfogadható ha state korrekt (membership $createdAt + denormalizált `acceptedByUserId` reconstrukcióhoz). Phase 3 trigger: ha compliance regulátor explicit event-log-ot kér.
 
 #### E. blokk Phase 2
 
-- **E.6** — `backfill_admin_team_acl` checkpoint pattern (Adversarial MAJOR — page-level commit / streaming). Nagy org (1000+ membership) timeout után részleges migrált state. Becsült: 1-2 óra streaming refactor.
-- **E.7** — `OrphanedOrgError extends Error` shared osztály (lásd F.7) — az `_handleCFError`-t `instanceof CFError` mintára átállítani. Fed F.7-tel.
+- **E.6 [RÉSZBEN KÉSZ]** — `paginateByQuery` `maxRunMs` + `fromCursor` + `incomplete` támogatás a `helpers/pagination.js`-ben. A `backfill_admin_team_acl` action checkpoint-pattern integrációja (`payload.fromInviteCursor` + `nextCursor` return) Phase 2.x deferred — kódoldalon a `paginateByQuery` ready, a hívó action-on alkalmazni külön task.
+- **E.7 [KÉSZ]** — `OrphanedOrgError extends Error` shared osztály (F.7-tel közös). `_handleCFError` `instanceof CFError` mintára átállítva (a `cfReason` szöveg-egyezés helyett).
 
 #### Code quality / shared infrastructure
 
-- **H.1 (Phase 2)** — `helpers/pagination.js` extract a `schemas.js`-ben. A `listAll` helper 4 hívóhelyen (`backfillTenantAcl`, `backfillAdminTeamAcl`, stb.) duplikált. Becsült: 30 perc.
-- **H.2 (Phase 2)** — `scripts/build-cf-orphan-guard.mjs` single-source generator a 3 (vagy több) write-CF-re (A.7.1 minta a `compiledValidator.js`-re). Az F-blokk inline `getOrgStatus` mostanra 3 helyen duplikált (1 `permissions.js` + 2 új CF). Becsült: 1-2 óra a generator + per-CF integráció.
+- **H.1 (Phase 2) [KÉSZ]** — `helpers/pagination.js` extract a [packages/maestro-server/functions/invite-to-organization/src/helpers/pagination.js](../packages/maestro-server/functions/invite-to-organization/src/helpers/pagination.js)-ben. 3 inline cursor-loop lecserélve (4. — `teamsApi.listMemberships` — másik API).
+- **H.2 (Phase 2) [KÉSZ]** — `scripts/build-cf-orphan-guard.mjs` single-source generator. Canonical [packages/maestro-shared/orphanGuard.js](../packages/maestro-shared/orphanGuard.js); generated `_generated_orphanGuard.js` 2 CF-en. Yarn script-ek: `build:cf-orphan-guard` + `check:cf-orphan-guard`.
 
 **AI-agent utasítás Phase 2 ütemezéshez**: ezek a tételek NEM blokkolóak, ütemezhetők egyenként vagy témablokkonként. Minden Phase 2 fix előtt KÖTELEZŐ Codex co-reflection (D.0). NE implementálj kettőnél többet egyszerre — a Phase 1-2 közti határt explicit kommit-üzenetben jelölni kell.
+
+#### Phase 2.x deferred
+
+- **F.8** strict ACL-szintű invariáns (ADR 0011 — Phase 3 trigger: élesben race-corrupcio incident).
+- **E.6 hívó action-integráció** — `backfill_admin_team_acl` `payload.fromInviteCursor` + `nextCursor` return + a hívó (admin) iteratív retry-pattern. A `paginateByQuery` ready (`maxRunMs` + `fromCursor` + `incomplete`).
 
 ---
 

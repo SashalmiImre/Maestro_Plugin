@@ -99,6 +99,28 @@ export class PermissionDeniedError extends Error {
 }
 
 /**
+ * Szerver-oldali árva-szervezet írástilt (Phase 1.6 orphan-guard, F-blokk).
+ *
+ * A CF-ek 403 `org_orphaned_write_blocked` választ adnak, ha a szervezet
+ * `status='orphaned'` (utolsó tulajdonos törlés / kilépés után). A hívók
+ * `try/catch`-ben felismerhetik (`err instanceof OrphanedOrgError`), és
+ * felhasználóbarát üzenetet jeleníthetnek meg anélkül, hogy raw `cfReason`
+ * kódot mutatnának.
+ *
+ * F.7 + E.7 (Phase 2 follow-up): a `cfReason === 'org_orphaned_write_blocked'`
+ * minta lecserélése `instanceof CFError` mintára (a `PermissionDeniedError`
+ * konvenciójához igazítva).
+ */
+export class OrphanedOrgError extends Error {
+    constructor(message) {
+        super(message || 'A szervezet jelenleg árva állapotban van — várd meg az új tulajdonos kijelölését, mielőtt módosítanál.');
+        this.name = 'OrphanedOrgError';
+        this.cfReason = 'org_orphaned_write_blocked';
+        this.orgOrphaned = true;
+    }
+}
+
+/**
  * Eldönti, hogy egy hiba Appwrite „hiányzó index" hiba-e.
  * Először stabil, strukturált property-ket vizsgál (code, type),
  * majd fallback-ként az üzenet szövegét ellenőrzi.
@@ -127,6 +149,10 @@ export const isIndexNotFoundError = (error) => {
  */
 export const getAPIErrorMessage = (error, operation = 'művelet') => {
     if (!error) return `A ${operation} sikertelen volt.`;
+
+    // Strukturált CF-error osztályok — saját message már magyarul fogalmaz.
+    if (error instanceof OrphanedOrgError) return error.message;
+    if (error instanceof PermissionDeniedError) return error.message;
 
     /** Defenzív string konverzió — hostile toString/Symbol.toPrimitive ellen */
     const safeString = (val) => {

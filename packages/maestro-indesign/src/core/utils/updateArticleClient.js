@@ -15,7 +15,7 @@
 
 import { functions, UPDATE_ARTICLE_FUNCTION_ID } from "../config/appwriteConfig.js";
 import { withTimeout } from "./promiseUtils.js";
-import { PermissionDeniedError } from "./errorUtils.js";
+import { PermissionDeniedError, OrphanedOrgError } from "./errorUtils.js";
 
 const UPDATE_ARTICLE_TIMEOUT_MS = 20000;
 
@@ -27,6 +27,8 @@ const UPDATE_ARTICLE_TIMEOUT_MS = 20000;
  * @param {string} [label='update-article'] - withTimeout debug címke.
  * @returns {Promise<Object>} A szerver által visszaadott frissített dokumentum.
  * @throws {PermissionDeniedError} Ha a CF 403-as `permissionDenied` választ adott.
+ * @throws {OrphanedOrgError} Ha a CF 403 `org_orphaned_write_blocked` választ adott
+ *   (Phase 1.6 orphan-guard, F-blokk).
  * @throws {Error} Bármely más hiba esetén (hálózat, 4xx/5xx, parse).
  */
 export async function callUpdateArticleCF(articleId, data, label = 'update-article') {
@@ -50,6 +52,9 @@ export async function callUpdateArticleCF(articleId, data, label = 'update-artic
     }
 
     if (!response.success) {
+        if (response.reason === 'org_orphaned_write_blocked') {
+            throw new OrphanedOrgError(response.message);
+        }
         if (response.permissionDenied) {
             throw new PermissionDeniedError(response.reason, response.requiredGroups || []);
         }

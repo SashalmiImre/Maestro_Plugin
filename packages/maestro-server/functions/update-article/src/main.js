@@ -222,43 +222,14 @@ async function findOfficeMembership(databases, databaseId, collectionId, userId,
     return result.documents[0] || null;
 }
 
-// ── Phase 1.6 orphan-guard (inline duplikáció a Phase 1.5 mintára) ───────────
+// ── Phase 1.6 orphan-guard (single-source, H.2 Phase 2 2026-05-09) ───────────
 //
-// Az `invite-to-organization` `permissions.js` `getOrgStatus()` /
-// `isOrgWriteBlocked()` helperjének inline mása. A `null` legacy active
-// (60+ legacy org backwards-compat). A `'lookup_failed'` env-hiány VAGY DB-hibára
-// utaló sentinel — fail-closed kezelendő (különben átmeneti DB-hiba alatt
-// fail-open lenne a guard).
-//
-// Drift: ha `organizations.status` enum bővül, szinkronizálni kell az
-// `invite-to-organization` permissions.js-szel és a `set-publication-root-path`
-// CF-fel. Phase 2: scripts/build-cf-orphan-guard.mjs single-source generátor.
-
-const ORG_STATUS_ORPHANED = 'orphaned';
-const ORG_STATUS_ARCHIVED = 'archived';
-const ORG_STATUS_LOOKUP_FAILED = 'lookup_failed';
-
-function isOrgWriteBlocked(status) {
-    return status === ORG_STATUS_ORPHANED
-        || status === ORG_STATUS_ARCHIVED
-        || status === ORG_STATUS_LOOKUP_FAILED;
-}
-
-async function getOrgStatus(databases, databaseId, organizationsCollectionId, organizationId) {
-    if (!organizationId) return null;
-    if (!databaseId || !organizationsCollectionId) {
-        return ORG_STATUS_LOOKUP_FAILED;
-    }
-    try {
-        const orgDoc = await databases.getDocument(
-            databaseId, organizationsCollectionId, organizationId,
-            [sdk.Query.select(['$id', 'status'])]
-        );
-        return orgDoc?.status || null;
-    } catch (e) {
-        return ORG_STATUS_LOOKUP_FAILED;
-    }
-}
+// Az inline duplikáció helyét a `_generated_orphanGuard.js` veszi át; a
+// kanonikus forrás `packages/maestro-shared/orphanGuard.js`, regeneráció:
+// `yarn build:cf-orphan-guard`. Az `invite-to-organization` `permissions.js`
+// belső `getOrgStatus()` (per-request cache) NEM cserélődött erre — más
+// kontextus, más invariánsok.
+const { getOrgStatus, isOrgWriteBlocked } = require('./_generated_orphanGuard.js');
 
 /**
  * JSON válasz hibakóddal — egyszerű wrapper a `res.json` köré.
@@ -491,7 +462,7 @@ module.exports = async function ({ req, res, log, error }) {
             || (parentPublication ? parentPublication.organizationId : null);
         if (!skipPermissionCheck && orphanGuardOrgId) {
             const orgStatus = await getOrgStatus(
-                databases, databaseId, organizationsCollectionId, orphanGuardOrgId
+                databases, databaseId, organizationsCollectionId, orphanGuardOrgId, sdk
             );
             if (isOrgWriteBlocked(orgStatus)) {
                 log(`[Scope] Org ${orphanGuardOrgId} status="${orgStatus}" → write blocked (Phase 1.6)`);

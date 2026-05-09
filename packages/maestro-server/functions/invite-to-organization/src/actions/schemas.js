@@ -31,6 +31,10 @@ const {
     requireOwnerAnywhere,
     fetchUserIdentity
 } = require('../helpers/util.js');
+const {
+    listAllByQuery,
+    paginateByQuery
+} = require('../helpers/pagination.js');
 
 /**
  * ACTION='bootstrap_workflow_schema' (#30 + #80) — owner-only schema-bővítés
@@ -878,19 +882,12 @@ async function backfillTenantAcl(ctx) {
         errors: []
     };
 
-    const listAll = async (collectionId, queries = []) => {
-        const out = [];
-        let cursor = null;
-        while (true) {
-            const q = [...queries, sdk.Query.limit(CASCADE_BATCH_LIMIT)];
-            if (cursor) q.push(sdk.Query.cursorAfter(cursor));
-            const batch = await databases.listDocuments(env.databaseId, collectionId, q);
-            out.push(...batch.documents);
-            if (batch.documents.length < CASCADE_BATCH_LIMIT) break;
-            cursor = batch.documents[batch.documents.length - 1].$id;
-        }
-        return out;
-    };
+    // H.1 (Phase 2, 2026-05-09): single-source `listAllByQuery` a
+    // `helpers/pagination.js`-ből. Korábban inline-olt 11 sor — minden új
+    // backfill action ezt használja, hogy a paging-step driftet ne kelljen
+    // 4 helyen szinkronban tartani.
+    const listAll = (collectionId, queries = []) =>
+        listAllByQuery(databases, env.databaseId, collectionId, queries, sdk, { batchSize: CASCADE_BATCH_LIMIT });
 
     // ── 1) target organization: team + memberships + invites ACL
     //
@@ -1197,19 +1194,11 @@ async function backfillAdminTeamAcl(ctx) {
     // a korábbi single-batch limit a target org > CASCADE_BATCH_LIMIT
     // memberships / invites / history rekord esetén néma részleges backfill-t
     // adott — az újrafuttatás cursor nélkül ugyanazt az első oldalt érte el).
-    const listAll = async (collectionId, queries) => {
-        const out = [];
-        let cursor = null;
-        while (true) {
-            const q = [...queries, sdk.Query.limit(CASCADE_BATCH_LIMIT)];
-            if (cursor) q.push(sdk.Query.cursorAfter(cursor));
-            const batch = await databases.listDocuments(env.databaseId, collectionId, q);
-            out.push(...batch.documents);
-            if (batch.documents.length < CASCADE_BATCH_LIMIT) break;
-            cursor = batch.documents[batch.documents.length - 1].$id;
-        }
-        return out;
-    };
+    //
+    // H.1 (Phase 2, 2026-05-09): single-source `listAllByQuery` import
+    // a `helpers/pagination.js`-ből — driftvédett a 4 hívóhely között.
+    const listAll = (collectionId, queries) =>
+        listAllByQuery(databases, env.databaseId, collectionId, queries, sdk, { batchSize: CASCADE_BATCH_LIMIT });
 
     // ── 2) Tagság-szinkron — owner+admin role-ú memberships ──
     //
@@ -1415,75 +1404,70 @@ async function backfillMembershipUserNames(ctx) {
 
     // Az updateDocument-pattern egy collection-en: paginated scan + idempotens
     // mező-update. A `kind` csak a stats-ban + log-ban különbözik.
+    //
+    // H.1 (Phase 2, 2026-05-09): `paginateByQuery` streaming wrapper a
+    // korábbi inline cursor-loop helyett.
     const processCollection = async (collectionId, kind) => {
         const bucket = stats[kind];
-        let cursor = null;
-        while (true) {
-            const queries = [sdk.Query.limit(CASCADE_BATCH_LIMIT)];
-            if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
-
-            let batch;
-            try {
-                batch = await databases.listDocuments(env.databaseId, collectionId, queries);
-            } catch (err) {
-                error(`[BackfillMembershipUserNames] ${kind} list hiba: ${err.message}`);
-                stats.errors.push({ kind, phase: 'list', message: err.message });
-                return;
-            }
-            if (batch.documents.length === 0) break;
-
-            for (const doc of batch.documents) {
-                bucket.scanned++;
-                // Idempotens: ha mindkét mező KI van töltve, skip.
-                const hasName = typeof doc.userName === 'string' && doc.userName.length > 0;
-                const hasEmail = typeof doc.userEmail === 'string' && doc.userEmail.length > 0;
-                if (hasName && hasEmail) {
-                    bucket.skipped++;
-                    continue;
-                }
-
-                if (!doc.userId) {
-                    // Defensive — egy korrupt rekord nélkül `userId`-vel nem
-                    // tudunk lookupolni. Skipoljuk, hibát logolunk.
-                    stats.errors.push({
-                        kind, phase: 'doc', $id: doc.$id, message: 'missing userId'
-                    });
-                    continue;
-                }
-
-                const identity = await fetchUserIdentity(usersApi, doc.userId, userIdentityCache, log);
-                if (!identity.userName && !identity.userEmail) {
-                    // A user-lookup bukott (törölt user / hálózati hiba) —
-                    // nem írunk null-t felül egy meglévő részleges adatra.
-                    bucket.lookupFailed++;
-                    continue;
-                }
-
-                if (dryRun) {
-                    bucket.updated++;
-                    continue;
-                }
-
-                try {
-                    await databases.updateDocument(
-                        env.databaseId,
-                        collectionId,
-                        doc.$id,
-                        {
-                            userName: hasName ? doc.userName : (identity.userName || null),
-                            userEmail: hasEmail ? doc.userEmail : (identity.userEmail || null)
+        try {
+            await paginateByQuery(
+                databases, env.databaseId, collectionId, [], sdk,
+                async (docs) => {
+                    for (const doc of docs) {
+                        bucket.scanned++;
+                        // Idempotens: ha mindkét mező KI van töltve, skip.
+                        const hasName = typeof doc.userName === 'string' && doc.userName.length > 0;
+                        const hasEmail = typeof doc.userEmail === 'string' && doc.userEmail.length > 0;
+                        if (hasName && hasEmail) {
+                            bucket.skipped++;
+                            continue;
                         }
-                    );
-                    bucket.updated++;
-                } catch (err) {
-                    stats.errors.push({
-                        kind, phase: 'update', $id: doc.$id, message: err.message
-                    });
-                }
-            }
 
-            if (batch.documents.length < CASCADE_BATCH_LIMIT) break;
-            cursor = batch.documents[batch.documents.length - 1].$id;
+                        if (!doc.userId) {
+                            // Defensive — egy korrupt rekord nélkül `userId`-vel nem
+                            // tudunk lookupolni. Skipoljuk, hibát logolunk.
+                            stats.errors.push({
+                                kind, phase: 'doc', $id: doc.$id, message: 'missing userId'
+                            });
+                            continue;
+                        }
+
+                        const identity = await fetchUserIdentity(usersApi, doc.userId, userIdentityCache, log);
+                        if (!identity.userName && !identity.userEmail) {
+                            // A user-lookup bukott (törölt user / hálózati hiba) —
+                            // nem írunk null-t felül egy meglévő részleges adatra.
+                            bucket.lookupFailed++;
+                            continue;
+                        }
+
+                        if (dryRun) {
+                            bucket.updated++;
+                            continue;
+                        }
+
+                        try {
+                            await databases.updateDocument(
+                                env.databaseId,
+                                collectionId,
+                                doc.$id,
+                                {
+                                    userName: hasName ? doc.userName : (identity.userName || null),
+                                    userEmail: hasEmail ? doc.userEmail : (identity.userEmail || null)
+                                }
+                            );
+                            bucket.updated++;
+                        } catch (err) {
+                            stats.errors.push({
+                                kind, phase: 'update', $id: doc.$id, message: err.message
+                            });
+                        }
+                    }
+                },
+                { batchSize: CASCADE_BATCH_LIMIT }
+            );
+        } catch (err) {
+            error(`[BackfillMembershipUserNames] ${kind} list hiba: ${err.message}`);
+            stats.errors.push({ kind, phase: 'list', message: err.message });
         }
     };
 
@@ -1838,59 +1822,48 @@ async function backfillOrganizationStatus(ctx) {
     const dryRun = payload?.dryRun === true;
     const stats = { total: 0, alreadySet: 0, backfilled: 0, errors: [] };
 
-    let cursorAfter = null;
-    let safety = 0;
-    while (safety++ < 1000) {
-        // Codex simplify F6 (2026-05-09): `Query.isNull('status')` szűrő —
-        // egy 1000+ orgú prod-on csak a backfill-elendő doc-okat lapozza.
-        // Az `alreadySet` mindig 0 lesz (a kliens-oldali check belowmaradt
-        // mégis defenzíven, hátha az index még nem propagált).
-        const queries = [
-            sdk.Query.isNull('status'),
-            sdk.Query.limit(CASCADE_BATCH_LIMIT)
-        ];
-        if (cursorAfter) queries.push(sdk.Query.cursorAfter(cursorAfter));
-
-        let page;
-        try {
-            page = await databases.listDocuments(
-                env.databaseId,
-                env.organizationsCollectionId,
-                queries
-            );
-        } catch (err) {
-            error(`[BackfillOrgStatus] listDocuments hiba: ${err.message}`);
-            return fail(res, 500, 'org_list_failed', { error: err.message });
-        }
-
-        if (!page.documents || page.documents.length === 0) break;
-        stats.total += page.documents.length;
-
-        for (const orgDoc of page.documents) {
-            if (orgDoc.status === 'active' || orgDoc.status === 'orphaned' || orgDoc.status === 'archived') {
-                stats.alreadySet++;
-                continue;
-            }
-            if (dryRun) {
-                stats.backfilled++;
-                continue;
-            }
-            try {
-                await databases.updateDocument(
-                    env.databaseId,
-                    env.organizationsCollectionId,
-                    orgDoc.$id,
-                    { status: 'active' }
-                );
-                stats.backfilled++;
-            } catch (err) {
-                stats.errors.push({ orgId: orgDoc.$id, error: err.message });
-                error(`[BackfillOrgStatus] update ${orgDoc.$id} hiba: ${err.message}`);
-            }
-        }
-
-        if (page.documents.length < CASCADE_BATCH_LIMIT) break;
-        cursorAfter = page.documents[page.documents.length - 1].$id;
+    // H.1 (Phase 2, 2026-05-09): `paginateByQuery` streaming wrapper.
+    // Codex simplify F6 (2026-05-09): `Query.isNull('status')` szűrő —
+    // egy 1000+ orgú prod-on csak a backfill-elendő doc-okat lapozza.
+    // Az `alreadySet` mindig 0 lesz (a kliens-oldali check defenzíven
+    // belowmaradt, hátha az index még nem propagált).
+    try {
+        await paginateByQuery(
+            databases,
+            env.databaseId,
+            env.organizationsCollectionId,
+            [sdk.Query.isNull('status')],
+            sdk,
+            async (docs) => {
+                stats.total += docs.length;
+                for (const orgDoc of docs) {
+                    if (orgDoc.status === 'active' || orgDoc.status === 'orphaned' || orgDoc.status === 'archived') {
+                        stats.alreadySet++;
+                        continue;
+                    }
+                    if (dryRun) {
+                        stats.backfilled++;
+                        continue;
+                    }
+                    try {
+                        await databases.updateDocument(
+                            env.databaseId,
+                            env.organizationsCollectionId,
+                            orgDoc.$id,
+                            { status: 'active' }
+                        );
+                        stats.backfilled++;
+                    } catch (err) {
+                        stats.errors.push({ orgId: orgDoc.$id, error: err.message });
+                        error(`[BackfillOrgStatus] update ${orgDoc.$id} hiba: ${err.message}`);
+                    }
+                }
+            },
+            { batchSize: CASCADE_BATCH_LIMIT }
+        );
+    } catch (err) {
+        error(`[BackfillOrgStatus] listDocuments hiba: ${err.message}`);
+        return fail(res, 500, 'org_list_failed', { error: err.message });
     }
 
     log(`[BackfillOrgStatus] dryRun=${dryRun} total=${stats.total} alreadySet=${stats.alreadySet} backfilled=${stats.backfilled} errors=${stats.errors.length}`);

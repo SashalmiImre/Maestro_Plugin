@@ -14,7 +14,7 @@
 
 import { functions, SET_PUBLICATION_ROOT_PATH_FUNCTION_ID } from "../config/appwriteConfig.js";
 import { withTimeout } from "./promiseUtils.js";
-import { PermissionDeniedError } from "./errorUtils.js";
+import { PermissionDeniedError, OrphanedOrgError } from "./errorUtils.js";
 
 const SET_ROOT_PATH_TIMEOUT_MS = 15000;
 
@@ -25,6 +25,8 @@ const SET_ROOT_PATH_TIMEOUT_MS = 15000;
  * @param {string} rootPath - Kanonikus rootPath (pl. `/ShareName/path`).
  * @returns {Promise<Object>} A szerver által visszaadott frissített dokumentum.
  * @throws {PermissionDeniedError} Ha a CF 403-as `permissionDenied` választ adott.
+ * @throws {OrphanedOrgError} Ha a CF 403 `org_orphaned_write_blocked` választ adott
+ *   (Phase 1.6 orphan-guard, F-blokk).
  * @throws {Error} Minden más hiba esetén (hálózat, 4xx/5xx, parse, `cfReason` mezővel).
  */
 export async function callSetPublicationRootPathCF(publicationId, rootPath) {
@@ -48,6 +50,9 @@ export async function callSetPublicationRootPathCF(publicationId, rootPath) {
     }
 
     if (!response.success) {
+        if (response.reason === 'org_orphaned_write_blocked') {
+            throw new OrphanedOrgError(response.message);
+        }
         if (response.permissionDenied) {
             throw new PermissionDeniedError(response.reason, response.requiredGroups || []);
         }

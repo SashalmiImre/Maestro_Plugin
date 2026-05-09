@@ -9,7 +9,7 @@
  */
 
 import { callUpdateArticleCF } from "../updateArticleClient.js";
-import { PermissionDeniedError, isNetworkError } from "../errorUtils.js";
+import { PermissionDeniedError, OrphanedOrgError, isNetworkError } from "../errorUtils.js";
 import { getAvailableTransitions as rtGetAvailableTransitions } from "maestro-shared/workflowRuntime.js";
 import { LOCK_TYPE } from "../constants.js";
 import { validate } from "../validationRunner.js";
@@ -23,14 +23,10 @@ function _handleCFError(error, context) {
     if (error instanceof PermissionDeniedError) {
         return { success: false, error: error.message, permissionDenied: true };
     }
-    // Phase 1.6 (D blokk follow-up) — orphan-guard: a user-facing copy
-    // különbözik a többi CF-hibától, ezért külön ágon kezelt érték.
-    if (error?.cfReason === 'org_orphaned_write_blocked') {
-        return {
-            success: false,
-            error: 'A szervezet jelenleg árva állapotban van — várd meg az új tulajdonos kijelölését, mielőtt módosítanál.',
-            orgOrphaned: true
-        };
+    // Phase 1.6 (F-blokk) — orphan-guard. F.7+E.7 átállás: `instanceof CFError` minta
+    // a régi `error?.cfReason === 'org_orphaned_write_blocked'` szöveg-egyezés helyett.
+    if (error instanceof OrphanedOrgError) {
+        return { success: false, error: error.message, orgOrphaned: true };
     }
     if (isNetworkError(error)) {
         logWarn(context, error);
