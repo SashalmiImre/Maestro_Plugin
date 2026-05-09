@@ -66,6 +66,24 @@ function errorMessage(code) {
     return code;
 }
 
+// D.5.4 — egy meghívó kiküldés-státusza humán formában a results-listához.
+// `'sent' | 'failed' | 'cooldown' | undefined`. Codex review (2026-05-09):
+// a `cooldown` ág akkor jön be, ha a backend idempotens existing-path
+// 60 másodpercen belül egy második createInvite hívást kapott — a CF nem
+// küld új e-mailt, csak ezzel jelzi.
+function deliverySummary(deliveryStatus) {
+    switch (deliveryStatus) {
+        case 'sent':
+            return { label: 'Kiküldve', color: 'var(--c-success)', tooltip: 'A meghívó e-mail elindult.' };
+        case 'failed':
+            return { label: 'Létrejött, e-mail hiba', color: 'var(--c-error)', tooltip: 'A meghívó létrejött, de az e-mail kiküldése sikertelen volt. Próbáld a függő meghívók listán az „Újraküldés" gombbal.' };
+        case 'cooldown':
+            return { label: 'Cooldown — várj', color: 'var(--text-secondary)', tooltip: 'Egy perccel ezelőtt már mentünk egy meghívót erre a címre. A backend most nem küldött újat — várj fél-egy percet, majd a függő meghívók listán „Újraküldés".' };
+        default:
+            return { label: 'Létrejött', color: 'var(--c-success)', tooltip: 'A meghívó rekord létrejött.' };
+    }
+}
+
 /**
  * @param {Object} props
  * @param {string} props.organizationId — a meghívást fogadó szervezet `$id`-ja
@@ -220,8 +238,18 @@ export default function InviteModal({ organizationId, onInviteSent }) {
                 perEmail
             });
             setIsSubmitting(false);
-            if ((response.successCount || 0) > 0) {
-                showToast(`${response.successCount} meghívó kiküldve.`, 'success');
+            // Codex baseline review fix (2026-05-09 MINOR): a `successCount`
+            // invite-doc létrejöttét (idempotens existing + race-winner is)
+            // számolja, NEM a tényleges e-mail kiküldést. A toast szövege
+            // ehhez igazítva: `meghívó létrejött` + a `Kiküldés eredménye`
+            // részletes panel mutatja a delivery-státuszt per-email.
+            const successCount = response.successCount || 0;
+            if (successCount > 0) {
+                const sentCount = perEmail.filter(r => r.deliveryStatus === 'sent').length;
+                const toastMsg = sentCount === successCount
+                    ? `${successCount} meghívó kiküldve.`
+                    : `${successCount} meghívó létrejött (${sentCount} e-mail elindult — részletek a listán).`;
+                showToast(toastMsg, 'success');
                 if (onInviteSent) {
                     try { await onInviteSent(); } catch { /* non-blocking */ }
                 }
@@ -258,27 +286,27 @@ export default function InviteModal({ organizationId, onInviteSent }) {
                     listStyle: 'none', padding: 0, margin: 0,
                     maxHeight: 240, overflowY: 'auto'
                 }}>
-                    {results.perEmail.map((r, i) => (
-                        <li key={i} style={{
-                            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                            padding: '6px 0', fontSize: 13,
-                            borderBottom: '1px solid var(--border)'
-                        }}>
-                            <span>{r.email}</span>
-                            <span style={{
-                                color: r.status === 'ok'
-                                    ? (r.deliveryStatus === 'failed' ? 'var(--c-error)' : 'var(--c-success)')
-                                    : 'var(--c-error)',
-                                fontSize: 11
+                    {results.perEmail.map((r, i) => {
+                        const summary = r.status === 'ok' ? deliverySummary(r.deliveryStatus) : null;
+                        return (
+                            <li key={i} style={{
+                                display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                                padding: '6px 0', fontSize: 13,
+                                borderBottom: '1px solid var(--border)'
                             }}>
-                                {r.status === 'ok'
-                                    ? (r.deliveryStatus === 'failed'
-                                        ? 'Létrejött, e-mail hiba'
-                                        : (r.deliveryStatus === 'sent' ? 'Kiküldve' : 'Létrejött'))
-                                    : (r.error || 'Hiba')}
-                            </span>
-                        </li>
-                    ))}
+                                <span>{r.email}</span>
+                                <span
+                                    title={summary ? summary.tooltip : (r.error || 'Hiba')}
+                                    style={{
+                                        color: summary ? summary.color : 'var(--c-error)',
+                                        fontSize: 11
+                                    }}
+                                >
+                                    {summary ? summary.label : (r.error || 'Hiba')}
+                                </span>
+                            </li>
+                        );
+                    })}
                 </ul>
                 <div className="modal-actions" style={{ marginTop: 16 }}>
                     <button type="button" className="btn-primary" onClick={closeModal}>

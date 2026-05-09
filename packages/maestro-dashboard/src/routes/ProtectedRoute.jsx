@@ -16,7 +16,9 @@
 import React, { useState } from 'react';
 import { Navigate, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext.jsx';
+import { useScope } from '../contexts/ScopeContext.jsx';
 import BrandHero from './auth/BrandHero.jsx';
+import OrganizationOrphanedView from './OrganizationOrphanedView.jsx';
 
 export default function ProtectedRoute() {
     const {
@@ -27,6 +29,7 @@ export default function ProtectedRoute() {
         reloadMemberships,
         logout
     } = useAuth();
+    const { activeOrganizationId } = useScope();
     const location = useLocation();
     const navigate = useNavigate();
     const [isRetrying, setIsRetrying] = useState(false);
@@ -104,6 +107,24 @@ export default function ProtectedRoute() {
     // önmagára vissza a usert egy redirect ciklusban.
     if (organizations.length === 0 && location.pathname !== '/onboarding') {
         return <Navigate to="/onboarding" replace />;
+    }
+
+    // D.2.3 (2026-05-09) — orphan org block view. Codex Q3 review: az org
+    // látható marad a `organizations` listán (NEM filterelünk az
+    // AuthContext-en), de az aktív org `status === 'orphaned'` esetén a
+    // dashboard helyett egy speciális blokkoló view jelenik meg. A user
+    // másik orgra válthat (ha van) vagy kijelentkezhet. A backend
+    // `userHasOrgPermission()` orphan-guard úgyis 403-mal ad vissza minden
+    // `org.*` write-műveletet, de a UI-szintű tisztázás megelőzi a "minden
+    // gomb 403"-os UX-zavart. Az `/onboarding` és `/settings/*` route-okat
+    // engedjük át, hogy az "új szervezet létrehozása" út továbbra is járható
+    // legyen — egy másik orgban a user lehet aktív.
+    const activeOrg = (organizations || []).find((o) => o.$id === activeOrganizationId);
+    const isOrphan = activeOrg?.status === 'orphaned';
+    const isAuxRoute = location.pathname.startsWith('/onboarding') ||
+                       location.pathname.startsWith('/settings');
+    if (isOrphan && !isAuxRoute) {
+        return <OrganizationOrphanedView />;
     }
 
     return <Outlet />;

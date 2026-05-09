@@ -18,7 +18,7 @@ import { DASHBOARD_URL } from '../../config.js';
 import { useCopyDialog } from '../CopyDialog.jsx';
 import InviteModal from './InviteModal.jsx';
 
-function errorMessage(reason) {
+function errorMessage(reason, retryAfterSec) {
     if (typeof reason !== 'string') return 'Ismeretlen hiba történt.';
     if (reason.includes('missing_fields')) return 'Tölts ki minden kötelező mezőt.';
     if (reason.includes('invalid_email')) return 'Érvénytelen e-mail cím formátum.';
@@ -30,7 +30,14 @@ function errorMessage(reason) {
     if (reason.includes('already_invited')) return 'Ehhez az e-mail címhez már van függőben lévő meghívó.';
     // ADR 0010 W2/W3 — meghívási flow hibakódok
     if (reason.includes('rate_limited')) return 'Túl sok próbálkozás — próbáld meg később.';
-    if (reason.includes('resend_cooldown')) return 'Az utolsó kiküldés óta kevesebb mint egy perc telt el — várj egy kicsit az újraküldéssel.';
+    if (reason.includes('resend_cooldown')) {
+        // D.5.4 — a `retryAfterSec` a CF response-ból érkezik (`callInviteFunction`
+        // wrapped err.response). Codex review fix (MINOR): `typeof === 'number'`
+        // hogy a `retryAfterSec === 0` se essen vissza generikusra (boundary case).
+        return typeof retryAfterSec === 'number'
+            ? `Az utolsó kiküldés óta nem telt el egy perc — várj még ${retryAfterSec} másodpercet.`
+            : 'Az utolsó kiküldés óta kevesebb mint egy perc telt el — várj egy kicsit az újraküldéssel.';
+    }
     if (reason.includes('invite_not_pending')) return 'Ez a meghívó már nem aktív (elfogadták vagy visszavonták).';
     if (reason.includes('invite_expired')) return 'A meghívó lejárt — generálj új meghívót.';
     if (reason.includes('email_send_failed')) return 'Az e-mail kiküldése sikertelen. Próbáld újra később.';
@@ -131,6 +138,32 @@ export default function UsersTab({
     const grouped = useMemo(() => groupMembersByRole(members), [members]);
 
     /**
+     * D.6.1 — duplikált megjelenítendő név detektálás. A `renderMemberRow`
+     * alapesetben csak akkor mutatja az e-mail címet, ha mind a `name`,
+     * mind az `email` ismert (`resolved?.name && resolved?.email`). Ez két
+     * különböző user-fiók esetén (pl. „Sashalmi Imre" — két e-mail) félre-
+     * vezető: mindkettőn ugyanaz a név látszik. Ezért minden olyan név,
+     * ami legalább kétszer szerepel az `members` listán, kötelezően kapja
+     * az e-mail badge-et (és `forceShowEmail` flag-et a self-row-ra is).
+     */
+    const duplicateDisplayNames = useMemo(() => {
+        const counts = new Map();
+        for (const m of members) {
+            const resolved = userNameMap.get(m.userId);
+            const isSelf = m.userId === user?.$id;
+            const name = resolved?.name
+                || resolved?.email
+                || (isSelf ? (user?.name || user?.email || m.userId) : m.userId);
+            counts.set(name, (counts.get(name) || 0) + 1);
+        }
+        const dupes = new Set();
+        for (const [name, count] of counts) {
+            if (count > 1) dupes.add(name);
+        }
+        return dupes;
+    }, [members, userNameMap, user?.$id, user?.name, user?.email]);
+
+    /**
      * ADR 0010 W2 — InviteModal-launcher. A meglévő inline form
      * lecserélődött egy felugró ablakra, amely multi-invite + lejárat-
      * választással + üzenettel támogatja a flow-t.
@@ -154,7 +187,10 @@ export default function UsersTab({
             await resendInviteEmail(invite.$id);
             if (onInviteSent) await onInviteSent();
         } catch (err) {
-            setActionError(errorMessage(err.message || err.code || ''));
+            // D.5.4 — a `callInviteFunction` wrapped err.response-on
+            // visszaadja a `retryAfterSec`-et a 429 cooldown ágon.
+            const retryAfterSec = err?.response?.retryAfterSec;
+            setActionError(errorMessage(err.message || err.code || '', retryAfterSec));
         } finally {
             setActionPending(null);
         }
@@ -228,7 +264,13 @@ export default function UsersTab({
         const displayName = resolved?.name
             || resolved?.email
             || (isSelf ? (user.name || user.email || m.userId) : m.userId);
-        const displayEmail = resolved?.name && resolved?.email ? resolved.email : null;
+        // D.6.1 — duplicate-name esetén kötelező e-mail; egyedi névnél
+        // csak akkor, ha mindkét adat ismert (eredeti viselkedés).
+        const isDuplicate = duplicateDisplayNames.has(displayName);
+        const fallbackEmail = isSelf ? (user?.email || null) : null;
+        const displayEmail = isDuplicate
+            ? (resolved?.email || fallbackEmail || null)
+            : (resolved?.name && resolved?.email ? resolved.email : null);
 
         // Role-dropdown 2026-05-07. Csak owner-caller láthatja, és csak
         // más tagra. Az admin-flow-t most kihagyjuk (admin csak meghívót
