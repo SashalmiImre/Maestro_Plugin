@@ -423,6 +423,8 @@ User report 2026-05-09 ~02:10: „kidobta a usert a loginra, de maradt még egy 
 
 ### E. Q1 ACL refactor — admin-team (külön session, 2026-05-09 follow-up)
 
+> **2026-05-09 SESSION-3 LEZÁRÁS — KÓDOLDAL KÉSZ ([[Naplók/2026-05-09]])**: Codex pre-review (Pattern A választott) + 5 sync hook + 2 collection ACL switch + `backfill_admin_team_acl` action (idempotens, dryRun, **reconcile** mintával — stale removal) + frontend "Meghívási történet" szekció (Pattern A render). Codex stop-time review: 1 BLOCKER (`teamsApi` ctx-destructuring) + 2 MAJOR (frontend pendingInvites catch, backfill pagination/Query.equal) javítva. **Harden Fázis 1+2** plusz 1 BLOCKER (acceptInvite admin-team részleges siker → idempotens-ágon retry) + 4 MAJOR/MINOR fix. Backend: `invite-to-organization` CF redeploy hátra (H szekció). Frontend: cPanel deploy hátra (H szekció).
+
 > **Cél**: a `organizationInviteHistory` és `organizationInvites` collection-ök ACL-jét `team:org_${orgId}` (org-wide read) → `team:org_${orgId}_admins` (csak owner+admin) refactor. A user Q1 explicit kérése (2026-05-09 session-2): "csak az lássa a kiküldött meghívókat aki tud is meghívót küldeni". Ez `org.member.invite` permission slug = owner+admin (`ADMIN_EXCLUDED_ORG_SLUGS` NEM tartalmazza).
 
 > **Why**: jelenleg a `team:org_${orgId}` minden org-tagnak read-et ad → minden member látja az invite-tartalmat (e-mail, customMessage, inviter identity). NEM új exposure (a pending invite-ok is org-wide), de a `organizationInviteHistory` tartós + token-hashed → privacy-adósság, hosszabb ideig fennmaradó leak.
@@ -543,6 +545,8 @@ Frontend deploy: `./deploy.sh` ismét.
 ---
 
 ### F. Phase 1.6 — globális orphan-guard (külön session, 2026-05-09 follow-up)
+
+> **2026-05-09 SESSION-3 LEZÁRÁS — KÓDOLDAL KÉSZ ([[Naplók/2026-05-09]])**: Codex pre-review (3 kérdés: inline duplikáció, lock-only fast-path SKIP, validate-publication-update C opció) + 2 CF integráció (`set-publication-root-path` + `update-article`) inline `getOrgStatus()`/`isOrgWriteBlocked()` helperrel + frontend toast-mapping (Plugin `Publication.jsx` cfReason ág + Dashboard `inviteFunctionErrorMessages.js` + Plugin `workflowEngine.js` `_handleCFError` `orgOrphaned: true` flag). A `validate-publication-update` SCOPE-OUT (csak audit-log, NEM enforce — pre-update snapshot nélkül teljes mező-revert nem biztonságos). Codex stop-time: 1 MAJOR best-effort (TOCTOU race-window — Phase 1.5 mintával koherens) + 2 MINOR (1 fix: audit-log; 1 Phase 2 follow-up). Backend: 2 CF redeploy hátra + `ORGANIZATIONS_COLLECTION_ID` env var (H szekció). Frontend: Plugin UXP rebuild + Dashboard cPanel deploy hátra (H szekció).
 
 > **Cél**: a `set-publication-root-path`, `update-article`, `validate-publication-update` 3 CF-be `getOrgStatus()` + `isOrgWriteBlocked()` orphan-guard integrálása. Ezzel teljessé válik a "orphaned org safe to leave overnight" invariáns.
 
@@ -667,6 +671,8 @@ Egy commit: `feat(d-blokk-phase-1-6): globális orphan-guard 3 CF (set-publicati
 
 ### G. D.3 race compare-and-swap (külön session, 2026-05-09 follow-up)
 
+> **2026-05-09 SESSION-3 LEZÁRÁS — KÓDOLDAL KÉSZ ([[Naplók/2026-05-09]])**: Codex pre-review (4 kérdés) → **Konstrukció C** választva (invite-szintű terminal-claim doc-ID, NEM `(inviteId, finalStatus)` postfix-szel). Új return-jelzéses helper signature (`{ status: 'created' | 'already_exists' | 'env_missing' | 'error', existingFinalStatus?, error? }`), 4 fő hívási hely sorrend-cserélve (ELŐSZÖR archive, ha `created` → status update; `already_exists` → SKIP / 409 `already_terminated`). Codex stop-time: 1 MAJOR (`_createInviteCore` re-read fix — race-loser után ha még pending, 409 `invite_state_race_retry`) + 2 MINOR (direct `invite.$id` doc-ID, kontraktus-komment) javítva. **Harden Fázis 1+2** plusz Quality #1 simplify: `_archiveAndUpdateExpiredInvite` wrapper a 4 opportunista expire-ágon (claim-then-update minta egy helyen). Backend: `invite-to-organization` CF redeploy hátra (H szekció — együtt E blokkal).
+
 > **Cél**: a `_archiveInvite()` deterministicus ID `(inviteId, finalStatus)` szintű idempotenciája NEM véd egy `accepted` vs `expired` race ellen. Compare-and-swap (CAS) pattern szükséges, hogy egy invite csak EGY terminál állapotba kerülhessen.
 
 > **Why**: Codex C+D stop-time review (2026-05-09 session-2) follow-up. A `_archiveInvite()` 4 ágon fut, plusz a `acceptInvite` és `declineInvite` terminális (DB delete vagy status update). Párhuzamos `expired` ÉS `accepted` ág → KÉT history rekord (eltérő doc-ID `inviteId__expired` vs `inviteId__accepted`). Audit-konzisztencia szempontból: egy invite egy terminál állapotban végez.
@@ -744,15 +750,122 @@ CF redeploy. Codex stop-time review.
 
 ### Halasztott follow-up — összefoglaló (E + F + G)
 
-| Pont | Cél | Kockázat | Becsült idő |
-|---|---|---|---|
-| **E. Q1 ACL refactor** | admin-team `org_${orgId}_admins`, 2 collection ACL switch | Privacy-adósság | 1-2 óra |
-| **F. Phase 1.6** | globális orphan-guard 3 status-blind CF-en | "Orphaned safe overnight" invariáns | 1-2 óra |
-| **G. D.3 race CAS** | terminál átmenet compare-and-swap | Audit-konzisztencia (KÉT history rekord per race) | 1-3 óra (Codex pattern-választás függő) |
+| Pont | Cél | Kockázat | Becsült idő | Status |
+|---|---|---|---|---|
+| **E. Q1 ACL refactor** | admin-team `org_${orgId}_admins`, 2 collection ACL switch | Privacy-adósság | 1-2 óra | ✅ KÓD KÉSZ (2026-05-09 SESSION-3) |
+| **F. Phase 1.6** | globális orphan-guard 3 status-blind CF-en | "Orphaned safe overnight" invariáns | 1-2 óra | ✅ KÓD KÉSZ (2026-05-09 SESSION-3) |
+| **G. D.3 race CAS** | terminál átmenet compare-and-swap | Audit-konzisztencia (KÉT history rekord per race) | 1-3 óra (Codex pattern-választás függő) | ✅ KÓD KÉSZ (2026-05-09 SESSION-3 — Konstrukció C) |
 
-**Sorrend (javasolt)**: F → E → G. Az F a kritikusabb (data-integrity), az E privacy, a G audit-edge-case.
+**Sorrend (javasolt)**: F → E → G. Az F a kritikusabb (data-integrity), az E privacy, a G audit-edge-case. **Implementáció sorrend (2026-05-09 session-3 alkalmazta)**: F → E → G egy commit-ban + Harden Fázis 1-7.
 
 **AI-agent utasítás minden 3 pontra**: KÖTELEZŐ a Codex co-reflection alapelv (D.0). Backend deploy ELŐTT pre-review, UTÁN stop-time review. NE implementálj Codex válasz nélkül.
+
+---
+
+### H. Deploy roadmap (F+E+G + Harden, 2026-05-09 session-3 zárás)
+
+> **Cél**: a session-3 (F+E+G + Harden Fázis 1-7) **kódoldali kész** — a Backend CF redeploy + frontend deploy + backfill futtatás + smoke teszt egy következő session feladata. Az implementáció lokális commitra készül a `claude/friendly-cartwright-16770c` branchen, **NINCS** push, NINCS deploy. A H szekció pontos lépéslistát ad a következő session indulására.
+
+> **Session-záró állapot (2026-05-09 session-3)**: 1 lokális commit a `claude/friendly-cartwright-16770c` branchen (`feat(efg-blokk-harden): F+E+G + Harden pass`), 17 fájl ~970/95 sor. Az F+E+G eredeti commit (`6f3dba7`) soft-reset után amalgamálva a Harden javításokkal egyetlen commit-ban. Codex review futások: 1 baseline + 1 adversarial + 1 verifikáló + 1 mini-verifikáló (Harden BLOCKER fix után) — összesen 4 stop-time + 3 pre-review (F.0, E.0, G.0) ezen a session-en.
+
+#### Pre-session checklist (KÖTELEZŐ a következő session elején)
+
+1. **SessionPreflight** ([[Komponensek/SessionPreflight]]) — 5 perc infra-check: deploy mechanizmus, Appwrite endpoint, Railway MCP elérhetőség.
+2. **D.0 Codex co-reflection alapelv**: a deploy ELŐTT és UTÁN egy-egy gyors Codex stop-time review-t kérek (a session-3 7 review-ja után még a deploy-szempontú race-eket átvizsgálni: schema-bootstrap után collection-state, env-var dependencia, CF deploy sorrendje).
+3. **Worktree**: `claude/friendly-cartwright-16770c` (vagy `main`, ha addig merge-elve van).
+4. **Olvasd el**: [[Naplók/2026-05-09]] session-3 + ezen H szekció.
+
+#### H.1 — Backend CF deploy (4 db)
+
+A 4 érintett CF-et MCP-vel (`functions_create_deployment`) deployolni — a session-2 D-blokk minta szerint.
+
+| Sorrend | CF | Forrás | Deploy függőség |
+|---|---|---|---|
+| 1 | `invite-to-organization` | `packages/maestro-server/functions/invite-to-organization/` | Új `backfill_admin_team_acl` action regisztrált a `main.js`-ben |
+| 2 | `set-publication-root-path` | `packages/maestro-server/functions/set-publication-root-path/` | Új `ORGANIZATIONS_COLLECTION_ID` env var (H.3) |
+| 3 | `update-article` | `packages/maestro-server/functions/update-article/` | Új `ORGANIZATIONS_COLLECTION_ID` env var (H.3) |
+| 4 | `validate-publication-update` | `packages/maestro-server/functions/validate-publication-update/` | Új `ORGANIZATIONS_COLLECTION_ID` env var (H.3) — opcionális, csak audit-loghoz |
+
+**Megjegyzés**: a 4-es csak audit-log céljából használja az env var-t (Phase 1.6 NEM enforce); a 2-es és 3-as **fail-closed** ha az env hiányzik (`lookup_failed` sentinel).
+
+#### H.2 — Console / DB előkészület
+
+- **`organizationInviteHistory.rowSecurity = true`** — ellenőrizni, hogy a `bootstrap_organization_invite_history_schema` action ezt már beállította-e (ha nem, kézi Console-művelet kell).
+- **Schema check**: a `bootstrap_organization_status_schema` (D.2.1) és `bootstrap_organization_invite_history_schema` (D.3.1) action-ek korábbi session-ben futottak. Ha a status-mező vagy a history-collection hiányzik, először ezeket futtatni.
+
+#### H.3 — Új env var
+
+A 2 (vagy 4) F-blokk CF-en `ORGANIZATIONS_COLLECTION_ID = "organizations"` env var beállítás (a `user-cascade-delete` mintára). Hiánya esetén `getOrgStatus()` `'lookup_failed'`-et ad → fail-closed 403.
+
+#### H.4 — Backfill manuális futtatás
+
+A `backfill_admin_team_acl` action minden meglévő orgon **dryRun: true** ELŐSZÖR, aztán éles futtatás:
+
+1. Listázni az orgokat a `Central Médiacsoport` és minden további `organizations` rekord.
+2. Per-org: `executions.create({ functionId: 'invite-to-organization', body: '{"action":"backfill_admin_team_acl","organizationId":"<id>","dryRun":true}' })` — owner-only.
+3. Stat ellenőrzés: `adminTeam.created`, `adminTeam.memberships`, `adminTeam.staleRemoved`, `acl.invites`, `acl.inviteHistory`, `errors.length === 0`.
+4. Ha clean → `dryRun: false` futtatás per-org.
+
+**Reconcile**: a `staleRemoved` mező a Harden Fázis 1+2 **MUST FIX** eredménye — a Console-ról/közvetlen DB-write-tal demote-olt admin-tagok automatikus eltávolítása az admin-team-ből (privacy invariáns).
+
+#### H.5 — Frontend deploy (2 célon)
+
+1. **Dashboard** (`maestro-dashboard`):
+   - cPanel `./deploy.sh` ([[Komponensek/SessionPreflight#Dashboard deploy]]).
+   - Érintett fájlok: `OrganizationSettingsModal.jsx`, `UsersTab.jsx`, `inviteFunctionErrorMessages.js`, `appwriteIds.js`.
+2. **Plugin** (`maestro-indesign`):
+   - InDesign UXP rebuild + plugin újra-betöltés.
+   - Érintett fájlok: `Publication.jsx` (`cfReason` ág), `workflowEngine.js` (`_handleCFError` `orgOrphaned: true` flag).
+
+#### H.6 — Smoke teszt (E2E)
+
+A 4 CF + frontend deploy UTÁN:
+
+1. **F blokk**: test-org `status='orphaned'`-be állítás (Console DB tables_db_update_row). Próbáld a UI-ból: rootPath-set, article-update, publication-update. Várt: 403 `org_orphaned_write_blocked` mind a 3 esetben. Reset `active`-ra → minden írás OK.
+2. **E blokk**: test-org 2 admin (owner + admin) + 1 member tagsággal. Invite küldés admin-tól → `organizationInvites` ACL `team:org_X_admins`. Member belépés → NEM látja a pending invite-okat (Realtime push elmarad). Admin → látja. Invite accept → `organizationInviteHistory` ACL `team:org_X_admins`. Member NEM látja a history-t. Admin igen.
+3. **G blokk**: race-test (k6 vagy custom Node-script): 2-2 párhuzamos `acceptInvite` + opportunista `auto_expire_on_list` ugyanarra a token-re. Várt: pontosan **1** history rekord per invite. Az invite végállapot: vagy `accepted` vagy `expired`, NEM mindkettő.
+4. **Harden**: demote-test — admin role-change → admin-team-ből kikerül. Új invite → ex-admin NEM látja.
+
+#### H.7 — Codex stop-time deploy review
+
+A live state után 1 Codex `codex:codex-rescue` stop-time review az élő rendszerre: van-e production-szintű regresszió, race-window, env-var dependencia drift.
+
+#### H.8 — Commit + push
+
+1. `git push origin claude/friendly-cartwright-16770c` (eddig csak lokális).
+2. PR a `main`-re (vagy direkt merge ha solo-dev).
+3. Memory pointer + vault-memó frissítés a session-záráshoz ([[meghivasi-flow-redesign]] mintára).
+
+---
+
+### Phase 2 follow-upok (új session-elhelyzés, NEM blokkoló)
+
+A 2026-05-09 session-3 (F+E+G + Harden) NEM zárta le a teljes kockázat-felületet. Az alábbi 10 follow-up tétel egy későbbi sprintben futtatható:
+
+#### F. blokk Phase 2
+
+- **F.7** — `useArticles.js` / `ArticleProperties.jsx` raw `org_orphaned_write_blocked` szöveg cfReason-mapping. Új `OrphanedOrgError extends Error` osztály a Plugin `errorUtils.js`-ben (consistent CFError minta a `PermissionDeniedError`-ral). Becsült: 30 perc.
+- **F.8** — TOCTOU race-window strict invariáns ACL-szinten (Phase 2 pre-event guard / collection-szintű write-tilt orphan org-ra). A jelenlegi 2 CF best-effort guardja `getOrgStatus` → `updateDocument` közti race-ablakot meghagy. Becsült: 2-3 óra.
+- **F.9** — F-blokk CF-ek hot-path orphan-guard cache (publication-fetch JOIN vagy in-memory LRU). A `getOrgStatus` per-request, NEM cached → magas-throughput plugin esetén bottleneck. Becsült: 1-2 óra.
+
+#### G. blokk Phase 2
+
+- **G.2** — `_archiveInvite()` 504 timeout recovery probe: a `error` return ágon `getDocument(deterministicId)` → ha létezik és ugyanaz a `finalStatus`, idempotens skip; ha más, race-loser. A jelenlegi `error` ág best-effort továbbmegy (CAS-gate opcionális hibaúton lekapcsol). Becsült: 1 óra.
+- **G.3** — `organizationInviteHistory` env-required CAS-üzemmódban (most még opcionális, hiánya `env_missing`-et ad → best-effort tovább). A teljes CAS invariáns érvényesüléshez kötelezővé kell tenni. Becsült: 30 perc + deploy guard.
+- **G.4** — DESIGN QUESTION: CAS-gate hard-fail vs best-effort (Adversarial BLOCKER 1). Döntés: a `_archiveInvite()` `env_missing` és `error` ág engedi-e a status-update-et (best-effort) vagy hard-fail-eli (strict CAS). Becsült: 1 óra Codex review + 30 perc kód.
+- **G.5** — DESIGN QUESTION: race-loser audit-veszteség (state-of-record vs event-log). Egy `accepted` vs `expired` race-en a winner `expired` lehet, miközben a user TAG. Compliance audit "missing accepted event"-et lát. Lehetséges megoldás: külön `terminal-claim` collection (CAS-gate) + `event-log` collection (mind a 2 ágat naplózza). Becsült: 2-3 óra refactor.
+
+#### E. blokk Phase 2
+
+- **E.6** — `backfill_admin_team_acl` checkpoint pattern (Adversarial MAJOR — page-level commit / streaming). Nagy org (1000+ membership) timeout után részleges migrált state. Becsült: 1-2 óra streaming refactor.
+- **E.7** — `OrphanedOrgError extends Error` shared osztály (lásd F.7) — az `_handleCFError`-t `instanceof CFError` mintára átállítani. Fed F.7-tel.
+
+#### Code quality / shared infrastructure
+
+- **H.1 (Phase 2)** — `helpers/pagination.js` extract a `schemas.js`-ben. A `listAll` helper 4 hívóhelyen (`backfillTenantAcl`, `backfillAdminTeamAcl`, stb.) duplikált. Becsült: 30 perc.
+- **H.2 (Phase 2)** — `scripts/build-cf-orphan-guard.mjs` single-source generator a 3 (vagy több) write-CF-re (A.7.1 minta a `compiledValidator.js`-re). Az F-blokk inline `getOrgStatus` mostanra 3 helyen duplikált (1 `permissions.js` + 2 új CF). Becsült: 1-2 óra a generator + per-CF integráció.
+
+**AI-agent utasítás Phase 2 ütemezéshez**: ezek a tételek NEM blokkolóak, ütemezhetők egyenként vagy témablokkonként. Minden Phase 2 fix előtt KÖTELEZŐ Codex co-reflection (D.0). NE implementálj kettőnél többet egyszerre — a Phase 1-2 közti határt explicit kommit-üzenetben jelölni kell.
 
 ---
 

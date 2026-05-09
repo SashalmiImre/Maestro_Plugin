@@ -24,6 +24,10 @@ export const COLLECTIONS = {
     EDITORIAL_OFFICES: 'editorialOffices',
     EDITORIAL_OFFICE_MEMBERSHIPS: 'editorialOfficeMemberships',
     ORGANIZATION_INVITES: 'organizationInvites',
+    // D.3 (2026-05-09) — invite audit-trail collection. Read ACL: a
+    // `organizationInviteHistory` doc-ok az `org_${orgId}_admins` admin-team
+    // tagjai (owner+admin) számára olvashatók (Q1 ACL, E blokk).
+    ORGANIZATION_INVITE_HISTORY: 'organizationInviteHistory',
     GROUPS: 'groups',
     GROUP_MEMBERSHIPS: 'groupMemberships',
     WORKFLOWS: 'workflows',

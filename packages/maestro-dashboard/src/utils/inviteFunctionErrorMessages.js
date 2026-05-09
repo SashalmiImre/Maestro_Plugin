@@ -25,7 +25,11 @@ const COMMON_MAP = Object.freeze({
     insufficient_role: 'Nincs jogosultságod ehhez a művelethez.',
     not_a_member: 'Nem vagy tagja ennek a szervezetnek.',
     schema_missing:
-        'A séma még nincs bootstrap-elve (futtasd a megfelelő bootstrap_*_schema action-t).'
+        'A séma még nincs bootstrap-elve (futtasd a megfelelő bootstrap_*_schema action-t).',
+    // Phase 1.6 (D blokk follow-up): a 2 status-blind CF (set-publication-root-path
+    // + update-article) most fail-closed-ozza az `orphaned`/`archived` orgokat.
+    org_orphaned_write_blocked:
+        'A szervezet jelenleg árva állapotban van — várd meg az új tulajdonos kijelölését, mielőtt módosítanál.'
 });
 
 const NETWORK_HINT = 'Hálózati hiba. Ellenőrizd a kapcsolatot, és próbáld újra.';

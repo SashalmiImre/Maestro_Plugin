@@ -8,12 +8,18 @@
  * Team ID konvenciók:
  * - `org_${organizationId}`    — minden szervezethez 1 team, tagjai az
  *                                 `organizationMemberships` collection alapján.
+ * - `org_${organizationId}_admins` — Q1 ACL (E blokk, 2026-05-09 follow-up).
+ *                                 CSAK az `owner` és `admin` role-ú tagokat
+ *                                 tartalmazza. Az `organizationInvites` és
+ *                                 `organizationInviteHistory` doc-szintű
+ *                                 ACL-je erre a team-re mutat (privacy).
  * - `office_${editorialOfficeId}` — minden szerkesztőséghez 1 team, tagjai az
  *                                    `editorialOfficeMemberships` alapján.
  *
- * ACL tag-ek a dokumentumokon:
- * - `groups` / `groupMemberships`   → `read("team:office_${officeId}")`
- * - `organizationInvites`           → `read("team:org_${orgId}")`
+ * ACL tag-ek a dokumentumokon (Q1 ACL utáni állapot):
+ * - `groups` / `groupMemberships`           → `read("team:office_${officeId}")`
+ * - `organizationInvites`                   → `read("team:org_${orgId}_admins")`
+ * - `organizationInviteHistory`             → `read("team:org_${orgId}_admins")`
  *
  * Minden művelet idempotens (a CF best-effort rollback-el kompatibilis).
  */
@@ -26,6 +32,15 @@ function buildOrgTeamId(organizationId) {
     return `org_${organizationId}`;
 }
 
+/**
+ * Q1 ACL (E blokk, 2026-05-09 follow-up) — admin-team ID generátor.
+ * CSAK az owner+admin tagokat tartalmazza, és az `organizationInvites` +
+ * `organizationInviteHistory` ACL-je erre szűkül.
+ */
+function buildOrgAdminTeamId(organizationId) {
+    return `org_${organizationId}_admins`;
+}
+
 function buildOfficeTeamId(editorialOfficeId) {
     return `office_${editorialOfficeId}`;
 }
@@ -33,13 +48,24 @@ function buildOfficeTeamId(editorialOfficeId) {
 // ── ACL permissions builders ────────────────────────────────────────────────
 
 /**
- * Szervezeti scope-ú dokumentumok ACL-je (pl. `organizationInvites`).
- * Írás-joga továbbra is kizárólag az API key-vel rendelkező CF-eké marad
- * (collection-szintű ACL), itt csak a Realtime push + REST olvasási hozzáférést
- * szűkítjük a team tagjaira.
+ * Szervezeti scope-ú dokumentumok ACL-je (pl. `organizationInvites` Q1 ELŐTT —
+ * jelenleg legacy backfill-utáni doc-okra mutat, az új doc-okon a
+ * `buildOrgAdminAclPerms` használandó). Írás-joga továbbra is kizárólag az
+ * API key-vel rendelkező CF-eké marad (collection-szintű ACL), itt csak a
+ * Realtime push + REST olvasási hozzáférést szűkítjük a team tagjaira.
  */
 function buildOrgAclPerms(organizationId) {
     return [sdk.Permission.read(sdk.Role.team(buildOrgTeamId(organizationId)))];
+}
+
+/**
+ * Q1 ACL (E blokk) — admin-team-szűkített read perm.
+ * Az `organizationInvites` és `organizationInviteHistory` collection write-path-ja
+ * ezt használja; CSAK az `org_${id}_admins` team tagjai (owner+admin) kapnak
+ * read jogot a doc-okra, azaz Realtime push + REST list/get is szűkül.
+ */
+function buildOrgAdminAclPerms(organizationId) {
+    return [sdk.Permission.read(sdk.Role.team(buildOrgAdminTeamId(organizationId)))];
 }
 
 /**
@@ -235,8 +261,10 @@ async function removeTeamMembership(teams, teamId, userId) {
 
 module.exports = {
     buildOrgTeamId,
+    buildOrgAdminTeamId,
     buildOfficeTeamId,
     buildOrgAclPerms,
+    buildOrgAdminAclPerms,
     buildOfficeAclPerms,
     buildWorkflowAclPerms,
     buildExtensionAclPerms,

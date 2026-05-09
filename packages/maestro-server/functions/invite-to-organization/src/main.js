@@ -133,6 +133,8 @@ const ACTION_HANDLERS = {
     'backfill_organization_status': schemaActions.backfillOrganizationStatus,
     // D.3 (2026-05-09) — invite audit-trail collection
     'bootstrap_organization_invite_history_schema': schemaActions.bootstrapOrganizationInviteHistorySchema,
+    // E (2026-05-09 follow-up) — Q1 ACL refactor: admin-team scoped backfill
+    'backfill_admin_team_acl': schemaActions.backfillAdminTeamAcl,
 
     // Permission set CRUD (A.3 + A.3.6)
     'create_permission_set': permissionSetActions.createPermissionSet,

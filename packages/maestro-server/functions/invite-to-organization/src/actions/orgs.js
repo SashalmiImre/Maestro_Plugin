@@ -20,11 +20,13 @@ const { createWorkflowDoc } = require('../helpers/workflowDoc.js');
 const { seedDefaultPermissionSets } = require('../helpers/groupSeed.js');
 const {
     buildOrgTeamId,
+    buildOrgAdminTeamId,
     buildOfficeTeamId,
     buildOfficeAclPerms,
     buildWorkflowAclPerms,
     ensureTeam,
     ensureTeamMembership,
+    removeTeamMembership,
     deleteTeamIfExists
 } = require('../teamHelpers.js');
 const permissions = require('../permissions.js');
@@ -234,6 +236,29 @@ async function bootstrapOrCreateOrganization(ctx) {
         error(`[Bootstrap] org team membership hiba: ${err.message}`);
         await runRollback();
         return fail(res, 500, 'org_team_membership_create_failed');
+    }
+
+    // 2.6. Admin-team (Q1 ACL, E blokk) — `org_${orgId}_admins` létrehozása
+    //      + owner-add. Ez a team az `organizationInvites` és
+    //      `organizationInviteHistory` doc-szintű ACL-jének tartója.
+    //      Idempotens: ha valamiért már létezik (race), `ensureTeam` skip-el.
+    const orgAdminTeamId = buildOrgAdminTeamId(newOrgId);
+    try {
+        const adminResult = await ensureTeam(teamsApi, orgAdminTeamId, `Org admins: ${orgName}`);
+        if (adminResult.created) {
+            rollbackSteps.push(() => teamsApi.delete(orgAdminTeamId));
+        }
+    } catch (err) {
+        error(`[Bootstrap] org admin-team create hiba: ${err.message}`);
+        await runRollback();
+        return fail(res, 500, 'org_admin_team_create_failed');
+    }
+    try {
+        await ensureTeamMembership(teamsApi, orgAdminTeamId, callerId, ['owner']);
+    } catch (err) {
+        error(`[Bootstrap] org admin-team membership hiba: ${err.message}`);
+        await runRollback();
+        return fail(res, 500, 'org_admin_team_membership_create_failed');
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -659,6 +684,17 @@ async function deleteOrganization(ctx) {
         error(`[DeleteOrg] org team törlés best-effort hiba: ${teamErr.message}`);
     }
 
+    // 5c) Admin-team cascade (Q1 ACL, E blokk) — best-effort. Az org doc már
+    //     törölve, így a `organizationInvites` és `organizationInviteHistory`
+    //     doc-ok ACL-je dangling lesz, de ez a Phase 1 cleanup után self-heal:
+    //     a doksik vagy törölve vannak (invitesCleanup), vagy az org-orphan
+    //     transition az `auto_expire_on_*` ágon archiválja őket.
+    try {
+        await deleteTeamIfExists(teamsApi, buildOrgAdminTeamId(organizationId));
+    } catch (teamErr) {
+        error(`[DeleteOrg] org admin-team törlés best-effort hiba: ${teamErr.message}`);
+    }
+
     // 6) Memberships takarítás — az org doc már nincs, a caller
     //    membership-e már nem ad semmilyen retry-lehetőséget.
     //    Ha ez elbukik, a maradék memberships árvák maradnak
@@ -715,7 +751,7 @@ async function deleteOrganization(ctx) {
  * @returns {Promise<Object>} CF response
  */
 async function changeOrganizationMemberRole(ctx) {
-    const { databases, env, callerId, callerUser, payload, log, error, res, fail, sdk, permissionEnv, permissionContext } = ctx;
+    const { databases, env, callerId, callerUser, payload, log, error, res, fail, sdk, permissionEnv, permissionContext, teamsApi } = ctx;
     const { organizationId, targetUserId, role } = payload;
 
     // 1. Payload validation
@@ -863,6 +899,91 @@ async function changeOrganizationMemberRole(ctx) {
         return fail(res, 500, 'role_update_failed');
     }
 
+    // 8.5. Q1 ACL (E blokk, 2026-05-09 follow-up) — admin-team sync.
+    //
+    // Codex pre-review: DB-first → strict admin-team add/remove. A DB már
+    // konzisztens, a team-mutáció CONSEQUENCE.
+    //
+    // Promote (member → admin/owner): admin-team-be add (ensureTeam idempotens).
+    // Demote (admin/owner → member): admin-team-ből removal.
+    // Owner ↔ admin csere: admin-team-ben mindkét role admin team-tag, csak a
+    //   role-string változik (idempotens ensure / no-op).
+    //
+    // Harden Fázis 1+2 (Codex baseline #2 + adversarial DESIGN-QUESTION):
+    //   - `ensureTeam` siker NEM elég: a `delete_organization` race közben az
+    //     admin-team épp törlődhet → re-create torzott team-et hagyna egy
+    //     törölt org mellett. Ezért az `ensureTeam` ELŐTT egy gyors org-doc
+    //     re-read invariáns: ha a doc már törölt (404), skippeljük a sync-et.
+    //   - `ensureTeamMembership` return-jelzést ellenőrizzük: `team_not_found`
+    //     vagy bármely hiba esetén stats-ba sorrendezünk és NEM némán
+    //     ignoráljuk. A DB role már updatedt, ezért NEM fail-closed-ozunk
+    //     (a user-feeling konzisztens), DE explicit `adminTeamSyncSkipped: true`
+    //     flag a response-ban → a frontend tájékoztathat a backfill-igényről.
+    let adminTeamSyncSkipped = false;
+    let orgStillExists = true;
+    // Simplify Efficiency #1: a `userHasOrgPermission()` (3. lépés) már
+    // letöltötte az org status-t és cache-elte a `permissionContext.orgStatusByOrg`
+    // Map-be (lásd permissions.js getOrgStatus). Ha cache-hit, NEM kell egy
+    // redundáns getDocument re-read — minden role-change-en -1 DB roundtrip.
+    const cachedStatus = permissionContext?.orgStatusByOrg?.has(organizationId)
+        ? permissionContext.orgStatusByOrg.get(organizationId)
+        : undefined;
+    if (cachedStatus !== undefined) {
+        // Cache-hit: az org status egyszer le lett kérve. A `null` legacy active,
+        // a `'lookup_failed'` env/DB hiba (a guard úgyis fail-closed-ott volna).
+        // Egyik sem 404 — az org létezik. Skip a re-read-et.
+    } else {
+        // Cache-miss (ritka — pl. globális admin call): csak akkor tényleges
+        // re-read fut, és akkor is fail-graceful (404 = törölt org).
+        try {
+            await databases.getDocument(
+                env.databaseId, env.organizationsCollectionId, organizationId,
+                [sdk.Query.select(['$id'])]
+            );
+        } catch (orgReadErr) {
+            if (orgReadErr?.code === 404) {
+                orgStillExists = false;
+                log(`[ChangeOrgMemberRole] org=${organizationId} már törölt — admin-team sync skipping (delete race)`);
+            }
+            // Egyéb hiba esetén best-effort sync (nem tudjuk biztosan, törölt-e).
+        }
+    }
+
+    if (orgStillExists) {
+        const orgAdminTeamId = buildOrgAdminTeamId(organizationId);
+        try {
+            await ensureTeam(teamsApi, orgAdminTeamId, `Org admins: ${organizationId}`);
+        } catch (teamErr) {
+            // Legacy org-on a team-create ritka edge — log, és a sync skip.
+            error(`[ChangeOrgMemberRole] admin-team create hiba (sync skip): ${teamErr.message}`);
+            adminTeamSyncSkipped = true;
+        }
+        const isPrivileged = (r) => r === 'owner' || r === 'admin';
+        if (!adminTeamSyncSkipped) {
+            try {
+                if (isPrivileged(role)) {
+                    const r = await ensureTeamMembership(teamsApi, orgAdminTeamId, targetUserId, [role]);
+                    if (r.skipped === 'team_not_found') {
+                        error(`[ChangeOrgMemberRole] admin-team membership team_not_found az ensureTeam után — race`);
+                        adminTeamSyncSkipped = true;
+                    }
+                } else if (isPrivileged(currentRole)) {
+                    const r = await removeTeamMembership(teamsApi, orgAdminTeamId, targetUserId);
+                    if (r.skipped === 'team_not_found') {
+                        // Demote-on a missing-team egy log-only állapot — a user
+                        // úgyse lát ACL-t, ami nincs.
+                        log(`[ChangeOrgMemberRole] admin-team remove team_not_found — log-only`);
+                    }
+                }
+            } catch (teamErr) {
+                error(`[ChangeOrgMemberRole] admin-team sync hiba (DB már updated): ${teamErr.message}`);
+                adminTeamSyncSkipped = true;
+            }
+        }
+    } else {
+        adminTeamSyncSkipped = true;
+    }
+
     // D.2.4 (Codex adversarial review fix 2026-05-09 MAJOR): self-heal a
     // race window stale `orphaned` status-ára. Ha a promote-ol owner-rel
     // egy olyan org-ot, ami `userHasOrgPermission` orphan-guard cache miss-e
@@ -899,7 +1020,12 @@ async function changeOrganizationMemberRole(ctx) {
         targetUserId,
         previousRole: currentRole,
         role,
-        ...(orgStatusReset ? { orgStatusReset: true } : {})
+        ...(orgStatusReset ? { orgStatusReset: true } : {}),
+        // Harden Fázis 1+2: ha az admin-team sync bukott (race / legacy /
+        // missing team), a frontend tájékoztatja a usert, hogy a
+        // `backfill_admin_team_acl` action futása szükséges. A DB role
+        // update sikerült — a user-feeling konzisztens.
+        ...(adminTeamSyncSkipped ? { adminTeamSyncSkipped: true } : {})
     });
 }
 

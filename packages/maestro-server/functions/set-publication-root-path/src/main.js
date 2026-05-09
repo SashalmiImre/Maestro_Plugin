@@ -21,6 +21,7 @@ const sdk = require("node-appwrite");
  *  5. Fresh publication doc fetch
  *  6. Scope mezők jelenléte (`organizationId` + `editorialOfficeId`)
  *  7. Jogosultság: office admin VAGY org owner/admin
+ *  7b. Phase 1.6 orphan-guard: az org `status === 'orphaned' | 'archived'` → 403
  *  8. Null check — csak akkor írunk, ha a rootPath még nincs beállítva
  *  9. DB write
  *
@@ -32,6 +33,8 @@ const sdk = require("node-appwrite");
  * - PUBLICATIONS_COLLECTION_ID
  * - EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID
  * - ORGANIZATION_MEMBERSHIPS_COLLECTION_ID
+ * - ORGANIZATIONS_COLLECTION_ID (Phase 1.6 orphan-guard, opcionális — ha
+ *   hiányzik, `lookup_failed` sentinel → fail-closed 403)
  * - APPWRITE_API_KEY (fallback, ha az x-appwrite-key header hiányzik)
  * - APPWRITE_ENDPOINT
  * - APPWRITE_FUNCTION_PROJECT_ID (Appwrite runtime automatikusan beállítja)
@@ -85,6 +88,44 @@ async function findSingleMembership(databases, databaseId, collectionId, queries
     ]);
     if ((result.total || 0) === 0) return null;
     return result.documents[0] || null;
+}
+
+// ── Phase 1.6 orphan-guard (inline duplikáció a Phase 1.5 mintára) ───────────
+//
+// Az `invite-to-organization` `permissions.js` `getOrgStatus()` /
+// `isOrgWriteBlocked()` helperjének inline mása. A `null` legacy active
+// (60+ legacy org backwards-compat). A `'lookup_failed'` env-hiány VAGY DB-hibára
+// utaló sentinel — fail-closed kezelendő (különben átmeneti DB-hiba alatt
+// fail-open lenne a guard).
+//
+// Drift: ha `organizations.status` enum bővül, a 3 érték fixáláshoz szinkronizálni
+// kell az `invite-to-organization` permissions.js modullal és az `update-article`
+// CF-fel. Phase 2: scripts/build-cf-orphan-guard.mjs single-source generátor.
+
+const ORG_STATUS_ORPHANED = 'orphaned';
+const ORG_STATUS_ARCHIVED = 'archived';
+const ORG_STATUS_LOOKUP_FAILED = 'lookup_failed';
+
+function isOrgWriteBlocked(status) {
+    return status === ORG_STATUS_ORPHANED
+        || status === ORG_STATUS_ARCHIVED
+        || status === ORG_STATUS_LOOKUP_FAILED;
+}
+
+async function getOrgStatus(databases, databaseId, organizationsCollectionId, organizationId) {
+    if (!organizationId) return null;
+    if (!databaseId || !organizationsCollectionId) {
+        return ORG_STATUS_LOOKUP_FAILED;
+    }
+    try {
+        const orgDoc = await databases.getDocument(
+            databaseId, organizationsCollectionId, organizationId,
+            [sdk.Query.select(['$id', 'status'])]
+        );
+        return orgDoc?.status || null;
+    } catch (e) {
+        return ORG_STATUS_LOOKUP_FAILED;
+    }
 }
 
 function fail(res, statusCode, reason, extra = {}) {
@@ -143,6 +184,8 @@ module.exports = async function ({ req, res, log, error }) {
         const publicationsCollectionId = process.env.PUBLICATIONS_COLLECTION_ID;
         const officeMembershipsCollectionId = process.env.EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID;
         const orgMembershipsCollectionId = process.env.ORGANIZATION_MEMBERSHIPS_COLLECTION_ID;
+        // Phase 1.6 orphan-guard: opcionális, hiányzás → `lookup_failed` → 403.
+        const organizationsCollectionId = process.env.ORGANIZATIONS_COLLECTION_ID;
 
         const missingEnvVars = [];
         if (!databaseId) missingEnvVars.push('DATABASE_ID');
@@ -225,6 +268,22 @@ module.exports = async function ({ req, res, log, error }) {
             log(`[Scope] User ${userId} engedélyezve org role-lal: ${orgRole}`);
         } else {
             log(`[Scope] User ${userId} engedélyezve office admin role-lal`);
+        }
+
+        // ── 7b. Phase 1.6 orphan-guard ──
+        // Ha az org `status === 'orphaned' | 'archived'` (vagy a status-lookup
+        // `lookup_failed` sentinel-t ad — env hiány vagy DB-hiba) → 403
+        // `org_orphaned_write_blocked`. A `null` legacy active (60+ legacy
+        // org backwards-compat, ld. Phase 1.5 minta). A guard a jogosultság-
+        // ellenőrzés UTÁN, az adat-validity (null check) és a DB write ELŐTT
+        // áll: a 403 választ a kliensnek mindenképp adunk a 409 helyett, ha
+        // az org írásra le van zárva.
+        const orgStatus = await getOrgStatus(
+            databases, databaseId, organizationsCollectionId, pub.organizationId
+        );
+        if (isOrgWriteBlocked(orgStatus)) {
+            log(`[Scope] Org ${pub.organizationId} status="${orgStatus}" → write blocked (Phase 1.6)`);
+            return fail(res, 403, 'org_orphaned_write_blocked');
         }
 
         // ── 8. Null check — csak null → érték írás ──

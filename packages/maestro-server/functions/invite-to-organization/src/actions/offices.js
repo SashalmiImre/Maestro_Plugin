@@ -21,6 +21,7 @@ const { createWorkflowDoc } = require('../helpers/workflowDoc.js');
 const {
     buildOfficeTeamId,
     buildOrgTeamId,
+    buildOrgAdminTeamId,
     buildOfficeAclPerms,
     buildWorkflowAclPerms,
     ensureTeam,
@@ -161,7 +162,7 @@ async function leaveOrganization(ctx) {
     //      Hiba esetén 500-zal leállunk — a DB még érintetlen, a user
     //      nyugodtan újrahívhat. A `removeTeamMembership` idempotens
     //      (409/404 skip), így a retry nem ír felül semmit.
-    const teamCleanup = { officeTeams: 0, orgTeam: false };
+    const teamCleanup = { officeTeams: 0, orgTeam: false, orgAdminTeam: false };
     try {
         for (const oid of officeIds) {
             const r = await removeTeamMembership(teamsApi, buildOfficeTeamId(oid), callerId);
@@ -169,6 +170,12 @@ async function leaveOrganization(ctx) {
         }
         const r = await removeTeamMembership(teamsApi, buildOrgTeamId(organizationId), callerId);
         if (r.removed > 0) teamCleanup.orgTeam = true;
+        // Q1 ACL (E blokk, 2026-05-09 follow-up): a caller, ha admin/owner volt,
+        // az `org_${orgId}_admins` team-ben is benne van. STRICT removal a DB
+        // delete ELŐTT — ugyanaz a Realtime/REST cleanup-érv, mint az org/office
+        // team-ek esetén. Idempotens: ha nem volt admin (member), 404/skip.
+        const ra = await removeTeamMembership(teamsApi, buildOrgAdminTeamId(organizationId), callerId);
+        if (ra.removed > 0) teamCleanup.orgAdminTeam = true;
     } catch (teamErr) {
         error(`[LeaveOrg] team membership remove hiba — abort, DB érintetlen: ${teamErr.message}`);
         return fail(res, 500, 'team_cleanup_failed', { message: teamErr.message });

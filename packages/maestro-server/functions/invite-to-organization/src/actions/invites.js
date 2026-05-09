@@ -13,8 +13,10 @@ const {
     TOKEN_BYTES
 } = require('../helpers/util.js');
 const {
-    buildOrgAclPerms,
+    buildOrgAdminAclPerms,
     buildOrgTeamId,
+    buildOrgAdminTeamId,
+    ensureTeam,
     ensureTeamMembership
 } = require('../teamHelpers.js');
 const permissions = require('../permissions.js');
@@ -28,35 +30,59 @@ const MAX_BATCH_INVITES = 20;
 const MAX_CUSTOM_MESSAGE_LENGTH = 500;
 
 /**
- * D.3 (2026-05-09) — invite audit-trail helper.
+ * D.3 (2026-05-09) — invite audit-trail helper, Codex Konstrukció C CAS-gate
+ * (G blokk, 2026-05-09 follow-up).
  *
- * A `acceptInvite` (3 helyen: main / idempotens / race-winner), `declineInvite`
- * és `expireInvite` (opportunista expire) destruktív kilépési ágain a
- * helper egy `organizationInviteHistory` doc-ot ír (snapshot-at-archive).
- * Ezzel rekonstruálható: ki hívta meg X-et, mikor, milyen role-lal, mi lett
- * a végső sors (accepted/declined/expired).
+ * A `acceptInvite`, `declineInvite` és `expireInvite` (opportunista expire)
+ * destruktív kilépési ágain a helper egy `organizationInviteHistory` doc-ot
+ * ír (snapshot-at-archive). Ezzel rekonstruálható: ki hívta meg X-et, mikor,
+ * milyen role-lal, mi lett a végső sors.
  *
- * GDPR (Codex tervi review 2026-05-09): a `token` raw értéket NEM tároljuk —
- * SHA-256 hash kerül a `tokenHash` mezőbe. Ez elég incident-korrelációhoz
- * (egy konkrét tokenes report → hash → lookup), de NEM lehet újrahasznosítani.
+ * **CAS-gate (G blokk, Codex pre-review Konstrukció C)**:
+ * A doc-ID INVITE-szintű terminal-claim (`invite.$id`, korábban
+ * `${invite.$id}__${finalStatus}` volt). Ezzel egy invite csak EGY terminál
+ * állapotba kerülhet — a párhuzamos `accepted` vs `expired` ág közül az első
+ * nyer, a második `document_already_exists` 409-et kap.
  *
- * Best-effort: ha az `organizationInviteHistory` collection nincs beállítva
- * (env var hiányzik) vagy a write bukik → loggolunk, nem blokkoljuk a
- * destruktív flow-t. A history rekord elveszhet, de a fő lifecycle (accept /
- * decline / expire) megy tovább.
+ * A hívóhely a return-ből látja az eredményt:
+ *   - `created`: az archive sikeres, a hívó futtathatja a status-update-et / delete-et.
+ *   - `already_exists`: race-loser. A hívó dönt:
+ *       - `acceptInvite` main: log + folytat (membership már megvan, user-feeling: tag).
+ *       - `declineInvite` main: 409 `already_terminated`.
+ *       - opportunista expire ágak (`auto_expire_on_*`): SKIP a status update
+ *         (a másik ág már átírta).
+ *       - `_createInviteCore` recreate: re-read a latest invite-ot — ha még
+ *         `pending`, 409 `invite_state_race_retry` (Codex stop-time MAJOR fix).
+ *   - `env_missing`: az `ORGANIZATION_INVITE_HISTORY_COLLECTION_ID` env hiányzik.
+ *     A hívó best-effort tovább megy a status update-tel (audit elvész).
+ *   - `error`: write hiba (timeout, hálózat). A hívó best-effort tovább megy.
+ *     Phase 2: recovery probe a deterministic ID-n.
+ *
+ * GDPR: a `token` raw értéket NEM tároljuk — SHA-256 hash kerül a `tokenHash`
+ * mezőbe. Ez elég incident-korrelációhoz (egy konkrét tokenes report → hash
+ * → lookup), de NEM lehet újrahasznosítani.
+ *
+ * **Phase 2 follow-up (Codex pre-review fix 3)**:
+ *   - 504 timeout után recovery probe: history `getDocument(deterministicId)`
+ *     → ha létezik és ugyanaz a `finalStatus`, idempotens; ha más, race-loser.
+ *     A jelenlegi `error` return ezt a hívóra hagyja.
+ *   - History collection env required CAS-üzemmódban (most még opcionális,
+ *     hiánya `env_missing`-et ad → a hívó best-effort tovább megy).
  *
  * @param {Object} ctx - CF ctx
  * @param {Object} invite - a teljes invite doc (a destrukció ELŐTT)
  * @param {'accepted'|'declined'|'expired'} finalStatus
  * @param {string} [finalReason] - opcionális magyarázat (pl. cleanup ok)
  * @param {string} [finalUserId] - acceptedByUserId / declinedByUserId
+ * @returns {Promise<{ status: 'created' | 'already_exists' | 'env_missing' | 'error',
+ *                     existingFinalStatus?: string, error?: Error }>}
  */
 async function _archiveInvite(ctx, invite, finalStatus, finalReason, finalUserId) {
     const { databases, env, log, error } = ctx;
     const inviteHistoryCollectionId = env.organizationInviteHistoryCollectionId;
     if (!inviteHistoryCollectionId) {
         log(`[ArchiveInvite] SKIP — ORGANIZATION_INVITE_HISTORY_COLLECTION_ID env var nincs beállítva (invite=${invite.$id})`);
-        return;
+        return { status: 'env_missing' };
     }
 
     try {
@@ -89,43 +115,95 @@ async function _archiveInvite(ctx, invite, finalStatus, finalReason, finalUserId
         else if (finalStatus === 'declined') payload.declinedByUserId = finalUserId || null;
         else if (finalStatus === 'expired') payload.expiredAt = finalAt;
 
-        // Codex MINOR fix (2026-05-09) — deterministic doc ID a retry-idempotenciához.
-        // A korábbi `ID.unique()` minden hívásra új ID-t adott, ami a delete bukás
-        // utáni retry-on duplikált history rekordokat eredményezhetett. Most az
-        // `${invite.$id}__${finalStatus}` kompozit ID — egy invite egy
-        // finalStatus-szal csak EGYSZER kerül a history-be. Egy második (idempotens)
-        // hívás `document_already_exists` 409-cel jön → log skip.
+        // G blokk (2026-05-09 follow-up) — invite-szintű terminal-claim doc-ID.
+        // A korábbi `${invite.$id}__${finalStatus}` finalStatus-postfix-ű ID
+        // két KÜLÖNBÖZŐ doc-ot engedett meg `accepted` vs `expired` race
+        // esetén → audit-inkonzisztencia. A jelenlegi minta egyetlen doc-ot
+        // enged meg invite-szinten — az első ág nyer, a második 409-et kap.
         //
-        // Codex adversarial review fix (2026-05-09 MINOR): Appwrite custom doc ID
-        // limit 36 char. Tipikus invite.$id `ID.unique()` ~20 char, `__accepted`
-        // 10 char = 30 char OK; DE egy custom (Phase 2) hosszabb invite ID
-        // overflow-t okozhatna. SHA-1 hash fallback ha a kompozit > 36 char —
-        // így a deterministic ID megőrződik, és a `(inviteId + finalStatus)`
-        // egyértelműen leképezhető. A hash-bázis hosszabb (40 char), ezért a
-        // 32-re vágjuk → `inv_<32 char>` formátum.
-        const compositeId = `${invite.$id}__${finalStatus}`;
-        const deterministicId = compositeId.length <= 36
-            ? compositeId
-            : `inv_${crypto.createHash('sha1').update(compositeId).digest('hex').slice(0, 32)}`;
+        // Codex stop-time MINOR fix (2026-05-09): közvetlenül az `invite.$id`-t
+        // használjuk doc-ID-nak — `sdk.ID.unique()` ~20 char, az Appwrite 36 char
+        // limit alatt fér, collision-mentes (a 32 hex SHA-1 helyett kevesebb
+        // moving part, és a history doc-ot azonnal megfeleltethető az invite
+        // ID-nak debug-szempontból). Phase 2: ha a custom invite ID-k > 36 char-ra
+        // bővülnek (B.x), bevezetünk SHA-256 slice fallback-et.
+        const deterministicId = invite.$id;
         try {
             await databases.createDocument(
                 env.databaseId,
                 inviteHistoryCollectionId,
                 deterministicId,
                 payload,
-                buildOrgAclPerms(invite.organizationId)
+                // Q1 ACL (E blokk, 2026-05-09 follow-up): a history doc is
+                // CSAK az admin-team tagjai (owner+admin) számára olvasható.
+                buildOrgAdminAclPerms(invite.organizationId)
             );
-            log(`[ArchiveInvite] invite=${invite.$id} → history (finalStatus=${finalStatus})`);
+            log(`[ArchiveInvite] invite=${invite.$id} → history (finalStatus=${finalStatus}) — claimed`);
+            return { status: 'created' };
         } catch (createErr) {
             if (createErr?.type === 'document_already_exists' || /already exist/i.test(createErr?.message || '')) {
-                log(`[ArchiveInvite] invite=${invite.$id} history (finalStatus=${finalStatus}) — már archiválva, idempotens skip`);
-                return;
+                // CAS race-loser: egy másik ág már elcsípte a terminal claim-et.
+                // Best-effort: probe-oljuk az existing finalStatus-t, hogy a
+                // hívó tudja, hogy ugyanazon vagy más finalStatus-szal nyert-e
+                // a másik ág (mind a kettő érvényes — ugyanakkor stale info,
+                // mert race két accept-éra elkapja az egyik 'accepted'-t).
+                let existingFinalStatus = null;
+                try {
+                    const existing = await databases.getDocument(
+                        env.databaseId, inviteHistoryCollectionId, deterministicId
+                    );
+                    existingFinalStatus = existing?.finalStatus || null;
+                } catch (probeErr) {
+                    // Lookup hiba — ne blokkoljunk a probe miatt.
+                }
+                log(`[ArchiveInvite] invite=${invite.$id} history (attempted=${finalStatus}, winner=${existingFinalStatus || '?'}) — race-loser, skip`);
+                return { status: 'already_exists', existingFinalStatus };
             }
             throw createErr;
         }
     } catch (err) {
         error(`[ArchiveInvite] write hiba (non-blocking, invite=${invite.$id}): ${err.message}`);
+        return { status: 'error', error: err };
     }
+}
+
+/**
+ * G blokk CAS-gate compose-helper (Simplify Quality #1, 2026-05-09).
+ *
+ * A 4 opportunista expire-ág (`_createInviteCore`, `acceptInvite` expiry,
+ * `listMyInvites`, `declineInvite` expiry) ugyanazt a "claim-then-update"
+ * mintát futtatta: ELŐSZÖR archive (terminal-claim), CSAK ha NEM race-loser
+ * → `status='expired'` update. A négy ismétlés egy helyre tömörítve, a
+ * hívóhely 1-2 sorra szűkül.
+ *
+ * @param {Object} ctx - CF ctx
+ * @param {Object} invite - a teljes invite doc
+ * @param {string} reason - finalReason a history-be (auto_expire_on_*)
+ * @param {string} contextLabel - log-prefix (pl. '[Accept]', '[ListMyInvites]')
+ * @returns {Promise<{ updated: boolean, archiveStatus: string, existingFinalStatus?: string }>}
+ *   - updated: a status-update lefutott-e (true ha created/env_missing/error,
+ *     false ha already_exists race-loser)
+ *   - archiveStatus: a `_archiveInvite` return.status mező
+ */
+async function _archiveAndUpdateExpiredInvite(ctx, invite, reason, contextLabel) {
+    const { databases, env, log } = ctx;
+    const archiveResult = await _archiveInvite(ctx, invite, 'expired', reason);
+    if (archiveResult.status === 'already_exists') {
+        log(`${contextLabel} invite ${invite.$id} race-loser (winner=${archiveResult.existingFinalStatus || '?'}) — status update skipping`);
+        return {
+            updated: false,
+            archiveStatus: archiveResult.status,
+            existingFinalStatus: archiveResult.existingFinalStatus
+        };
+    }
+    await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
+        status: 'expired'
+    });
+    log(`${contextLabel} invite ${invite.$id} expired-re állítva (archive=${archiveResult.status})`);
+    return {
+        updated: true,
+        archiveStatus: archiveResult.status
+    };
 }
 
 /**
@@ -235,15 +313,29 @@ async function _createInviteCore(ctx, params) {
                 invite: existing
             };
         }
-        // Lejárt — frissítjük expired-re és új invite-ot hozunk létre
-        await databases.updateDocument(env.databaseId, env.invitesCollectionId, existing.$id, {
-            status: 'expired'
-        });
-        log(`[CreateCore] Lejárt invite ${existing.$id} expired-re állítva`);
-        // D.3 expired audit-gap fix (Codex MAJOR 2026-05-09): a lejárt invite
-        // archiválása a history-be — különben az `auto_expire_on_recreate`
-        // ágon elveszne a finalStatus rekord.
-        await _archiveInvite(ctx, existing, 'expired', 'auto_expire_on_recreate');
+        // Lejárt — G blokk CAS-gate: ELŐSZÖR archive (terminal-claim),
+        // CSAK ha NEM race-loser → status update.
+        //
+        // Codex stop-time MAJOR fix: race-loser után re-read kell a latest invite
+        // state-jére. Ha még `pending` (másik ág archive-ja átment, status update
+        // még nem), a create-flow túl korán futna és a unique-index ütközne →
+        // 409 `invite_state_race_retry`, a hívó retry-olhatja.
+        const archiveResult = await _archiveAndUpdateExpiredInvite(
+            ctx, existing, 'auto_expire_on_recreate', '[CreateCore]'
+        );
+        if (!archiveResult.updated) {
+            try {
+                const latest = await databases.getDocument(
+                    env.databaseId, env.invitesCollectionId, existing.$id
+                );
+                if (latest.status === 'pending') {
+                    log(`[CreateCore] invite ${existing.$id} race-loser, latest still pending — retry kell`);
+                    return { ok: false, reason: 'invite_state_race_retry', statusCode: 409 };
+                }
+            } catch (readErr) {
+                log(`[CreateCore] invite ${existing.$id} race-loser, re-read bukott (${readErr.message}) — status update skipping`);
+            }
+        }
     }
 
     // 2) Token + expiry generálás
@@ -273,7 +365,9 @@ async function _createInviteCore(ctx, params) {
                 lastDeliveryStatus: 'pending',
                 sendCount: 0
             },
-            buildOrgAclPerms(organizationId)
+            // Q1 ACL (E blokk, 2026-05-09 follow-up): új invite-ot CSAK az
+            // admin-team tagjai (owner+admin) látnak. Membereknek nincs read.
+            buildOrgAdminAclPerms(organizationId)
         );
     } catch (err) {
         if (err?.type === 'document_already_exists' || /unique/i.test(err?.message || '')) {
@@ -460,6 +554,13 @@ async function createInvite(ctx) {
         organizationId, email, role, expiryDays, customMessage
     });
 
+    // G blokk CAS-gate (2026-05-09 follow-up): a `_createInviteCore` `ok:false`
+    // ágon visszaadhat `invite_state_race_retry`-t, ha az `existing` invite
+    // expire-archive race-loser és a status update SKIP-pelt → a hívó retry-olhat.
+    if (result.ok === false) {
+        return fail(res, result.statusCode || 409, result.reason);
+    }
+
     // Auto-send: 2026-05-09 E2E smoke #2 fix — az 'existing' ágon is auto-send,
     // a `_maybeAutoSendInviteEmail` 60s cooldown-nal védi a spam ellen. A user
     // mentális modellje: „rákattintok a Send-re, megy az e-mail" — a korábbi
@@ -605,6 +706,10 @@ async function createBatchInvites(ctx) {
                 const result = await _createInviteCore(ctx, {
                     organizationId, email, role, expiryDays, customMessage
                 });
+                // G blokk CAS-gate (2026-05-09 follow-up): race-retry batch ágon is.
+                if (result.ok === false) {
+                    return { email, status: 'error', reason: result.reason || 'race_retry' };
+                }
                 // 2026-05-09 E2E smoke #2 fix — `existing` action-ön is auto-send,
                 // 60s cooldown-nal. (Lásd `_maybeAutoSendInviteEmail`.)
                 // 2026-05-09 simplification (iteration-guardian #6): a fresh
@@ -693,15 +798,9 @@ async function acceptInvite(ctx) {
         return fail(res, 410, 'invite_not_pending', { status: invite.status });
     }
 
-    // 3. Expiry check
+    // 3. Expiry check — G blokk CAS-gate: archive-then-update wrapper.
     if (new Date(invite.expiresAt) < new Date()) {
-        await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
-            status: 'expired'
-        });
-        log(`[Accept] Invite ${invite.$id} lejárt — expired-re állítva`);
-        // D.3 expired audit-gap fix (Codex MAJOR 2026-05-09): accept-attempt
-        // közben lejárt → history archive (különben a finalStatus elveszik).
-        await _archiveInvite(ctx, invite, 'expired', 'auto_expire_on_accept_attempt');
+        await _archiveAndUpdateExpiredInvite(ctx, invite, 'auto_expire_on_accept_attempt', '[Accept]');
         return fail(res, 410, 'invite_expired');
     }
 
@@ -743,6 +842,29 @@ async function acceptInvite(ctx) {
         // pótolja.
         // D.3 — audit-trail: a delete ELŐTT mentjük a history-ba.
         await _archiveInvite(ctx, invite, 'accepted', 'idempotent_already_member', callerId);
+
+        // Harden Fázis 6 BLOCKER fix: ha az előző acceptInvite-call az 7b
+        // admin-team ensure-en bukott el (membership létrejött, 500), az
+        // invite-doc még pending (a 8. delete a 7b után fut). A retry erre
+        // az ágra esik — itt RETRY-oljuk az admin-team add-et az admin role-os
+        // existing membership-re. Idempotens (ensureTeam 409 = skip,
+        // ensureTeamMembership 409 = already_member). Best-effort: ha újra
+        // bukik, log + tovább (a következő retry vagy a backfill_admin_team_acl
+        // pótolja — különben az idempotent ág végtelenül 500-at adna a usernek).
+        const existingRole = existingMembership.documents[0].role;
+        if (existingRole === 'owner' || existingRole === 'admin') {
+            const adminTeamId = buildOrgAdminTeamId(invite.organizationId);
+            try {
+                await ensureTeam(teamsApi, adminTeamId, `Org admins: ${invite.organizationId}`);
+                const r = await ensureTeamMembership(teamsApi, adminTeamId, callerId, [existingRole]);
+                if (r.skipped === 'team_not_found') {
+                    log(`[Accept] Idempotens admin-team retry: team_not_found az ensureTeam után — backfill pótolja`);
+                }
+            } catch (err) {
+                log(`[Accept] Idempotens admin-team retry hiba (non-blocking — backfill pótolja): ${err.message}`);
+            }
+        }
+
         try {
             await databases.deleteDocument(env.databaseId, env.invitesCollectionId, invite.$id);
         } catch (deleteErr) {
@@ -754,7 +876,7 @@ async function acceptInvite(ctx) {
             action: 'already_member',
             organizationId: invite.organizationId,
             membershipId: existingMembership.documents[0].$id,
-            role: existingMembership.documents[0].role
+            role: existingRole
         });
     }
 
@@ -807,6 +929,23 @@ async function acceptInvite(ctx) {
                 // source of truth.
                 // D.3 — audit-trail: a delete ELŐTT mentjük a history-ba.
                 await _archiveInvite(ctx, invite, 'accepted', 'race_winner_already_member', callerId);
+
+                // Harden Fázis 6 BLOCKER fix (mint az idempotens-ágon): admin
+                // role esetén az admin-team add idempotens retry — a Q1 ACL
+                // beállítása race-winner ágon is futnia kell.
+                if (existing.role === 'owner' || existing.role === 'admin') {
+                    const adminTeamId = buildOrgAdminTeamId(invite.organizationId);
+                    try {
+                        await ensureTeam(teamsApi, adminTeamId, `Org admins: ${invite.organizationId}`);
+                        const r = await ensureTeamMembership(teamsApi, adminTeamId, callerId, [existing.role]);
+                        if (r.skipped === 'team_not_found') {
+                            log(`[Accept] Race admin-team retry: team_not_found az ensureTeam után — backfill pótolja`);
+                        }
+                    } catch (adminErr) {
+                        log(`[Accept] Race admin-team retry hiba (non-blocking — backfill pótolja): ${adminErr.message}`);
+                    }
+                }
+
                 try {
                     await databases.deleteDocument(env.databaseId, env.invitesCollectionId, invite.$id);
                 } catch (deleteErr) {
@@ -839,6 +978,38 @@ async function acceptInvite(ctx) {
         error(`[Accept] org team membership hiba (non-blocking): ${err.message}`);
     }
 
+    // 7b. Q1 ACL (E blokk, 2026-05-09 follow-up): ha az új tag admin role-lal
+    //     érkezik, az admin-team-be is be kell venni — különben nem lát
+    //     `organizationInvites` / `organizationInviteHistory` doc-ot.
+    //
+    // Harden Fázis 1+2 (Codex baseline #2 + #3): korábban best-effort volt;
+    // ha az admin-team nem létezett (legacy org backfill előtt), a `team_not_found`
+    // némán elnyelődött → admin user 'admin' role-t kapott, DE NEM látott
+    // ACL-t. Most: `ensureTeam` ELŐSZÖR (idempotens, létrehozza ha hiányzik),
+    // utána `ensureTeamMembership`. Ha bármelyik bukik, fail-closed (a user
+    // retry-olhatja, és a backend invariáns lokálisan érvényesül).
+    if (invite.role === 'admin') {
+        const adminTeamId = buildOrgAdminTeamId(invite.organizationId);
+        try {
+            await ensureTeam(teamsApi, adminTeamId, `Org admins: ${invite.organizationId}`);
+        } catch (err) {
+            error(`[Accept] org admin-team ensure hiba: ${err.message}`);
+            return fail(res, 500, 'admin_team_ensure_failed');
+        }
+        try {
+            const r = await ensureTeamMembership(teamsApi, adminTeamId, callerId, ['admin']);
+            if (r.skipped === 'team_not_found') {
+                // Az ensureTeam fent sikerült, mégis 404 — párhuzamos törlés
+                // vagy belső hiba. Fail-closed.
+                error(`[Accept] org admin-team membership team_not_found az ensureTeam után — race`);
+                return fail(res, 500, 'admin_team_membership_failed');
+            }
+        } catch (err) {
+            error(`[Accept] org admin-team membership hiba: ${err.message}`);
+            return fail(res, 500, 'admin_team_membership_failed');
+        }
+    }
+
     // 8. Invite cleanup (Codex review 2026-05-08 BLOCKER 2 fix)
     //
     // A korábbi `updateDocument(status='accepted')` a
@@ -851,10 +1022,19 @@ async function acceptInvite(ctx) {
     // hogy az invite metadata (ki hívta, mikor, milyen role-lal) a token
     // SHA-256 hash-szel együtt rekonstruálható legyen.
     //
+    // G blokk CAS-gate (2026-05-09 follow-up): a return-jelzést loggoljuk;
+    // a delete és membership létrehozás már megtörtént (user-feeling: tag).
+    // Ha az archive `already_exists`, egy párhuzamos expire/decline ág már
+    // megnyerte a terminal-claim-et — audit-szempontból a másik
+    // finalStatus marad érvényben, de a user-feeling konzisztens (tag).
+    //
     // Ha a delete bukik (permission / network), a user TAG marad —
     // a következő accept-call az 5-ös idempotens-membership ágon fogja
     // pótolni a cleanup-ot.
-    await _archiveInvite(ctx, invite, 'accepted', null, callerId);
+    const archiveResult = await _archiveInvite(ctx, invite, 'accepted', null, callerId);
+    if (archiveResult.status === 'already_exists') {
+        log(`[Accept] CAS race — másik ág nyert (${archiveResult.existingFinalStatus || '?'}), de a membership létrejött; user-feeling konzisztens`);
+    }
     try {
         await databases.deleteDocument(env.databaseId, env.invitesCollectionId, invite.$id);
     } catch (deleteErr) {
@@ -922,21 +1102,13 @@ async function listMyInvites(ctx) {
     }
 
     const now = Date.now();
-    // Lejárt invite-ok auto-expire — kvázi opportunista "látogatáskor
-    // takarítjuk" megközelítés. Best-effort: hiba esetén nem dobunk,
-    // a UI úgyis a `expired`-re elnémul, és a következő call újra
-    // próbálkozik.
+    // Lejárt invite-ok opportunista auto-expire (G blokk CAS-gate). Best-effort:
+    // a wrapper hibája esetén log + skip, a következő call újra próbálkozik.
     const validInvites = [];
     for (const inv of invitesResp.documents) {
         if (new Date(inv.expiresAt).getTime() < now) {
             try {
-                await databases.updateDocument(env.databaseId, env.invitesCollectionId, inv.$id, {
-                    status: 'expired'
-                });
-                // D.3 expired audit-gap fix (Codex MAJOR 2026-05-09): opportunista
-                // expire során a history rekord is létrejön — különben a passzív
-                // listing alatti expire-ok elvesznének az audit-trailből.
-                await _archiveInvite(ctx, inv, 'expired', 'auto_expire_on_list');
+                await _archiveAndUpdateExpiredInvite(ctx, inv, 'auto_expire_on_list', '[ListMyInvites]');
             } catch (expErr) {
                 log(`[ListMyInvites] invite expire frissítés sikertelen (non-blocking, ${inv.$id}): ${expErr.message}`);
             }
@@ -1042,16 +1214,11 @@ async function declineInvite(ctx) {
         return fail(res, 410, 'invite_not_pending', { status: invite.status });
     }
 
-    // 3) Expiry check — lejárt invite-ot nem utasítunk el (értelmetlen),
-    //    de auto-expire-oljuk, mint az accept-nél.
+    // 3) Expiry check — G blokk CAS-gate: archive-then-update wrapper. A 410
+    //    válasz amúgy is megfelelő, ezért a wrapper hibája csak loggolódik.
     if (new Date(invite.expiresAt) < new Date()) {
         try {
-            await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
-                status: 'expired'
-            });
-            // D.3 expired audit-gap fix (Codex MAJOR 2026-05-09): decline-attempt
-            // közben lejárt → history archive.
-            await _archiveInvite(ctx, invite, 'expired', 'auto_expire_on_decline_attempt');
+            await _archiveAndUpdateExpiredInvite(ctx, invite, 'auto_expire_on_decline_attempt', '[DeclineInvite]');
         } catch (e) {
             log(`[DeclineInvite] expire frissítés sikertelen: ${e.message}`);
         }
@@ -1074,7 +1241,19 @@ async function declineInvite(ctx) {
         return fail(res, 403, 'email_mismatch');
     }
 
-    // 5) Status update
+    // 5) G blokk CAS-gate (2026-05-09 follow-up): ELŐSZÖR archive (terminal-
+    //    claim), CSAK ha `created` → status update. `already_exists` =
+    //    race-loser (egy párhuzamos accept/expire ág már lezárta) → 409
+    //    `already_terminated`.
+    const archiveResult = await _archiveInvite(ctx, invite, 'declined', null, callerId);
+    if (archiveResult.status === 'already_exists') {
+        log(`[DeclineInvite] CAS race-loser — másik ág nyert (${archiveResult.existingFinalStatus || '?'}) az invite ${invite.$id}-on`);
+        return fail(res, 409, 'already_terminated', {
+            existingFinalStatus: archiveResult.existingFinalStatus || null
+        });
+    }
+    // `created` | `env_missing` | `error` → status update fut (best-effort
+    // env_missing/error esetén az audit elvész, de a fő decline flow megy).
     try {
         await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
             status: 'declined'
@@ -1083,10 +1262,6 @@ async function declineInvite(ctx) {
         error(`[DeclineInvite] status update hiba: ${e.message}`);
         return fail(res, 500, 'invite_update_failed');
     }
-
-    // D.3 — audit-trail: a status-update UTÁN, a doc megmarad. Best-effort,
-    // a history-be kerül a metadata.
-    await _archiveInvite(ctx, invite, 'declined', null, callerId);
 
     log(`[DeclineInvite] User ${callerId} elutasította invite ${invite.$id}-t (org=${invite.organizationId})`);
 

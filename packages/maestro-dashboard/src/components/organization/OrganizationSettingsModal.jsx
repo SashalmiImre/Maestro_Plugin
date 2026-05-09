@@ -58,6 +58,7 @@ export default function OrganizationSettingsModal({ organizationId, initialTab }
 
     const [members, setMembers] = useState([]);
     const [pendingInvites, setPendingInvites] = useState([]);
+    const [inviteHistory, setInviteHistory] = useState([]);
     const [offices, setOffices] = useState([]);
     const [userNameMap, setUserNameMap] = useState(new Map());
     const [callerRole, setCallerRole] = useState(null);
@@ -91,13 +92,41 @@ export default function OrganizationSettingsModal({ organizationId, initialTab }
         if (gen === 1) setIsLoading(true);
 
         try {
+            // E (2026-05-09 follow-up) — Q1 ACL: az `organizationInviteHistory`
+            // és `organizationInvites` CSAK az admin-team tagjai (owner+admin)
+            // számára olvasható. Member 403-at kapna; ezt csendben üres
+            // listára map-eljük. Az 5xx / hálózati / schema-missing hibákat
+            // VISZONT propagáljuk → a teljes Promise.all hibára esik és a
+            // `loadError` a user-nek vizuális jelzést ad.
+            //
+            // Harden Fázis 1+2 (Codex baseline #4 + adversarial MINOR):
+            // a `.catch(() => ({ documents: [] }))` minden hibát némán
+            // elnyelt, ami az incidens-elrejtést és hibás "üres" UI-t okozhatott.
+            const swallow403 = (err) => {
+                if (err?.code === 403 || err?.response?.status === 403) {
+                    return { documents: [] };
+                }
+                throw err;
+            };
+
+            const inviteHistoryPromise = databases.listDocuments({
+                databaseId: DATABASE_ID,
+                collectionId: COLLECTIONS.ORGANIZATION_INVITE_HISTORY,
+                queries: [
+                    Query.equal('organizationId', organizationId),
+                    Query.orderDesc('finalAt'),
+                    Query.limit(100)
+                ]
+            }).catch(swallow403);
+
             const [
                 membersResult,
                 invitesResult,
                 officesResult,
                 groupMembersResult,
                 publicationsHead,
-                articlesHead
+                articlesHead,
+                inviteHistoryResult
             ] = await Promise.all([
                 databases.listDocuments({
                     databaseId: DATABASE_ID,
@@ -107,6 +136,10 @@ export default function OrganizationSettingsModal({ organizationId, initialTab }
                         Query.limit(200)
                     ]
                 }),
+                // E (2026-05-09 follow-up) — Q1 ACL: a `organizationInvites`
+                // CSAK az admin-team tagjai (owner+admin) számára olvasható.
+                // Member 403-at kapna; csendben üres listára map-eljük (a
+                // többi hibát viszont propagáljuk → loadError).
                 databases.listDocuments({
                     databaseId: DATABASE_ID,
                     collectionId: COLLECTIONS.ORGANIZATION_INVITES,
@@ -115,7 +148,7 @@ export default function OrganizationSettingsModal({ organizationId, initialTab }
                         Query.equal('status', 'pending'),
                         Query.limit(100)
                     ]
-                }),
+                }).catch(swallow403),
                 databases.listDocuments({
                     databaseId: DATABASE_ID,
                     collectionId: COLLECTIONS.EDITORIAL_OFFICES,
@@ -148,13 +181,16 @@ export default function OrganizationSettingsModal({ organizationId, initialTab }
                         Query.equal('organizationId', organizationId),
                         Query.limit(1)
                     ]
-                })
+                }),
+                // E (2026-05-09 follow-up) — invite history (csak admin-team láthatja)
+                inviteHistoryPromise
             ]);
 
             if (gen !== loadGenRef.current) return;
 
             setMembers(membersResult.documents);
             setPendingInvites(invitesResult.documents);
+            setInviteHistory(inviteHistoryResult.documents || []);
             setOffices(officesResult.documents.sort(
                 (a, b) => (a.name || '').localeCompare(b.name || '', 'hu')
             ));
@@ -265,6 +301,7 @@ export default function OrganizationSettingsModal({ organizationId, initialTab }
                             callerRole={callerRole}
                             members={members}
                             pendingInvites={pendingInvites}
+                            inviteHistory={inviteHistory}
                             userNameMap={userNameMap}
                             onInviteSent={reloadInvites}
                             onMembersRefresh={loadData}

@@ -43,6 +43,15 @@ const sdk = require("node-appwrite");
  * fedi a teljes update field-level védelmét).
  * Sikertelen aktiválás → deaktiválás korrekciós update-tel.
  *
+ * **Phase 1.6 orphan-guard SCOPE-OUT (Codex pre-review C opció)**:
+ * Ez a CF post-event guard, pre-update snapshot nincs, így egy `orphaned`
+ * orgon érkező direkt DB-write-ot a meglévő `corrections{}` mintával NEM
+ * lehet teljes mező-revert-tel javítani (a `set-publication-root-path` és
+ * `update-article` CF-ek tartalmaznak Phase 1.6 fail-closed guardot, így a
+ * normál kliens-write útvonalak már lefedettek). A direkt Console DB-write
+ * vagy egyéb CF általi bypass elleni védelmet pre-event vagy ACL-szinten
+ * kell megfogni — ez Phase 2 hatáskör.
+ *
  * Trigger: databases.*.collections.publications.documents.*.create
  *          databases.*.collections.publications.documents.*.update
  * Runtime: Node.js 18.0+
@@ -281,6 +290,35 @@ module.exports = async function ({ req, res, log, error }) {
             log(`[Scope] Hiányzó scope mezők publikáción ${freshDoc.$id} → törlés`);
             await databases.deleteDocument(databaseId, publicationsCollectionId, payload.$id);
             return res.json({ success: true, action: 'deleted', reason: 'Missing scope fields' });
+        }
+
+        // ── 1b. Phase 1.6 orphan-status audit-log (NEM enforce) ──
+        //
+        // Codex stop-time review (F blokk MINOR 1): ez a CF post-event guard,
+        // pre-update snapshot nincs, így teljes mező-revert NEM biztonságos
+        // (Codex pre-review C opció, ld. fájl-eleji komment). A normál kliens-
+        // útvonalakat a `set-publication-root-path` és `update-article` CF-ek
+        // fail-closed-ozzák Phase 1.6-ban. Ami eljut idáig egy `orphaned`
+        // orgon: direkt DB-write a Console-ról vagy egy másik (NEM Phase 1.6
+        // patch-elt) CF. Itt CSAK log-breadcrumb-ot hagyunk az audit-trail-be,
+        // hogy a Phase 2 pre-event/ACL-szintű enforce-ot tervezve legyen
+        // signal arra, hogy a bypass-write mennyire frequentált.
+        const organizationsCollectionId = process.env.ORGANIZATIONS_COLLECTION_ID;
+        if (organizationsCollectionId && freshDoc.organizationId) {
+            try {
+                const orgDoc = await databases.getDocument(
+                    databaseId, organizationsCollectionId, freshDoc.organizationId,
+                    [sdk.Query.select(['$id', 'status'])]
+                );
+                const orgStatus = orgDoc?.status || null;
+                if (orgStatus === 'orphaned' || orgStatus === 'archived') {
+                    log(`[OrphanAudit] Publication ${freshDoc.$id} (org=${freshDoc.organizationId}, status="${orgStatus}") write-event detektálva — Phase 1.6 NEM enforce-ol itt, Phase 2 pre-event/ACL guard scope`);
+                }
+            } catch (e) {
+                // Best-effort log; ha az org-lookup hibára fut, csak log marad,
+                // a fő flow tovább megy.
+                log(`[OrphanAudit] Org-status lookup hiba (${freshDoc.organizationId}): ${e.message} — audit kihagyva`);
+            }
         }
 
         // ── 2. Caller office membership check (B.8) ──

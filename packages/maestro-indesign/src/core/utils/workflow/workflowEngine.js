@@ -23,6 +23,15 @@ function _handleCFError(error, context) {
     if (error instanceof PermissionDeniedError) {
         return { success: false, error: error.message, permissionDenied: true };
     }
+    // Phase 1.6 (D blokk follow-up) — orphan-guard: a user-facing copy
+    // különbözik a többi CF-hibától, ezért külön ágon kezelt érték.
+    if (error?.cfReason === 'org_orphaned_write_blocked') {
+        return {
+            success: false,
+            error: 'A szervezet jelenleg árva állapotban van — várd meg az új tulajdonos kijelölését, mielőtt módosítanál.',
+            orgOrphaned: true
+        };
+    }
     if (isNetworkError(error)) {
         logWarn(context, error);
         return { success: false, error: error.message, networkError: true };

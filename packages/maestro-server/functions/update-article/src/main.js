@@ -20,6 +20,7 @@ const sdk = require("node-appwrite");
  *  8. Workflow betöltés (publication.workflowId alapján, fail-closed)
  *  9. Allowed state / átmenet validáció
  * 10. Office membership check — MINDIG fut (lock fast-path is)
+ * 10b. Phase 1.6 orphan-guard (csak content-write, lock-only fast-path SKIP)
  * 11. Jogosultsági check (állapotváltáskor és per-mező, statePermissions alapján)
  * 12. previousState karbantartás + sentinel
  * 13. DB write
@@ -28,7 +29,10 @@ const sdk = require("node-appwrite");
  * tartalmaz, és a user a saját lock-ját veszi/adja vissza (a cikk nincs más
  * által zárolva), a workflow + csoport jogosultsági check-et skippeljük —
  * így az orphaned lock cleanup működik akkor is, ha a user közben elvesztette
- * a csoporttagságát. Az office membership check MINDIG fut.
+ * a csoporttagságát. Az office membership check MINDIG fut. A Phase 1.6
+ * orphan-guard szintén SKIP a lock-only fast-path-on (Codex pre-review): egy
+ * orphaned org-on a saját lock NE ragadjon be — release / acquire metaadat
+ * mozgatható maradjon, a tartalom-write viszont fail-closed.
  *
  * Trigger: HTTP endpoint, `execute: ["users"]`
  * Runtime: Node.js 18.0+
@@ -41,6 +45,8 @@ const sdk = require("node-appwrite");
  * - EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID
  * - GROUPS_COLLECTION_ID
  * - GROUP_MEMBERSHIPS_COLLECTION_ID
+ * - ORGANIZATIONS_COLLECTION_ID (Phase 1.6 orphan-guard, opcionális — ha
+ *   hiányzik, `lookup_failed` sentinel → fail-closed 403)
  * - APPWRITE_API_KEY (fallback, ha az x-appwrite-key header hiányzik)
  */
 
@@ -216,6 +222,44 @@ async function findOfficeMembership(databases, databaseId, collectionId, userId,
     return result.documents[0] || null;
 }
 
+// ── Phase 1.6 orphan-guard (inline duplikáció a Phase 1.5 mintára) ───────────
+//
+// Az `invite-to-organization` `permissions.js` `getOrgStatus()` /
+// `isOrgWriteBlocked()` helperjének inline mása. A `null` legacy active
+// (60+ legacy org backwards-compat). A `'lookup_failed'` env-hiány VAGY DB-hibára
+// utaló sentinel — fail-closed kezelendő (különben átmeneti DB-hiba alatt
+// fail-open lenne a guard).
+//
+// Drift: ha `organizations.status` enum bővül, szinkronizálni kell az
+// `invite-to-organization` permissions.js-szel és a `set-publication-root-path`
+// CF-fel. Phase 2: scripts/build-cf-orphan-guard.mjs single-source generátor.
+
+const ORG_STATUS_ORPHANED = 'orphaned';
+const ORG_STATUS_ARCHIVED = 'archived';
+const ORG_STATUS_LOOKUP_FAILED = 'lookup_failed';
+
+function isOrgWriteBlocked(status) {
+    return status === ORG_STATUS_ORPHANED
+        || status === ORG_STATUS_ARCHIVED
+        || status === ORG_STATUS_LOOKUP_FAILED;
+}
+
+async function getOrgStatus(databases, databaseId, organizationsCollectionId, organizationId) {
+    if (!organizationId) return null;
+    if (!databaseId || !organizationsCollectionId) {
+        return ORG_STATUS_LOOKUP_FAILED;
+    }
+    try {
+        const orgDoc = await databases.getDocument(
+            databaseId, organizationsCollectionId, organizationId,
+            [sdk.Query.select(['$id', 'status'])]
+        );
+        return orgDoc?.status || null;
+    } catch (e) {
+        return ORG_STATUS_LOOKUP_FAILED;
+    }
+}
+
 /**
  * JSON válasz hibakóddal — egyszerű wrapper a `res.json` köré.
  */
@@ -291,6 +335,8 @@ module.exports = async function ({ req, res, log, error }) {
         const officeMembershipsCollectionId = process.env.EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID;
         const groupsCollectionId = process.env.GROUPS_COLLECTION_ID;
         const groupMembershipsCollectionId = process.env.GROUP_MEMBERSHIPS_COLLECTION_ID;
+        // Phase 1.6 orphan-guard: opcionális, hiányzás → `lookup_failed` → 403.
+        const organizationsCollectionId = process.env.ORGANIZATIONS_COLLECTION_ID;
 
         const missingEnvVars = [];
         if (!databaseId) missingEnvVars.push('DATABASE_ID');
@@ -429,6 +475,27 @@ module.exports = async function ({ req, res, log, error }) {
             if (!membership) {
                 log(`[Scope] User ${userId} nem tagja az office-nak ${freshDoc.editorialOfficeId}`);
                 return permissionDenied(res, 'Nem vagy tagja a cikk szerkesztőségének.');
+            }
+        }
+
+        // ── 10b. Phase 1.6 orphan-guard ──
+        // Ha az org `status === 'orphaned' | 'archived'` (vagy `lookup_failed`
+        // sentinel — env hiány vagy DB-hiba) → 403 fail-closed. A `null` legacy
+        // active (60+ legacy org backwards-compat).
+        //
+        // Lock-only fast-path SKIP (Codex pre-review): a saját lock release /
+        // acquire metaadata egy orphaned org-on is mozgatható maradjon, hogy a
+        // cikkek ne ragadjanak be (operatív cleanup invariáns). A tartalom-write
+        // (state, contributors, name, stb.) viszont fail-closed.
+        const orphanGuardOrgId = freshDoc.organizationId
+            || (parentPublication ? parentPublication.organizationId : null);
+        if (!skipPermissionCheck && orphanGuardOrgId) {
+            const orgStatus = await getOrgStatus(
+                databases, databaseId, organizationsCollectionId, orphanGuardOrgId
+            );
+            if (isOrgWriteBlocked(orgStatus)) {
+                log(`[Scope] Org ${orphanGuardOrgId} status="${orgStatus}" → write blocked (Phase 1.6)`);
+                return fail(res, 403, 'org_orphaned_write_blocked');
             }
         }
 

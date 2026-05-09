@@ -303,6 +303,9 @@ export const Publication = React.memo(({ publication, onShowProperties, onOpenIn
             } else if (err.cfReason === 'publication_not_found') {
                 title = "Kiadvány nem található";
                 message = "A kiadvány időközben törölve lett.";
+            } else if (err.cfReason === 'org_orphaned_write_blocked') {
+                title = "Szervezet árva állapotban";
+                message = "A szervezet jelenleg árva állapotban van — várd meg az új tulajdonos kijelölését, mielőtt módosítanál.";
             } else if (isNetworkError(err)) {
                 title = "Hálózati hiba";
                 message = "A beállítás nem mentődött el — próbáld újra.";

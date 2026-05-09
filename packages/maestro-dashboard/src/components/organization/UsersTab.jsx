@@ -116,6 +116,7 @@ export default function UsersTab({
     callerRole,
     members,
     pendingInvites,
+    inviteHistory = [],
     userNameMap,
     onInviteSent,
     onMembersRefresh
@@ -469,6 +470,66 @@ export default function UsersTab({
                     </>
                 )}
             </div>
+
+            {/* ═══ Meghívási történet (E blokk, Q1 ACL) ═══ */}
+            {/*
+                Csak admin/owner látja (Pattern A — Codex pre-review): a
+                `organizationInviteHistory` ACL `team:org_${orgId}_admins`-ra
+                szűkül (E.3 ACL switch), így a member user 403-at kapna a
+                listáznál (a `OrganizationSettingsModal.loadData` catch-eli
+                üres tömbre). A render-gate `isOrgAdmin` ENNÉL kezdődik el —
+                a member elől a teljes szekciót elrejtjük (privacy intent:
+                ne legyen affordance a feature-re).
+            */}
+            {isOrgAdmin && inviteHistory.length > 0 && (
+                <div style={{ marginBottom: 20, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
+                    <h3 style={{ margin: '0 0 8px 0', fontSize: 14, fontWeight: 600 }}>
+                        Meghívási történet <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 12 }}>({inviteHistory.length})</span>
+                    </h3>
+                    <p style={{ margin: '0 0 8px 0', fontSize: 12, color: 'var(--text-muted)' }}>
+                        Korábbi meghívók sorsa (elfogadva / elutasítva / lejárva).
+                    </p>
+                    <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                        {inviteHistory.map(h => {
+                            const finalLabel = (() => {
+                                switch (h.finalStatus) {
+                                    case 'accepted': return { text: 'Elfogadva', color: 'var(--c-success)' };
+                                    case 'declined': return { text: 'Elutasítva', color: 'var(--text-muted)' };
+                                    case 'expired':  return { text: 'Lejárt',     color: 'var(--text-muted)' };
+                                    default:         return { text: h.finalStatus || '?', color: 'var(--text-muted)' };
+                                }
+                            })();
+                            const finalAt = h.finalAt
+                                ? new Date(h.finalAt).toLocaleDateString('hu-HU')
+                                : '?';
+                            return (
+                                <li key={h.$id} style={{
+                                    display: 'flex', alignItems: 'center', gap: 8,
+                                    fontSize: 13, padding: '4px 0',
+                                    borderBottom: '1px solid var(--bg-elevated)'
+                                }}>
+                                    <span>{h.email}</span>
+                                    <span style={{
+                                        fontSize: 10, color: 'var(--text-muted)', background: 'var(--bg-elevated)',
+                                        padding: '1px 6px', borderRadius: 3
+                                    }}>
+                                        {roleLabel(h.role)}
+                                    </span>
+                                    <span style={{
+                                        fontSize: 10, color: finalLabel.color, background: 'var(--bg-elevated)',
+                                        padding: '1px 6px', borderRadius: 3
+                                    }}>
+                                        {finalLabel.text}
+                                    </span>
+                                    <span style={{ marginLeft: 'auto', color: 'var(--text-muted)', fontSize: 11 }}>
+                                        {finalAt}
+                                    </span>
+                                </li>
+                            );
+                        })}
+                    </ul>
+                </div>
+            )}
         </>
     );
 }

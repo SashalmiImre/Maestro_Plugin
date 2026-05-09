@@ -18,8 +18,10 @@ const {
 } = require('../helpers/constants.js');
 const {
     buildOrgTeamId,
+    buildOrgAdminTeamId,
     buildOfficeTeamId,
     buildOrgAclPerms,
+    buildOrgAdminAclPerms,
     buildOfficeAclPerms,
     ensureTeam,
     ensureTeamMembership
@@ -1093,6 +1095,279 @@ async function backfillTenantAcl(ctx) {
 }
 
 /**
+ * ACTION='backfill_admin_team_acl' — Q1 ACL refactor scoped migráció
+ * (E blokk, 2026-05-09 follow-up).
+ *
+ * Caller a target org `owner`-e. Az action:
+ *  1. `org_${orgId}_admins` admin-team létrehozása (HARD prerequisite — ha
+ *     bukik, abort 500). Idempotens (409 → skip).
+ *  2. Tagság-szinkron: minden `organizationMemberships` rekord, ahol
+ *     `role IN (owner, admin)` → `ensureTeamMembership(adminTeamId, userId, [role])`.
+ *  3. ACL rewrite a `organizationInvites` doc-okon (org-scope) →
+ *     `buildOrgAdminAclPerms`.
+ *  4. ACL rewrite a `organizationInviteHistory` doc-okon (org-scope) →
+ *     `buildOrgAdminAclPerms`. Ha az env var nincs beállítva, a lépést
+ *     skipping-eljük (a Phase D.3 kód már `buildOrgAdminAclPerms`-szel írja
+ *     az új doc-okat — csak a legacy backfill-utáni rekordok érintettek).
+ *
+ * Idempotens: 409 → skip; per-doc fail-open (errors[]). `dryRun: true`
+ * opcióval csak számolja a változásokat.
+ *
+ * **Hard prerequisite minta (Codex baseline minta a `backfill_tenant_acl`
+ * 893-916 sorából)**: ha az admin-team create elbukik, abort az egész action
+ * 500-zal — különben a doksik dangling team-re kapnának ACL-t, és minden
+ * admin elveszítené a láthatóságot.
+ */
+async function backfillAdminTeamAcl(ctx) {
+    const { databases, env, callerId, payload, log, error, res, fail, sdk, teamsApi } = ctx;
+    const dryRun = payload && payload.dryRun === true;
+    const { organizationId: targetOrgId } = payload || {};
+
+    if (!targetOrgId || typeof targetOrgId !== 'string') {
+        return fail(res, 400, 'missing_fields', { required: ['organizationId'] });
+    }
+
+    // Caller jogosultság: target org `owner`. (NEM `userHasOrgPermission`,
+    // mert orphaned org-on is futtatható az ACL backfill — a caller-hez
+    // direkt membership-check tisztább.)
+    let ownerMembership;
+    try {
+        ownerMembership = await databases.listDocuments(
+            env.databaseId,
+            env.membershipsCollectionId,
+            [
+                sdk.Query.equal('organizationId', targetOrgId),
+                sdk.Query.equal('userId', callerId),
+                sdk.Query.select(['role']),
+                sdk.Query.limit(1)
+            ]
+        );
+    } catch (err) {
+        error(`[BackfillAdminAcl] caller membership lookup hiba: ${err.message}`);
+        return fail(res, 500, 'membership_lookup_failed');
+    }
+    if (ownerMembership.documents.length === 0) {
+        return fail(res, 403, 'not_a_member');
+    }
+    if (ownerMembership.documents[0].role !== 'owner') {
+        return fail(res, 403, 'insufficient_role', {
+            yourRole: ownerMembership.documents[0].role,
+            required: 'owner'
+        });
+    }
+
+    // Target org létezés-check (és név a team labelhez).
+    let targetOrg;
+    try {
+        targetOrg = await databases.getDocument(
+            env.databaseId, env.organizationsCollectionId, targetOrgId
+        );
+    } catch (err) {
+        if (err?.code === 404) return fail(res, 404, 'organization_not_found');
+        error(`[BackfillAdminAcl] org fetch hiba: ${err.message}`);
+        return fail(res, 500, 'organization_fetch_failed');
+    }
+
+    const stats = {
+        dryRun,
+        organizationId: targetOrgId,
+        adminTeam: { created: false, memberships: 0, staleRemoved: 0 },
+        acl: { invites: 0, inviteHistory: 0 },
+        skipped: { inviteHistory: false },
+        errors: []
+    };
+
+    // ── 1) Admin-team HARD prerequisite ──
+    const adminTeamId = buildOrgAdminTeamId(targetOrgId);
+    if (!dryRun) {
+        try {
+            const result = await ensureTeam(teamsApi, adminTeamId, `Org admins: ${targetOrg.name}`);
+            stats.adminTeam.created = result.created === true;
+        } catch (err) {
+            error(`[BackfillAdminAcl] admin-team create hard-fail (${targetOrgId}): ${err.message}`);
+            return fail(res, 500, 'admin_team_create_failed', {
+                orgId: targetOrgId,
+                message: err.message,
+                hint: 'Admin-team create failure megakadályozta az ACL rewrite-ot a Q1 collection-ökön.'
+            });
+        }
+    }
+
+    // Cursor-paginált helper a 3 backfill scan-hez (Codex stop-time MAJOR fix:
+    // a korábbi single-batch limit a target org > CASCADE_BATCH_LIMIT
+    // memberships / invites / history rekord esetén néma részleges backfill-t
+    // adott — az újrafuttatás cursor nélkül ugyanazt az első oldalt érte el).
+    const listAll = async (collectionId, queries) => {
+        const out = [];
+        let cursor = null;
+        while (true) {
+            const q = [...queries, sdk.Query.limit(CASCADE_BATCH_LIMIT)];
+            if (cursor) q.push(sdk.Query.cursorAfter(cursor));
+            const batch = await databases.listDocuments(env.databaseId, collectionId, q);
+            out.push(...batch.documents);
+            if (batch.documents.length < CASCADE_BATCH_LIMIT) break;
+            cursor = batch.documents[batch.documents.length - 1].$id;
+        }
+        return out;
+    };
+
+    // ── 2) Tagság-szinkron — owner+admin role-ú memberships ──
+    //
+    // Codex stop-time MAJOR fix: `Query.equal('role', ['owner','admin'])` array-
+    // form (Appwrite SDK 23.x string-mezőn is támogatja az IN-szemantikát).
+    // A korábbi `Query.contains` fallback hibás minta volt; primary path most
+    // direkt array-equal.
+    let privilegedMemberships;
+    try {
+        privilegedMemberships = await listAll(
+            env.membershipsCollectionId,
+            [
+                sdk.Query.equal('organizationId', targetOrgId),
+                sdk.Query.equal('role', ['owner', 'admin'])
+            ]
+        );
+    } catch (err) {
+        stats.errors.push({ kind: 'memberships_list', message: err.message });
+        privilegedMemberships = [];
+    }
+
+    for (const m of privilegedMemberships) {
+        if (dryRun) { stats.adminTeam.memberships++; continue; }
+        try {
+            const r = await ensureTeamMembership(
+                teamsApi, adminTeamId, m.userId, [m.role]
+            );
+            if (r.added) {
+                stats.adminTeam.memberships++;
+            } else if (r.skipped === 'team_not_found') {
+                // Az admin-team-et most hoztuk létre — ha 404, párhuzamos
+                // törlés vagy belső hiba.
+                stats.errors.push({
+                    kind: 'admin_membership', userId: m.userId,
+                    message: 'team_not_found after ensureTeam succeeded'
+                });
+            }
+        } catch (err) {
+            stats.errors.push({
+                kind: 'admin_membership', userId: m.userId, message: err.message
+            });
+        }
+    }
+
+    // ── 2b) Stale tagok eltávolítása (reconcile) ──
+    //
+    // Harden Fázis 1+2 (Codex baseline #1 + adversarial BLOCKER 2): a tisztán
+    // additív backfill nem védi az out-of-band membership-változásokat
+    // (Console-ról közvetlenül törölt admin, vagy nem CF-en át demotált admin
+    // → admin-team membership marad → továbbra is lát invite/history doc-ot).
+    // A reconcile listázza az admin-team tagokat, és aki nincs a
+    // `privilegedMemberships`-ben, az stale → eltávolítjuk.
+    //
+    // Simplify Efficiency #3: a stale-delete-eket 10-es chunked Promise.all-ban
+    // futtatjuk (~10× speedup vs. szekvenciális loop) — egy nagy legacy org
+    // 50 stale tag-jánál 5s helyett 500ms.
+    const STALE_DELETE_CONCURRENCY = 10;
+    if (!dryRun) {
+        const privilegedUserIds = new Set(privilegedMemberships.map(m => m.userId));
+        const staleQueue = [];
+        try {
+            let cursor = null;
+            while (true) {
+                const queries = [sdk.Query.limit(CASCADE_BATCH_LIMIT)];
+                if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
+                const memList = await teamsApi.listMemberships(adminTeamId, queries);
+                const items = memList?.memberships || [];
+                if (items.length === 0) break;
+                for (const tm of items) {
+                    if (!privilegedUserIds.has(tm.userId)) {
+                        staleQueue.push(tm);
+                    }
+                }
+                if (items.length < CASCADE_BATCH_LIMIT) break;
+                cursor = items[items.length - 1].$id;
+            }
+        } catch (err) {
+            stats.errors.push({ kind: 'admin_team_list', message: err.message });
+        }
+
+        for (let i = 0; i < staleQueue.length; i += STALE_DELETE_CONCURRENCY) {
+            const slice = staleQueue.slice(i, i + STALE_DELETE_CONCURRENCY);
+            await Promise.all(slice.map(async (tm) => {
+                try {
+                    await teamsApi.deleteMembership(adminTeamId, tm.$id);
+                    stats.adminTeam.staleRemoved++;
+                    log(`[BackfillAdminAcl] stale admin-team tag eltávolítva (userId=${tm.userId}, membershipId=${tm.$id})`);
+                } catch (delErr) {
+                    stats.errors.push({
+                        kind: 'admin_stale_remove',
+                        userId: tm.userId, membershipId: tm.$id,
+                        message: delErr.message
+                    });
+                }
+            }));
+        }
+    }
+
+    // ── 3) ACL rewrite a `organizationInvites` doc-okra ──
+    const adminPerms = buildOrgAdminAclPerms(targetOrgId);
+    let invites;
+    try {
+        invites = await listAll(
+            env.invitesCollectionId,
+            [sdk.Query.equal('organizationId', targetOrgId)]
+        );
+    } catch (err) {
+        stats.errors.push({ kind: 'invites_list', message: err.message });
+        invites = [];
+    }
+    for (const inv of invites) {
+        if (dryRun) { stats.acl.invites++; continue; }
+        try {
+            await databases.updateDocument(
+                env.databaseId, env.invitesCollectionId, inv.$id, {}, adminPerms
+            );
+            stats.acl.invites++;
+        } catch (err) {
+            stats.errors.push({ kind: 'invite_acl', inviteId: inv.$id, message: err.message });
+        }
+    }
+
+    // ── 4) ACL rewrite a `organizationInviteHistory` doc-okra ──
+    if (env.organizationInviteHistoryCollectionId) {
+        let history;
+        try {
+            history = await listAll(
+                env.organizationInviteHistoryCollectionId,
+                [sdk.Query.equal('organizationId', targetOrgId)]
+            );
+        } catch (err) {
+            stats.errors.push({ kind: 'invite_history_list', message: err.message });
+            history = [];
+        }
+        for (const h of history) {
+            if (dryRun) { stats.acl.inviteHistory++; continue; }
+            try {
+                await databases.updateDocument(
+                    env.databaseId, env.organizationInviteHistoryCollectionId, h.$id, {}, adminPerms
+                );
+                stats.acl.inviteHistory++;
+            } catch (err) {
+                stats.errors.push({
+                    kind: 'invite_history_acl', historyId: h.$id, message: err.message
+                });
+            }
+        }
+    } else {
+        stats.skipped.inviteHistory = true;
+        log(`[BackfillAdminAcl] ORGANIZATION_INVITE_HISTORY_COLLECTION_ID env hiányzik — history ACL rewrite skipping`);
+    }
+
+    log(`[BackfillAdminAcl] User ${callerId} — org=${targetOrgId}, dryRun=${dryRun}, errors=${stats.errors.length}`);
+
+    return res.json({ success: true, action: 'backfilled_admin_team_acl', stats });
+}
+
+/**
  * ACTION='backfill_membership_user_names' (2026-05-07) — global owner-only
  * migrációs action. Az `organizationMemberships` és `editorialOfficeMemberships`
  * collection-ök minden rekordjára `usersApi.get(userId)`-t hív, és írja a
@@ -1814,5 +2089,7 @@ module.exports = {
     bootstrapOrganizationStatusSchema,
     backfillOrganizationStatus,
     // D.3 (2026-05-09) — invite audit-trail collection
-    bootstrapOrganizationInviteHistorySchema
+    bootstrapOrganizationInviteHistorySchema,
+    // E (2026-05-09 follow-up) — Q1 ACL refactor admin-team
+    backfillAdminTeamAcl
 };
