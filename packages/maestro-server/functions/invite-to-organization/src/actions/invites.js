@@ -240,6 +240,10 @@ async function _createInviteCore(ctx, params) {
             status: 'expired'
         });
         log(`[CreateCore] Lejárt invite ${existing.$id} expired-re állítva`);
+        // D.3 expired audit-gap fix (Codex MAJOR 2026-05-09): a lejárt invite
+        // archiválása a history-be — különben az `auto_expire_on_recreate`
+        // ágon elveszne a finalStatus rekord.
+        await _archiveInvite(ctx, existing, 'expired', 'auto_expire_on_recreate');
     }
 
     // 2) Token + expiry generálás
@@ -695,6 +699,9 @@ async function acceptInvite(ctx) {
             status: 'expired'
         });
         log(`[Accept] Invite ${invite.$id} lejárt — expired-re állítva`);
+        // D.3 expired audit-gap fix (Codex MAJOR 2026-05-09): accept-attempt
+        // közben lejárt → history archive (különben a finalStatus elveszik).
+        await _archiveInvite(ctx, invite, 'expired', 'auto_expire_on_accept_attempt');
         return fail(res, 410, 'invite_expired');
     }
 
@@ -926,6 +933,10 @@ async function listMyInvites(ctx) {
                 await databases.updateDocument(env.databaseId, env.invitesCollectionId, inv.$id, {
                     status: 'expired'
                 });
+                // D.3 expired audit-gap fix (Codex MAJOR 2026-05-09): opportunista
+                // expire során a history rekord is létrejön — különben a passzív
+                // listing alatti expire-ok elvesznének az audit-trailből.
+                await _archiveInvite(ctx, inv, 'expired', 'auto_expire_on_list');
             } catch (expErr) {
                 log(`[ListMyInvites] invite expire frissítés sikertelen (non-blocking, ${inv.$id}): ${expErr.message}`);
             }
@@ -1038,6 +1049,9 @@ async function declineInvite(ctx) {
             await databases.updateDocument(env.databaseId, env.invitesCollectionId, invite.$id, {
                 status: 'expired'
             });
+            // D.3 expired audit-gap fix (Codex MAJOR 2026-05-09): decline-attempt
+            // közben lejárt → history archive.
+            await _archiveInvite(ctx, invite, 'expired', 'auto_expire_on_decline_attempt');
         } catch (e) {
             log(`[DeclineInvite] expire frissítés sikertelen: ${e.message}`);
         }
