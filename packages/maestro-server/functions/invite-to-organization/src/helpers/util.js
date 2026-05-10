@@ -57,6 +57,12 @@ const VALID_ACTIONS = new Set([
     // 2026-05-07: org-tag role változtatása (owner → admin → member). Az
     // `org.member.role.change` org-scope slug + extra owner-touch guard.
     'change_organization_member_role',
+    // 2026-05-10 ([[Döntések/0012-org-member-removal-cascade]]) — admin-kick.
+    // `org.member.remove` org-scope slug, owner-touch + last-owner guarddal.
+    'remove_organization_member',
+    // 2026-05-10 ([[Döntések/0013-self-service-account-management]]) — self-service
+    // fiók-törlés. Cross-org sequential cleanup + users.delete (Codex B1+B2 fix).
+    'delete_my_account',
     'create_editorial_office', 'update_editorial_office',
     'delete_organization', 'delete_editorial_office',
     'backfill_tenant_acl',
@@ -85,7 +91,10 @@ const VALID_ACTIONS = new Set([
     'bootstrap_organization_status_schema',     // D.2.1 — organizations.status enum
     'backfill_organization_status',             // D.2.5 — legacy orgok status='active'
     'transfer_orphaned_org_ownership',          // D.2.5b — recovery action (global admin)
-    'bootstrap_organization_invite_history_schema' // D.3.1 — audit-trail collection schema
+    'bootstrap_organization_invite_history_schema', // D.3.1 — audit-trail collection schema
+    // E (2026-05-09 follow-up) — Q1 ACL refactor: admin-team scoped backfill.
+    // (Korábbi drift-fix 2026-05-10: a router-ben már szerepelt, a VALID_ACTIONS-ból hiányzott.)
+    'backfill_admin_team_acl'
 ]);
 
 // Slug formátum: kisbetű, szám, kötőjel. A frontend is ugyanezt alkalmazza.

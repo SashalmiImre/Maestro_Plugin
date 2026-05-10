@@ -19,6 +19,8 @@ Sorrend = időbeli (`NNNN` szekvencia).
 | 0009 | [[0009-membership-user-identity-denormalization]] | 2026-05-07 | Accepted |
 | 0010 | [[0010-meghivasi-flow-redesign]] | 2026-05-08 | Accepted |
 | 0011 | [[0011-cas-gate-and-orphan-guard-invariants]] | 2026-05-09 | Accepted |
+| 0012 | [[0012-org-member-removal-cascade]] | 2026-05-10 | Accepted |
+| 0013 | [[0013-self-service-account-management]] | 2026-05-10 | Accepted |
 
 ## Új ADR
 1. Másold a [[Templates/decision-template]] tartalmát.

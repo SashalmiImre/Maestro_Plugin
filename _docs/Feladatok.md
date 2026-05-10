@@ -33,6 +33,8 @@ tags: [feladatok]
 ### D.3 Audit-trail follow-up
 
 - [ ] **D.3.4** — `organizationInviteHistory` retention policy (default forever, admin-kérésre törölhető Console-ról). Phase 2: cron-alapú TTL.
+- [ ] **D.3.5** ([[Döntések/0012-org-member-removal-cascade]] DESIGN-Q D1) — admin-kick audit-trail. A `remove_organization_member` jelenleg csak Appwrite execution log-ot ír. Ha tenant-visible forensic history kell (különösen owner-on-owner kick-ekre), bővítsük az `organizationInviteHistory`-t `removed_by_admin` finalStatus-szal, vagy új `organizationMemberRemovalHistory` collection. Trigger: első panaszos incident vagy explicit compliance-igény.
+- [ ] **D.3.6** ([[Döntések/0013-self-service-account-management]] M2 follow-up) — `delete_my_account` `MAX_ORGS_PER_DELETE_CALL = 10` cap. Ha 10+ org-tag user gyakori, vagy a CF timeout 60s-en sokba kerül, implement chunkolás `continueFrom` payload-mezővel + frontend retry-pattern. Jelenleg 409 `too_many_orgs` hint a usernek (manuális leave-ek előtt).
 
 ### D.5 Hardening backlog (deferred)
 

@@ -1030,6 +1030,283 @@ async function changeOrganizationMemberRole(ctx) {
 }
 
 /**
+ * ACTION='remove_organization_member' (2026-05-10, [[Döntések/0012-org-member-removal-cascade]]).
+ *
+ * Tag eltávolítása a szervezetből (admin-kick) a `UsersTab` felületről. A
+ * `changeOrganizationMemberRole` 8 védelmi rétegét + a `leaveOrganization`
+ * STRICT team-cleanup mintáját ötvözi. Self-removal-ra a `leave_organization`
+ * action a megfelelő (külön self-service flow, ld. ADR 0013).
+ *
+ * Védelmi rétegek (sorrendben):
+ *   1. Payload validation — `organizationId`, `targetUserId`
+ *   2. Self-block — `callerId === targetUserId` → 403 `cannot_remove_self`
+ *   3. Permission check — `org.member.remove` (owner + admin default-ban)
+ *   4. Membership lookup — `organizationMemberships` (org + targetUserId)
+ *   5. Owner-touch guard — admin nem érintheti owner-t (Codex Q3, MAJOR)
+ *   6. Last-owner guard — utolsó owner-t nem lehet kicsapni
+ *   7. STRICT team cleanup (Codex Q5+Q6, MAJOR) — per-office + org + admin-team
+ *      a DB delete ELŐTT, a Realtime ghost-ACL elkerülésére
+ *   8. Cascade DB delete — officeMemberships → groupMemberships → org membership
+ *      paginált, infinite-loop guard (mint a `leaveOrganization`-ben)
+ */
+async function removeOrganizationMember(ctx) {
+    const { databases, env, callerId, callerUser, payload, log, error, res, fail, sdk, permissionEnv, permissionContext, teamsApi } = ctx;
+    const { organizationId, targetUserId } = payload || {};
+
+    // 1. Payload validation
+    if (!organizationId || !targetUserId) {
+        return fail(res, 400, 'missing_fields', {
+            required: ['organizationId', 'targetUserId']
+        });
+    }
+    if (typeof organizationId !== 'string' || typeof targetUserId !== 'string') {
+        return fail(res, 400, 'invalid_payload_types');
+    }
+
+    // 2. Self-block — self-removal a self-service `leave_organization`-en át.
+    //    Indok: a self-flow last-owner / last-member hint-szet ad ('transfer_ownership_first'
+    //    vs 'delete_organization_instead'), amit az admin-kick nem tudna megfelelően
+    //    visszaadni a hívónak (a hívó nem a target).
+    if (callerId === targetUserId) {
+        return fail(res, 403, 'cannot_remove_self', {
+            hint: 'use_leave_organization',
+            note: 'Saját kilépéshez a `leave_organization` action-t használd.'
+        });
+    }
+
+    // 3. Permission check — `org.member.remove` slug. Admin is megkapja
+    //    default-ban (NINCS az `ADMIN_EXCLUDED_ORG_SLUGS`-ban).
+    const allowed = await permissions.userHasOrgPermission(
+        databases,
+        permissionEnv,
+        callerUser,
+        'org.member.remove',
+        organizationId,
+        permissionContext.orgRoleByOrg,
+        permissionContext.orgStatusByOrg
+    );
+    if (!allowed) {
+        return fail(res, 403, 'insufficient_permission', {
+            slug: 'org.member.remove',
+            scope: 'org'
+        });
+    }
+
+    // 4. Target membership lookup
+    let targetMembership;
+    try {
+        const list = await databases.listDocuments(
+            env.databaseId,
+            env.membershipsCollectionId,
+            [
+                sdk.Query.equal('organizationId', organizationId),
+                sdk.Query.equal('userId', targetUserId),
+                sdk.Query.limit(1)
+            ]
+        );
+        if (list.documents.length === 0) {
+            return fail(res, 404, 'membership_not_found', {
+                note: 'A target user nem tagja ennek a szervezetnek.'
+            });
+        }
+        targetMembership = list.documents[0];
+    } catch (err) {
+        error(`[RemoveOrgMember] target membership lookup hiba: ${err.message}`);
+        return fail(res, 500, 'membership_lookup_failed');
+    }
+    const targetRole = targetMembership.role;
+
+    // 5. Owner-touch guard — admin nem nyúlhat owner-hez (privilege-eszkaláció).
+    //    A `userHasOrgPermission` admin-nak is true-t adna; az ADR 0008 elv:
+    //    admin nem érinthet magasabb szintű felhasználót. A caller role-t a
+    //    `getOrgRole` per-request cache-ből olvassuk.
+    if (targetRole === 'owner') {
+        const callerRole = await permissions.getOrgRole(
+            databases,
+            permissionEnv,
+            callerId,
+            organizationId,
+            permissionContext.orgRoleByOrg
+        );
+        if (callerRole !== 'owner') {
+            return fail(res, 403, 'requires_owner_for_owner_removal', {
+                note: 'Owner-szintű tag eltávolítása csak owner caller-rel végezhető. Admin nem nyúlhat owner-szintű felhasználóhoz.'
+            });
+        }
+    }
+
+    // 6. Last-owner guard — owner-target esetén ellenőrizzük, hogy van-e
+    //    másik owner. Ha nincs → az org owner-mentes lenne, deadlock.
+    if (targetRole === 'owner') {
+        try {
+            const owners = await databases.listDocuments(
+                env.databaseId,
+                env.membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', organizationId),
+                    sdk.Query.equal('role', 'owner'),
+                    sdk.Query.limit(2) // 2 elég az "≥2 owner van?" döntéshez
+                ]
+            );
+            if (owners.documents.length <= 1) {
+                return fail(res, 409, 'cannot_remove_last_owner', {
+                    hint: 'transfer_ownership_first',
+                    note: 'A szervezetben legalább egy owner-nek lennie kell. Előbb promote-olj egy másik tagot owner-ré.'
+                });
+            }
+        } catch (err) {
+            error(`[RemoveOrgMember] owner count lookup hiba: ${err.message}`);
+            return fail(res, 500, 'owner_count_lookup_failed');
+        }
+    }
+
+    // 7. Office-IDs listing — a per-office team cleanup-hoz kell. Lapozott listing.
+    const officeIds = [];
+    let cursor;
+    while (true) {
+        const queries = [
+            sdk.Query.equal('organizationId', organizationId),
+            sdk.Query.select(['$id']),
+            sdk.Query.limit(CASCADE_BATCH_LIMIT)
+        ];
+        if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
+        let resp;
+        try {
+            resp = await databases.listDocuments(env.databaseId, env.officesCollectionId, queries);
+        } catch (e) {
+            error(`[RemoveOrgMember] office listing hiba: ${e.message}`);
+            return fail(res, 500, 'office_list_failed');
+        }
+        if (resp.documents.length === 0) break;
+        for (const o of resp.documents) officeIds.push(o.$id);
+        if (resp.documents.length < CASCADE_BATCH_LIMIT) break;
+        cursor = resp.documents[resp.documents.length - 1].$id;
+    }
+
+    // 7.5. STRICT team cleanup — DB delete ELŐTT (Realtime ghost-ACL elkerülése).
+    //      A `leaveOrganization` mintát követjük: per-office team + org team +
+    //      `org_${orgId}_admins` team (admin-on eltávolít, member-en idempotens skip).
+    //      Hiba → 500 `team_cleanup_failed`, DB érintetlen, retry biztonságos
+    //      (`removeTeamMembership` idempotens 404/409 skip).
+    const teamCleanup = { officeTeams: 0, orgTeam: false, orgAdminTeam: false };
+    try {
+        for (const oid of officeIds) {
+            const r = await removeTeamMembership(teamsApi, buildOfficeTeamId(oid), targetUserId);
+            if (r.removed > 0) teamCleanup.officeTeams += r.removed;
+        }
+        const r = await removeTeamMembership(teamsApi, buildOrgTeamId(organizationId), targetUserId);
+        if (r.removed > 0) teamCleanup.orgTeam = true;
+        // Q1 ACL admin-team — Codex Q6 MAJOR: a target esetleges admin-tagsága.
+        const ra = await removeTeamMembership(teamsApi, buildOrgAdminTeamId(organizationId), targetUserId);
+        if (ra.removed > 0) teamCleanup.orgAdminTeam = true;
+    } catch (teamErr) {
+        error(`[RemoveOrgMember] team membership remove hiba — abort, DB érintetlen: ${teamErr.message}`);
+        return fail(res, 500, 'team_cleanup_failed', { message: teamErr.message });
+    }
+
+    // 8. Cascade DB delete — `editorialOfficeMemberships` (target + org-szűrt).
+    //    Lapozott + infinite-loop guard (a `leaveOrganization` minta szerint).
+    let officeMembershipsRemoved = 0;
+    const officeFailures = [];
+    try {
+        while (true) {
+            const resp = await databases.listDocuments(
+                env.databaseId,
+                env.officeMembershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', organizationId),
+                    sdk.Query.equal('userId', targetUserId),
+                    sdk.Query.limit(CASCADE_BATCH_LIMIT)
+                ]
+            );
+            if (resp.documents.length === 0) break;
+            for (const m of resp.documents) {
+                try {
+                    await databases.deleteDocument(env.databaseId, env.officeMembershipsCollectionId, m.$id);
+                    officeMembershipsRemoved++;
+                } catch (delErr) {
+                    officeFailures.push({ docId: m.$id, message: delErr.message });
+                }
+            }
+            if (officeFailures.length > 0) break;
+            if (resp.documents.length < CASCADE_BATCH_LIMIT) break;
+        }
+    } catch (e) {
+        error(`[RemoveOrgMember] office memberships listing hiba: ${e.message}`);
+        return fail(res, 500, 'office_memberships_failed');
+    }
+    if (officeFailures.length > 0) {
+        error(`[RemoveOrgMember] office membership delete failures: ${JSON.stringify(officeFailures)}`);
+        return fail(res, 500, 'office_memberships_failed', { failures: officeFailures });
+    }
+
+    // 8b. Cascade DB delete — `groupMemberships` (target + org-szűrt).
+    let groupMembershipsRemoved = 0;
+    const groupFailures = [];
+    try {
+        while (true) {
+            const resp = await databases.listDocuments(
+                env.databaseId,
+                env.groupMembershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', organizationId),
+                    sdk.Query.equal('userId', targetUserId),
+                    sdk.Query.limit(CASCADE_BATCH_LIMIT)
+                ]
+            );
+            if (resp.documents.length === 0) break;
+            for (const m of resp.documents) {
+                try {
+                    await databases.deleteDocument(env.databaseId, env.groupMembershipsCollectionId, m.$id);
+                    groupMembershipsRemoved++;
+                } catch (delErr) {
+                    groupFailures.push({ docId: m.$id, message: delErr.message });
+                }
+            }
+            if (groupFailures.length > 0) break;
+            if (resp.documents.length < CASCADE_BATCH_LIMIT) break;
+        }
+    } catch (e) {
+        error(`[RemoveOrgMember] group memberships listing hiba: ${e.message}`);
+        return fail(res, 500, 'group_memberships_failed');
+    }
+    if (groupFailures.length > 0) {
+        error(`[RemoveOrgMember] group membership delete failures: ${JSON.stringify(groupFailures)}`);
+        return fail(res, 500, 'group_memberships_failed', { failures: groupFailures });
+    }
+
+    // 8c. Org membership doc törlése — a fő rekord. Most már minden gyerek
+    //     (office + group) le van bontva, az org doc-on a target jogosultsága
+    //     megszűnik.
+    try {
+        await databases.deleteDocument(
+            env.databaseId,
+            env.membershipsCollectionId,
+            targetMembership.$id
+        );
+    } catch (e) {
+        error(`[RemoveOrgMember] org membership delete hiba (${targetMembership.$id}): ${e.message}`);
+        return fail(res, 500, 'membership_delete_failed');
+    }
+
+    log(`[RemoveOrgMember] caller=${callerId} kicsapta target=${targetUserId} org=${organizationId}-ból (target.role=${targetRole}, office=${officeMembershipsRemoved}, groupMemberships=${groupMembershipsRemoved}, teams.office=${teamCleanup.officeTeams}, teams.org=${teamCleanup.orgTeam}, teams.admin=${teamCleanup.orgAdminTeam})`);
+
+    return res.json({
+        success: true,
+        action: 'removed',
+        organizationId,
+        targetUserId,
+        previousRole: targetRole,
+        removed: {
+            organizationMembership: 1,
+            editorialOfficeMemberships: officeMembershipsRemoved,
+            groupMemberships: groupMembershipsRemoved
+        },
+        teamCleanup
+    });
+}
+
+/**
  * ACTION='transfer_orphaned_org_ownership' (D.2.5b, 2026-05-09)
  *
  * Recovery flow egy `status === 'orphaned'` organizációra. Az utolsó owner
@@ -1163,10 +1440,290 @@ async function transferOrphanedOrgOwnership(ctx) {
     });
 }
 
+/**
+ * ACTION='delete_my_account' (2026-05-10, [[Döntések/0013-self-service-account-management]]).
+ *
+ * Self-service fiók-törlés a `/settings/account` profile-screen "Veszélyes
+ * zóna" gombjáról. Cross-org cascade + Appwrite user-account hard-delete.
+ *
+ * **Codex BLOCKER fix-ek**:
+ *   - B1 (race-window): per-org sequential cleanup a `users.delete` ELŐTT.
+ *     A `users.delete` után a `user-cascade-delete` event-driven CF-nek már
+ *     semmit nem kell takarítania (zéró-membership user).
+ *   - B2 (sole-member): a sole-owner ÉS sole-member ágat is blokkolja, hogy
+ *     ne maradjon árva, üres org. A `leaveOrganization` mintát követi.
+ *   - B3: a meglévő `user-cascade-delete` CF most már lebontja az
+ *     `org_${orgId}_admins` team-eket is (ld. külön patch a CF-ben).
+ *
+ * **Lépések**:
+ *   1. Caller user kötelező (self-service).
+ *   2. Caller MINDEN org-membership listázása (paginált).
+ *   3. Cross-org pre-check (FAIL-CLOSED): minden owner-role membership-en a
+ *      másik-owner / másik-tag check. Ha valamelyikben nincs másik owner →
+ *      `lastOwnerOrgs` (van más tag) vagy `soleOwnerOrgs` (egyedüli tag).
+ *      Bármelyik nem üres → 409 `last_owner_in_orgs` + hint, NINCS cleanup.
+ *   4. Per-org sequential cleanup — minden orgra a `leaveOrganization` mintát
+ *      replikálja: STRICT team cleanup → office memberships → group memberships
+ *      → org membership doc.
+ *   5. `usersApi.delete(callerId)` — egy zéró-membership user-en. A
+ *      `user-cascade-delete` event-driven CF lefut, de már semmit nem talál.
+ */
+async function deleteMyAccount(ctx) {
+    const { databases, env, callerId, payload, sdk, log, error, res, fail, teamsApi, usersApi } = ctx;
+
+    if (!callerId) {
+        return fail(res, 401, 'unauthenticated');
+    }
+    // Defense-in-depth confirm token (a frontend a confirmation után küldi).
+    // A meglévő strict email-typed dialog UI-szintű védelem; a backend-en
+    // requestből explicit `confirm: true` flag-et várunk, hogy egy tévedésből
+    // küldött payload (pl. CSRF, minified bug) NE törölje a user-t.
+    if (!payload || payload.confirm !== true) {
+        return fail(res, 400, 'confirm_required', {
+            note: 'A delete_my_account payload-ban explicit `confirm: true` szükséges.'
+        });
+    }
+
+    // 2. Caller MINDEN org-membership listázása (paginált, mintaként a
+    //    `leaveOrganization` office-listing loop-jából).
+    const callerMemberships = [];
+    {
+        let cursor;
+        while (true) {
+            const queries = [
+                sdk.Query.equal('userId', callerId),
+                sdk.Query.limit(CASCADE_BATCH_LIMIT)
+            ];
+            if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
+            let resp;
+            try {
+                resp = await databases.listDocuments(env.databaseId, env.membershipsCollectionId, queries);
+            } catch (e) {
+                error(`[DeleteMyAccount] org memberships listing hiba: ${e.message}`);
+                return fail(res, 500, 'memberships_list_failed');
+            }
+            if (resp.documents.length === 0) break;
+            callerMemberships.push(...resp.documents);
+            if (resp.documents.length < CASCADE_BATCH_LIMIT) break;
+            cursor = resp.documents[resp.documents.length - 1].$id;
+        }
+    }
+
+    // 2.5. CF timeout védelem (Codex stop-time review MAJOR M2, 2026-05-10).
+    //      Az `invite-to-organization` CF timeout 60s a meghívási flow miatt;
+    //      a per-org cleanup soros (per-office team API + 2-3 collection paginált
+    //      delete) kb. 1.5-3 mp/org. Egy 10-org cap biztos margin a 60s alatt.
+    //      Ennél több → 409 `too_many_orgs` + hint: a user előbb manuálisan lép
+    //      ki néhány orgból (`leave_organization` per-org flow), majd retry.
+    const MAX_ORGS_PER_DELETE_CALL = 10;
+    if (callerMemberships.length > MAX_ORGS_PER_DELETE_CALL) {
+        return fail(res, 409, 'too_many_orgs', {
+            orgCount: callerMemberships.length,
+            max: MAX_ORGS_PER_DELETE_CALL,
+            hint: 'leave_some_orgs_first',
+            note: `Túl sok szervezetben vagy tag (${callerMemberships.length}). Először lépj ki ${callerMemberships.length - MAX_ORGS_PER_DELETE_CALL} szervezetből, majd próbáld újra a fiók-törlést.`
+        });
+    }
+
+    // 3. Cross-org pre-check (FAIL-CLOSED). MINDEN owner-orgra ellenőrzünk,
+    //    cleanup ELŐTT — különben részleges törlés után árva orgok maradnának.
+    const lastOwnerOrgs = [];
+    const soleOwnerOrgs = [];
+    for (const m of callerMemberships) {
+        if (m.role !== 'owner') continue;
+        const orgId = m.organizationId;
+        let otherOwners;
+        try {
+            otherOwners = await databases.listDocuments(env.databaseId, env.membershipsCollectionId, [
+                sdk.Query.equal('organizationId', orgId),
+                sdk.Query.equal('role', 'owner'),
+                sdk.Query.notEqual('userId', callerId),
+                sdk.Query.limit(1)
+            ]);
+        } catch (e) {
+            error(`[DeleteMyAccount] other-owner scan hiba (${orgId}): ${e.message}`);
+            return fail(res, 500, 'owner_scan_failed', { organizationId: orgId });
+        }
+        if (otherOwners.documents.length > 0) continue; // van másik owner, mehet
+
+        // Egyedüli owner — van más tag?
+        let otherMembers;
+        try {
+            otherMembers = await databases.listDocuments(env.databaseId, env.membershipsCollectionId, [
+                sdk.Query.equal('organizationId', orgId),
+                sdk.Query.notEqual('userId', callerId),
+                sdk.Query.limit(1)
+            ]);
+        } catch (e) {
+            error(`[DeleteMyAccount] other-member scan hiba (${orgId}): ${e.message}`);
+            return fail(res, 500, 'owner_scan_failed', { organizationId: orgId });
+        }
+
+        if (otherMembers.documents.length > 0) {
+            lastOwnerOrgs.push(orgId);
+        } else {
+            soleOwnerOrgs.push(orgId);
+        }
+    }
+
+    if (lastOwnerOrgs.length > 0 || soleOwnerOrgs.length > 0) {
+        return fail(res, 409, 'last_owner_in_orgs', {
+            lastOwnerOrgs,
+            soleOwnerOrgs,
+            hint: 'transfer_or_delete',
+            note: 'A felsorolt szervezetekben utolsó owner vagy. Először adj át tulajdonjogot, vagy töröld a szervezetet.'
+        });
+    }
+
+    // 4. Per-org sequential cleanup. A `leaveOrganization` belső mintáját
+    //    iteráljuk: office-IDs → STRICT team cleanup → office/group memberships
+    //    → org membership doc. Hibára 500-zal abort, retry biztonságos.
+    const cleanupStats = [];
+    for (const m of callerMemberships) {
+        const orgId = m.organizationId;
+        const stat = { organizationId: orgId, officeMemberships: 0, groupMemberships: 0, teams: { officeTeams: 0, orgTeam: false, orgAdminTeam: false } };
+
+        // 4a. Office-IDs listing
+        const officeIds = [];
+        let cursor;
+        while (true) {
+            const queries = [
+                sdk.Query.equal('organizationId', orgId),
+                sdk.Query.select(['$id']),
+                sdk.Query.limit(CASCADE_BATCH_LIMIT)
+            ];
+            if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
+            let resp;
+            try {
+                resp = await databases.listDocuments(env.databaseId, env.officesCollectionId, queries);
+            } catch (e) {
+                error(`[DeleteMyAccount] office listing hiba (${orgId}): ${e.message}`);
+                return fail(res, 500, 'partial_cleanup', { stage: 'office_list', organizationId: orgId, completedOrgs: cleanupStats });
+            }
+            if (resp.documents.length === 0) break;
+            for (const o of resp.documents) officeIds.push(o.$id);
+            if (resp.documents.length < CASCADE_BATCH_LIMIT) break;
+            cursor = resp.documents[resp.documents.length - 1].$id;
+        }
+
+        // 4b. STRICT team cleanup
+        try {
+            for (const oid of officeIds) {
+                const r = await removeTeamMembership(teamsApi, buildOfficeTeamId(oid), callerId);
+                if (r.removed > 0) stat.teams.officeTeams += r.removed;
+            }
+            const r = await removeTeamMembership(teamsApi, buildOrgTeamId(orgId), callerId);
+            if (r.removed > 0) stat.teams.orgTeam = true;
+            const ra = await removeTeamMembership(teamsApi, buildOrgAdminTeamId(orgId), callerId);
+            if (ra.removed > 0) stat.teams.orgAdminTeam = true;
+        } catch (teamErr) {
+            error(`[DeleteMyAccount] team cleanup hiba (${orgId}): ${teamErr.message}`);
+            return fail(res, 500, 'partial_cleanup', { stage: 'team_cleanup', organizationId: orgId, message: teamErr.message, completedOrgs: cleanupStats });
+        }
+
+        // 4c. Office memberships cascade (callerId + org-szűrt, paginált)
+        try {
+            while (true) {
+                const resp = await databases.listDocuments(env.databaseId, env.officeMembershipsCollectionId, [
+                    sdk.Query.equal('organizationId', orgId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.limit(CASCADE_BATCH_LIMIT)
+                ]);
+                if (resp.documents.length === 0) break;
+                let anyFailed = false;
+                for (const om of resp.documents) {
+                    try {
+                        await databases.deleteDocument(env.databaseId, env.officeMembershipsCollectionId, om.$id);
+                        stat.officeMemberships++;
+                    } catch (delErr) {
+                        anyFailed = true;
+                        error(`[DeleteMyAccount] office membership delete hiba (${om.$id}): ${delErr.message}`);
+                    }
+                }
+                if (anyFailed) {
+                    return fail(res, 500, 'partial_cleanup', { stage: 'office_memberships', organizationId: orgId, completedOrgs: cleanupStats });
+                }
+                if (resp.documents.length < CASCADE_BATCH_LIMIT) break;
+            }
+        } catch (e) {
+            error(`[DeleteMyAccount] office memberships listing hiba (${orgId}): ${e.message}`);
+            return fail(res, 500, 'partial_cleanup', { stage: 'office_memberships_list', organizationId: orgId, completedOrgs: cleanupStats });
+        }
+
+        // 4d. Group memberships cascade
+        try {
+            while (true) {
+                const resp = await databases.listDocuments(env.databaseId, env.groupMembershipsCollectionId, [
+                    sdk.Query.equal('organizationId', orgId),
+                    sdk.Query.equal('userId', callerId),
+                    sdk.Query.limit(CASCADE_BATCH_LIMIT)
+                ]);
+                if (resp.documents.length === 0) break;
+                let anyFailed = false;
+                for (const gm of resp.documents) {
+                    try {
+                        await databases.deleteDocument(env.databaseId, env.groupMembershipsCollectionId, gm.$id);
+                        stat.groupMemberships++;
+                    } catch (delErr) {
+                        anyFailed = true;
+                        error(`[DeleteMyAccount] group membership delete hiba (${gm.$id}): ${delErr.message}`);
+                    }
+                }
+                if (anyFailed) {
+                    return fail(res, 500, 'partial_cleanup', { stage: 'group_memberships', organizationId: orgId, completedOrgs: cleanupStats });
+                }
+                if (resp.documents.length < CASCADE_BATCH_LIMIT) break;
+            }
+        } catch (e) {
+            error(`[DeleteMyAccount] group memberships listing hiba (${orgId}): ${e.message}`);
+            return fail(res, 500, 'partial_cleanup', { stage: 'group_memberships_list', organizationId: orgId, completedOrgs: cleanupStats });
+        }
+
+        // 4e. Org membership doc törlés
+        try {
+            await databases.deleteDocument(env.databaseId, env.membershipsCollectionId, m.$id);
+        } catch (e) {
+            error(`[DeleteMyAccount] org membership delete hiba (${m.$id}): ${e.message}`);
+            return fail(res, 500, 'partial_cleanup', { stage: 'org_membership', organizationId: orgId, completedOrgs: cleanupStats });
+        }
+
+        cleanupStats.push(stat);
+        log(`[DeleteMyAccount] caller=${callerId} org=${orgId} cleanup OK (office=${stat.officeMemberships}, group=${stat.groupMemberships})`);
+    }
+
+    // 5. users.delete(callerId) — zéró-membership user-en. A
+    //    `user-cascade-delete` event-driven CF lefut, de már semmit nem talál.
+    try {
+        await usersApi.delete(callerId);
+    } catch (e) {
+        // Ha a delete bukott, az org-cleanup már megtörtént — a user
+        // technikailag már nem tudja használni a fiókját (membership-jei
+        // törölve). De az Appwrite account még él. Manuális intervenció
+        // szükséges; a hívó retry-elhet.
+        error(`[DeleteMyAccount] users.delete bukott a cleanup után: ${e.message}`);
+        return fail(res, 500, 'user_delete_failed', {
+            message: e.message,
+            note: 'A szervezet-tagságok törölve, de a user-fiók delete bukott. Retry vagy manuális admin-action szükséges.',
+            completedOrgs: cleanupStats
+        });
+    }
+
+    log(`[DeleteMyAccount] caller=${callerId} fiók törölve, ${cleanupStats.length} org cleanup-pal.`);
+
+    return res.json({
+        success: true,
+        action: 'account_deleted',
+        leftOrgs: cleanupStats.map(s => s.organizationId),
+        cleanupStats
+    });
+}
+
 module.exports = {
     bootstrapOrCreateOrganization,
     updateOrganization,
     deleteOrganization,
     changeOrganizationMemberRole,
+    removeOrganizationMember,
+    deleteMyAccount,
     transferOrphanedOrgOwnership
 };

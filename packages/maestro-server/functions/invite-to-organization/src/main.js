@@ -163,6 +163,13 @@ const ACTION_HANDLERS = {
     // 2026-05-07: org-tag role változtatás (org.member.role.change slug,
     // self-edit + last-owner + owner-touch guardokkal). UsersTab role-dropdown.
     'change_organization_member_role': orgActions.changeOrganizationMemberRole,
+    // 2026-05-10 ([[Döntések/0012-org-member-removal-cascade]]) — admin-kick a
+    // UsersTab "Felhasználók" tabról. STRICT team-cleanup + cascade DB delete.
+    'remove_organization_member': orgActions.removeOrganizationMember,
+    // 2026-05-10 ([[Döntések/0013-self-service-account-management]]) — self-service
+    // fiók-törlés a /settings/account profile-screen-en. Cross-org cleanup +
+    // users.delete. Codex BLOCKER B1+B2+B3 fix-ek beépítve.
+    'delete_my_account': orgActions.deleteMyAccount,
     // D.2.5b (2026-05-09) — recovery flow orphan org-ra. Globális admin auth,
     // saját guard-dal (NEM userHasOrgPermission, mert az orphan-guard fail-closed).
     'transfer_orphaned_org_ownership': orgActions.transferOrphanedOrgOwnership,

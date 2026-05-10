@@ -119,6 +119,8 @@ export default function BreadcrumbHeader({
             })
         },
         { label: 'Jelszó módosítása', onClick: () => navigate('/settings/password') },
+        // [[Döntések/0013-self-service-account-management]] — self-service profile screen
+        { label: 'Saját fiókom', onClick: () => navigate('/settings/account') },
         {
             label: theme === 'light' ? 'Sötét téma' : 'Világos téma',
             onClick: toggleTheme
