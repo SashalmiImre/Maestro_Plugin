@@ -2,9 +2,10 @@
  * Maestro Dashboard — OrganizationSettings / UsersTab
  *
  * A szervezet beállítás modal „Felhasználók" füle:
- *   - Felhasználó meghívása (email + role + opcionális üzenet) — admin/owner
- *   - Függő meghívók listája link-másolással — admin/owner
- *   - Tagok listája csoportosítva: Tulajdonosok / Adminok / Tagok
+ *   - Toolbar: kereső + szerepkör-szűrő + „+ Meghívás" CTA + függőben badge
+ *   - Függő meghívók collapsible (admin/owner)
+ *   - Tagok role szerint csoportosítva (Tulajdonos / Admin / Tag) — color-marker
+ *   - Meghívási történet (admin/owner, opcionális)
  *
  * A member névfeloldás az aktív szerkesztőségen kívüli tagokra nem mindig
  * működik (a `groupMemberships` scope editorial office-ra van szűrve) —
@@ -73,14 +74,24 @@ function roleLabel(role) {
     }
 }
 
-/** ADR 0010 W3 — meghívó kézbesítési-status badge címke + szín. */
+/**
+ * Avatar-monogram a megjelenítendő név első karakteréből (Unicode-safe,
+ * uppercase). Üres / hiányzó név esetén `?`.
+ */
+function avatarInitials(name) {
+    const trimmed = (name || '').trim();
+    if (!trimmed) return '?';
+    return trimmed.charAt(0).toUpperCase();
+}
+
+/** ADR 0010 W3 — meghívó kézbesítési-status badge címke + variáns. */
 function deliveryStatusBadge(status) {
     switch (status) {
-        case 'sent':      return { label: 'Kiküldve',      color: 'var(--text-secondary)', bg: 'var(--bg-elevated)' };
-        case 'delivered': return { label: 'Kézbesítve',    color: 'var(--c-success)',      bg: 'var(--bg-elevated)' };
-        case 'bounced':   return { label: 'Visszapattant', color: 'var(--c-error)',        bg: 'var(--bg-elevated)' };
-        case 'failed':    return { label: 'Kézbesítési hiba', color: 'var(--c-error)',     bg: 'var(--bg-elevated)' };
-        case 'pending':   return { label: 'Várakozik',     color: 'var(--text-muted)',     bg: 'var(--bg-elevated)' };
+        case 'sent':      return { label: 'Kiküldve',          variant: 'neutral' };
+        case 'delivered': return { label: 'Kézbesítve',        variant: 'success' };
+        case 'bounced':   return { label: 'Visszapattant',     variant: 'error' };
+        case 'failed':    return { label: 'Kézbesítési hiba',  variant: 'error' };
+        case 'pending':   return { label: 'Várakozik',         variant: 'muted' };
         default:          return null; // legacy invite — nincs status mező
     }
 }
@@ -94,6 +105,13 @@ function groupMembersByRole(members) {
     return buckets;
 }
 
+const ROLE_FILTER_OPTIONS = [
+    { value: 'all',    label: 'Mind' },
+    { value: 'owner',  label: 'Tulajdonos' },
+    { value: 'admin',  label: 'Admin' },
+    { value: 'member', label: 'Tag' }
+];
+
 /**
  * @param {Object} props
  * @param {Object} props.org — a szervezet rekord
@@ -103,13 +121,6 @@ function groupMembersByRole(members) {
  * @param {Map} props.userNameMap — userId → { name, email } (groupMemberships-ből)
  * @param {Function} props.onInviteSent — callback a pending invite lista újratöltésére
  * @param {Function} [props.onMembersRefresh] — opcionális teljes loadData() trigger.
- *   A `handleRoleChange` ezt hívja a sikeres CF response után, hogy az
- *   azonos tab-ban azonnal lássuk a `role` mező változását — az `ORG_CHANNELS`
- *   `ORGANIZATION_MEMBERSHIPS` Realtime csatornája ugyan szintén reload-olna,
- *   de az 300ms debounce-on át, és a same-tab UX-hez azonnal kell.
- *   Codex review (2026-05-07): a kódbázis preferált mintája "explicit reload
- *   saját mutáció után + Realtime cross-tab szinkronra" — `GroupsRoute.jsx`
- *   precedensét követjük.
  */
 export default function UsersTab({
     org,
@@ -130,13 +141,23 @@ export default function UsersTab({
     const [copiedId, setCopiedId] = useState(null);
     const copyTimerRef = useRef(null);
 
+    // Toolbar állapot — kereső + szerepkör-szűrő. Csak kliens-oldali filter,
+    // a server-fetch továbbra is a teljes listát kéri (kis lista, max ~200).
+    const [searchQuery, setSearchQuery] = useState('');
+    const [roleFilter, setRoleFilter] = useState('all');
+
+    // Függő meghívók collapsible — alapból nyitva, ha van pending; user
+    // bezárhatja, hogy a tagok-listára fókuszáljon.
+    const [pendingExpanded, setPendingExpanded] = useState(true);
+    // Meghívási történet ugyancsak collapsible — alapból zárva, a footer
+    // alatt ritkán használt; csak admin/owner férhet hozzá.
+    const [historyExpanded, setHistoryExpanded] = useState(false);
+
     const isOrgAdmin = callerRole === 'owner' || callerRole === 'admin';
 
     useEffect(() => () => {
         if (copyTimerRef.current) clearTimeout(copyTimerRef.current);
     }, []);
-
-    const grouped = useMemo(() => groupMembersByRole(members), [members]);
 
     /**
      * D.6.1 — duplikált megjelenítendő név detektálás. A `renderMemberRow`
@@ -163,6 +184,28 @@ export default function UsersTab({
         }
         return dupes;
     }, [members, userNameMap, user?.$id, user?.name, user?.email]);
+
+    /** Search + role-filter alkalmazva. A kereső név + email mezőre megy. */
+    const filteredMembers = useMemo(() => {
+        const q = searchQuery.trim().toLowerCase();
+        return members.filter(m => {
+            if (roleFilter !== 'all' && m.role !== roleFilter) return false;
+            if (!q) return true;
+            const resolved = userNameMap.get(m.userId);
+            const isSelf = m.userId === user?.$id;
+            const name = (resolved?.name
+                || (isSelf ? user?.name : null)
+                || ''
+            ).toLowerCase();
+            const email = (resolved?.email
+                || (isSelf ? user?.email : null)
+                || ''
+            ).toLowerCase();
+            return name.includes(q) || email.includes(q);
+        });
+    }, [members, searchQuery, roleFilter, userNameMap, user]);
+
+    const grouped = useMemo(() => groupMembersByRole(filteredMembers), [filteredMembers]);
 
     /**
      * ADR 0010 W2 — InviteModal-launcher. A meglévő inline form
@@ -259,6 +302,7 @@ export default function UsersTab({
         }
     }
 
+    /** Egyetlen tag-sor: avatar + név/meta + (te badge) + role-control. */
     function renderMemberRow(m) {
         const resolved = userNameMap.get(m.userId);
         const isSelf = m.userId === user?.$id;
@@ -282,66 +326,76 @@ export default function UsersTab({
         const isProcessingRole = actionPending === `role:${m.$id}`;
 
         return (
-            <li key={m.$id} style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                fontSize: 13, padding: '3px 0'
-            }}>
-                <span>{displayName}</span>
-                {displayEmail && (
-                    <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>({displayEmail})</span>
-                )}
-                {isSelf && (
-                    <span style={{
-                        fontSize: 10, color: 'var(--text-muted)',
-                        background: 'var(--bg-elevated)', padding: '1px 6px', borderRadius: 3
-                    }}>
-                        te
-                    </span>
-                )}
-                {canChangeThisMemberRole && (
-                    <select
-                        value={m.role}
-                        onChange={(e) => handleRoleChange(m, e.target.value)}
-                        disabled={!!actionPending}
-                        title="Szerepkör módosítása"
-                        aria-label={`${displayName} szerepkörének módosítása`}
-                        style={{
-                            marginLeft: 'auto',
-                            fontSize: 11, padding: '2px 6px',
-                            background: 'var(--bg-base)', color: 'var(--text-primary)',
-                            border: '1px solid var(--outline-variant)',
-                            borderRadius: 3,
-                            cursor: actionPending ? 'wait' : 'pointer'
-                        }}
-                    >
-                        <option value="owner">Tulajdonos</option>
-                        <option value="admin">Admin</option>
-                        <option value="member">Tag</option>
-                    </select>
-                )}
-                {isProcessingRole && (
-                    <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>…</span>
-                )}
+            <li key={m.$id} className="org-settings-member-row">
+                <div className={`org-settings-member-avatar org-settings-member-avatar--${m.role}`}>
+                    {avatarInitials(displayName)}
+                </div>
+                <div className="org-settings-member-text">
+                    <div className="org-settings-member-name-line">
+                        <span className="org-settings-member-name">{displayName}</span>
+                        {isSelf && (
+                            <span className="org-settings-badge org-settings-badge--self">te</span>
+                        )}
+                    </div>
+                    {displayEmail && (
+                        <div className="org-settings-member-email">{displayEmail}</div>
+                    )}
+                </div>
+                <div className="org-settings-member-action">
+                    {canChangeThisMemberRole ? (
+                        <select
+                            className="org-settings-role-select"
+                            value={m.role}
+                            onChange={(e) => handleRoleChange(m, e.target.value)}
+                            disabled={!!actionPending}
+                            aria-label={`${displayName} szerepkörének módosítása`}
+                        >
+                            <option value="owner">Tulajdonos</option>
+                            <option value="admin">Admin</option>
+                            <option value="member">Tag</option>
+                        </select>
+                    ) : (
+                        <span className={`org-settings-role-pill org-settings-role-pill--${m.role}`}>
+                            {roleLabel(m.role)}
+                        </span>
+                    )}
+                    {isProcessingRole && (
+                        <span className="org-settings-role-spinner" aria-hidden="true">…</span>
+                    )}
+                </div>
             </li>
         );
     }
 
-    function renderMemberGroup(label, list, color) {
-        if (list.length === 0) return null;
+    /** Role-szekció (Tulajdonos / Admin / Tag) — color-marker dot + label. */
+    function renderMemberGroup(roleKey, label, list) {
+        // A grouped objektum CSAK az org-allowed role-okra (owner/admin/member) van
+        // kalibrálva. Egzotikus role-érték (history/legacy) esetén üres listát
+        // kapunk — nem dobunk error-t, csak nem rendereljük a szekciót.
+        if (!Array.isArray(list)) return null;
+        // D.0.1 — az „Admin (0)" üres-állapot szándékosan látszik, hogy a
+        // szerepkör létezését megerősítse a felhasználónak (nem hiba, csak
+        // jelenleg nincs benne tag).
+        const isEmpty = list.length === 0;
         return (
-            <div style={{ marginBottom: 12 }}>
-                <h4 style={{
-                    margin: '0 0 4px 0',
-                    fontSize: 11, fontWeight: 600,
-                    color,
-                    textTransform: 'uppercase',
-                    letterSpacing: '0.5px'
-                }}>
-                    {label} <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>({list.length})</span>
+            <div key={roleKey} className={`org-settings-member-group org-settings-member-group--${roleKey}${isEmpty ? ' is-empty' : ''}`}>
+                <h4 className="org-settings-member-group-label">
+                    <span className={`org-settings-role-dot org-settings-role-dot--${roleKey}`} aria-hidden="true" />
+                    <span>{label} <span className="org-settings-section-count">({list.length})</span></span>
                 </h4>
-                <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                    {list.map(renderMemberRow)}
-                </ul>
+                {isEmpty ? (
+                    <p className="org-settings-member-group-empty">
+                        {roleKey === 'admin'
+                            ? 'Még nincs admin tag.'
+                            : roleKey === 'owner'
+                                ? 'Még nincs tulajdonos.'
+                                : 'Még nincs tag.'}
+                    </p>
+                ) : (
+                    <ul className="org-settings-member-list">
+                        {list.map(renderMemberRow)}
+                    </ul>
+                )}
             </div>
         );
     }
@@ -352,126 +406,134 @@ export default function UsersTab({
                 <div className="login-error" style={{ marginBottom: 12 }}>{actionError}</div>
             )}
 
-            {/* ═══ Felhasználó meghívása (ADR 0010 W2 — modal-launcher gomb) ═══ */}
-            {isOrgAdmin && (
-                <div style={{
-                    marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 16,
-                    display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12
-                }}>
-                    <div>
-                        <h3 style={{ margin: '0 0 4px 0', fontSize: 14, fontWeight: 600 }}>
-                            Felhasználó meghívása
-                        </h3>
-                        <p style={{ margin: 0, fontSize: 12, color: 'var(--text-muted)' }}>
-                            E-mail meghívót küldhetsz egy vagy több címre, választható lejárattal.
-                        </p>
+            {/* ═══ Toolbar — kereső + filter + meghívás CTA + függőben badge ═══ */}
+            <section className="org-settings-section org-settings-section--toolbar">
+                <div className="org-settings-toolbar">
+                    <div className="org-settings-toolbar-search">
+                        <input
+                            type="search"
+                            className="org-settings-search-input"
+                            placeholder="Tag keresése név vagy email szerint…"
+                            value={searchQuery}
+                            onChange={e => setSearchQuery(e.target.value)}
+                            aria-label="Tag keresése"
+                        />
                     </div>
-                    <button
-                        type="button"
-                        onClick={handleOpenInviteModal}
-                        disabled={!!actionPending}
-                        style={{
-                            background: 'var(--accent-solid)', color: '#fff', border: 'none',
-                            padding: '8px 16px', borderRadius: 4, cursor: actionPending ? 'wait' : 'pointer',
-                            fontSize: 13, fontWeight: 500, whiteSpace: 'nowrap'
-                        }}
+                    <select
+                        className="org-settings-role-filter"
+                        value={roleFilter}
+                        onChange={e => setRoleFilter(e.target.value)}
+                        aria-label="Szerepkör szerint szűrés"
                     >
-                        + Új meghívó
-                    </button>
+                        {ROLE_FILTER_OPTIONS.map(opt => (
+                            <option key={opt.value} value={opt.value}>
+                                Szerepkör: {opt.label}
+                            </option>
+                        ))}
+                    </select>
+                    {isOrgAdmin && (
+                        <button
+                            type="button"
+                            className="btn-primary org-settings-toolbar-cta"
+                            onClick={handleOpenInviteModal}
+                            disabled={!!actionPending}
+                        >
+                            + Meghívás
+                        </button>
+                    )}
+                    {isOrgAdmin && pendingInvites.length > 0 && (
+                        <button
+                            type="button"
+                            className="org-settings-pending-badge"
+                            onClick={() => setPendingExpanded(v => !v)}
+                            aria-expanded={pendingExpanded}
+                            title={pendingExpanded ? 'Függő meghívók elrejtése' : 'Függő meghívók mutatása'}
+                        >
+                            {pendingInvites.length} függőben
+                        </button>
+                    )}
                 </div>
-            )}
+            </section>
 
-            {/* ═══ Függő meghívók ═══ */}
-            {isOrgAdmin && pendingInvites.length > 0 && (
-                <div style={{ marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
-                    <h3 style={{ margin: '0 0 8px 0', fontSize: 14, fontWeight: 600 }}>
-                        Függő meghívók <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 12 }}>({pendingInvites.length})</span>
+            {/* ═══ Függő meghívók collapsible (admin/owner) ═══ */}
+            {isOrgAdmin && pendingInvites.length > 0 && pendingExpanded && (
+                <section className="org-settings-section">
+                    <h3 className="org-settings-section-label">
+                        Függő meghívók <span className="org-settings-section-count">({pendingInvites.length})</span>
                     </h3>
-                    <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                    <ul className="org-settings-pending-list">
                         {pendingInvites.map(inv => {
                             const badge = deliveryStatusBadge(inv.lastDeliveryStatus);
                             const isResending = actionPending === `resend:${inv.$id}`;
+                            const expiresAt = inv.expiresAt
+                                ? new Date(inv.expiresAt).toLocaleDateString('hu-HU')
+                                : '?';
                             return (
-                                <li key={inv.$id} style={{
-                                    display: 'flex', alignItems: 'center', gap: 8,
-                                    fontSize: 13, padding: '4px 0'
-                                }}>
-                                    <span>{inv.email}</span>
-                                    <span style={{
-                                        fontSize: 10, color: 'var(--text-muted)', background: 'var(--bg-elevated)',
-                                        padding: '1px 6px', borderRadius: 3
-                                    }}>
-                                        {roleLabel(inv.role)}
-                                    </span>
-                                    {/* ADR 0010 W3 — kézbesítési state badge (csak ha a CF visszaadta) */}
-                                    {badge && (
-                                        <span
-                                            title={inv.lastDeliveryError || badge.label}
-                                            style={{
-                                                fontSize: 10, color: badge.color, background: badge.bg,
-                                                padding: '1px 6px', borderRadius: 3
-                                            }}
+                                <li key={inv.$id} className="org-settings-pending-row">
+                                    <div className="org-settings-member-avatar org-settings-member-avatar--pending" aria-hidden="true">
+                                        ?
+                                    </div>
+                                    <div className="org-settings-member-text">
+                                        <div className="org-settings-member-name-line">
+                                            <span className="org-settings-member-name">{inv.email}</span>
+                                            {badge && (
+                                                <span
+                                                    className={`org-settings-delivery-badge org-settings-delivery-badge--${badge.variant}`}
+                                                    title={inv.lastDeliveryError || badge.label}
+                                                >
+                                                    {badge.label}
+                                                </span>
+                                            )}
+                                        </div>
+                                        <div className="org-settings-member-email">
+                                            {roleLabel(inv.role)} · lejár: {expiresAt}
+                                        </div>
+                                    </div>
+                                    <div className="org-settings-pending-actions">
+                                        <button
+                                            type="button"
+                                            className="btn-secondary org-settings-pending-btn"
+                                            onClick={() => handleResendInvite(inv)}
+                                            disabled={!!actionPending}
+                                            title="E-mail újraküldése"
                                         >
-                                            {badge.label}
-                                        </span>
-                                    )}
-                                    <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>
-                                        Lejár: {new Date(inv.expiresAt).toLocaleDateString('hu-HU')}
-                                    </span>
-                                    <button
-                                        onClick={() => handleResendInvite(inv)}
-                                        disabled={!!actionPending}
-                                        title="E-mail újraküldése"
-                                        style={{
-                                            marginLeft: 'auto', background: 'none',
-                                            border: '1px solid var(--outline-variant)', color: 'var(--text-secondary)',
-                                            padding: '2px 8px', borderRadius: 4,
-                                            cursor: actionPending ? 'wait' : 'pointer',
-                                            fontSize: 11
-                                        }}
-                                    >
-                                        {isResending ? 'Küldés…' : 'Újraküldés'}
-                                    </button>
-                                    <button
-                                        onClick={() => handleCopyLink(inv)}
-                                        disabled={!!actionPending}
-                                        style={{
-                                            background: 'none',
-                                            border: '1px solid var(--outline-variant)', color: 'var(--text-secondary)',
-                                            padding: '2px 8px', borderRadius: 4,
-                                            cursor: actionPending ? 'wait' : 'pointer',
-                                            fontSize: 11
-                                        }}
-                                    >
-                                        {copiedId === inv.$id ? 'Másolva!' : 'Link másolása'}
-                                    </button>
+                                            {isResending ? 'Küldés…' : 'Újraküldés'}
+                                        </button>
+                                        <button
+                                            type="button"
+                                            className="btn-secondary org-settings-pending-btn"
+                                            onClick={() => handleCopyLink(inv)}
+                                            disabled={!!actionPending}
+                                            title="Meghívó link másolása"
+                                        >
+                                            {copiedId === inv.$id ? 'Másolva!' : 'Link másolása'}
+                                        </button>
+                                    </div>
                                 </li>
                             );
                         })}
                     </ul>
-                </div>
+                </section>
             )}
 
-            {/* ═══ Tagok szerepkörönként ═══ */}
-            <div style={{ marginBottom: 20 }}>
-                <h3 style={{ margin: '0 0 12px 0', fontSize: 14, fontWeight: 600 }}>
-                    Tagok <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 12 }}>({members.length})</span>
-                </h3>
-
+            {/* ═══ Tagok role szerint csoportosítva ═══ */}
+            <section className="org-settings-section">
                 {members.length === 0 ? (
-                    <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0' }}>
-                        Nincsenek tagok.
+                    <p className="org-settings-empty">Nincsenek tagok.</p>
+                ) : filteredMembers.length === 0 ? (
+                    <p className="org-settings-empty">
+                        Nincs találat a szűrésnek megfelelő taggal.
                     </p>
                 ) : (
                     <>
-                        {renderMemberGroup('Tulajdonosok', grouped.owner, 'var(--accent)')}
-                        {renderMemberGroup('Adminok', grouped.admin, 'var(--text-secondary)')}
-                        {renderMemberGroup('Tagok', grouped.member, 'var(--text-muted)')}
+                        {renderMemberGroup('owner', 'Tulajdonos', grouped.owner)}
+                        {renderMemberGroup('admin', 'Admin', grouped.admin)}
+                        {renderMemberGroup('member', 'Tag', grouped.member)}
                     </>
                 )}
-            </div>
+            </section>
 
-            {/* ═══ Meghívási történet (E blokk, Q1 ACL) ═══ */}
+            {/* ═══ Meghívási történet (E blokk, Q1 ACL) — collapsible ═══ */}
             {/*
                 Csak admin/owner látja (Pattern A — Codex pre-review): a
                 `organizationInviteHistory` ACL `team:org_${orgId}_admins`-ra
@@ -482,53 +544,44 @@ export default function UsersTab({
                 ne legyen affordance a feature-re).
             */}
             {isOrgAdmin && inviteHistory.length > 0 && (
-                <div style={{ marginBottom: 20, borderTop: '1px solid var(--border)', paddingTop: 16 }}>
-                    <h3 style={{ margin: '0 0 8px 0', fontSize: 14, fontWeight: 600 }}>
-                        Meghívási történet <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 12 }}>({inviteHistory.length})</span>
-                    </h3>
-                    <p style={{ margin: '0 0 8px 0', fontSize: 12, color: 'var(--text-muted)' }}>
-                        Korábbi meghívók sorsa (elfogadva / elutasítva / lejárva).
-                    </p>
-                    <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
-                        {inviteHistory.map(h => {
-                            const finalLabel = (() => {
-                                switch (h.finalStatus) {
-                                    case 'accepted': return { text: 'Elfogadva', color: 'var(--c-success)' };
-                                    case 'declined': return { text: 'Elutasítva', color: 'var(--text-muted)' };
-                                    case 'expired':  return { text: 'Lejárt',     color: 'var(--text-muted)' };
-                                    default:         return { text: h.finalStatus || '?', color: 'var(--text-muted)' };
-                                }
-                            })();
-                            const finalAt = h.finalAt
-                                ? new Date(h.finalAt).toLocaleDateString('hu-HU')
-                                : '?';
-                            return (
-                                <li key={h.$id} style={{
-                                    display: 'flex', alignItems: 'center', gap: 8,
-                                    fontSize: 13, padding: '4px 0',
-                                    borderBottom: '1px solid var(--bg-elevated)'
-                                }}>
-                                    <span>{h.email}</span>
-                                    <span style={{
-                                        fontSize: 10, color: 'var(--text-muted)', background: 'var(--bg-elevated)',
-                                        padding: '1px 6px', borderRadius: 3
-                                    }}>
-                                        {roleLabel(h.role)}
-                                    </span>
-                                    <span style={{
-                                        fontSize: 10, color: finalLabel.color, background: 'var(--bg-elevated)',
-                                        padding: '1px 6px', borderRadius: 3
-                                    }}>
-                                        {finalLabel.text}
-                                    </span>
-                                    <span style={{ marginLeft: 'auto', color: 'var(--text-muted)', fontSize: 11 }}>
-                                        {finalAt}
-                                    </span>
-                                </li>
-                            );
-                        })}
-                    </ul>
-                </div>
+                <section className="org-settings-section org-settings-section--history">
+                    <button
+                        type="button"
+                        className="org-settings-history-toggle"
+                        onClick={() => setHistoryExpanded(v => !v)}
+                        aria-expanded={historyExpanded}
+                    >
+                        <span aria-hidden="true">{historyExpanded ? '▾' : '▸'}</span>
+                        <span>Meghívási történet <span className="org-settings-section-count">({inviteHistory.length})</span></span>
+                    </button>
+                    {historyExpanded && (
+                        <ul className="org-settings-history-list">
+                            {inviteHistory.map(h => {
+                                const finalLabel = (() => {
+                                    switch (h.finalStatus) {
+                                        case 'accepted': return { text: 'Elfogadva',  variant: 'success' };
+                                        case 'declined': return { text: 'Elutasítva', variant: 'muted' };
+                                        case 'expired':  return { text: 'Lejárt',     variant: 'muted' };
+                                        default:         return { text: h.finalStatus || '?', variant: 'muted' };
+                                    }
+                                })();
+                                const finalAt = h.finalAt
+                                    ? new Date(h.finalAt).toLocaleDateString('hu-HU')
+                                    : '?';
+                                return (
+                                    <li key={h.$id} className="org-settings-history-row">
+                                        <span className="org-settings-history-email">{h.email}</span>
+                                        <span className="org-settings-history-role">{roleLabel(h.role)}</span>
+                                        <span className={`org-settings-history-final org-settings-history-final--${finalLabel.variant}`}>
+                                            {finalLabel.text}
+                                        </span>
+                                        <span className="org-settings-history-date">{finalAt}</span>
+                                    </li>
+                                );
+                            })}
+                        </ul>
+                    )}
+                </section>
             )}
         </>
     );

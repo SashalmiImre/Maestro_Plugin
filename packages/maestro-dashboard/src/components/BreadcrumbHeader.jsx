@@ -152,9 +152,10 @@ export default function BreadcrumbHeader({
     // ── Szervezet / Szerkesztőség modalok ─────────────────────────────────
     function handleOrganizationSettings() {
         if (!activeOrganizationId) return;
+        // A modal saját custom headert (avatar + név + meta + X) renderel,
+        // ezért NEM adunk `title`-t — a Modal default header-ét kikapcsolja.
         openModal(<OrganizationSettingsModal organizationId={activeOrganizationId} />, {
-            size: 'lg',
-            title: <OrganizationSettingsTitle organizationId={activeOrganizationId} />
+            size: 'lg'
         });
     }
 
@@ -307,13 +308,11 @@ export default function BreadcrumbHeader({
  * state-változásaira (rename Realtime event). React elementként átadva a
  * komponens saját maga feliratkozik a context-re, és a név frissül a modal
  * fejlécében is.
+ *
+ * `OrganizationSettingsTitle` korábban itt volt — az OrganizationSettingsModal
+ * mostantól saját custom headert renderel (avatar + név + meta + X), így a
+ * Modal `title` propja nem szükséges és a name-frissítés a modal-on belül megy.
  */
-export function OrganizationSettingsTitle({ organizationId }) {
-    const { organizations } = useAuth();
-    const org = (organizations || []).find(o => o.$id === organizationId);
-    return org?.name || 'Szervezet beállításai';
-}
-
 export function EditorialOfficeSettingsTitle({ editorialOfficeId }) {
     const { editorialOffices } = useAuth();
     const office = (editorialOffices || []).find(o => o.$id === editorialOfficeId);

@@ -41,6 +41,7 @@
 @import './features/publication-settings.css';
 @import './features/workflow-library.css';
 @import './features/editorial-office-settings.css';
+@import './features/organization-settings.css';
 
 /* ─── Responsive overrides ─────────────────────────────────────────────────── */
 /* Utoljára importálva: azonos specifikitású @media szabályok felülírják a fenti

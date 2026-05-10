@@ -250,16 +250,43 @@ export default function OrganizationSettingsModal({ organizationId, initialTab }
 
     // ─── Render ─────────────────────────────────────────────────────
 
+    /**
+     * Avatar-monogram a szervezet nevének első karakteréből (Unicode-safe,
+     * uppercase). Üres / hiányzó név esetén `?`.
+     */
+    const orgInitial = (org?.name || '?').trim().charAt(0).toUpperCase() || '?';
+
+    /**
+     * Modal-fejléc meta-sora: slug · X szerkesztőség · Y tag.
+     * Dot-separator visuális elemmel, egyetlen sorba szedve.
+     */
+    function renderHeaderMeta() {
+        const parts = [];
+        if (org?.slug) parts.push(<span className="org-settings-meta-slug" key="slug">{org.slug}</span>);
+        parts.push(<span key="offices">{offices.length} szerkesztőség</span>);
+        parts.push(<span key="members">{members.length} tag</span>);
+        return parts.reduce((acc, node, i) => {
+            if (i === 0) return [node];
+            return [...acc, <span className="org-settings-meta-dot" key={`dot-${i}`} aria-hidden="true">·</span>, node];
+        }, []);
+    }
+
     if (!organizationId || !org) {
         return (
-            <div className="publication-form">
+            <div className="org-settings-shell">
+                <header className="org-settings-header">
+                    <h2 className="org-settings-title">Szervezet beállításai</h2>
+                    <button
+                        type="button"
+                        className="modal-close-btn"
+                        onClick={closeModal}
+                        aria-label="Bezárás"
+                    >
+                        ✕
+                    </button>
+                </header>
                 <div className="form-empty-state">
                     A szervezet nem található vagy törölve lett.
-                </div>
-                <div className="modal-actions">
-                    <button type="button" className="btn-secondary" onClick={closeModal}>
-                        Bezárás
-                    </button>
                 </div>
             </div>
         );
@@ -267,18 +294,47 @@ export default function OrganizationSettingsModal({ organizationId, initialTab }
 
     if (isLoading) {
         return (
-            <div className="publication-form">
+            <div className="org-settings-shell">
+                <header className="org-settings-header">
+                    <h2 className="org-settings-title">Szervezet beállításai</h2>
+                    <button
+                        type="button"
+                        className="modal-close-btn"
+                        onClick={closeModal}
+                        aria-label="Bezárás"
+                    >
+                        ✕
+                    </button>
+                </header>
                 <div className="form-empty-state">Betöltés…</div>
             </div>
         );
     }
 
     return (
-        <div className="publication-settings-modal">
+        <div className="org-settings-shell">
+            <header className="org-settings-header">
+                <div className="org-settings-header-identity">
+                    <div className="org-settings-avatar" aria-hidden="true">{orgInitial}</div>
+                    <div className="org-settings-header-text">
+                        <h2 className="org-settings-title">{org.name}</h2>
+                        <div className="org-settings-meta">{renderHeaderMeta()}</div>
+                    </div>
+                </div>
+                <button
+                    type="button"
+                    className="modal-close-btn"
+                    onClick={closeModal}
+                    aria-label="Bezárás"
+                >
+                    ✕
+                </button>
+            </header>
+
             <Tabs tabs={TAB_DEFS} activeTab={activeTab} onTabChange={handleTabChange} />
 
             <AnimatedAutoHeight>
-                <div className="publication-tab-content">
+                <div className="org-settings-tab-content">
                     {loadError && (
                         <div className="login-error" style={{ marginBottom: 12 }}>{loadError}</div>
                     )}
