@@ -243,6 +243,38 @@ async function fetchUserIdentity(usersApi, userId, cache, log) {
     return identity;
 }
 
+/**
+ * Org-on belüli office ID-k paginált lekérdezése team-cleanup workflow-khoz.
+ * A `leaveOrganization`, `removeOrganizationMember` és `deleteMyAccount` mind
+ * ugyanezt a select(['$id']) cursor-paginált scan-t használja az org alá tartozó
+ * office team ID-k összegyűjtéséhez. Single-source helper.
+ *
+ * @param {Object} databases — Appwrite Databases SDK instance
+ * @param {Object} env — env objektum `databaseId`, `officesCollectionId` mezőkkel
+ * @param {Object} sdk — node-appwrite SDK module (Query-konstruktorok miatt)
+ * @param {string} organizationId
+ * @param {number} [batchLimit=100] — `helpers/constants.CASCADE_BATCH_LIMIT` default
+ * @returns {Promise<string[]>} — office $id-k tömbje
+ */
+async function listOfficeIdsForOrg(databases, env, sdk, organizationId, batchLimit = 100) {
+    const officeIds = [];
+    let cursor;
+    while (true) {
+        const queries = [
+            sdk.Query.equal('organizationId', organizationId),
+            sdk.Query.select(['$id']),
+            sdk.Query.limit(batchLimit)
+        ];
+        if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
+        const resp = await databases.listDocuments(env.databaseId, env.officesCollectionId, queries);
+        if (resp.documents.length === 0) break;
+        for (const o of resp.documents) officeIds.push(o.$id);
+        if (resp.documents.length < batchLimit) break;
+        cursor = resp.documents[resp.documents.length - 1].$id;
+    }
+    return officeIds;
+}
+
 module.exports = {
     DEFAULT_WORKFLOW,
     INVITE_VALIDITY_DAYS,
@@ -260,5 +292,6 @@ module.exports = {
     slugifyName,
     sanitizeString,
     isAlreadyExists,
-    requireOwnerAnywhere
+    requireOwnerAnywhere,
+    listOfficeIdsForOrg
 };

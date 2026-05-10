@@ -12,7 +12,8 @@ const {
     SLUG_REGEX,
     DEFAULT_WORKFLOW,
     sanitizeString,
-    fetchUserIdentity
+    fetchUserIdentity,
+    listOfficeIdsForOrg
 } = require('../helpers/util.js');
 const { CASCADE_BATCH_LIMIT, WORKFLOW_VISIBILITY_DEFAULT } = require('../helpers/constants.js');
 const { deleteByQuery, cascadeDeleteOffice } = require('../helpers/cascade.js');
@@ -1160,34 +1161,72 @@ async function removeOrganizationMember(ctx) {
         }
     }
 
-    // 7. Office-IDs listing — a per-office team cleanup-hoz kell. Lapozott listing.
-    const officeIds = [];
-    let cursor;
-    while (true) {
-        const queries = [
-            sdk.Query.equal('organizationId', organizationId),
-            sdk.Query.select(['$id']),
-            sdk.Query.limit(CASCADE_BATCH_LIMIT)
-        ];
-        if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
-        let resp;
-        try {
-            resp = await databases.listDocuments(env.databaseId, env.officesCollectionId, queries);
-        } catch (e) {
-            error(`[RemoveOrgMember] office listing hiba: ${e.message}`);
-            return fail(res, 500, 'office_list_failed');
-        }
-        if (resp.documents.length === 0) break;
-        for (const o of resp.documents) officeIds.push(o.$id);
-        if (resp.documents.length < CASCADE_BATCH_LIMIT) break;
-        cursor = resp.documents[resp.documents.length - 1].$id;
+    // 7. Office-IDs listing — a per-office team cleanup-hoz kell. Helper-extracted.
+    let officeIds;
+    try {
+        officeIds = await listOfficeIdsForOrg(databases, env, sdk, organizationId, CASCADE_BATCH_LIMIT);
+    } catch (e) {
+        error(`[RemoveOrgMember] office listing hiba: ${e.message}`);
+        return fail(res, 500, 'office_list_failed');
     }
 
-    // 7.5. STRICT team cleanup — DB delete ELŐTT (Realtime ghost-ACL elkerülése).
-    //      A `leaveOrganization` mintát követjük: per-office team + org team +
-    //      `org_${orgId}_admins` team (admin-on eltávolít, member-en idempotens skip).
-    //      Hiba → 500 `team_cleanup_failed`, DB érintetlen, retry biztonságos
-    //      (`removeTeamMembership` idempotens 404/409 skip).
+    // 7.5. CAS owner re-check (Codex baseline P1 / adversarial high #2, 2026-05-10).
+    //      Az 5+6 lépés a target.role-ra alapozott guardja a 4. lépés után FRESH
+    //      lookup-tól származik, de a delete (8.) sok DB-call + team-call után
+    //      érkezik. Ha közben másik owner kilép vagy demote-olódik, a stale
+    //      pre-check átmegy → utolsó owner is törölhető. CAS-stílusú revalidáció:
+    //      "van-e másik owner mint a target?" — `notEqual + limit(1)` minta
+    //      konzisztens a `deleteMyAccount` 4b CAS-ével.
+    if (targetRole === 'owner') {
+        try {
+            const otherOwnersFresh = await databases.listDocuments(
+                env.databaseId,
+                env.membershipsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', organizationId),
+                    sdk.Query.equal('role', 'owner'),
+                    sdk.Query.notEqual('userId', targetUserId),
+                    sdk.Query.limit(1)
+                ]
+            );
+            if (otherOwnersFresh.documents.length === 0) {
+                return fail(res, 409, 'cas_last_owner_conflict', {
+                    hint: 'concurrent_owner_change',
+                    note: 'A delete ELŐTTI fresh-read szerint már nincs másik owner. Más művelet közben demotálta a többit. Ismételd meg a kérést.'
+                });
+            }
+        } catch (err) {
+            error(`[RemoveOrgMember] CAS owner re-check hiba: ${err.message}`);
+            return fail(res, 500, 'cas_recheck_failed');
+        }
+    }
+
+    // 7.6. Org membership doc törlése ELSŐKÉNT (Codex adversarial medium, 2026-05-10).
+    //      A `userHasOrgPermission()` az `organizationMemberships.role`-on alapszik
+    //      (NEM a team-membership-en), ezért az auth-vágás a server-side write-okhoz
+    //      AKKOR történik meg, amikor ezt a rekordot töröljük. Ha team-cleanup
+    //      vagy a membership-cascade ELŐTT csinálnánk, és valamelyik bukna, a
+    //      target user CF-write-okat küldhetne a half-failed admin-kick után
+    //      (org.member.invite, org.rename, stb.) — security-issue. A team cleanup
+    //      utána fut: a Realtime push-csatornák ~ms-szintű residue-t adnak, de
+    //      ez nem authority, csak read-leak.
+    try {
+        await databases.deleteDocument(
+            env.databaseId,
+            env.membershipsCollectionId,
+            targetMembership.$id
+        );
+    } catch (e) {
+        error(`[RemoveOrgMember] org membership delete hiba (${targetMembership.$id}): ${e.message}`);
+        return fail(res, 500, 'membership_delete_failed');
+    }
+
+    // 8. Team cleanup — most már a target nem tud authority-t használni a server-side
+    //    írási flow-khoz (a `userHasOrgPermission` 7.6 után hard-deny-ot ad). A
+    //    team-membership a Realtime/REST read-ACL-t adja; eltávolítása a push-leak
+    //    ablakot zárja. Hiba esetén 500, DE az auth már elveszett — retry biztonságos
+    //    (`removeTeamMembership` idempotens 404/409 skip), és a target user nem
+    //    tud közben "használni" hogyhogy nem létezik a membership rekordban.
     const teamCleanup = { officeTeams: 0, orgTeam: false, orgAdminTeam: false };
     try {
         for (const oid of officeIds) {
@@ -1196,16 +1235,15 @@ async function removeOrganizationMember(ctx) {
         }
         const r = await removeTeamMembership(teamsApi, buildOrgTeamId(organizationId), targetUserId);
         if (r.removed > 0) teamCleanup.orgTeam = true;
-        // Q1 ACL admin-team — Codex Q6 MAJOR: a target esetleges admin-tagsága.
         const ra = await removeTeamMembership(teamsApi, buildOrgAdminTeamId(organizationId), targetUserId);
         if (ra.removed > 0) teamCleanup.orgAdminTeam = true;
     } catch (teamErr) {
-        error(`[RemoveOrgMember] team membership remove hiba — abort, DB érintetlen: ${teamErr.message}`);
-        return fail(res, 500, 'team_cleanup_failed', { message: teamErr.message });
+        error(`[RemoveOrgMember] team membership remove hiba (DB org-membership már törölve, retry safe): ${teamErr.message}`);
+        return fail(res, 500, 'team_cleanup_failed', { message: teamErr.message, note: 'A target már elvesztette org-authority-t. Retry biztonságos, idempotens.' });
     }
 
-    // 8. Cascade DB delete — `editorialOfficeMemberships` (target + org-szűrt).
-    //    Lapozott + infinite-loop guard (a `leaveOrganization` minta szerint).
+    // 9. Cascade DB delete — `editorialOfficeMemberships` (target + org-szűrt).
+    //    Lapozott + infinite-loop guard.
     let officeMembershipsRemoved = 0;
     const officeFailures = [];
     try {
@@ -1240,7 +1278,7 @@ async function removeOrganizationMember(ctx) {
         return fail(res, 500, 'office_memberships_failed', { failures: officeFailures });
     }
 
-    // 8b. Cascade DB delete — `groupMemberships` (target + org-szűrt).
+    // 9b. Cascade DB delete — `groupMemberships` (target + org-szűrt).
     let groupMembershipsRemoved = 0;
     const groupFailures = [];
     try {
@@ -1273,20 +1311,6 @@ async function removeOrganizationMember(ctx) {
     if (groupFailures.length > 0) {
         error(`[RemoveOrgMember] group membership delete failures: ${JSON.stringify(groupFailures)}`);
         return fail(res, 500, 'group_memberships_failed', { failures: groupFailures });
-    }
-
-    // 8c. Org membership doc törlése — a fő rekord. Most már minden gyerek
-    //     (office + group) le van bontva, az org doc-on a target jogosultsága
-    //     megszűnik.
-    try {
-        await databases.deleteDocument(
-            env.databaseId,
-            env.membershipsCollectionId,
-            targetMembership.$id
-        );
-    } catch (e) {
-        error(`[RemoveOrgMember] org membership delete hiba (${targetMembership.$id}): ${e.message}`);
-        return fail(res, 500, 'membership_delete_failed');
     }
 
     log(`[RemoveOrgMember] caller=${callerId} kicsapta target=${targetUserId} org=${organizationId}-ból (target.role=${targetRole}, office=${officeMembershipsRemoved}, groupMemberships=${groupMembershipsRemoved}, teams.office=${teamCleanup.officeTeams}, teams.org=${teamCleanup.orgTeam}, teams.admin=${teamCleanup.orgAdminTeam})`);
@@ -1575,38 +1599,94 @@ async function deleteMyAccount(ctx) {
         });
     }
 
-    // 4. Per-org sequential cleanup. A `leaveOrganization` belső mintáját
-    //    iteráljuk: office-IDs → STRICT team cleanup → office/group memberships
-    //    → org membership doc. Hibára 500-zal abort, retry biztonságos.
+    // 3.5. users.write scope preflight (Codex baseline P1 #3, 2026-05-10).
+    //      A flow legkritikusabb hibapontja: ha a CF API key-ből hiányzik a
+    //      `users.write` scope, a per-org cleanup végigfut, MINDEN membership
+    //      törlődik, majd a végén az `usersApi.delete()` 401/403-zal elszáll →
+    //      `user_delete_failed` 500 + ZOMBI USER (élő, zéró-membership). Megoldás:
+    //      idempotens no-op `usersApi.updateName` (a meglévő nevet visszaírjuk)
+    //      — ez ÍGY igényli a `users.write` scope-ot. A 3. lépés UTÁN fut, hogy
+    //      a 409 ágon (transfer_or_delete) NE legyen felesleges _users write.
+    let callerUserName;
+    try {
+        const callerInfo = await usersApi.get(callerId);
+        callerUserName = callerInfo?.name || '';
+    } catch (e) {
+        error(`[DeleteMyAccount] caller user lookup hiba (users.read): ${e.message}`);
+        return fail(res, 500, 'caller_lookup_failed');
+    }
+    try {
+        await usersApi.updateName(callerId, callerUserName);
+    } catch (e) {
+        if (e?.code === 401 || e?.code === 403) {
+            error(`[DeleteMyAccount] users.write scope hiányzik a CF API key-ből — cleanup ABORT`);
+            return fail(res, 503, 'users_write_scope_missing', {
+                note: 'A CF nem tudja törölni az Appwrite user account-ot a cleanup végén. Adminisztrátor figyelmébe: Functions → Invite To Organization → Settings → Scopes → users.write hozzáadása szükséges.'
+            });
+        }
+        error(`[DeleteMyAccount] users.write preflight ismeretlen hiba: ${e.message}`);
+        return fail(res, 500, 'preflight_failed', { message: e.message });
+    }
+
+    // 4. Per-org sequential cleanup (Codex baseline P1 #2 / adversarial high #1, 2026-05-10).
+    //    Sorrend: office-IDs → CAS owner re-check → ORG MEMBERSHIP DELETE ELSŐKÉNT
+    //    → team cleanup → office/group cascade. Az org-membership ELSŐ delete-je
+    //    az auth-vágás kritikus pontja: a `userHasOrgPermission` az
+    //    `organizationMemberships`-en alapszik, ezért amíg ez áll, a caller másik
+    //    flow-t indíthatna a half-failed cleanup közben. Az ELSŐ delete után
+    //    semmilyen authority nincs, a többi cleanup kozmetikus residue-takarítás.
     const cleanupStats = [];
     for (const m of callerMemberships) {
         const orgId = m.organizationId;
         const stat = { organizationId: orgId, officeMemberships: 0, groupMemberships: 0, teams: { officeTeams: 0, orgTeam: false, orgAdminTeam: false } };
 
-        // 4a. Office-IDs listing
-        const officeIds = [];
-        let cursor;
-        while (true) {
-            const queries = [
-                sdk.Query.equal('organizationId', orgId),
-                sdk.Query.select(['$id']),
-                sdk.Query.limit(CASCADE_BATCH_LIMIT)
-            ];
-            if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
-            let resp;
-            try {
-                resp = await databases.listDocuments(env.databaseId, env.officesCollectionId, queries);
-            } catch (e) {
-                error(`[DeleteMyAccount] office listing hiba (${orgId}): ${e.message}`);
-                return fail(res, 500, 'partial_cleanup', { stage: 'office_list', organizationId: orgId, completedOrgs: cleanupStats });
-            }
-            if (resp.documents.length === 0) break;
-            for (const o of resp.documents) officeIds.push(o.$id);
-            if (resp.documents.length < CASCADE_BATCH_LIMIT) break;
-            cursor = resp.documents[resp.documents.length - 1].$id;
+        // 4a. Office-IDs listing — helper-extracted.
+        let officeIds;
+        try {
+            officeIds = await listOfficeIdsForOrg(databases, env, sdk, orgId, CASCADE_BATCH_LIMIT);
+        } catch (e) {
+            error(`[DeleteMyAccount] office listing hiba (${orgId}): ${e.message}`);
+            return fail(res, 500, 'partial_cleanup', { stage: 'office_list', organizationId: orgId, completedOrgs: cleanupStats });
         }
 
-        // 4b. STRICT team cleanup
+        // 4b. CAS owner re-check (csak owner-orgokra). A 3. lépés cross-org
+        //     pre-check-je TOCTOU-rézbányás: ha közben másik owner kilép vagy
+        //     demote-olódik, a callerből utolsó owner lesz, és a 4c delete utolsó
+        //     ownert távolít el → ownerless org. Fresh-read közvetlenül a delete
+        //     előtt (`limit(1)` elég a "van másik owner?" döntéshez).
+        if (m.role === 'owner') {
+            try {
+                const otherOwnersFresh = await databases.listDocuments(env.databaseId, env.membershipsCollectionId, [
+                    sdk.Query.equal('organizationId', orgId),
+                    sdk.Query.equal('role', 'owner'),
+                    sdk.Query.notEqual('userId', callerId),
+                    sdk.Query.limit(1)
+                ]);
+                if (otherOwnersFresh.documents.length === 0) {
+                    return fail(res, 409, 'cas_last_owner_in_org', {
+                        organizationId: orgId,
+                        hint: 'concurrent_owner_change',
+                        completedOrgs: cleanupStats,
+                        note: 'A 3. lépés óta másik owner elhagyta vagy demotálódott ennél az orgnál. Ismételd meg a fiók-törlést.'
+                    });
+                }
+            } catch (e) {
+                error(`[DeleteMyAccount] CAS owner re-check hiba (${orgId}): ${e.message}`);
+                return fail(res, 500, 'partial_cleanup', { stage: 'cas_recheck', organizationId: orgId, completedOrgs: cleanupStats });
+            }
+        }
+
+        // 4c. Org membership doc törlése ELSŐKÉNT (Codex adversarial medium).
+        //     A `userHasOrgPermission` ettől hard-deny-ot ad, az auth-vágás megtörtént.
+        //     A team + cascade utánfutás kozmetikus residue-takarítás.
+        try {
+            await databases.deleteDocument(env.databaseId, env.membershipsCollectionId, m.$id);
+        } catch (e) {
+            error(`[DeleteMyAccount] org membership delete hiba (${m.$id}): ${e.message}`);
+            return fail(res, 500, 'partial_cleanup', { stage: 'org_membership', organizationId: orgId, completedOrgs: cleanupStats });
+        }
+
+        // 4d. Team cleanup (most már a caller nem tud authority-t használni).
         try {
             for (const oid of officeIds) {
                 const r = await removeTeamMembership(teamsApi, buildOfficeTeamId(oid), callerId);
@@ -1617,11 +1697,11 @@ async function deleteMyAccount(ctx) {
             const ra = await removeTeamMembership(teamsApi, buildOrgAdminTeamId(orgId), callerId);
             if (ra.removed > 0) stat.teams.orgAdminTeam = true;
         } catch (teamErr) {
-            error(`[DeleteMyAccount] team cleanup hiba (${orgId}): ${teamErr.message}`);
+            error(`[DeleteMyAccount] team cleanup hiba (${orgId}, org-membership már törölve): ${teamErr.message}`);
             return fail(res, 500, 'partial_cleanup', { stage: 'team_cleanup', organizationId: orgId, message: teamErr.message, completedOrgs: cleanupStats });
         }
 
-        // 4c. Office memberships cascade (callerId + org-szűrt, paginált)
+        // 4e. Office memberships cascade (callerId + org-szűrt, paginált)
         try {
             while (true) {
                 const resp = await databases.listDocuments(env.databaseId, env.officeMembershipsCollectionId, [
@@ -1650,7 +1730,7 @@ async function deleteMyAccount(ctx) {
             return fail(res, 500, 'partial_cleanup', { stage: 'office_memberships_list', organizationId: orgId, completedOrgs: cleanupStats });
         }
 
-        // 4d. Group memberships cascade
+        // 4f. Group memberships cascade (callerId + org-szűrt)
         try {
             while (true) {
                 const resp = await databases.listDocuments(env.databaseId, env.groupMembershipsCollectionId, [
@@ -1677,14 +1757,6 @@ async function deleteMyAccount(ctx) {
         } catch (e) {
             error(`[DeleteMyAccount] group memberships listing hiba (${orgId}): ${e.message}`);
             return fail(res, 500, 'partial_cleanup', { stage: 'group_memberships_list', organizationId: orgId, completedOrgs: cleanupStats });
-        }
-
-        // 4e. Org membership doc törlés
-        try {
-            await databases.deleteDocument(env.databaseId, env.membershipsCollectionId, m.$id);
-        } catch (e) {
-            error(`[DeleteMyAccount] org membership delete hiba (${m.$id}): ${e.message}`);
-            return fail(res, 500, 'partial_cleanup', { stage: 'org_membership', organizationId: orgId, completedOrgs: cleanupStats });
         }
 
         cleanupStats.push(stat);
