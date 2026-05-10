@@ -2,11 +2,10 @@
  * Maestro Dashboard — OrganizationSettings / GeneralTab
  *
  * A szervezet beállítás modal „Általános" füle:
- *   - Szervezet neve (inline szerkesztés, admin/owner)
- *   - Szerkesztőségek listája + „+ Új szerkesztőség" gomb
- *     (a gomb admin/ownernek — a CreateEditorialOfficeModal-t nyitja)
- *   - Veszélyes zóna (owner-only) — szervezet kaszkád törlése
- *     konkrét számokkal: X szerkesztőség, Y kiadvány, Z cikk, W tag stb.
+ *   - Megnevezés card: szervezet neve (inline szerkesztés, admin/owner) + slug
+ *   - Szerkesztőségek lista: clickable card-row-k „Megnyitás →" link-affordanciával
+ *     + „+ Új szerkesztőség" CTA (admin/owner)
+ *   - Veszélyes zóna (owner-only) — szervezet kaszkád törlése konkrét számokkal
  */
 
 import React, { useState, useMemo } from 'react';
@@ -63,6 +62,7 @@ export default function GeneralTab({
     const [nameDraft, setNameDraft] = useState('');
     const [actionPending, setActionPending] = useState(null);
     const [actionError, setActionError] = useState('');
+    const [slugCopied, setSlugCopied] = useState(false);
 
     const isOrgAdmin = callerRole === 'owner' || callerRole === 'admin';
     const isOrgOwner = callerRole === 'owner';
@@ -89,6 +89,23 @@ export default function GeneralTab({
             setActionError(errorMessage(err.message || err.code || ''));
         } finally {
             setActionPending(null);
+        }
+    }
+
+    function handleStartEdit() {
+        if (!isOrgAdmin) return;
+        setNameDraft(org?.name || '');
+        setIsEditingName(true);
+    }
+
+    async function handleCopySlug() {
+        if (!org?.slug) return;
+        try {
+            await navigator.clipboard.writeText(org.slug);
+            setSlugCopied(true);
+            setTimeout(() => setSlugCopied(false), 1500);
+        } catch {
+            // Clipboard API nem elérhető — csendes no-op (a slug látható, kézzel másolható).
         }
     }
 
@@ -154,8 +171,8 @@ export default function GeneralTab({
             await deleteOrganization(org.$id);
             closeModal();
             showToast(`A(z) „${org.name}" szervezet törölve lett.`, 'success');
-            const ok = await reloadMemberships();
-            if (!ok) {
+            const reloadOk = await reloadMemberships();
+            if (!reloadOk) {
                 // Szervezet tényleg törölve a szerveren; csak a kliens lista
                 // friss állapota nem frissült. Egy második, diszkrét toast
                 // mondja meg, hogy frissítés kell — a `ScopeContext` amúgy is
@@ -174,94 +191,98 @@ export default function GeneralTab({
                 <div className="login-error" style={{ marginBottom: 12 }}>{actionError}</div>
             )}
 
-            {/* ═══ Szervezet neve ═══ */}
-            <div style={{ marginBottom: 20, borderBottom: '1px solid var(--border)', paddingBottom: 16 }}>
-                <h3 style={{ margin: '0 0 8px 0', fontSize: 14, fontWeight: 600 }}>
-                    Szervezet neve
-                </h3>
-
-                {isEditingName && isOrgAdmin ? (
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <input
-                            type="text"
-                            value={nameDraft}
-                            onChange={e => setNameDraft(e.target.value)}
-                            disabled={actionPending === 'rename'}
-                            maxLength={128}
-                            autoFocus
-                            style={{
-                                flex: 1, fontSize: 13, padding: '6px 8px',
-                                background: 'var(--bg-base)', color: 'var(--text-primary)', border: '1px solid var(--outline-variant)',
-                                borderRadius: 4
-                            }}
-                            onKeyDown={e => {
-                                if (e.key === 'Enter') handleSaveName();
-                                if (e.key === 'Escape') setIsEditingName(false);
-                            }}
-                        />
-                        <button
-                            onClick={handleSaveName}
-                            disabled={!!actionPending}
-                            style={{
-                                background: 'var(--accent-solid)', color: '#fff', border: 'none',
-                                padding: '6px 14px', borderRadius: 4, cursor: 'pointer',
-                                fontSize: 12
-                            }}
-                        >
-                            {actionPending === 'rename' ? '...' : 'Mentés'}
-                        </button>
-                        <button
-                            onClick={() => setIsEditingName(false)}
-                            disabled={!!actionPending}
-                            style={{
-                                background: 'none', color: 'var(--text-secondary)', border: '1px solid var(--outline-variant)',
-                                padding: '6px 10px', borderRadius: 4, cursor: 'pointer',
-                                fontSize: 12
-                            }}
-                        >
-                            Mégse
-                        </button>
-                    </div>
-                ) : (
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                        <span style={{ fontSize: 14 }}>{org?.name || '—'}</span>
-                        <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>({org?.slug})</span>
-                        {isOrgAdmin && (
+            {/* ═══ Megnevezés card ═══ */}
+            <section className="org-settings-section">
+                <h3 className="org-settings-section-label">Megnevezés</h3>
+                <div className="org-settings-card org-settings-card--rows">
+                    {/* Név sor — inline edit */}
+                    <div className="org-settings-field-row">
+                        <span className="org-settings-field-label">Név</span>
+                        {isEditingName && isOrgAdmin ? (
+                            <div className="org-settings-name-edit">
+                                <input
+                                    type="text"
+                                    className="org-settings-name-input"
+                                    value={nameDraft}
+                                    onChange={e => setNameDraft(e.target.value)}
+                                    disabled={actionPending === 'rename'}
+                                    maxLength={128}
+                                    autoFocus
+                                    onKeyDown={e => {
+                                        if (e.key === 'Enter') handleSaveName();
+                                        if (e.key === 'Escape') setIsEditingName(false);
+                                    }}
+                                />
+                                <button
+                                    type="button"
+                                    className="btn-primary org-settings-name-save"
+                                    onClick={handleSaveName}
+                                    disabled={!!actionPending}
+                                >
+                                    {actionPending === 'rename' ? '…' : 'Mentés'}
+                                </button>
+                                <button
+                                    type="button"
+                                    className="btn-secondary org-settings-name-cancel"
+                                    onClick={() => setIsEditingName(false)}
+                                    disabled={!!actionPending}
+                                >
+                                    Mégse
+                                </button>
+                            </div>
+                        ) : (
                             <button
-                                onClick={() => {
-                                    setNameDraft(org?.name || '');
-                                    setIsEditingName(true);
-                                }}
-                                disabled={!!actionPending}
-                                style={{
-                                    marginLeft: 'auto', background: 'none', border: '1px solid var(--outline-variant)',
-                                    color: 'var(--text-secondary)', padding: '4px 10px', borderRadius: 4, cursor: 'pointer',
-                                    fontSize: 11
-                                }}
+                                type="button"
+                                className="org-settings-field-value org-settings-field-value--editable"
+                                onClick={handleStartEdit}
+                                disabled={!isOrgAdmin || !!actionPending}
+                                title={isOrgAdmin ? 'Kattints a szerkesztéshez' : 'Csak admin módosíthatja'}
+                                aria-label={`Szervezet neve: ${org?.name || '—'}${isOrgAdmin ? ' — szerkesztés' : ''}`}
                             >
-                                Szerkesztés
+                                <span>{org?.name || '—'}</span>
+                                {isOrgAdmin && (
+                                    <span className="org-settings-field-pen" aria-hidden="true">✎</span>
+                                )}
                             </button>
                         )}
                     </div>
-                )}
-            </div>
 
-            {/* ═══ Szerkesztőségek + „+ Új" ═══ */}
-            <div style={{ marginBottom: 20, borderBottom: isOrgOwner ? '1px solid var(--border)' : 'none', paddingBottom: 16 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                    <h3 style={{ margin: 0, fontSize: 14, fontWeight: 600 }}>
-                        Szerkesztőségek <span style={{ color: 'var(--text-muted)', fontWeight: 400, fontSize: 12 }}>({offices.length})</span>
+                    {/* Slug sor — read-only + copy */}
+                    <div className="org-settings-field-row">
+                        <span className="org-settings-field-label">Slug</span>
+                        <div className="org-settings-field-value org-settings-field-value--mono">
+                            <span>{org?.slug || '—'}</span>
+                            {org?.slug && (
+                                <button
+                                    type="button"
+                                    className="org-settings-copy-btn"
+                                    onClick={handleCopySlug}
+                                    aria-label="Slug másolása"
+                                    title={slugCopied ? 'Másolva!' : 'Slug másolása'}
+                                >
+                                    {slugCopied ? '✓' : '⧉'}
+                                </button>
+                            )}
+                        </div>
+                    </div>
+
+                    <p className="org-settings-card-hint">
+                        A slug az URL-ben szereplő egyedi azonosító. Csak admin-tool módosíthatja.
+                    </p>
+                </div>
+            </section>
+
+            {/* ═══ Szerkesztőségek ═══ */}
+            <section className="org-settings-section">
+                <div className="org-settings-section-header">
+                    <h3 className="org-settings-section-label">
+                        Szerkesztőségek <span className="org-settings-section-count">({offices.length})</span>
                     </h3>
                     {isOrgAdmin && (
                         <button
                             type="button"
+                            className="btn-primary org-settings-section-cta"
                             onClick={handleOpenCreateOffice}
-                            style={{
-                                marginLeft: 'auto',
-                                background: 'var(--accent-solid)', color: '#fff', border: 'none',
-                                padding: '4px 10px', borderRadius: 4, cursor: 'pointer',
-                                fontSize: 11
-                            }}
                         >
                             + Új szerkesztőség
                         </button>
@@ -269,36 +290,29 @@ export default function GeneralTab({
                 </div>
 
                 {offices.length === 0 ? (
-                    <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: '4px 0' }}>
-                        Nincsenek szerkesztőségek.
-                    </p>
+                    <p className="org-settings-empty">Nincsenek szerkesztőségek.</p>
                 ) : (
-                    <ul style={{ listStyle: 'none', padding: 0, margin: 0 }}>
+                    <ul className="org-settings-office-list">
                         {offices.map(office => (
-                            <li key={office.$id} style={{
-                                display: 'flex', alignItems: 'center', gap: 8,
-                                fontSize: 13, padding: '3px 0'
-                            }}>
-                                <span>{office.name}</span>
-                                <span style={{ color: 'var(--text-muted)', fontSize: 11 }}>({office.slug})</span>
+                            <li key={office.$id}>
                                 <button
                                     type="button"
+                                    className="org-settings-office-row"
                                     onClick={() => handleOpenWorkflowDesigner(office.$id)}
-                                    style={{
-                                        marginLeft: 'auto', fontSize: 11,
-                                        color: 'var(--accent)', textDecoration: 'none',
-                                        background: 'none', border: 'none', cursor: 'pointer',
-                                        padding: 0
-                                    }}
-                                    title={'A szerkesztőség aktívvá válik; a workflow-kat a breadcrumb „Workflow” chipről nyithatod meg.'}
+                                    title={'A szerkesztőség aktívvá válik; a workflow-kat a breadcrumb „Workflow" chipről nyithatod meg.'}
                                 >
-                                    Megnyitás →
+                                    <span className="org-settings-office-icon" aria-hidden="true">📰</span>
+                                    <span className="org-settings-office-text">
+                                        <span className="org-settings-office-name">{office.name}</span>
+                                        <span className="org-settings-office-meta">{office.slug}</span>
+                                    </span>
+                                    <span className="org-settings-office-link">Megnyitás →</span>
                                 </button>
                             </li>
                         ))}
                     </ul>
                 )}
-            </div>
+            </section>
 
             {/* ═══ Veszélyes zóna — csak owner ═══ */}
             {isOrgOwner && (

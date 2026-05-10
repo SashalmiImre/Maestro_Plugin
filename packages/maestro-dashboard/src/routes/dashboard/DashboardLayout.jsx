@@ -22,7 +22,6 @@ import { STORAGE_KEYS } from '../../config.js';
 import { buildPlaceholderRows } from '@shared/pageGapUtils.js';
 
 import BreadcrumbHeader, {
-    OrganizationSettingsTitle,
     EditorialOfficeSettingsTitle
 } from '../../components/BreadcrumbHeader.jsx';
 import FilterBar from '../../components/FilterBar.jsx';
@@ -172,12 +171,11 @@ export default function DashboardLayout() {
 
     const handleOpenOrgSettings = useCallback(() => {
         if (!activeOrganizationId) return;
+        // A modal saját custom headert (avatar + név + meta + X) renderel,
+        // ezért NEM adunk `title`-t — a Modal default header-ét kikapcsolja.
         openModal(
             <OrganizationSettingsModal organizationId={activeOrganizationId} />,
-            {
-                size: 'lg',
-                title: <OrganizationSettingsTitle organizationId={activeOrganizationId} />
-            }
+            { size: 'lg' }
         );
     }, [activeOrganizationId, openModal]);
 

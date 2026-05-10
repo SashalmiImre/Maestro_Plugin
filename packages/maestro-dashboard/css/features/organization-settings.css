@@ -1,0 +1,1092 @@
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* OrganizationSettingsModal — Általános / Felhasználók fülek                 */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+/*
+ * A `OrganizationSettingsModal` saját custom headert renderel (avatar + név +
+ * meta + X close), ezért a Modal `title` propja NINCS megadva — a default
+ * `.modal-header` nem renderelődik. A custom header a `.modal-body` paddingen
+ * belül van; ez konzisztens a Modal többi tartalmával.
+ *
+ * A meglévő `.modal-card`, `.tabs`, `.user-avatar`, `.btn-primary`,
+ * `.btn-secondary`, `.danger-zone`, `.danger-action`, `.modal-actions`,
+ * `.form-error*`, `.form-empty-state` osztályokat reuse-oljuk.
+ */
+
+/* ─── Modal-shell + custom header ────────────────────────────────────────── */
+
+.org-settings-shell {
+    display: flex;
+    flex-direction: column;
+}
+
+.org-settings-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: var(--space-3);
+    margin-bottom: var(--space-4);
+}
+
+.org-settings-header-identity {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-width: 0;
+}
+
+.org-settings-avatar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 40px;
+    height: 40px;
+    border-radius: 50%;
+    background: var(--accent-subtle);
+    color: var(--accent);
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.org-settings-header-text {
+    min-width: 0;
+}
+
+.org-settings-title {
+    margin: 0;
+    font-size: 18px;
+    font-weight: 600;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.org-settings-meta {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-wrap: wrap;
+    margin-top: 4px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.org-settings-meta-slug {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    color: var(--text-secondary);
+}
+
+.org-settings-meta-dot {
+    color: var(--text-disabled);
+    user-select: none;
+}
+
+/* Tab content wrapper — a `.tabs` border-bottom alatti content. */
+.org-settings-tab-content {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+}
+
+/* ─── Szekciók — közös szerkezet ──────────────────────────────────────────── */
+
+.org-settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.org-settings-section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-2);
+}
+
+.org-settings-section-label {
+    margin: 0;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.org-settings-section-count {
+    color: var(--text-muted);
+    font-weight: 400;
+}
+
+.org-settings-section-cta {
+    padding: 6px 12px;
+    font-size: 12px;
+}
+
+.org-settings-empty {
+    margin: 0;
+    padding: var(--space-3) 0;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+/* ─── Megnevezés card ────────────────────────────────────────────────────── */
+
+.org-settings-card {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    padding: var(--space-4);
+}
+
+.org-settings-card--rows {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.org-settings-field-row {
+    display: grid;
+    grid-template-columns: 96px 1fr;
+    align-items: center;
+    gap: var(--space-3);
+}
+
+.org-settings-field-label {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.org-settings-field-value {
+    display: inline-flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-height: 28px;
+    padding: 0;
+    background: none;
+    border: none;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    text-align: left;
+}
+
+.org-settings-field-value--editable {
+    cursor: pointer;
+    border-radius: var(--radius-sm);
+    padding: 4px 6px;
+    margin: -4px -6px;
+    transition: background 0.15s, color 0.15s;
+}
+
+.org-settings-field-value--editable:hover:not(:disabled) {
+    background: var(--bg-hover);
+}
+
+.org-settings-field-value--editable:disabled {
+    cursor: default;
+}
+
+.org-settings-field-value--editable:disabled .org-settings-field-pen {
+    display: none;
+}
+
+.org-settings-field-value--mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    color: var(--text-secondary);
+}
+
+.org-settings-field-pen {
+    color: var(--text-muted);
+    font-size: 12px;
+    opacity: 0;
+    transition: opacity 0.15s;
+}
+
+.org-settings-field-value--editable:hover .org-settings-field-pen {
+    opacity: 1;
+}
+
+.org-settings-copy-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+
+.org-settings-copy-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text-primary);
+}
+
+/* Inline edit mód */
+.org-settings-name-edit {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: 1;
+}
+
+.org-settings-name-input {
+    flex: 1;
+    padding: 6px 10px;
+    background: var(--bg-base);
+    border: 1px solid var(--outline-variant);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.org-settings-name-input:focus {
+    border-color: rgb(from var(--accent) r g b / 0.5);
+    box-shadow: 0 0 0 3px rgb(from var(--accent) r g b / 0.10);
+}
+
+.org-settings-name-save,
+.org-settings-name-cancel {
+    padding: 6px 12px;
+    font-size: 12px;
+}
+
+.org-settings-card-hint {
+    margin: 0;
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+/* ─── Szerkesztőségek lista ───────────────────────────────────────────────── */
+
+.org-settings-office-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.org-settings-office-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    padding: var(--space-3) var(--space-4);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.org-settings-office-row:hover {
+    background: var(--bg-hover);
+    border-color: var(--outline-variant);
+}
+
+.org-settings-office-row:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.org-settings-office-icon {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--radius-md);
+    background: var(--bg-overlay);
+    font-size: 16px;
+}
+
+.org-settings-office-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.org-settings-office-name {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.org-settings-office-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+.org-settings-office-link {
+    flex-shrink: 0;
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.org-settings-office-row:hover .org-settings-office-link {
+    color: var(--accent-hover);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* Felhasználók tab                                                           */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Toolbar ─────────────────────────────────────────────────────────────── */
+
+.org-settings-section--toolbar {
+    gap: 0;
+}
+
+.org-settings-toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.org-settings-toolbar-search {
+    flex: 1;
+    min-width: 200px;
+}
+
+.org-settings-search-input {
+    width: 100%;
+    padding: 8px 12px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.org-settings-search-input:focus {
+    border-color: rgb(from var(--accent) r g b / 0.5);
+    box-shadow: 0 0 0 3px rgb(from var(--accent) r g b / 0.10);
+}
+
+.org-settings-search-input::placeholder {
+    color: var(--text-muted);
+}
+
+.org-settings-role-filter {
+    padding: 8px 12px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.org-settings-role-filter:hover {
+    border-color: var(--outline-variant);
+}
+
+.org-settings-toolbar-cta {
+    padding: 8px 14px;
+    font-size: 13px;
+    white-space: nowrap;
+}
+
+.org-settings-pending-badge {
+    padding: 6px 10px;
+    background: var(--accent-subtle);
+    border: 1px solid rgb(from var(--accent) r g b / 0.20);
+    border-radius: var(--radius-sm);
+    color: var(--accent);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.org-settings-pending-badge:hover {
+    background: rgb(from var(--accent) r g b / 0.22);
+}
+
+/* ─── Pending invites lista ──────────────────────────────────────────────── */
+
+.org-settings-pending-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.org-settings-pending-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+}
+
+.org-settings-pending-actions {
+    display: flex;
+    gap: var(--space-1);
+    flex-shrink: 0;
+}
+
+.org-settings-pending-btn {
+    padding: 5px 10px;
+    font-size: 11px;
+}
+
+/* Delivery status badge — variánsok */
+.org-settings-delivery-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 2px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.org-settings-delivery-badge--success {
+    background: rgb(from var(--c-success) r g b / 0.15);
+    color: var(--c-success);
+}
+
+.org-settings-delivery-badge--error {
+    background: rgb(from var(--c-error) r g b / 0.15);
+    color: var(--c-error);
+}
+
+.org-settings-delivery-badge--neutral {
+    background: var(--bg-overlay);
+    color: var(--text-secondary);
+}
+
+.org-settings-delivery-badge--muted {
+    background: var(--bg-overlay);
+    color: var(--text-muted);
+}
+
+/* ─── Tagok role-csoportok ───────────────────────────────────────────────── */
+
+.org-settings-member-group {
+    margin-top: var(--space-3);
+}
+
+.org-settings-member-group:first-child {
+    margin-top: 0;
+}
+
+.org-settings-member-group.is-empty {
+    opacity: 0.6;
+}
+
+.org-settings-member-group-label {
+    margin: 0 0 var(--space-2) 0;
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+/* Color-marker dot per role — vizuálisan szortolható */
+.org-settings-role-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+
+.org-settings-role-dot--owner {
+    background: var(--accent);
+    box-shadow: 0 0 6px rgb(from var(--accent) r g b / 0.40);
+}
+
+.org-settings-role-dot--admin {
+    background: var(--c-warning);
+    box-shadow: 0 0 6px rgb(from var(--c-warning) r g b / 0.40);
+}
+
+.org-settings-role-dot--member {
+    background: var(--text-muted);
+}
+
+.org-settings-member-group-empty {
+    margin: 0;
+    padding: var(--space-2) 0;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+.org-settings-member-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.org-settings-member-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-2) var(--space-3);
+    border-radius: var(--radius-md);
+    transition: background 0.15s;
+}
+
+.org-settings-member-row:hover {
+    background: var(--bg-hover);
+}
+
+.org-settings-member-avatar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.02em;
+}
+
+.org-settings-member-avatar--owner {
+    background: var(--accent-subtle);
+    color: var(--accent);
+}
+
+.org-settings-member-avatar--admin {
+    background: rgb(from var(--c-warning) r g b / 0.15);
+    color: var(--c-warning);
+}
+
+.org-settings-member-avatar--member {
+    background: var(--bg-overlay);
+    color: var(--text-secondary);
+}
+
+.org-settings-member-avatar--pending {
+    background: var(--bg-overlay);
+    color: var(--text-muted);
+    border: 1px dashed var(--outline-variant);
+}
+
+.org-settings-member-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.org-settings-member-name-line {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex-wrap: wrap;
+}
+
+.org-settings-member-name {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.org-settings-member-email {
+    font-size: 11px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.org-settings-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 1px 6px;
+    border-radius: var(--radius-sm);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+}
+
+.org-settings-badge--self {
+    background: var(--accent-subtle);
+    color: var(--accent);
+}
+
+.org-settings-member-action {
+    display: flex;
+    align-items: center;
+    gap: var(--space-1);
+    flex-shrink: 0;
+}
+
+.org-settings-role-select {
+    padding: 4px 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 11px;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+}
+
+.org-settings-role-select:hover {
+    border-color: var(--outline-variant);
+}
+
+.org-settings-role-select:focus {
+    border-color: rgb(from var(--accent) r g b / 0.5);
+}
+
+.org-settings-role-pill {
+    padding: 3px 10px;
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--bg-overlay);
+    color: var(--text-secondary);
+}
+
+.org-settings-role-pill--owner {
+    color: var(--accent);
+}
+
+.org-settings-role-spinner {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+/* ─── Meghívási történet — collapsible ───────────────────────────────────── */
+
+.org-settings-section--history {
+    border-top: 1px solid var(--border);
+    padding-top: var(--space-4);
+    margin-top: var(--space-2);
+}
+
+.org-settings-history-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0;
+    background: none;
+    border: none;
+    color: var(--text-secondary);
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    text-align: left;
+}
+
+.org-settings-history-toggle:hover {
+    color: var(--text-primary);
+}
+
+.org-settings-history-list {
+    list-style: none;
+    padding: var(--space-2) 0 0;
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.org-settings-history-row {
+    display: grid;
+    grid-template-columns: 1fr auto auto auto;
+    align-items: center;
+    gap: var(--space-2);
+    padding: 6px var(--space-2);
+    font-size: 12px;
+    border-radius: var(--radius-sm);
+}
+
+.org-settings-history-row:hover {
+    background: var(--bg-hover);
+}
+
+.org-settings-history-email {
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.org-settings-history-role,
+.org-settings-history-final {
+    padding: 1px 8px;
+    border-radius: var(--radius-sm);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    background: var(--bg-overlay);
+    color: var(--text-muted);
+}
+
+.org-settings-history-final--success {
+    color: var(--c-success);
+}
+
+.org-settings-history-date {
+    color: var(--text-muted);
+    font-size: 11px;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════ */
+/* InviteModal                                                                */
+/* ═══════════════════════════════════════════════════════════════════════════ */
+
+.invite-modal-form {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+
+.invite-modal-field {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+
+.invite-modal-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+}
+
+.invite-modal-label-optional {
+    color: var(--text-disabled);
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+}
+
+/* ─── Chip-input ──────────────────────────────────────────────────────────── */
+
+.invite-modal-chip-container {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+    min-height: 80px;
+    padding: 8px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    cursor: text;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.invite-modal-chip-container:focus-within {
+    border-color: rgb(from var(--accent) r g b / 0.5);
+    box-shadow: 0 0 0 3px rgb(from var(--accent) r g b / 0.10);
+}
+
+.invite-modal-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 8px;
+    background: var(--bg-hover);
+    border-radius: var(--radius-sm);
+    color: var(--text-primary);
+    font-size: 12px;
+}
+
+.invite-modal-chip-remove {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px;
+    height: 16px;
+    padding: 0;
+    background: none;
+    border: none;
+    color: var(--text-muted);
+    font-size: 14px;
+    line-height: 1;
+    cursor: pointer;
+    transition: color 0.15s;
+}
+
+.invite-modal-chip-remove:hover {
+    color: var(--text-primary);
+}
+
+.invite-modal-chip-input {
+    flex: 1 1 160px;
+    min-width: 120px;
+    padding: 4px 6px;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    outline: none;
+}
+
+.invite-modal-field-hint {
+    display: flex;
+    justify-content: space-between;
+    gap: var(--space-2);
+    font-size: 11px;
+    color: var(--text-muted);
+}
+
+.invite-modal-field-hint-tail {
+    margin-left: auto;
+}
+
+.invite-modal-field-info {
+    margin: 0;
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+/* ─── Role + Expiry segmented controls ────────────────────────────────────── */
+
+.invite-modal-role-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: var(--space-2);
+}
+
+.invite-modal-role-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: var(--space-3);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-family: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.invite-modal-role-card:hover:not(.is-active):not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--outline-variant);
+}
+
+.invite-modal-role-card.is-active {
+    background: var(--accent-subtle);
+    border-color: rgb(from var(--accent) r g b / 0.50);
+}
+
+.invite-modal-role-card:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.invite-modal-role-card-label {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.invite-modal-role-card.is-active .invite-modal-role-card-label {
+    color: var(--accent);
+}
+
+.invite-modal-role-card-desc {
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+.invite-modal-expiry-grid {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: var(--space-2);
+}
+
+.invite-modal-expiry-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    padding: var(--space-2) var(--space-3);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+}
+
+.invite-modal-expiry-card:hover:not(.is-active):not(:disabled) {
+    background: var(--bg-hover);
+    border-color: var(--outline-variant);
+}
+
+.invite-modal-expiry-card.is-active {
+    background: var(--accent-subtle);
+    border-color: rgb(from var(--accent) r g b / 0.50);
+}
+
+.invite-modal-expiry-card.is-active .invite-modal-expiry-card-label {
+    color: var(--accent);
+}
+
+.invite-modal-expiry-card:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+.invite-modal-expiry-card-label {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.invite-modal-expiry-card-date {
+    font-size: 10px;
+    color: var(--text-muted);
+}
+
+/* ─── Textarea ────────────────────────────────────────────────────────────── */
+
+.invite-modal-textarea {
+    width: 100%;
+    min-height: 80px;
+    padding: 10px 12px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--text-primary);
+    font-size: 13px;
+    font-family: inherit;
+    resize: vertical;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.invite-modal-textarea:focus {
+    border-color: rgb(from var(--accent) r g b / 0.5);
+    box-shadow: 0 0 0 3px rgb(from var(--accent) r g b / 0.10);
+}
+
+.invite-modal-textarea::placeholder {
+    color: var(--text-muted);
+}
+
+/* ─── Footer ──────────────────────────────────────────────────────────────── */
+
+.invite-modal-footer {
+    align-items: center;
+}
+
+.invite-modal-footer-info {
+    flex: 1;
+    font-size: 11px;
+    color: var(--text-muted);
+    line-height: 1.4;
+}
+
+/* ─── Results panel ──────────────────────────────────────────────────────── */
+
+.invite-modal-results {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-3);
+}
+
+.invite-modal-results-title {
+    margin: 0;
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.invite-modal-results-summary {
+    display: flex;
+    gap: var(--space-3);
+    font-size: 13px;
+}
+
+.invite-modal-results-success {
+    color: var(--c-success);
+}
+
+.invite-modal-results-error {
+    color: var(--c-error);
+}
+
+.invite-modal-results-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    max-height: 240px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-1);
+}
+
+.invite-modal-results-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 12px;
+    background: var(--bg-elevated);
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+}
+
+.invite-modal-results-email {
+    color: var(--text-primary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
