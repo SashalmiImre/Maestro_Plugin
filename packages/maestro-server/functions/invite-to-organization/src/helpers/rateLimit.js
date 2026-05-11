@@ -6,10 +6,14 @@
 // NEM "X rontás után elveszik a meghívó" elvű — az DoS-vektort nyitna a
 // meghívottra (tetszőleges támadó kiéghette volna a meghívását).
 //
-// SKELETON — a helper logikája kész, de a middleware-be még be kell
-// kötni az `actions/invites.js` `acceptInvite`-ot. Az új collection-ök
-// (`ipRateLimitCounters`, `ipRateLimitBlocks`) Appwrite Cloud-on
+// STATUS — bekötve az `actions/invites.js` `acceptInvite`-ban (`checkRateLimit(ctx, 'accept_invite')`,
+// 860. sor). Az új collection-ök (`ipRateLimitCounters`, `ipRateLimitBlocks`) Appwrite Cloud-on
 // manuálisan felveendők (séma a kommentben).
+//
+// (S.2.1 verify, 2026-05-11) — a bekötés aktív, de a cleanup CF (`cleanup-rate-limits`, S.2.5)
+// még TODO. Lejárt counter- és block-doc-ok periodikus takarítása nélkül a memory-helyett-DB
+// store hosszabb távon felhalmoz. A `unblock` window 1 óra, a counter window 15 perc;
+// 24h+ régi doc-ok takaríthatók.
 //
 // ─── Új collection-ök sémája ───────────────────────────────────────────
 //

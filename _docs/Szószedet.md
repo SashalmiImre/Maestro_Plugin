@@ -95,3 +95,21 @@ tags: [referencia]
 | **`PARSE_ERROR` sentinel (CF)** | `contributorJsonReferencesSlug` fail-closed jelzés sérült contributors JSON esetén — a `delete_group`/`archive_group` blocker-listára `parseError: true` flaggel teszi a doc-ot, különben adatvesztés. |
 | **`applyPublicationPatchLocal()`** | [[Komponensek/DataContext]] helper — CF response.publication-t lokális state-re patcheli az `isStaleUpdate` szemantikával + `$updatedAt` autoritatív fallback. Megelőzi a Realtime-pong sorrend "régi state visszaírás"-t a `success` toast után. |
 | **`autoseed warnings[]`** | A `seedGroupsFromWorkflow` non-fatal anomáliák listája: `group_slug_collision` (eltérő flag-ek a meglévő doc-on), `group_archived_blocking_autoseed` (slug archivált csoporthoz tartozik), `group_metadata_schema_missing` (`bootstrap_groups_schema` még nem futott). UI: [[Komponensek/AuthContext|showAutoseedWarnings]] toast helper. |
+
+## Biztonság (2026-05-11 S blokk óta)
+
+| Fogalom | Leírás |
+|---------|--------|
+| **STRIDE** | Microsoft threat modeling kategóriák: Spoofing / Tampering / Repudiation / Info-disclosure / DoS / Elevation. Per-komponens analízis [[Komponensek/SecurityBaseline]]. |
+| **OWASP ASVS Level 2** | Application Security Verification Standard — webapp kontrollok 14 fejezetben (V1–V14). Maestro baseline. |
+| **CIS Controls v8 IG1** | Center for Internet Security defensive control katalógus — Implementation Group 1 (kis-közepes szervezet, 56 safeguards). Maestro infra/operációs réteg. |
+| **CSP** | Content Security Policy — HTTP header `default-src 'self'; script-src …; connect-src …`. Phase 1 report-only → Phase 2 enforce. [[Komponensek/SecurityHeaders]] (S.3). |
+| **HSTS** | HTTP Strict Transport Security — `max-age=31536000; includeSubDomains; preload`. Csak HTTPS-en kommunikálnak a kliensek (S.3.6). |
+| **Idempotency-key** | Webhook / API call request-ID-ja egy `webhookEventIds` (vagy hasonló) collection-ben tárolva — anti-replay (S.8.4). |
+| **PII-redaction** | `log()` helper email-maszkolás / token-elhúzás / session-id-cut — Logger middleware (S.13.2). |
+| **Rate-limit** | IP + user + per-org cap az abuse-vektor csökkentéséhez. CF: `ipRateLimitCounters` + `ipRateLimitBlocks` (ADR 0010). Phase 2 további endpoint-okra (S.2). |
+| **Tenant-isolation** | Per-tenant Appwrite Team ACL (`org_${orgId}` / `org_${orgId}_admins` / `office_${officeId}`) + `rowSecurity: true` minden tenant-érintő collection-en (ADR 0003, S.7). |
+| **CAS-gate** | Compare-And-Set invite-szintű terminal-claim race-loser detection (ADR 0011, `_archiveInvite()`). |
+| **Orphan-guard** | `_generated_orphanGuard.js` write-block az `org.status='orphaned'` állapotú szervezetekre (Phase 1.6, ADR 0011). |
+| **Security Risk Register** | Minden ismert gap egy táblában: severity × likelihood × ASVS/CIS + owner + target + status. [[Komponensek/SecurityRiskRegister]]. |
+| **Defense-in-depth** | Réteges védelem: DNS/SSL → network → application → auth → AuthZ → rate-limit → audit → recovery. [[Komponensek/SecurityBaseline#Defense-in-depth réteg-szervezet]]. |

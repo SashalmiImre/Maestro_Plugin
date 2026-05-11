@@ -1,6 +1,8 @@
 const express = require('express');
 const { createProxyMiddleware } = require('http-proxy-middleware');
 const cors = require('cors');
+const rateLimit = require('express-rate-limit');
+const proxyAddr = require('proxy-addr');
 const Groq = require('groq-sdk');
 
 /**
@@ -32,12 +34,156 @@ const isSocketNoise = (error) =>
 // Security: Hide Express signature
 app.disable('x-powered-by');
 
-// Body parser — POST form adatokhoz (jelszó-visszaállítás)
-app.use(express.urlencoded({ extended: false }));
+// S.1.3 — `trust proxy` szükséges hogy az `express-rate-limit` a valódi kliens IP-t lássa
+// (`req.ip`), különben minden klienst a Railway/Cloudflare edge IP-re vonna össze (self-DoS).
+// Default: 1 hop (Railway). Override-olható `TRUST_PROXY` env var-ral.
+const TRUST_PROXY = process.env.TRUST_PROXY !== undefined ? Number(process.env.TRUST_PROXY) : 1;
+app.set('trust proxy', TRUST_PROXY);
 
-// CORS headers - allow all origins for UXP plugin
+// --- S.1 Security helpers ---
+
+/**
+ * Engedett HTTP/HTTPS origin-ek (CORS allowlist).
+ * UXP plugin a `null` origin-t küldi — külön middleware kezeli (lásd `nullOriginGuard`).
+ */
+const ALLOWED_ORIGINS = new Set([
+    'https://maestro.emago.hu',  // Dashboard prod
+    'http://localhost:5173'      // Dashboard dev (Vite)
+]);
+
+/** A `null` origin kizárólag ezeken a path-eken engedett (UXP Realtime WebSocket workaround). */
+const NULL_ORIGIN_ALLOWED_PATHS = ['/v1/realtime', '/maestro-proxy/v1/realtime'];
+
+/** `x-fallback-cookies` query-paramot kizárólag ezen path-eken fogadjuk el. */
+const FALLBACK_COOKIES_ALLOWED_PATHS = ['/v1/realtime', '/maestro-proxy/v1/realtime'];
+
+/** PII-szivárgás védelem: log előtt ezeket a query-paramokat maszkoljuk. */
+const REDACT_QUERY_KEYS = new Set([
+    'x-fallback-cookies', 'cookie', 'cookies', 'token', 'secret',
+    'key', 'apikey', 'api_key', 'password', 'pwd', 'email',
+    'jwt', 'session', 'sessionid', 'authorization', 'auth'
+]);
+
+/** Cookie kulcsnév whitelist a fallback-cookie payload-ban (Appwrite session minta). */
+const FALLBACK_COOKIE_KEY_PATTERN = /^a_session(_[a-z0-9]+)?(_legacy)?$/i;
+
+/** 4 KB cap a `x-fallback-cookies` query-param payload-ra. */
+const FALLBACK_COOKIES_MAX_BYTES = 4 * 1024;
+
+/** Cookie érték RFC 6265 cookie-octet: minden non-CTL ASCII printable kivéve space/`"`/`,`/`;`/`\\`. */
+const COOKIE_VALUE_OCTET = /^[\x21\x23-\x2B\x2D-\x3A\x3C-\x5B\x5D-\x7E]*$/;
+
+/** Regex fallback a `REDACT_QUERY_KEYS` Set-ből generálva — mindig szinkronban. */
+const REDACT_QUERY_REGEX = new RegExp(
+    `([?&])(${[...REDACT_QUERY_KEYS].map(k => k.replace(/[-_]/g, '[-_]')).join('|')})=[^&]*`,
+    'gi'
+);
+
+/** Path matching segment-boundary check (NEM `/v1/realtimeevil`). */
+function pathMatchesAny(pathName, allowedPaths) {
+    return allowedPaths.some(p => pathName === p || pathName.startsWith(p + '/'));
+}
+
+/** Maszkolja a PII-érzékeny query-paramokat a request URL-ben (logoláshoz). */
+function redactUrl(rawUrl) {
+    try {
+        const url = new URL(rawUrl, 'http://local');
+        if (!url.search) return rawUrl; // gyors út: nincs query
+        let dirty = false;
+        for (const key of url.searchParams.keys()) {
+            if (REDACT_QUERY_KEYS.has(key.toLowerCase())) {
+                url.searchParams.set(key, '[REDACTED]');
+                dirty = true;
+            }
+        }
+        return dirty ? url.pathname + url.search : rawUrl;
+    } catch {
+        // Rosszul formált URL — Set-ből generált regex fallback
+        return rawUrl.replace(REDACT_QUERY_REGEX, '$1$2=[REDACTED]');
+    }
+}
+
+// --- WS upgrade rate-limit (memory-store, multi-instance limitations dokumentálva) ---
+const WS_UPGRADE_WINDOW_MS = 60 * 1000;  // 1 perc ablak
+const WS_UPGRADE_MAX = 60;               // 60 upgrade / perc / IP
+const wsUpgradeRateLimit = new Map();    // ip → {count, windowStart}
+
+/** Egy IP-re per-perc 60 WS upgrade. True ha engedett, false ha limit elérve. */
+function checkWsUpgradeRateLimit(ip) {
+    const now = Date.now();
+    const entry = wsUpgradeRateLimit.get(ip);
+    if (!entry || now - entry.windowStart >= WS_UPGRADE_WINDOW_MS) {
+        wsUpgradeRateLimit.set(ip, { count: 1, windowStart: now });
+        return true;
+    }
+    if (entry.count >= WS_UPGRADE_MAX) return false;
+    entry.count++;
+    return true;
+}
+
+/** Periodikus takarítás: lejárt windows-okkal rendelkező IP-k törlése (memory leak ellen). */
+setInterval(() => {
+    const now = Date.now();
+    for (const [ip, entry] of wsUpgradeRateLimit.entries()) {
+        if (now - entry.windowStart >= WS_UPGRADE_WINDOW_MS) {
+            wsUpgradeRateLimit.delete(ip);
+        }
+    }
+}, WS_UPGRADE_WINDOW_MS).unref();
+
+// (S.1 Codex verifying review MAJOR fix)
+// Express maga compile-olja a `trust proxy` setting-et (hop-count, string, function),
+// majd `app.get('trust proxy fn')`-en keresztül elérhető a resolved function.
+// Ez `(ip, distance) => boolean` formátumú, a `proxy-addr` lib által fogadott —
+// így a `req.ip` resolution-ja és a WS upgrade IP-detection ugyanazon szemantikán
+// fut (egyszerű XFF-first parsing spoofolható volt malicious kliens által).
+const trustFn = app.get('trust proxy fn');
+
+/** Kliens IP extrakció Express `trust proxy`-egyenértékű módon. */
+function extractClientIp(req) {
+    try {
+        return proxyAddr(req, trustFn) || req.socket?.remoteAddress || 'unknown';
+    } catch {
+        return req.socket?.remoteAddress || 'unknown';
+    }
+}
+
+/**
+ * Validálja a `x-fallback-cookies` query-param tartalmát.
+ * @returns {string|null} `Cookie` header érték vagy `null` ha érvénytelen.
+ */
+function validateAndBuildCookieHeader(rawValue) {
+    if (typeof rawValue !== 'string' || rawValue.length === 0) return null;
+    if (Buffer.byteLength(rawValue, 'utf8') > FALLBACK_COOKIES_MAX_BYTES) return null;
+    let parsed;
+    try { parsed = JSON.parse(rawValue); } catch { return null; }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const pairs = [];
+    for (const [key, value] of Object.entries(parsed)) {
+        if (typeof key !== 'string' || !FALLBACK_COOKIE_KEY_PATTERN.test(key)) return null;
+        if (typeof value !== 'string') return null;
+        // Cookie érték RFC 6265 cookie-octet (base64/base64url engedett, kivéve CTLs / whitespace / DQUOTE / `,` / `;` / `\`).
+        if (!COOKIE_VALUE_OCTET.test(value)) return null;
+        pairs.push(`${key}=${value}`);
+    }
+    return pairs.length > 0 ? pairs.join('; ') : null;
+}
+
+// (S.1 Codex MAJOR 2) — globális `express.urlencoded()` body parser eltávolítva.
+// A `/reset-password` POST route 410 Gone-nel válaszol body-feldolgozás nélkül,
+// más POST endpoint pedig route-szintű parserrel jön (`express.json({limit:...})`).
+// A rate-limit middleware-eket NEM blokkolja parse-cost.
+
+// --- S.1.1 CORS — default-deny allowlist ---
 app.use(cors({
-    origin: true,
+    origin(origin, cb) {
+        // Same-origin / curl / health-check: nincs Origin header
+        if (!origin) return cb(null, true);
+        if (ALLOWED_ORIGINS.has(origin)) return cb(null, true);
+        // UXP plugin `null` origin — külön middleware (nullOriginGuard) érvényesíti
+        if (origin === 'null') return cb(null, true);
+        return cb(new Error('CORS_ORIGIN_DENIED'));
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: [
@@ -46,9 +192,62 @@ app.use(cors({
         'X-Appwrite-Project',
         'X-Appwrite-Key',
         'X-Appwrite-Response-Format',
-        'X-Fallback-Cookies'
+        'X-Fallback-Cookies',
+        'X-Maestro-Client'
     ]
 }));
+
+// CORS hiba-handler — 403 JSON válasz a default 500 helyett
+app.use((err, req, res, next) => {
+    if (err && err.message === 'CORS_ORIGIN_DENIED') {
+        return res.status(403).json({ error: 'CORS origin not allowed', code: 'cors_origin_denied' });
+    }
+    return next(err);
+});
+
+// --- S.1.2 `null` origin secondary guard ---
+// A UXP plugin sandbox `null` origin-t küld. Csak a Realtime WS upgrade path-en engedett,
+// és csak `X-Maestro-Client: indesign-plugin` header mellett.
+// Megjegyzés: ez best-effort kliens-azonosító — Codex review szerint nem-böngészős klienssel
+// spoofolható. Phase 2: per-deployment shared-secret HMAC + timestamp (S.1 follow-up).
+app.use((req, res, next) => {
+    if (req.headers.origin !== 'null') return next();
+    if (!pathMatchesAny(req.path, NULL_ORIGIN_ALLOWED_PATHS)) {
+        return res.status(403).json({ error: 'null origin not permitted on this path', code: 'null_origin_path_denied' });
+    }
+    if (req.headers['x-maestro-client'] !== 'indesign-plugin') {
+        return res.status(403).json({ error: 'null origin requires X-Maestro-Client header', code: 'null_origin_client_required' });
+    }
+    next();
+});
+
+// --- S.1.3 Rate-limit ---
+// Memory-store (S.1 elfogadható egyetlen Railway instance-szal, dokumentált Redis upgrade path).
+// Sorrend kritikus: auth path-ek a default `/v1/*` előtt mountolva.
+function makeLimiter(windowMs, max, code = 'rate_limit_exceeded') {
+    return rateLimit({
+        windowMs,
+        max,
+        standardHeaders: true,
+        legacyHeaders: false,
+        message: { error: 'Too many requests', code }
+    });
+}
+
+app.use(['/v1/account/sessions/email', '/maestro-proxy/v1/account/sessions/email'],
+    makeLimiter(15 * 60 * 1000, 5));                                  // 5 / 15 perc / IP
+app.use(['/v1/account/sessions', '/maestro-proxy/v1/account/sessions'],
+    makeLimiter(15 * 60 * 1000, 20));                                 // 20 / 15 perc / IP
+app.use(['/v1/account/recovery', '/maestro-proxy/v1/account/recovery'],
+    makeLimiter(60 * 60 * 1000, 5));                                  // 5 / óra / IP
+app.use(['/v1/account/verification', '/maestro-proxy/v1/account/verification'],
+    makeLimiter(60 * 60 * 1000, 10));                                 // 10 / óra / IP
+app.use(['/v1/account', '/maestro-proxy/v1/account'],
+    makeLimiter(60 * 60 * 1000, 20));                                 // 20 / óra / IP (általános account)
+app.use(['/v1/realtime', '/maestro-proxy/v1/realtime'],
+    makeLimiter(60 * 1000, 60));                                      // 60 upgrade / perc / IP
+app.use(['/v1', '/maestro-proxy/v1'],
+    makeLimiter(15 * 60 * 1000, 300));                                // 300 / 15 perc / IP (default)
 
 // Health endpoint - handles both paths
 app.get(['/v1/health', '/maestro-proxy/v1/health'], (req, res) => {
@@ -329,33 +528,34 @@ function injectAuthenticationFromQueryParams(proxyReq, req) {
         const targetUrl = new URL(req.url, 'http://localhost');
         const searchParameters = targetUrl.searchParams;
 
-        // 1. Inject Cookies from x-fallback-cookies query parameter
-        const fallbackAuthenticationCookies = searchParameters.get('x-fallback-cookies');
-        if (fallbackAuthenticationCookies) {
-            try {
-                const cookies = JSON.parse(fallbackAuthenticationCookies);
-                const cookieHeader = Object.entries(cookies)
-                    .map(([key, value]) => `${key}=${value}`)
-                    .join('; ');
-
+        // S.1.6 — x-fallback-cookies CSAK Realtime WS upgrade path-en + validált JSON.
+        // Raw-string fallback eltávolítva (korábban silently propagált malformed payload-ot).
+        // Segment-boundary check (NEM `/v1/realtimeevil`).
+        const isRealtimePath = pathMatchesAny(targetUrl.pathname, FALLBACK_COOKIES_ALLOWED_PATHS);
+        if (isRealtimePath) {
+            const fallbackCookies = searchParameters.get('x-fallback-cookies');
+            if (fallbackCookies) {
+                const cookieHeader = validateAndBuildCookieHeader(fallbackCookies);
                 if (cookieHeader) {
                     proxyReq.setHeader('Cookie', cookieHeader);
-                    console.log(`[Proxy] 🍪 Injected Cookies for ${targetUrl.pathname}`);
+                    console.log(`[Proxy] WS auth cookies injected (${targetUrl.pathname})`);
+                } else {
+                    console.warn(`[Proxy] x-fallback-cookies rejected (validation failed) ${targetUrl.pathname}`);
                 }
-            } catch (error) {
-                // If not JSON, treat as a direct cookie string
-                proxyReq.setHeader('Cookie', fallbackAuthenticationCookies);
             }
         }
 
-        // 2. Inject Appwrite Package Name
+        // Appwrite Package Name — bárhol engedett, de szigorú string-validáció
         const appwritePackageName = searchParameters.get('x-appwrite-package-name');
-        if (appwritePackageName) {
+        if (appwritePackageName
+            && typeof appwritePackageName === 'string'
+            && appwritePackageName.length <= 200
+            && /^[A-Za-z0-9._-]+$/.test(appwritePackageName)
+        ) {
             proxyReq.setHeader('X-Appwrite-Package-Name', appwritePackageName);
-            console.log(`[Proxy] 📦 Injected Package Name: ${appwritePackageName}`);
         }
     } catch (error) {
-        console.error('[Proxy] Authentication injection failed:', error);
+        console.error('[Proxy] Authentication injection failed:', error.message);
     }
 }
 // Shared proxy configuration
@@ -395,7 +595,8 @@ function prepareProxyRequest(proxyReq, req) {
     proxyReq.removeHeader('x-forwarded-for');
     proxyReq.setHeader('Host', 'cloud.appwrite.io');
     injectAuthenticationFromQueryParams(proxyReq, req);
-    console.log(`[Proxy] ${req.method} ${req.url} -> Appwrite`);
+    // S.1.4 — PII-redacted log (cookie/token/email query-paramok maszkolva)
+    console.log(`[Proxy] ${req.method} ${redactUrl(req.url)} -> Appwrite`);
 }
 
 // HTTP Proxy — normál API kérésekhez (30s timeout)
@@ -452,10 +653,13 @@ const wsProxy = createProxyMiddleware({
     }
 });
 
-// Realtime (WebSocket) route — ws proxy-val, végtelen timeout
-app.use(['/v1/realtime', '/maestro-proxy/v1/realtime'], wsProxy);
+// (S.1 Codex BLOCKER) — a WS upgrade event NEM megy át az Express middleware láncon,
+// ezért a CORS / nullOriginGuard / express-rate-limit a WS-re bypassolható volt.
+// Megoldás: NE mountoljuk az `wsProxy`-t app.use-ra (az auto-subscribe az `upgrade` event-re).
+// Helyette explicit `server.on('upgrade', wsUpgradeHandler)` gate (lent, `server.listen` után),
+// amely path/origin/`X-Maestro-Client`/rate-limit ellenőrzés után hívja `wsProxy.upgrade()`-et.
 
-// Minden egyéb /v1/* kérés — http proxy-val, normál timeout
+// Minden /v1/* HTTP kérés — http proxy-val, normál timeout
 app.use(['/v1', '/maestro-proxy/v1'], httpProxy);
 
 // 404 Handler for unknown routes
@@ -473,6 +677,60 @@ const server = app.listen(port, () => {
 // A Railway/Apache idle timeout ellen (alapértelmezett Node.js 5s → 65s)
 server.keepAliveTimeout = 65000;
 server.headersTimeout = 66000; // keepAliveTimeout-nál kicsit nagyobb (Node.js ajánlás)
+
+// --- S.1.2 / S.1.3 / S.1.6 WS Upgrade Gate (Codex BLOCKER fix) ---
+// A WebSocket upgrade event NEM megy át az Express middleware láncon, ezért explicit
+// gate kell amely a CORS / null-origin / rate-limit kontrollokat reprodukálja:
+//   1. Path: csak `NULL_ORIGIN_ALLOWED_PATHS` (`/v1/realtime`)
+//   2. Origin: HTTP-rel azonos allowlist (`ALLOWED_ORIGINS` + `null` secondary guard)
+//   3. `null` origin → `X-Maestro-Client: indesign-plugin` header kötelező
+//   4. Rate-limit: per-IP 60 upgrade / perc (memory-store)
+// 403/429 esetén plain HTTP response + socket destroy.
+function denyUpgrade(socket, statusCode, message) {
+    try {
+        const reasonLine = statusCode === 403 ? '403 Forbidden' : '429 Too Many Requests';
+        socket.write(`HTTP/1.1 ${reasonLine}\r\nConnection: close\r\nContent-Type: text/plain\r\n\r\n${message}\r\n`);
+        // (Codex verifying NIT) flush-garancia — graceful FIN után 50ms-mal destroy
+        socket.end();
+    } catch (e) { /* socket may already be destroyed */ }
+    setTimeout(() => {
+        if (!socket.destroyed) socket.destroy();
+    }, 50).unref();
+}
+
+server.on('upgrade', (req, socket, head) => {
+    let pathname;
+    try {
+        pathname = new URL(req.url, 'http://local').pathname;
+    } catch {
+        return denyUpgrade(socket, 403, 'malformed upgrade URL');
+    }
+
+    // 1. Path validation — csak `/v1/realtime` (segment-boundary)
+    if (!pathMatchesAny(pathname, NULL_ORIGIN_ALLOWED_PATHS)) {
+        return denyUpgrade(socket, 403, 'WS upgrade not permitted on this path');
+    }
+
+    // 2. Origin validation (CORS allowlist párhuzamos)
+    const origin = req.headers.origin;
+    if (origin && origin !== 'null' && !ALLOWED_ORIGINS.has(origin)) {
+        return denyUpgrade(socket, 403, 'CORS origin not allowed');
+    }
+
+    // 3. null-origin secondary guard
+    if (origin === 'null' && req.headers['x-maestro-client'] !== 'indesign-plugin') {
+        return denyUpgrade(socket, 403, 'null origin requires X-Maestro-Client header');
+    }
+
+    // 4. Per-IP rate-limit (60 / perc / IP)
+    const clientIp = extractClientIp(req);
+    if (!checkWsUpgradeRateLimit(clientIp)) {
+        return denyUpgrade(socket, 429, 'Too many WebSocket upgrade requests');
+    }
+
+    // Minden ellenőrzés zöld — proxy átadás
+    wsProxy.upgrade(req, socket, head);
+});
 
 // --- WebSocket Ping Frames ---
 // 15 másodpercenként ping frame küldése az aktív WebSocket socket-ekre,

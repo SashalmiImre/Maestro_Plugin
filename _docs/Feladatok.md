@@ -9,6 +9,142 @@ tags: [feladatok]
 
 ## Aktív
 
+### S — Biztonsági audit (új, 2026-05-11)
+
+> Átfogó security audit a teljes monorepóra. Baseline: **OWASP ASVS Level 2 + CIS Controls v8 IG1 hibrid**. Codex-szel egyeztetett priorizálás (2026-05-11). Részletes terv: [[Komponensek/SecurityBaseline]] + [[Komponensek/SecurityRiskRegister]]. Implementációs sorrend Codex szerint: **S.0 → S.1 → S.2 → S.7 → S.3 → S.4 → S.5 → S.12 → S.13 → S.6 → S.8 → S.9 → S.10 → S.11**. S.14 conditional defer.
+
+#### S.0 Inventory + threat model (1 session)
+
+- [ ] **S.0.1** — `_docs/Komponensek/SecurityBaseline.md` létrehozás: STRIDE per komponens (proxy / dashboard / plugin / CF / Appwrite / Resend), trust boundary diagram, ASVS L2 + CIS IG1 mapping.
+- [ ] **S.0.2** — `_docs/Komponensek/SecurityRiskRegister.md` létrehozás: S.1–S.13 minden ismert gap egy sorban (severity, likelihood, owner, target-date, closed timestamp).
+- [ ] **S.0.3** — Codex pre-review a baseline + risk register felett. Trigger: S.0.1 + S.0.2 után, az S.1 implementáció előtt.
+
+#### S.1 CORS + proxy szigorítás (CRITICAL, 2 session) — ASVS V5/V13, CIS 4/8/12
+
+- [x] **S.1.1** — Origin whitelist a proxy-n. Lista: `https://maestro.emago.hu` (dashboard prod) + lokális dev (`http://localhost:5173`) + UXP `null` origin (Adobe ID egyedi). Default-deny minden más. **Done 2026-05-11**.
+- [x] **S.1.2** — UXP `null` / `file://` origin secondary guard: `X-Maestro-Client: indesign-plugin` header check ha origin null, különben deny. Pre-flight engedélyezett. **Done 2026-05-11** (`nullOriginGuard` middleware).
+- [x] **S.1.3** — Rate limit a proxyn (`express-rate-limit` per-IP per-route). Prioritás: auth-érintő path-ek (`/v1/account`, `/v1/sessions`, Realtime upgrade). **Done 2026-05-11** — 7 path-szintű limiter (memory-store, dokumentált Redis upgrade path Phase 2).
+- [x] **S.1.4** — Request- és response-log PII-scrub: URL query (token, email), body `Authorization` header, `email` kulcs maszkolás. Saját redactor middleware. **Done 2026-05-11** — `redactUrl()` `URL`-based + regex fallback (`x-fallback-cookies`, `cookie`, `token`, `secret`, `key`, `email`, `jwt`, `session`, `authorization` stb. maszkolva).
+- [ ] **S.1.5** — Per-route timeout finomhangolás (HTTP 30s default → 8s health, 30s upload). WebSocket keep-alive bound (15s ping). **Deferred** — Codex pre-review nem indokolta változtatást, jelenlegi 30s uniform `/v1/*` proxy timeout elegendő. Trigger: első incident timeouttal kapcsolatban.
+- [x] **S.1.6** — `injectAuthenticationFromQueryParams()` támadási felület szűkítése: csak Realtime upgrade path-en, max payload 4KB, JSON-only. **Done 2026-05-11** — `/v1/realtime` only, 4KB cap, Appwrite session-key whitelist regex (`a_session(_xxx)?(_legacy)?`), value-charset validate, **raw-string fallback eltávolítva**.
+- [x] **S.1.7** — Stop-time Codex review (`task-mp1k8f73-rdtj2x`): 1 BLOCKER + 4 MAJOR + 3 MINOR + 2 NIT, mind javítva. Verifying review (`task-mp1kn806-x09za4`): 1 új MAJOR (extractClientIp XFF-first spoofolható) + 1 NIT (denyUpgrade flush) — mindkettő javítva (`proxy-addr` lib + `app.get('trust proxy fn')` + `socket.end()` graceful close). Lásd [[Komponensek/ProxyHardening#Codex stop-time review]] + `#Codex verifying review`. Egy MAJOR (`X-Maestro-Client` HMAC) **defer-elt Phase 2-re** — best-effort kliens-azonosító elfogadott jelenlegi pre-prod állapotban. Risk register: R.S.1.7–R.S.1.15.
+
+#### S.2 Rate-limit kiterjesztés CF-szinten (CRITICAL, 2 session) — ASVS V11/V13, CIS 13
+
+- [x] **S.2.1** — `acceptInvite` IP rate-limit verify (5/15min/IP, 1h block). **Done 2026-05-11**: a `checkRateLimit(ctx, 'accept_invite')` ténylegesen hívott az `actions/invites.js:860`-on. A `helpers/rateLimit.js` fájl tetejének "SKELETON" megjegyzése frissítve "STATUS — bekötve"-re. **Halasztva S.2.5 — Cleanup CF**: lejárt counter (24h+) és block (lejárt blockedUntil) doc-ok periodikus törlése (új scheduled CF). Collection schema deploy + env var verify production-előtt (nincs éles, halaszthatjuk).
+- [ ] **S.2.2** — `invite_to_organization` rate-limit: IP + user-id, per-day cap (max 50 invite/admin/nap). Az auto-send batch (`MAX_BATCH_INVITES=20`) cost-spam védelem.
+- [ ] **S.2.3** — `delete_my_account` cooldown: per-user-id-per-24h idempotency window (vagy 7 napos retry-window).
+- [ ] **S.2.4** — Appwrite-built-in login throttle audit (Console "Sessions Limit" beállítások) + alkalmazás-szintű login-fail counter ha hiányzik.
+- [ ] **S.2.5** — Cleanup CF: lejárt `ipRateLimitCounters` (24h+ régebbi) + `ipRateLimitBlocks` (lejárt) periodikus törlése. Új scheduled CF: `cleanup-rate-limits` napi futás.
+- [ ] **S.2.6** — Resend cost-control: per-org-per-day cap a teljes invite-küldési mennyiségre (`organizationDailySendCounter` collection vagy hasonló).
+- [ ] **S.2.7** — Stop-time Codex review. Update: [[Komponensek/PermissionHelpers]] vagy új [[Komponensek/RateLimiting]].
+
+#### S.7 Realtime + cross-tenant data leak (HIGH — Codex előrehozta, 2 session) — ASVS V4/V5, CIS 3
+
+- [ ] **S.7.1** — `appwrite.json` minden collection `rowSecurity` flag audit. Hiányzó → enable (új deployment).
+- [ ] **S.7.2** — Per-tenant ACL coverage verify: `backfill_tenant_acl` + `backfill_admin_team_acl` minden orgon lefuttatva (dryRun → éles). Update [[H.6]] smoke-teszt-checklist.
+- [ ] **S.7.3** — Realtime channel filter audit: `realtimeBus.js` `subscribeRealtime()` listáz minden csatornát, ellenőrizni hogy tenant-prefix-szűrés (defensive depth) van-e.
+- [ ] **S.7.4** — Cross-org membership ACL: ha user több org-ban van, milyen Realtime payload-okat lát. Adversarial verify.
+- [ ] **S.7.5** — Adversarial 2-tab teszt: két browser-tab, két különböző org, `localStorage.maestro.activeEditorialOfficeId` csere → más org adata láthatóvá válik-e? (Tilos.)
+- [ ] **S.7.6** — Stop-time Codex review. Új jegyzet: [[Komponensek/TenantIsolation]].
+
+#### S.3 Security headers + CSP (HIGH, 2 session — CSP report-only rollout) — ASVS V14, CIS 4
+
+- [ ] **S.3.1** — CSP design: `default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' https://api.maestro.emago.hu wss://api.maestro.emago.hu https://webhook.maestro.emago.hu; img-src 'self' data:; style-src 'self' 'unsafe-inline'`. Réteges: report-only mode → enforce.
+- [ ] **S.3.2** — Apache `.htaccess` (`packages/maestro-dashboard/public/.htaccess`) `Header set` direktívák: `Content-Security-Policy-Report-Only` (Phase 1) → `Content-Security-Policy` (Phase 2).
+- [ ] **S.3.3** — `X-Frame-Options: DENY`. (UXP plugin nem iframe.)
+- [ ] **S.3.4** — `Referrer-Policy: strict-origin-when-cross-origin`.
+- [ ] **S.3.5** — `Permissions-Policy: camera=(), microphone=(), geolocation=()`. Letiltja az SDK-szintű hozzáférést.
+- [ ] **S.3.6** — `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload`. Verify: minden `*.emago.hu` HTTPS-en.
+- [ ] **S.3.7** — Stop-time Codex review. Új jegyzet: [[Komponensek/SecurityHeaders]].
+
+#### S.4 XSS + input sanitization audit (HIGH, 1 session) — ASVS V5
+
+- [ ] **S.4.1** — User-content render audit: grep + manuális minden `dangerouslySetInnerHTML` / `innerHTML` / `eval` előfordulásra mindhárom frontend csomagban (várhatóan 0 — Codex korábban megerősítette).
+- [ ] **S.4.2** — ImportDialog file upload validáció: méret-cap (max 1MB workflow JSON), MIME-check, struktur-validáció ELŐTT. `packages/maestro-dashboard/src/features/workflowDesigner/ImportDialog.js`.
+- [ ] **S.4.3** — Server-side input length cap audit: `sanitizeString(str, maxLen)` minden CF action paraméteren — túl-permisszív cap-ek keresése.
+- [ ] **S.4.4** — Output encoding verify: React JSX auto-escape OK; specifikus helyek (CSV export, email template) explicit escape.
+- [ ] **S.4.5** — Stop-time Codex review. Update [[Hibaelhárítás]] minden talált issue-val.
+
+#### S.5 Secret + env var audit (HIGH → CRITICAL ha production-kulcs gyanús, 2 session) — ASVS V6/V14, CIS 6
+
+- [ ] **S.5.1** — Git secret-scan: `gitleaks` vagy `detect-secrets` lokálisan a teljes history-n. Eredmény → `_docs/Komponensek/SecretsRotation.md` snapshot.
+- [ ] **S.5.2** — `.env.production` tartalom verify: csak `VITE_*` (frontend public) — semmi server-side secret.
+- [ ] **S.5.3** — Appwrite API key rotáció dokumentáció: mikor, hogyan, mely CF-eket érint. Új jegyzet [[Komponensek/SecretsRotation]].
+- [ ] **S.5.4** — Resend `RESEND_WEBHOOK_SECRET` + `RESEND_API_KEY` rotáció policy.
+- [ ] **S.5.5** — GROQ_API_KEY + ANTHROPIC_API_KEY használat audit: csak szerver-oldal? `dangerouslyAllowBrowser` ellenőrzés (Anthropic SDK).
+- [ ] **S.5.6** — `.gitignore` completeness: minden `.env*` variáns, `.mcp.json`, lokális dev-secret fájlok.
+- [ ] **S.5.7** — Phase 2: rotáció éles végrehajtás (külön session, **user-trigger** mert prod-érintő destruktív lépés).
+- [ ] **S.5.8** — Stop-time Codex review.
+
+#### S.12 Auth / Session / Access Control (HIGH, 1 session) — ASVS V2/V3/V4
+
+- [ ] **S.12.1** — Password policy audit (Appwrite Console: min length, complexity, password-history, breached-password check).
+- [ ] **S.12.2** — MFA enforcement: kötelező admin szerepre (`org.admin` permission slug), opcionális member-re. UI flow.
+- [ ] **S.12.3** — Session lifetime + idle timeout audit (Appwrite Console alapértelmezett — dokumentálni vagy szigorítani).
+- [ ] **S.12.4** — Token revocation: logout cleanup teljesség (ADR 0010 fix után), `localStorage.maestro.activeEditorialOfficeId` cleanup, session-list view ("Sign out other devices").
+- [ ] **S.12.5** — Account recovery flow audit: Appwrite password reset email rate-limit, token entropy, expire.
+- [ ] **S.12.6** — Role/permission matrix dokumentáció: `PermissionTaxonomy.md` 38 slug + role-mapping-leltár (member / admin / owner mit lát/csinál).
+- [ ] **S.12.7** — Stop-time Codex review. Új jegyzet: [[Komponensek/AuthSessionAccess]].
+
+#### S.13 Logging / Monitoring / Error-disclosure (HIGH, 1 session) — ASVS V7, CIS 8
+
+- [ ] **S.13.1** — Central log aggregation tervezés (Sentry / Better Stack / Grafana Loki). Trigger: első incident vagy compliance-kérés.
+- [ ] **S.13.2** — PII-redaction sablonok: `log()` helper bővítés email-maszkolás, token-elhúzás, session-id-cut funkciókkal.
+- [ ] **S.13.3** — Error message info-disclosure audit: CF 500 → kliens, mit lát a frontend (stack trace? internal error code? `partial_cleanup_failed` üzenet?). Defensive: minden user-facing error code-os, NEM szöveges.
+- [ ] **S.13.4** — Monitoring alert-ek tervezése: CF failure rate, WebSocket disconnect rate, rate-limit-trigger spike, login-fail spike.
+- [ ] **S.13.5** — Audit-log retention CIS 8.3: minimum 90 nap (ASVS L2 elegendő). Appwrite Cloud + Railway logs verify.
+- [ ] **S.13.6** — Anomaly detection (Phase 2, defer): unusual invite-send pattern, geo-outlier login.
+- [ ] **S.13.7** — Stop-time Codex review. Új jegyzet: [[Komponensek/LoggingMonitoring]].
+
+#### S.6 UXP plugin sandbox (MEDIUM, 1 session) — ASVS V14
+
+- [ ] **S.6.1** — `manifest.json` network domain whitelist: Railway primary + emago.hu fallback + Appwrite + webhook subdomain. `"domains": "all"` → konkrét lista.
+- [ ] **S.6.2** — localFileSystem szűkítés: `pluginData` + `documents` write, `userDocuments` csak read ha CF-en keresztül megy a write.
+- [ ] **S.6.3** — `launchProcess.schemes`: csak `https` (verify).
+- [ ] **S.6.4** — UXP auto-update review (Adobe ExMan-szintű).
+- [ ] **S.6.5** — Stop-time Codex review.
+
+#### S.8 Webhook + 3rd party trust (MEDIUM, 1 session)
+
+- [ ] **S.8.1** — `RESEND_WEBHOOK_SECRET` deploy verify: élesen kötve van-e, rotáció policy.
+- [ ] **S.8.2** — Webhook custom domain (`webhook.maestro.emago.hu`) IP-allowlist (Resend IP-tartomány) — best-effort, mert Resend nem ad fix IP-t (HMAC az autoritatív).
+- [ ] **S.8.3** — Bounce / spam-complaint kezelés audit: UI mutatja-e a `bounced` státuszt, Resend API rebound idempotency.
+- [ ] **S.8.4** — Idempotency-key tárolás: Resend `id` payload-mező → `webhookEventIds` collection (anti-replay).
+- [ ] **S.8.5** — Stop-time Codex review.
+
+#### S.9 Dependency + supply chain (MEDIUM, 1 session) — CIS 7/16
+
+- [ ] **S.9.1** — `yarn npm audit --recursive` lokális run. Eredmény → `_docs/Komponensek/DependencyAudit.md` snapshot.
+- [ ] **S.9.2** — Critical/High vulnerability fix: `yarn up <pkg>`, lockfile review.
+- [ ] **S.9.3** — Dependabot setup (GitHub) vagy `npm-audit-resolver`.
+- [ ] **S.9.4** — `package.json` `engines.node` pin (`>=20`). Backend EOL védelem: Appwrite CF `node-18.0` runtime → upgrade `node-20` vagy `node-22` (Appwrite Console runtime-választó).
+- [ ] **S.9.5** — Lock-file integrity CI: `yarn.lock` checksum check PR-ban.
+- [ ] **S.9.6** — Post-install script audit: `yarn explain peer-requirements` + manuális ellenőrzés a 3rd party SDK-knál (Resend, Anthropic, Groq, Appwrite).
+- [ ] **S.9.7** — Stop-time Codex review. Új jegyzet: [[Komponensek/DependencyAudit]].
+
+#### S.10 Audit log + GDPR (LOW–MEDIUM, 1 session) — GDPR Art. 30, CIS 8.3
+
+- [ ] **S.10.1** — Admin audit-view UI (`/settings/organization/audit`): meghívási history + member-removal + role-change.
+- [ ] **S.10.2** — `organizationInviteHistory` retention policy (D.3.4 már listázott — ide hivatkozni): default forever, admin-kérésre törölhető.
+- [ ] **S.10.3** — `delete_my_account` GDPR-export: a törlés ELŐTT a user kapjon egy ZIP-et a saját adataival (legal-Q + dev-ready-Q).
+- [ ] **S.10.4** — `attemptId` per-attempt tracking dokumentáció: új jegyzet [[Komponensek/AttemptIdTracking]] (ADR 0011 follow-up).
+- [ ] **S.10.5** — Központi `actionAuditLog` collection (defer Phase 4, ADR 0011 deferred listáz "Audit completeness").
+- [ ] **S.10.6** — Stop-time Codex review. Új jegyzet: [[Komponensek/AuditTrail]].
+
+#### S.11 DNS / SSL / DR baseline (LOW, 1 session) — CIS 11
+
+- [ ] **S.11.1** — DNS CAA record (`0 issue "letsencrypt.org"`). Registrar action.
+- [ ] **S.11.2** — DNSSEC enable emago.hu (registrar-függő).
+- [ ] **S.11.3** — Appwrite Cloud backup policy dokumentálás: új jegyzet [[Komponensek/DRPlan]].
+- [ ] **S.11.4** — Failover dokumentáció: Railway → emago.hu verify (ADR 0001 listázza, elérhetőség-test).
+- [ ] **S.11.5** — Recovery-runbook: key-rotation incident, secret-leak incident, DB restore, last-owner-orphan recovery.
+- [ ] **S.11.6** — Stop-time Codex review.
+
+#### S.14 AI/LLM security (CONDITIONAL — defer)
+
+- [ ] **S.14.0** — Trigger-feltétel: ha Groq/Anthropic SDK production-adatot kap (prompt injection, data leakage, retention, provider key isolation), S.14 prioritás re-eval (`maestro-proxy` package használ groq-sdk + anthropic-sdk).
+
 ### A.6 Smoke teszt
 
 - [ ] **A.6.1** — Permission rendszer 2-tab smoke: workflow létrehozás új slug-okkal → kiadvány hozzárendelés → autoseed verifikálás → tag-hozzáadás → aktiválás → plugin Realtime.
