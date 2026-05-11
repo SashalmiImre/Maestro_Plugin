@@ -1176,34 +1176,7 @@
     margin-top: auto;
 }
 
-/* ─── ImportDialog ─────────────────────────────────────────────────────── */
-
-.import-dialog__overlay {
-    position: fixed;
-    inset: 0;
-    background: var(--modal-backdrop);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 100;
-}
-
-.import-dialog {
-    width: 420px;
-    max-width: 90vw;
-    background: var(--bg-elevated, #282a30);
-    border: 1px solid rgb(from var(--text-primary) r g b / 0.1);
-    border-radius: 12px;
-    padding: 24px;
-    box-shadow: 0 8px 32px rgba(var(--shadow-tint), 0.5);
-}
-
-.import-dialog__title {
-    font-size: 16px;
-    font-weight: 600;
-    color: var(--text-primary, #e8e8e8);
-    margin: 0 0 16px;
-}
+/* ─── ImportDialog (tartalom — wrapper a közös Modal-ban) ─────────────────── */
 
 .import-dialog__file-row {
     margin-bottom: 12px;
@@ -1252,46 +1225,6 @@
 
 .import-dialog__diff-item--remove {
     color: var(--c-error);
-}
-
-.import-dialog__actions {
-    display: flex;
-    justify-content: flex-end;
-    gap: 8px;
-    margin-top: 16px;
-}
-
-.import-dialog__btn {
-    padding: 6px 14px;
-    font-size: 13px;
-    font-weight: 500;
-    border-radius: 6px;
-    border: none;
-    cursor: pointer;
-    transition: background 0.15s;
-}
-
-.import-dialog__btn--cancel {
-    background: rgb(from var(--text-primary) r g b / 0.06);
-    color: var(--text-secondary, #999);
-}
-
-.import-dialog__btn--cancel:hover {
-    background: rgb(from var(--text-primary) r g b / 0.1);
-}
-
-.import-dialog__btn--confirm {
-    background: var(--accent-solid);
-    color: #fff;
-}
-
-.import-dialog__btn--confirm:hover:not(:disabled) {
-    background: var(--accent-hover);
-}
-
-.import-dialog__btn--confirm:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
 }
 
 /* ─── Scaffold (betöltés/hiba állapot) ──────────────────────────────────── */

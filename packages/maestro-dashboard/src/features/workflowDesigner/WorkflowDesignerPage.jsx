@@ -28,6 +28,7 @@ import { useMediaQuery, BREAKPOINTS } from '../../hooks/useMediaQuery.js';
 import { useOrgRole } from '../../hooks/useOrgRole.js';
 import { DATABASE_ID, COLLECTIONS } from '../../config.js';
 import { useConfirm } from '../../components/ConfirmDialog.jsx';
+import { useBlockerConfirm } from '../../hooks/useBlockerConfirm.js';
 import { openCreateWorkflowModal } from '../../components/workflows/CreateWorkflowModal.jsx';
 import { WORKFLOW_VISIBILITY_DEFAULT, WORKFLOW_VISIBILITY_LABELS } from '@shared/constants.js';
 import { compiledToGraph, graphToCompiled, extractGraphData } from './compiler.js';
@@ -127,7 +128,6 @@ export default function WorkflowDesignerPage() {
     const isDirty = isGraphDirty || isNameDirty;
     const [isSaving, setIsSaving] = useState(false);
     const [saveError, setSaveError] = useState(null);
-    const [isImportOpen, setIsImportOpen] = useState(false);
     const [remoteVersionWarning, setRemoteVersionWarning] = useState(null);
     // #73: oldalpanel collapse — localStorage-perzisztált, a designerbe visszatérve
     // megőrződik a felhasználó preferenciája (széles canvas vs. teljes panelek).
@@ -198,6 +198,12 @@ export default function WorkflowDesignerPage() {
     const blocker = useBlocker(({ currentLocation, nextLocation }) =>
         isDirty && currentLocation.pathname !== nextLocation.pathname
     );
+
+    useBlockerConfirm(blocker, {
+        title: 'Nem mentett változások',
+        message: 'A workflow nem mentett változásokat tartalmaz. Biztosan elhagyod az oldalt?',
+        confirmLabel: 'Elhagyom'
+    });
 
     // ── Workflow betöltés ────────────────────────────────────────────────────
     // A workflowId route param szerint töltjük be a konkrét workflow doc-ot.
@@ -1014,7 +1020,15 @@ export default function WorkflowDesignerPage() {
                             <button
                                 type="button"
                                 className="workflow-designer-toolbar__btn-secondary"
-                                onClick={() => setIsImportOpen(true)}
+                                onClick={() => openModal(
+                                    <ImportDialog
+                                        currentNodes={nodes}
+                                        currentEdges={edges}
+                                        currentMetadata={metadata}
+                                        onImport={handleImport}
+                                    />,
+                                    { title: 'Workflow importálás', size: 'md' }
+                                )}
                                 title="Workflow importálása JSON-ből"
                             >
                                 Import
@@ -1141,43 +1155,10 @@ export default function WorkflowDesignerPage() {
                 />
             </div>
 
-            {/* Import dialógus */}
-            <ImportDialog
-                isOpen={isImportOpen}
-                onClose={() => setIsImportOpen(false)}
-                currentNodes={nodes}
-                currentEdges={edges}
-                currentMetadata={metadata}
-                onImport={handleImport}
-            />
-
-            {/* Navigáció blokkoló dialógus */}
-            {blocker.state === 'blocked' && (
-                <div className="import-dialog__overlay" onClick={() => blocker.reset()}>
-                    <div className="import-dialog" onClick={e => e.stopPropagation()}>
-                        <h3 className="import-dialog__title">Nem mentett változások</h3>
-                        <p style={{ fontSize: 13, color: 'var(--text-secondary, #999)', margin: '0 0 16px' }}>
-                            A workflow nem mentett változásokat tartalmaz. Biztosan elhagyod az oldalt?
-                        </p>
-                        <div className="import-dialog__actions">
-                            <button
-                                type="button"
-                                className="import-dialog__btn import-dialog__btn--cancel"
-                                onClick={() => blocker.reset()}
-                            >
-                                Maradok
-                            </button>
-                            <button
-                                type="button"
-                                className="import-dialog__btn import-dialog__btn--confirm"
-                                onClick={() => blocker.proceed()}
-                            >
-                                Elhagyom
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            {/* Import dialógus + Navigáció blokkoló: mindkettő a közös
+                ModalContext-en át nyílik (Import → toolbar gomb `openModal`,
+                blocker → `useConfirm` a fenti useEffect-ben). Itt már nincs
+                inline render — a portál + animáció a közös Modal-ból jön. */}
         </div>
     );
 }

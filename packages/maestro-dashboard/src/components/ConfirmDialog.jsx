@@ -129,31 +129,23 @@ export function useConfirm() {
 
     return useCallback((options = {}) => {
         return new Promise((resolve) => {
+            // A user választása egy ref-ben, amit a Promise resolve-ja olvas
+            // ki a záró animáció VÉGÉN (Modal `onAfterClose`). Default: false
+            // (Cancel/ESC/backdrop/✕ mind a default ágra futnak, csak az OK gomb
+            // állítja át `true`-ra).
+            const resultRef = { current: false };
             let modalId;
-
-            function handleConfirm() {
-                closeModalById(modalId);
-                resolve(true);
-            }
-
-            function handleCancel() {
-                closeModalById(modalId);
-                resolve(false);
-            }
 
             modalId = openModal(
                 <ConfirmDialog
                     {...options}
-                    onConfirm={handleConfirm}
-                    onCancel={handleCancel}
+                    onConfirm={() => { resultRef.current = true; closeModalById(modalId); }}
+                    onCancel={() => { resultRef.current = false; closeModalById(modalId); }}
                 />,
                 {
                     size: 'sm',
                     closeOnBackdrop: !options.isAlert,
-                    onBeforeClose: () => {
-                        handleCancel();
-                        return false; // false = ne hívja a Modal az onClose-t is (dupla bezárás elkerülése)
-                    }
+                    onAfterClose: () => resolve(resultRef.current)
                 }
             );
         });
