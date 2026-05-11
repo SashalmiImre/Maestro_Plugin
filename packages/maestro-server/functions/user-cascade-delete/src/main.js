@@ -50,6 +50,10 @@ const BATCH_LIMIT = 100;
 // külön node_modules van, shared modul-importot itt nem támogat) ─────────
 function buildOrgTeamId(organizationId) { return `org_${organizationId}`; }
 function buildOfficeTeamId(officeId) { return `office_${officeId}`; }
+// Q1 ACL admin-team (E blokk, 2026-05-09 / [[Döntések/0013-self-service-account-management]] B3 fix).
+// A `leaveOrganization` és `changeOrganizationMemberRole` action a `org_${orgId}_admins` team-et is
+// kezeli, ezért a user-delete cascade-nek konzisztensen le kell bontania.
+function buildOrgAdminTeamId(organizationId) { return `org_${organizationId}_admins`; }
 
 // ── Helper: paginated listDocuments userId-szűréssel ───────────────────
 // 2026-05-09 (Codex stop-time #8): a `da54129` egyszerűsítés eltávolította
@@ -195,6 +199,8 @@ module.exports = async ({ req, res, log, error }) => {
         groupMemberships: { found: 0, deleted: 0, failed: 0 },
         orgTeams: { processed: 0, deleted: 0, failed: 0 },
         officeTeams: { processed: 0, deleted: 0, failed: 0 },
+        // [[Döntések/0013-self-service-account-management]] B3 fix — Q1 admin-team cleanup.
+        orgAdminTeams: { processed: 0, deleted: 0, failed: 0 },
         lastOwnerOrgs: []
     };
 
@@ -243,6 +249,19 @@ module.exports = async ({ req, res, log, error }) => {
         } catch (err) {
             stats.orgTeams.failed++;
             error(`[UserCascade] team ${teamId} cleanup dobott: ${err.message}`);
+        }
+        // [[Döntések/0013-self-service-account-management]] B3 fix — admin-team is.
+        // A `leaveOrganization` és `changeOrganizationMemberRole` a `org_${orgId}_admins`
+        // team-et kezeli; admin/owner role-ú user-en eltávolít, member-en idempotens skip.
+        const adminTeamId = buildOrgAdminTeamId(orgId);
+        try {
+            const r = await removeUserFromTeam(teams, adminTeamId, userId, log, error);
+            stats.orgAdminTeams.processed++;
+            stats.orgAdminTeams.deleted += r.deleted || 0;
+            stats.orgAdminTeams.failed += r.failed || 0;
+        } catch (err) {
+            stats.orgAdminTeams.failed++;
+            error(`[UserCascade] team ${adminTeamId} cleanup dobott: ${err.message}`);
         }
     }
     for (const officeId of officeIds) {
@@ -343,6 +362,7 @@ module.exports = async ({ req, res, log, error }) => {
         (stats.groupMemberships.failed || 0) +
         (stats.orgTeams.failed || 0) +
         (stats.officeTeams.failed || 0) +
+        (stats.orgAdminTeams.failed || 0) +
         stats.listFailures.length +
         stats.verificationFailures.length;
 

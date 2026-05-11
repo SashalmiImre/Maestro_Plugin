@@ -703,6 +703,43 @@
     color: var(--text-muted);
 }
 
+/* ADR 0012 — admin-kick gomb a member-row jobb szélén. Diszkrét × ikon,
+   hover-re piros (danger), hogy ne legyen elcsábító elsőre, de egyértelműen
+   pusztító akcióra utaljon. */
+.org-settings-member-remove-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    padding: 0;
+    border: 1px solid transparent;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 16px;
+    line-height: 1;
+    font-family: inherit;
+    cursor: pointer;
+    transition: background-color 100ms, color 100ms, border-color 100ms;
+}
+
+.org-settings-member-remove-btn:hover:not(:disabled) {
+    background: rgb(from var(--danger, #d33) r g b / 0.1);
+    color: var(--danger, #d33);
+    border-color: rgb(from var(--danger, #d33) r g b / 0.3);
+}
+
+.org-settings-member-remove-btn:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+}
+
+.org-settings-member-remove-btn:focus-visible {
+    outline: 2px solid rgb(from var(--accent) r g b / 0.5);
+    outline-offset: 2px;
+}
+
 /* ─── Meghívási történet — collapsible ───────────────────────────────────── */
 
 .org-settings-section--history {

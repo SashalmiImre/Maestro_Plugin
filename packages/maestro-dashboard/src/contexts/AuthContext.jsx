@@ -1206,6 +1206,48 @@ export function AuthProvider({ children }) {
     }, [user?.$id]);
 
     /**
+     * 2026-05-10 ([[Döntések/0012-org-member-removal-cascade]]) — admin-kick
+     * a UsersTab "Felhasználók" tabról. A CF `remove_organization_member`
+     * action-t hívja, amely cascade-cleanup-pal eltávolítja a target tagot
+     * a szervezetből (per-office team + org team + admin-team STRICT cleanup,
+     * majd `editorialOfficeMemberships` + `groupMemberships` + `organizationMemberships`).
+     *
+     * Védelmi rétegek backend-en: self-block, owner-touch (admin nem érint owner-t),
+     * last-owner guard, `org.member.remove` permission slug. Frontend csak az
+     * UX-szintű azonnali eseteket szűri (pl. self-row gomb hide).
+     */
+    const removeOrganizationMember = useCallback(async (organizationId, targetUserId) => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'remove_organization_member',
+            { organizationId, targetUserId },
+            'member_removal_failed'
+        );
+    }, [user?.$id]);
+
+    /**
+     * 2026-05-10 ([[Döntések/0013-self-service-account-management]]) — self-service
+     * fiók-törlés a /settings/account profile-screen "Veszélyes zóna" gombjáról.
+     *
+     * Cross-org sequential cleanup MINDEN orgból + `users.delete(callerId)`.
+     * Backend BLOCKER-fix-ek: per-org cleanup `users.delete` ELŐTT (race-window),
+     * sole-owner / sole-member ágat is blokkolja (mint a `leaveOrganization`).
+     *
+     * Sikeres response után a hívó: `account.deleteSession({ sessionId: 'current' })`
+     * try/catch + redirect `/login` (a session a backend-en már érvénytelen).
+     *
+     * @returns {Promise<{ leftOrgs: string[], cleanupStats: Array }>}
+     */
+    const deleteMyAccount = useCallback(async () => {
+        if (!user?.$id) throw new Error('not_authenticated');
+        return callInviteFunction(
+            'delete_my_account',
+            { confirm: true },
+            'account_delete_failed'
+        );
+    }, [user?.$id]);
+
+    /**
      * Szerkesztőség átnevezése (org owner/admin). A CF `update_editorial_office`
      * action-jét hívja. Slug NEM változik (stabilitás — cikkek / publikációk az
      * office $id-re hivatkoznak). A hívó maga futtassa a `reloadMemberships()`-t
@@ -1580,6 +1622,8 @@ export function AuthProvider({ children }) {
         renameOrganization,
         renameEditorialOffice,
         changeOrganizationMemberRole,
+        removeOrganizationMember,
+        deleteMyAccount,
         addGroupMember,
         removeGroupMember,
         createGroup,
@@ -1632,6 +1676,8 @@ export function AuthProvider({ children }) {
         renameOrganization,
         renameEditorialOffice,
         changeOrganizationMemberRole,
+        removeOrganizationMember,
+        deleteMyAccount,
         addGroupMember,
         removeGroupMember,
         createGroup,

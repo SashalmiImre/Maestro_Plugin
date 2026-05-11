@@ -17,6 +17,7 @@ import { useAuth } from '../../contexts/AuthContext.jsx';
 import { useModal } from '../../contexts/ModalContext.jsx';
 import { DASHBOARD_URL } from '../../config.js';
 import { useCopyDialog } from '../CopyDialog.jsx';
+import { useConfirm } from '../ConfirmDialog.jsx';
 import InviteModal from './InviteModal.jsx';
 
 function errorMessage(reason, retryAfterSec) {
@@ -27,6 +28,15 @@ function errorMessage(reason, retryAfterSec) {
     if (reason.includes('not_a_member')) return 'Nem vagy tagja ennek a szervezetnek.';
     if (reason.includes('insufficient_role')) return 'Nincs jogosultságod ehhez a művelethez.';
     if (reason.includes('insufficient_permission')) return 'Nincs jogosultságod ehhez a művelethez.';
+    // ADR 0012 — admin-kick hibakódok
+    if (reason.includes('cannot_remove_self')) return 'Saját magadat nem tudod eltávolítani innen — használd a "Fiókom" / "Szervezet elhagyása" funkciót.';
+    if (reason.includes('requires_owner_for_owner_removal')) return 'Tulajdonos eltávolításához tulajdonosi jogosultság szükséges.';
+    if (reason.includes('cannot_remove_last_owner')) return 'Ez a szervezet utolsó tulajdonosa — előbb adj át tulajdonjogot egy másik tagnak.';
+    if (reason.includes('membership_not_found')) return 'A felhasználó már nem tagja ennek a szervezetnek.';
+    if (reason.includes('team_cleanup_failed')) return 'Hozzáférési listák tisztítása sikertelen — próbáld újra.';
+    if (reason.includes('office_memberships_failed')) return 'Szerkesztőségi tagságok tisztítása sikertelen — próbáld újra.';
+    if (reason.includes('group_memberships_failed')) return 'Csoporttagságok tisztítása sikertelen — próbáld újra.';
+    if (reason.includes('member_removal_failed')) return 'A tag eltávolítása nem sikerült. Próbáld újra.';
     if (reason.includes('already_member')) return 'A felhasználó már tagja a szervezetnek.';
     if (reason.includes('already_invited')) return 'Ehhez az e-mail címhez már van függőben lévő meghívó.';
     // ADR 0010 W2/W3 — meghívási flow hibakódok
@@ -132,9 +142,10 @@ export default function UsersTab({
     onInviteSent,
     onMembersRefresh
 }) {
-    const { user, resendInviteEmail, changeOrganizationMemberRole } = useAuth();
+    const { user, resendInviteEmail, changeOrganizationMemberRole, removeOrganizationMember } = useAuth();
     const { openModal } = useModal();
     const copyDialog = useCopyDialog();
+    const confirm = useConfirm();
 
     const [actionError, setActionError] = useState('');
     const [actionPending, setActionPending] = useState(null);
@@ -254,6 +265,73 @@ export default function UsersTab({
      *   2. Cross-tab szinkron a `useTenantRealtimeRefresh` hook
      *      `ORGANIZATION_MEMBERSHIPS` csatornáján át, debounce-olva.
      */
+    /**
+     * 2026-05-10 ([[Döntések/0012-org-member-removal-cascade]]) — admin-kick.
+     *
+     * Backend védelmi rétegek (CF `remove_organization_member`):
+     * self-block, owner-touch (admin nem érint owner-t), last-owner guard,
+     * STRICT team-cleanup (per-office + org + admin-team), DB cascade.
+     * UI csak az UX-szintű egyértelmű eseteket szűri (gomb hide self/owner-on-admin).
+     *
+     * Email-typed verification ConfirmDialog-on át — a `member.userEmail`
+     * denormalizált a [[ADR 0009]] alapján, pontosan az látszik a UI-on.
+     * Legacy/null-denormalizált rekordnál fallback `member.userId` (ritka).
+     */
+    async function handleRemoveMember(member) {
+        if (member.userId === user?.$id) {
+            // UX-szintű early return — backend self-block-ja erre 403-mal
+            // védekezne, de soha ne is kelljen.
+            setActionError('Saját magadat nem tudod eltávolítani innen.');
+            return;
+        }
+
+        const resolved = userNameMap.get(member.userId);
+        const displayName = resolved?.name || resolved?.email || member.userEmail || member.userId;
+        const verificationTarget = member.userEmail || resolved?.email || null;
+
+        // Confirmation: ha van email, email-typed strict verification.
+        // Ha nincs (legacy null), egyszerű igen/nem (a backend a hard-guardja).
+        const ok = await confirm({
+            title: 'Tag eltávolítása',
+            message: (
+                <>
+                    <p>
+                        <strong>{displayName}</strong> tagot eltávolítod a <strong>{org.name}</strong> szervezetből.
+                    </p>
+                    <ul style={{ marginTop: 12, marginBottom: 12, paddingLeft: 20, lineHeight: 1.6 }}>
+                        <li>A felhasználó fiókja <strong>megmarad</strong>, más szervezetekben tovább dolgozhat.</li>
+                        <li>A szervezet csoport- és szerkesztőség-tagságai megszűnnek.</li>
+                        <li>Bármikor újra meghívhatod ugyanezzel az e-maillel.</li>
+                    </ul>
+                </>
+            ),
+            verificationExpected: verificationTarget,
+            confirmLabel: 'Eltávolítás',
+            cancelLabel: 'Mégsem',
+            variant: 'danger'
+        });
+
+        if (!ok) return;
+
+        setActionPending(`remove:${member.$id}`);
+        setActionError('');
+
+        try {
+            await removeOrganizationMember(org.$id, member.userId);
+            if (onMembersRefresh) {
+                try {
+                    await onMembersRefresh();
+                } catch (refreshErr) {
+                    console.warn('[UsersTab] onMembersRefresh sikertelen:', refreshErr);
+                }
+            }
+        } catch (err) {
+            setActionError(errorMessage(err.message || err.code || ''));
+        } finally {
+            setActionPending(null);
+        }
+    }
+
     async function handleRoleChange(member, newRole) {
         if (member.role === newRole) return;
         if (member.userId === user?.$id) {
@@ -325,6 +403,17 @@ export default function UsersTab({
         const canChangeThisMemberRole = callerRole === 'owner' && !isSelf;
         const isProcessingRole = actionPending === `role:${m.$id}`;
 
+        // 2026-05-10 ([[Döntések/0012]]) — admin-kick gomb láthatóság:
+        //   - csak owner / admin caller látja (isOrgAdmin)
+        //   - NEM látszik self-row-on (backend self-block)
+        //   - admin caller NEM láthatja owner-row-on (UX előszűrés a backend
+        //     owner-touch guard előtt; owner-caller LÁTHATJA, mert tudhatja
+        //     törölni másik owner-t, csak last-owner véd ellene)
+        const canRemoveThisMember = isOrgAdmin
+            && !isSelf
+            && !(callerRole === 'admin' && m.role === 'owner');
+        const isProcessingRemove = actionPending === `remove:${m.$id}`;
+
         return (
             <li key={m.$id} className="org-settings-member-row">
                 <div className={`org-settings-member-avatar org-settings-member-avatar--${m.role}`}>
@@ -361,6 +450,18 @@ export default function UsersTab({
                     )}
                     {isProcessingRole && (
                         <span className="org-settings-role-spinner" aria-hidden="true">…</span>
+                    )}
+                    {canRemoveThisMember && (
+                        <button
+                            type="button"
+                            className="org-settings-member-remove-btn"
+                            onClick={() => handleRemoveMember(m)}
+                            disabled={!!actionPending}
+                            aria-label={`${displayName} eltávolítása a szervezetből`}
+                            title="Tag eltávolítása"
+                        >
+                            {isProcessingRemove ? '…' : '×'}
+                        </button>
                     )}
                 </div>
             </li>

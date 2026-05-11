@@ -30,6 +30,7 @@ import ResetPasswordRoute from './routes/auth/ResetPasswordRoute.jsx';
 import OnboardingRoute from './routes/auth/OnboardingRoute.jsx';
 import InviteRoute from './routes/auth/InviteRoute.jsx';
 import SettingsPasswordRoute from './routes/settings/SettingsPasswordRoute.jsx';
+import SettingsAccountRoute from './routes/settings/SettingsAccountRoute.jsx';
 import GroupsRoute from './routes/settings/GroupsRoute.jsx';
 import DashboardLayout from './routes/dashboard/DashboardLayout.jsx';
 import TableViewRoute from './routes/dashboard/TableViewRoute.jsx';
@@ -122,6 +123,7 @@ export const router = createBrowserRouter([
                         children: [
                             { path: '/onboarding', element: <OnboardingRoute /> },
                             { path: '/settings/password', element: <SettingsPasswordRoute /> },
+                            { path: '/settings/account', element: <SettingsAccountRoute /> },
                             { path: '/settings/groups', element: <GroupsRoute /> }
                         ]
                     },

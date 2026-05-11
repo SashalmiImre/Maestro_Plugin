@@ -101,12 +101,21 @@ export default function ProtectedRoute() {
         );
     }
 
+    // [[ADR 0013]] M1 stop-time fix — közös aux-route lista. Két helyen
+    // használjuk: (a) az üres-orgList → /onboarding redirect alól mentes,
+    // hogy a `/settings/account`-ról az utolsó org elhagyása után a user a
+    // sikerüzenet elolvashassa, ne kerüljön azonnal /onboarding-ra; (b) a
+    // frozen-org gate is ugyanezt a listát kérdezi le.
+    const isAuxRoute = location.pathname.startsWith('/onboarding') ||
+                       location.pathname.startsWith('/settings/password') ||
+                       location.pathname.startsWith('/settings/account');
+
     // Sikeres fetch + tényleg üres → onboarding. Az /invite route az App.jsx
     // szerint publikus (AuthSplitLayout alatt), így sosem éri el ezt a guardot
     // — kizárólag az /onboarding-ot kell kivételként kezelni, hogy ne dobja
     // önmagára vissza a usert egy redirect ciklusban.
     const orgList = organizations || [];
-    if (orgList.length === 0 && location.pathname !== '/onboarding') {
+    if (orgList.length === 0 && !isAuxRoute) {
         return <Navigate to="/onboarding" replace />;
     }
 
@@ -121,6 +130,9 @@ export default function ProtectedRoute() {
     //   - `/onboarding` — új org létrehozása (recovery út, ha a user másik
     //     orgban admin)
     //   - `/settings/password` — saját jelszó-csere (self-mgmt, NEM org-szintű)
+    //   - `/settings/account` ([[ADR 0013]] M3 fix) — self-service profile-screen
+    //     (per-org leave + fiók-törlés). Ha az árva-org user-t blokkolnánk,
+    //     nem jutna recovery-screen-hez.
     // Minden más settings (`/settings/groups` / `/settings/organization` /
     // `/settings/editorial-office`) blokkolt — ezek tenant-write-műveletek,
     // amiket a backend úgyis 403-mal eldob.
@@ -131,8 +143,6 @@ export default function ProtectedRoute() {
     // hívást kell tenni, single-source-of-truth-tal.
     const activeOrg = orgList.find((o) => o.$id === activeOrganizationId);
     const isFrozen = activeOrg?.status === 'orphaned' || activeOrg?.status === 'archived';
-    const isAuxRoute = location.pathname.startsWith('/onboarding') ||
-                       location.pathname.startsWith('/settings/password');
     if (isFrozen && !isAuxRoute) {
         return <OrganizationOrphanedView />;
     }

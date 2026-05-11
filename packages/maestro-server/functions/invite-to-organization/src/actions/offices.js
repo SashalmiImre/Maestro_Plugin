@@ -9,7 +9,8 @@ const {
     SLUG_MAX_LENGTH,
     sanitizeString,
     slugifyName,
-    fetchUserIdentity
+    fetchUserIdentity,
+    listOfficeIdsForOrg
 } = require('../helpers/util.js');
 const {
     CASCADE_BATCH_LIMIT,
@@ -128,28 +129,15 @@ async function leaveOrganization(ctx) {
         }
     }
 
-    // 3) Az org alá tartozó office-ok listája — a per-office team
-    //    cleanup-hoz kell. Lapozott listing.
-    const officeIds = [];
-    let cursor;
-    while (true) {
-        const queries = [
-            sdk.Query.equal('organizationId', organizationId),
-            sdk.Query.select(['$id']),
-            sdk.Query.limit(CASCADE_BATCH_LIMIT)
-        ];
-        if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
-        let resp;
-        try {
-            resp = await databases.listDocuments(env.databaseId, env.officesCollectionId, queries);
-        } catch (e) {
-            error(`[LeaveOrg] office listing hiba: ${e.message}`);
-            return fail(res, 500, 'office_list_failed');
-        }
-        if (resp.documents.length === 0) break;
-        for (const o of resp.documents) officeIds.push(o.$id);
-        if (resp.documents.length < CASCADE_BATCH_LIMIT) break;
-        cursor = resp.documents[resp.documents.length - 1].$id;
+    // 3) Az org alá tartozó office-ok listája — a per-office team cleanup-hoz
+    //    kell. Helper-extracted (a `removeOrganizationMember` és `deleteMyAccount`
+    //    is ezt használja).
+    let officeIds;
+    try {
+        officeIds = await listOfficeIdsForOrg(databases, env, sdk, organizationId, CASCADE_BATCH_LIMIT);
+    } catch (e) {
+        error(`[LeaveOrg] office listing hiba: ${e.message}`);
+        return fail(res, 500, 'office_list_failed');
     }
 
     // 3.5) Team cleanup STRICT — a DB doc törlések ELŐTT fut le, mert
