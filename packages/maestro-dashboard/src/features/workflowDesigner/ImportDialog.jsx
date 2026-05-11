@@ -1,24 +1,29 @@
 /**
  * Maestro Dashboard — ImportDialog
  *
- * Modal dialógus a workflow JSON importálásához.
- * Fájl kiválasztás → validáció → diff megjelenítés → megerősítés.
+ * Modal-tartalom a workflow JSON importálásához. A közös `Modal.jsx` wrapper-en
+ * keresztül nyílik meg (`useModal().openModal(<ImportDialog ... />, ...)`-ra
+ * a WorkflowDesignerPage toolbar). A komponens csak a belső tartalmat
+ * rendereli; a portál + animáció + ESC/backdrop/✕ a közös Modal-tól jön.
+ *
+ * Folyamat: Fájl kiválasztás → validáció → diff megjelenítés → megerősítés.
  */
 
 import React, { useState, useCallback, useRef } from 'react';
+import { useModal } from '../../contexts/ModalContext.jsx';
 import { parseImportFile, computeImportDiff } from './exportImport.js';
 import { normalizeAndValidateImport } from './compiler.js';
 import { summarizeValidationErrors } from '@shared/compiledValidator.js';
 
 /**
  * @param {Object} props
- * @param {boolean} props.isOpen - Dialógus nyitva van-e
- * @param {Function} props.onClose - Bezárás callback
  * @param {Object[]} props.currentNodes - Jelenlegi node-ok (diff-hez)
  * @param {Object[]} props.currentEdges - Jelenlegi edge-ek (diff-hez)
+ * @param {Object} props.currentMetadata - Jelenlegi metadata (diff-hez)
  * @param {Function} props.onImport - (nodes, edges, metadata, viewport) => void
  */
-export default function ImportDialog({ isOpen, onClose, currentNodes, currentEdges, currentMetadata, onImport }) {
+export default function ImportDialog({ currentNodes, currentEdges, currentMetadata, onImport }) {
+    const { closeModal } = useModal();
     const [importData, setImportData] = useState(null);
     const [diff, setDiff] = useState(null);
     const [error, setError] = useState(null);
@@ -32,24 +37,14 @@ export default function ImportDialog({ isOpen, onClose, currentNodes, currentEdg
     // upload (lassú→gyors completion) különben stale state-et írhatna.
     const parseSeqRef = useRef(0);
 
-    const reset = useCallback(() => {
-        setImportData(null);
-        setDiff(null);
-        setError(null);
-        setValidationWarning(null);
-        if (fileInputRef.current) fileInputRef.current.value = '';
-    }, []);
-
     const handleClose = useCallback(() => {
         // Invalidáljuk az in-flight parse-okat: a seq-bump után a meglévő
-        // `await parseImportFile`/`await normalizeAndValidateImport` callback
-        // a `seq !== parseSeqRef.current` ágon korai return-nel kilép, így
-        // bezárás után NEM ír stale state-et (újranyitásra a tisztított
-        // állapot látszana).
+        // `await parseImportFile` / `await normalizeAndValidateImport`
+        // callback-ek a `seq !== parseSeqRef.current` ágon korai return-nel
+        // kilépnek, így bezárás után NEM írnak stale state-et.
         parseSeqRef.current++;
-        reset();
-        onClose();
-    }, [onClose, reset]);
+        closeModal();
+    }, [closeModal]);
 
     const handleFileChange = useCallback(async (event) => {
         const file = event.target.files?.[0];
@@ -105,88 +100,83 @@ export default function ImportDialog({ isOpen, onClose, currentNodes, currentEdg
         handleClose();
     }, [importData, validationWarning, onImport, handleClose]);
 
-    if (!isOpen) return null;
-
     return (
-        <div className="import-dialog__overlay" onClick={handleClose}>
-            <div className="import-dialog" onClick={e => e.stopPropagation()}>
-                <h3 className="import-dialog__title">Workflow importálás</h3>
+        <div className="import-dialog-body">
+            {/* Fájl kiválasztás */}
+            <div className="import-dialog__file-row">
+                <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".json"
+                    onChange={handleFileChange}
+                    className="import-dialog__file-input"
+                />
+            </div>
 
-                {/* Fájl kiválasztás */}
-                <div className="import-dialog__file-row">
-                    <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept=".json"
-                        onChange={handleFileChange}
-                        className="import-dialog__file-input"
-                    />
+            {/* Hiba */}
+            {error && <p className="import-dialog__error">{error}</p>}
+
+            {/* Hard contract blokk — A.1.9: érvénytelen workflow-t NEM
+                engedünk betölteni a Designer state-be, mert a corrupt
+                nodes/edges/metadata renderelés-időben crash-eli a
+                canvast. A felhasználó vagy javítja a JSON-t és újratölti,
+                vagy lemond. */}
+            {validationWarning && (
+                <p className="import-dialog__error">
+                    ⚠ Az importált workflow érvénytelen: {validationWarning} Javítsd a JSON-t és tölts fel újat.
+                </p>
+            )}
+
+            {/* Diff megjelenítés */}
+            {diff && (
+                <div className="import-dialog__diff">
+                    <p className="import-dialog__diff-title">Változások:</p>
+                    <ul className="import-dialog__diff-list">
+                        {diff.addedStates.length > 0 && (
+                            <li className="import-dialog__diff-item import-dialog__diff-item--add">
+                                + {diff.addedStates.length} új állapot: {diff.addedStates.join(', ')}
+                            </li>
+                        )}
+                        {diff.removedStates.length > 0 && (
+                            <li className="import-dialog__diff-item import-dialog__diff-item--remove">
+                                - {diff.removedStates.length} törölt állapot: {diff.removedStates.join(', ')}
+                            </li>
+                        )}
+                        {diff.changedTransitions > 0 && (
+                            <li className="import-dialog__diff-item">
+                                ~ {diff.changedTransitions} módosított átmenet
+                            </li>
+                        )}
+                        {diff.metadataChanges?.length > 0 && (
+                            <li className="import-dialog__diff-item" style={{ color: 'var(--c-warning, #fb923c)' }}>
+                                ⚠ Jogosultság/konfiguráció változás: {diff.metadataChanges.join(', ')}
+                            </li>
+                        )}
+                        {diff.addedStates.length === 0 && diff.removedStates.length === 0 && diff.changedTransitions === 0 && !diff.metadataChanges?.length && (
+                            <li className="import-dialog__diff-item">Nincs változás.</li>
+                        )}
+                    </ul>
                 </div>
+            )}
 
-                {/* Hiba */}
-                {error && <p className="import-dialog__error">{error}</p>}
-
-                {/* Hard contract blokk — A.1.9: érvénytelen workflow-t NEM
-                    engedünk betölteni a Designer state-be, mert a corrupt
-                    nodes/edges/metadata renderelés-időben crash-eli a
-                    canvast. A felhasználó vagy javítja a JSON-t és újratölti,
-                    vagy lemond. */}
-                {validationWarning && (
-                    <p className="import-dialog__error">
-                        ⚠ Az importált workflow érvénytelen: {validationWarning} Javítsd a JSON-t és tölts fel újat.
-                    </p>
-                )}
-
-                {/* Diff megjelenítés */}
-                {diff && (
-                    <div className="import-dialog__diff">
-                        <p className="import-dialog__diff-title">Változások:</p>
-                        <ul className="import-dialog__diff-list">
-                            {diff.addedStates.length > 0 && (
-                                <li className="import-dialog__diff-item import-dialog__diff-item--add">
-                                    + {diff.addedStates.length} új állapot: {diff.addedStates.join(', ')}
-                                </li>
-                            )}
-                            {diff.removedStates.length > 0 && (
-                                <li className="import-dialog__diff-item import-dialog__diff-item--remove">
-                                    - {diff.removedStates.length} törölt állapot: {diff.removedStates.join(', ')}
-                                </li>
-                            )}
-                            {diff.changedTransitions > 0 && (
-                                <li className="import-dialog__diff-item">
-                                    ~ {diff.changedTransitions} módosított átmenet
-                                </li>
-                            )}
-                            {diff.metadataChanges?.length > 0 && (
-                                <li className="import-dialog__diff-item" style={{ color: 'var(--c-warning, #fb923c)' }}>
-                                    ⚠ Jogosultság/konfiguráció változás: {diff.metadataChanges.join(', ')}
-                                </li>
-                            )}
-                            {diff.addedStates.length === 0 && diff.removedStates.length === 0 && diff.changedTransitions === 0 && !diff.metadataChanges?.length && (
-                                <li className="import-dialog__diff-item">Nincs változás.</li>
-                            )}
-                        </ul>
-                    </div>
-                )}
-
-                {/* Gombok */}
-                <div className="import-dialog__actions">
-                    <button
-                        type="button"
-                        className="import-dialog__btn import-dialog__btn--cancel"
-                        onClick={handleClose}
-                    >
-                        Mégse
-                    </button>
-                    <button
-                        type="button"
-                        className="import-dialog__btn import-dialog__btn--confirm"
-                        disabled={!importData || !!validationWarning}
-                        onClick={handleConfirm}
-                    >
-                        Importálás
-                    </button>
-                </div>
+            {/* Gombok — a közös modal-actions + btn-secondary / btn-primary,
+                hogy a többi modal-lal egységes legyen a hierarchia és stílus. */}
+            <div className="modal-actions">
+                <button
+                    type="button"
+                    className="btn-secondary"
+                    onClick={handleClose}
+                >
+                    Mégse
+                </button>
+                <button
+                    type="button"
+                    className="btn-primary"
+                    disabled={!importData || !!validationWarning}
+                    onClick={handleConfirm}
+                >
+                    Importálás
+                </button>
             </div>
         </div>
     );

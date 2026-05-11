@@ -8,7 +8,7 @@
  * keresztül — minden újabb réteg blur-öli az előzőt.
  */
 
-import React, { useEffect, useRef, useCallback, useState } from 'react';
+import React, { useEffect, useRef, useCallback, useState, useImperativeHandle, forwardRef } from 'react';
 import { createPortal } from 'react-dom';
 
 /**
@@ -37,44 +37,55 @@ const CLOSE_ANIMATION_MS = 200;
  * @param {Object} props
  * @param {'sm'|'md'|'lg'|'xl'} [props.size='md'] — kártya szélesség
  * @param {string} [props.title] — opcionális fejléc cím
- * @param {Function} props.onClose — bezárás callback
+ * @param {Function} props.onClose — bezárás callback (a záró animáció UTÁN fut le)
  * @param {Function} [props.onBeforeClose] — dirty-form guard: ha false-t ad vissza, nem zárul be
+ * @param {Function} [props.onAfterClose] — záró animáció UTÁN, az `onClose` előtt fut.
+ *   Ide hívd a Promise-resolve-ot (useConfirm/usePrompt), hogy az `await confirm()`
+ *   a tényleges animált záráshoz igazodjon.
  * @param {boolean} [props.closeOnBackdrop=true] — háttérre kattintás bezár-e
  * @param {number} [props.zIndex] — explicit z-index (ModalContext stack esetén)
  * @param {React.ReactNode} props.children
+ *
+ * Imperative API (ref-en át):
+ *   ref.current.requestClose() — kívülről indított animált zárás (Mégse-gomb,
+ *     scope-váltás auto-close stb.). Ugyanazon `attemptClose()` útvonalon megy,
+ *     mint az ESC/backdrop/✕ — `onBeforeClose` guard érvényes, `closingRef`
+ *     re-entrancy védi, és a 200ms-os fade-out animáció lefut.
  */
-export default function Modal({
+const Modal = forwardRef(function Modal({
     size = 'md',
     title,
     onClose,
     onBeforeClose,
+    onAfterClose,
     closeOnBackdrop = true,
     zIndex,
     children
-}) {
+}, ref) {
     const cardRef = useRef(null);
     const previousFocusRef = useRef(null);
     const closingRef = useRef(false);
     const closeTimerRef = useRef(null);
-    const [isOpen, setIsOpen] = useState(false);
     const [isClosing, setIsClosing] = useState(false);
 
-    // Mount-ot követő rAF: a CSS-ben az alapérték `opacity: 0` + transition;
-    // egy frame múlva a `.is-open` átkapcsolja `opacity: 1`-re és a transition
-    // az aktuális komputált értékből interpolál. Strict Mode-ban a dupla
-    // mount/unmount-ra a rAF-et cancel-eljük, hogy ne maradjon árva.
-    useEffect(() => {
-        const rafId = requestAnimationFrame(() => setIsOpen(true));
-        return () => cancelAnimationFrame(rafId);
-    }, []);
+    // A nyitás-animációt a CSS `@keyframes` mount-ról automatikusan játszik
+    // (lásd `modal.css`). A korábbi JS-state + rAF + setIsOpen minta a
+    // WorkflowDesigner re-render-ciklusa alatt cancelálódó rAF miatt
+    // stuck-on hagyta a modal-t — a CSS-only enter független a render-pipeline-tól.
 
-    // Bezárás kísérlet — onBeforeClose guard-dal. Két fázis:
-    //   1) `isClosing=true` → a CSS `is-closing` osztály opacity-t 0-ra,
-    //      kártyát kicsit lejjebb+kicsinyíti az AKTUÁLIS állapotból
-    //      (transition interpolál — nincs snap mid-open close esetén).
-    //   2) `CLOSE_ANIMATION_MS` után tényleges `onClose()` (unmount).
-    // A `closingRef` re-entrancy guard: gyors duplakattintás a backdrop-on
-    // vagy ESC ne indítson párhuzamos záró timer-t.
+    // Az `onClose` / `onAfterClose` ref-pinning: a parent (ModalProvider) minden
+    // render-en új arrow-okat ad át — ezzel az `attemptClose` deps-szel csak
+    // `onBeforeClose`-tól függ (ritkán változó), így az `useImperativeHandle`
+    // és a globális ESC-listener nem re-mountol minden render-en.
+    const onCloseRef = useRef(onClose);
+    const onAfterCloseRef = useRef(onAfterClose);
+    onCloseRef.current = onClose;
+    onAfterCloseRef.current = onAfterClose;
+
+    // `closingRef` re-entrancy guard: gyors duplakattintás a backdrop-on / ESC-en
+    // / Mégse-gombon ne indítson párhuzamos záró timer-t. Az `onClose` a
+    // 200ms-os animáció VÉGÉN fut le (stack-slice → unmount), az `onAfterClose`
+    // utána (Promise-resolve hely a useConfirm/usePrompt-nak).
     const attemptClose = useCallback(() => {
         if (closingRef.current) return;
         if (onBeforeClose && onBeforeClose() === false) return;
@@ -82,17 +93,41 @@ export default function Modal({
         setIsClosing(true);
         closeTimerRef.current = setTimeout(() => {
             closeTimerRef.current = null;
-            onClose();
+            onCloseRef.current?.();
+            if (onAfterCloseRef.current) onAfterCloseRef.current();
         }, CLOSE_ANIMATION_MS);
-    }, [onClose, onBeforeClose]);
+    }, [onBeforeClose]);
+
+    // Imperative API: a ModalProvider a stack-ben tartott ref-en át hívja a
+    // `requestClose()`-t, amikor `closeModal()` / `closeModalById()` / scope-
+    // váltás auto-close történik. Ezzel a Mégse-gomb és bármely belső close-
+    // gomb is ugyanazt a 200ms fade+slide+scale exit animációt fussa, mint az
+    // ESC / backdrop / ✕. A `closingRef.current` guard mindkét csatornát védi.
+    useImperativeHandle(ref, () => ({
+        requestClose: attemptClose
+    }), [attemptClose]);
 
     // Pending close-timer takarítás: ha a parent (pl. scope auto-close)
     // előbb unmount-ol, mint hogy a setTimeout lejárna, ne maradjon
     // árva timer (potenciális onClose-hívás már unmountolt komponensre).
+    //
+    // Stack-leak guard: ha a unmount éppen az `is-closing` 200ms-os ablakban
+    // történik (a timer még pending), a `commitClose` sose fut → a
+    // ModalProvider stack-ben árva entry marad (legrosszabb esetben fantom
+    // Modal a következő openModal után). A cleanup itt synchron meghívja az
+    // `onClose`-t (`commitClose(id)`) is, hogy a stack-slice mindenképp
+    // lemenjen. Ha közben a teljes ModalProvider unmountolt, a setState
+    // egy "no-op on unmounted component" lesz (csendes), nem regresszió.
     useEffect(() => () => {
         if (closeTimerRef.current) {
             clearTimeout(closeTimerRef.current);
             closeTimerRef.current = null;
+            // Pending exit-animáció félbeszakítva: zárjuk a stack-entry-t
+            // hogy a ModalProvider ne tartson fantomot. Az onAfterClose
+            // (Promise resolve) is fut, hogy a `useConfirm`/`usePrompt`
+            // hívó `await` continuation-je ne lógjon örökre.
+            try { onCloseRef.current?.(); } catch { /* unmount race */ }
+            try { onAfterCloseRef.current?.(); } catch { /* unmount race */ }
         }
     }, []);
 
@@ -196,8 +231,8 @@ export default function Modal({
 
     const overlayStyle = zIndex != null ? { zIndex } : undefined;
 
-    const overlayClass = `modal-overlay${isOpen ? ' is-open' : ''}${isClosing ? ' is-closing' : ''}`;
-    const cardClass = `modal-card modal-${size}${isOpen ? ' is-open' : ''}${isClosing ? ' is-closing' : ''}`;
+    const overlayClass = `modal-overlay${isClosing ? ' is-closing' : ''}`;
+    const cardClass = `modal-card modal-${size}${isClosing ? ' is-closing' : ''}`;
 
     return createPortal(
         <div
@@ -234,4 +269,6 @@ export default function Modal({
         </div>,
         document.body
     );
-}
+});
+
+export default Modal;

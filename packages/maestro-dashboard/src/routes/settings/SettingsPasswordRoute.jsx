@@ -14,6 +14,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useBlocker } from 'react-router-dom';
 import { useAuth, getAccount } from '../../contexts/AuthContext.jsx';
+import { useBlockerConfirm } from '../../hooks/useBlockerConfirm.js';
 
 export default function SettingsPasswordRoute() {
     const { updatePassword } = useAuth();
@@ -86,6 +87,12 @@ export default function SettingsPasswordRoute() {
         && nextLocation.pathname !== '/login'
         && nextLocation.pathname !== '/onboarding'
     );
+
+    useBlockerConfirm(blocker, {
+        title: 'Nem mentett változások',
+        message: 'A jelszómezők ki vannak töltve. Biztosan elhagyod az oldalt?',
+        confirmLabel: 'Elhagyom'
+    });
 
     async function handleSubmit(e) {
         e.preventDefault();
@@ -232,56 +239,8 @@ export default function SettingsPasswordRoute() {
                 <Link to="/">Mégse</Link>
             </div>
 
-            {/* Navigáció blokkoló dialógus */}
-            {blocker.state === 'blocked' && (
-                <div
-                    style={{
-                        position: 'fixed', inset: 0, zIndex: 9999,
-                        background: 'rgba(0,0,0,0.55)', display: 'flex',
-                        alignItems: 'center', justifyContent: 'center'
-                    }}
-                    onClick={() => blocker.reset()}
-                >
-                    <div
-                        style={{
-                            background: 'var(--bg-elevated)', borderRadius: 8, padding: '24px 28px',
-                            maxWidth: 420, width: '90%', border: '1px solid var(--border)'
-                        }}
-                        onClick={e => e.stopPropagation()}
-                    >
-                        <h3 style={{ margin: '0 0 8px', fontSize: 15, fontWeight: 600, color: 'var(--text-primary)' }}>
-                            Nem mentett változások
-                        </h3>
-                        <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 16px' }}>
-                            A jelszómezők ki vannak töltve. Biztosan elhagyod az oldalt?
-                        </p>
-                        <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 8 }}>
-                            <button
-                                type="button"
-                                onClick={() => blocker.reset()}
-                                style={{
-                                    padding: '6px 16px', fontSize: 13, borderRadius: 4,
-                                    border: '1px solid var(--outline-variant)', background: 'transparent',
-                                    color: 'var(--text-secondary)', cursor: 'pointer'
-                                }}
-                            >
-                                Maradok
-                            </button>
-                            <button
-                                type="button"
-                                onClick={() => blocker.proceed()}
-                                style={{
-                                    padding: '6px 16px', fontSize: 13, borderRadius: 4,
-                                    border: 'none', background: 'var(--c-danger, #e53935)', color: '#fff',
-                                    cursor: 'pointer'
-                                }}
-                            >
-                                Elhagyom
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            {/* Navigáció blokkoló: a közös `useConfirm()`-on át nyílik a fenti
+                useEffect-ben — fade+slide+scale animáció + a közös design rendszer. */}
         </div>
     );
 }

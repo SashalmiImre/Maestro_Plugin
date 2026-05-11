@@ -1,16 +1,19 @@
 /* ─── Modal overlay (backdrop) ────────────────────────────────────────────── */
 
-/* Nyitás/zárás: `transition` (NEM `animation`) — a `transition` az aktuális
-   komputált értékből interpolál, így mid-open close (felhasználó még a
-   fadeIn alatt ESC-el / backdrop-ra kattint) NEM snap-el vissza `opacity: 1`-re,
-   hogy onnan tűnjön el; egyenesen az épp aktuális opacity-ről fade-el 0-ra.
-   Codex stop-time review (close-during-open path).
+/* Nyitás CSS `@keyframes` animation-on (NEM JS-state + transition), hogy a
+   mount-utáni animáció FÜGGETLEN legyen a parent re-render-ciklusától.
+   Korábban a `useEffect mount → rAF → setIsOpen(true)` minta a WorkflowDesigner-
+   szerű forró parent-re-rendelési ciklusokban a rAF callback-et minden mount-
+   cleanup-on cancelálta, és az `is-open` osztály soha nem került fel — a
+   modal stuck-on maradt opacity 0-n. Vite Fast Refresh-en is volt flaky timing.
+   Az `animation: ... forwards` mount-tól AUTOMATIKUSAN játszik, függetlenül
+   a React render-pipeline-tól.
 
-   Három fázis a JS oldalról:
-   - `mounting` (alapállapot): opacity 0, kártya alulról+kicsinyítve
-   - `is-open` (egy `requestAnimationFrame` után): opacity 1, kártya helyén
-   - `is-closing` (attemptClose után, `CLOSE_ANIMATION_MS` alatt): opacity 0
-     a JELENLEGI állapotból (közepes is lehet, ha még nyitottuk).
+   Zárás továbbra is `transition`-alapú `.is-closing` osztállyal — az
+   `animation: none` overrideolja a nyitás-keyframe-et, és a `transition`
+   az AKTUÁLIS komputált értékből interpolál a target-re. Így a mid-open
+   close (user az enter alatt ESC-el / backdrop-ra kattint) NEM snap-el
+   vissza opacity 1-re hogy onnan tűnjön el — az aktuális opacity-ről fade.
 */
 
 .modal-overlay {
@@ -30,20 +33,29 @@
        biztosítja a saját layer promotálást Safari-n is. */
     will-change: opacity, backdrop-filter;
     transform: translateZ(0);
-    /* Mounting alapérték — egy frame múlva a `.is-open` osztály billent át. */
+    /* Mounting alapérték + automata enter animation. A `forwards` fill-mode
+       megőrzi az end-state-et (opacity 1) az animation lefutása után. */
     opacity: 0;
-    transition: opacity 0.2s ease-out;
+    animation: modal-overlay-enter 0.2s ease-out forwards;
 }
 
-.modal-overlay.is-open {
-    opacity: 1;
+@keyframes modal-overlay-enter {
+    from { opacity: 0; }
+    to { opacity: 1; }
 }
 
-/* `is-closing` jön a `is-open` UTÁN a fájlban → ugyanaz a specificitás,
-   sorrend dönt → `is-closing` nyer akkor is, ha mindkettő ott van. */
+/* Zárás külön `@keyframes`-en (NEM `transition`): a `transition` és
+   `animation` nem keverhető egy elemen — a `transition` csak két nem-animált
+   érték közt interpolál. A `modal-overlay-exit` mindig opacity 1-ről indul,
+   mert a mid-enter close (nyitás-animáció KÖZBEN ESC) ritka edge case, és
+   vizuálisan elviselhető a snap-back-and-fade. */
 .modal-overlay.is-closing {
-    opacity: 0;
-    transition: opacity 0.2s ease-in;
+    animation: modal-overlay-exit 0.2s ease-in forwards;
+}
+
+@keyframes modal-overlay-exit {
+    from { opacity: 1; }
+    to { opacity: 0; }
 }
 
 /* ─── Modal kártya ────────────────────────────────────────────────────────── */
@@ -59,22 +71,67 @@
     display: flex;
     flex-direction: column;
     outline: none;
-    /* Mounting: enyhén lejjebb és kisebbre — a `.is-open` egy frame múlva
-       visszaviszi a helyére (transition interpolál). */
+    /* Mounting alapérték + automata enter animation (lásd overlay-megjegyzés). */
     opacity: 0;
     transform: translateY(12px) scale(0.97);
-    transition: opacity 0.25s ease-out, transform 0.25s ease-out;
+    animation: modal-card-enter 0.25s ease-out forwards;
 }
 
-.modal-card.is-open {
-    opacity: 1;
-    transform: translateY(0) scale(1);
+@keyframes modal-card-enter {
+    from { opacity: 0; transform: translateY(12px) scale(0.97); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 .modal-card.is-closing {
-    opacity: 0;
-    transform: translateY(8px) scale(0.97);
-    transition: opacity 0.2s ease-in, transform 0.2s ease-in;
+    animation: modal-card-exit 0.2s ease-in forwards;
+    /* A 200ms-os exit-animáció alatt a kártya interakciója LE VAN TILTVA.
+       Race-fix: a `useConfirm`/`usePrompt` `resultRef`-jét egy gyors Mégse →
+       OK kattintás-szekvencia flippelheti, mert a Promise resolve a 200ms
+       végén olvas. A `pointer-events: none` az `is-closing` állapotban a
+       gombokat inert-té teszi — Mégse után nem lehet véletlenül OK-ra
+       kattintani a fade-out közben. Az overlay-en is letiltjuk a backdrop-
+       klikket (az is `attemptClose`-t hívna, de a `closingRef` blokkolja). */
+    pointer-events: none;
+}
+
+.modal-overlay.is-closing {
+    pointer-events: none;
+}
+
+@keyframes modal-card-exit {
+    from { opacity: 1; transform: translateY(0) scale(1); }
+    to   { opacity: 0; transform: translateY(8px) scale(0.97); }
+}
+
+/* ─── A11y: prefers-reduced-motion ────────────────────────────────────────
+   A `@keyframes ... forwards` fill-mode-ra hagyatkozó CSS-animation NEM FUT
+   a `prefers-reduced-motion: reduce` user-preferencia alatt — a böngésző
+   átugorja az animation-time-line-t. Ekkor a `modal-card` mounting alapérték
+   (`opacity: 0`, scale 0.97, translateY 12px) MEGRAGAD, és a felhasználó
+   SOHA nem látja a modal-t — csak a backdrop-blur-t. A11y regresszió.
+   Override: kapcsoljuk ki az animációkat ÉS állítsuk a target-állapotra
+   az értékeket, hogy a modal azonnal látható legyen. */
+@media (prefers-reduced-motion: reduce) {
+    .modal-overlay,
+    .modal-overlay.is-closing,
+    .modal-card,
+    .modal-card.is-closing {
+        animation: none !important;
+    }
+    .modal-overlay {
+        opacity: 1;
+        /* A `backdrop-filter: blur(8px)` GPU-kompozit + CPU-rasterizációs
+           művelet, ami a reduced-motion preferencia mögött tipikusan a
+           motion sickness / vizuális distraktálás csökkentését célzó user-
+           preferenciával egybeesik. Kapcsoljuk ki a blur-t is a média-
+           query alatt: a sima áttetsző háttér megfelelő affordance, a blur
+           hiánya a a11y-igények kontextusában elfogadható. */
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+    }
+    .modal-overlay.is-closing { opacity: 0; transition: opacity 0.1s linear; }
+    .modal-card { opacity: 1; transform: none; }
+    .modal-card.is-closing { opacity: 0; transition: opacity 0.1s linear; }
 }
 
 /* Méretek */

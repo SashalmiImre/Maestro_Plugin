@@ -143,31 +143,22 @@ export function usePrompt() {
 
     return useCallback((options = {}) => {
         return new Promise((resolve) => {
+            // A user beadott értéke vagy null (mégse). A Promise a záró animáció
+            // végén resolve-ol (`onAfterClose`), így az `await prompt()`
+            // continuation csak akkor fut, amikor a Modal animáltan eltűnt.
+            const resultRef = { current: null };
             let modalId;
-
-            function handleConfirm(value) {
-                closeModalById(modalId);
-                resolve(value);
-            }
-
-            function handleCancel() {
-                closeModalById(modalId);
-                resolve(null);
-            }
 
             modalId = openModal(
                 <PromptDialog
                     {...options}
-                    onConfirm={handleConfirm}
-                    onCancel={handleCancel}
+                    onConfirm={(value) => { resultRef.current = value; closeModalById(modalId); }}
+                    onCancel={() => { resultRef.current = null; closeModalById(modalId); }}
                 />,
                 {
                     size: 'sm',
                     closeOnBackdrop: true,
-                    onBeforeClose: () => {
-                        handleCancel();
-                        return false;
-                    }
+                    onAfterClose: () => resolve(resultRef.current)
                 }
             );
         });
