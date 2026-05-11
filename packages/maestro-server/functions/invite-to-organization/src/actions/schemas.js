@@ -1716,8 +1716,44 @@ async function bootstrapRateLimitSchema(ctx) {
         }
     }
 
-    log(`[BootstrapRateLimitSchema] created=[${created.join(',')}] skipped=[${skipped.join(',')}]`);
-    return res.json({ success: true, action: 'rate_limit_schema_bootstrapped', created, skipped });
+    // ── 3) Indexek (S.2.7 harden HIGH-3 fix, 2026-05-11) ──
+    //
+    // A `helpers/rateLimit.js` query-mintái nélkül a runtime full-scan-re menne:
+    //   - readCounter:    equal(ip) + equal(endpoint) + equal(windowStart)
+    //   - isSubjectBlocked: equal(ip) + equal(endpoint) + greaterThan(blockedUntil)
+    //
+    // Index nélkül a doc-szám növekedésével a CF timeout-ra fut, ami DoS-vektor
+    // (rate-limit fail-open mellett még súlyosabb). Composite key index lefedi
+    // mindkét fent használt query-formátumot.
+    //
+    // Aszinkron Appwrite attribute processing miatt 400 `not available` lehet
+    // első futáskor — a user 10s múlva újrafuttatja (`indexesPending` lista).
+    const indexesPending = [];
+    const rateLimitIndexes = [
+        // counter query: ip + endpoint + windowStart (összes szűrő mező)
+        { coll: env.ipRateLimitCountersCollectionId, key: 'subject_endpoint_window', attrs: ['ip', 'endpoint', 'windowStart'] },
+        // block query: ip + endpoint (egzakt match) + blockedUntil (range filter)
+        { coll: env.ipRateLimitBlocksCollectionId, key: 'subject_endpoint_until', attrs: ['ip', 'endpoint', 'blockedUntil'] },
+    ];
+    for (const idx of rateLimitIndexes) {
+        try {
+            await databases.createIndex(env.databaseId, idx.coll, idx.key, 'key', idx.attrs);
+            created.push(`index:${idx.key}`);
+        } catch (err) {
+            const msg = err?.message || '';
+            if (isAlreadyExists(err)) {
+                skipped.push(`index:${idx.key}`);
+            } else if (err?.code === 400 && /not available|processing|unknown attribute/i.test(msg)) {
+                indexesPending.push(idx.key);
+            } else {
+                error(`[BootstrapRateLimitSchema] index ${idx.key} hiba: ${err.message}`);
+                return fail(res, 500, 'rate_index_failed', { idx: idx.key, error: err.message });
+            }
+        }
+    }
+
+    log(`[BootstrapRateLimitSchema] created=[${created.join(',')}] skipped=[${skipped.join(',')}] indexesPending=[${indexesPending.join(',')}]`);
+    return res.json({ success: true, action: 'rate_limit_schema_bootstrapped', created, skipped, indexesPending });
 }
 
 /**

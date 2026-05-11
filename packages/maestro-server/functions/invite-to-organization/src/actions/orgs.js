@@ -17,7 +17,7 @@ const {
 } = require('../helpers/util.js');
 const { CASCADE_BATCH_LIMIT, WORKFLOW_VISIBILITY_DEFAULT } = require('../helpers/constants.js');
 const { deleteByQuery, cascadeDeleteOffice } = require('../helpers/cascade.js');
-const { evaluateRateLimit, consumeRateLimit } = require('../helpers/rateLimit.js');
+const { evaluateAndConsume } = require('../helpers/rateLimit.js');
 const { createWorkflowDoc } = require('../helpers/workflowDoc.js');
 const { seedDefaultPermissionSets } = require('../helpers/groupSeed.js');
 const {
@@ -1635,11 +1635,10 @@ async function deleteMyAccount(ctx) {
     //      5 perc window / max 3 attempt / 5 perc block (Codex stop-time MAJOR 3 fix):
     //      partial cleanup után a self-heal retry megengedhető (NEM 24h hard cooldown).
     {
-        const evaluation = await evaluateRateLimit(ctx, 'delete_my_account', { subject: callerId });
-        if (evaluation.blocked) {
-            return fail(res, 429, 'rate_limited', { scope: 'user', retryAfter: evaluation.retryAfter });
-        }
-        await consumeRateLimit(ctx, 'delete_my_account', { subject: callerId });
+        const rateLimited = await evaluateAndConsume(ctx, [
+            { endpoint: 'delete_my_account', options: { subject: callerId }, tag: 'user' }
+        ]);
+        if (rateLimited) return fail(res, rateLimited.code, rateLimited.reason, rateLimited.payload);
     }
 
     // 4. Per-org sequential cleanup (Codex baseline P1 #2 / adversarial high #1, 2026-05-10).

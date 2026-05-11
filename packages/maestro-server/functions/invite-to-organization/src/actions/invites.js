@@ -24,7 +24,8 @@ const permissions = require('../permissions.js');
 //   - sendOneInviteEmail: auto-send a sikeres createInvite után (best-effort)
 //   - checkRateLimit: brute-force védelem az acceptInvite-on (IP-rate-limit)
 const { sendOneInviteEmail, RESEND_COOLDOWN_MS } = require('./sendEmail.js');
-const { checkRateLimit, evaluateRateLimit, consumeRateLimit } = require('../helpers/rateLimit.js');
+const { checkRateLimit, evaluateAndConsume } = require('../helpers/rateLimit.js');
+const { inviteSendScopes } = require('../helpers/inviteRateLimits.js');
 
 const MAX_BATCH_INVITES = 20;
 const MAX_CUSTOM_MESSAGE_LENGTH = 500;
@@ -561,37 +562,6 @@ async function _autoSendInviteEmail(ctx, inviteDoc, organizationName, inviterNam
 }
 
 /**
- * S.2.2/S.2.6 (2026-05-11) — invite-send rate-limit helper. Multi-scope:
- *   - `invite_send_ip` (per-IP, 15min/30, 1h block) — anon-spam védelem
- *   - `invite_send_user` (per-caller, 24h/50, 1h block) — admin abuse cap
- *   - `invite_send_org_day` (per-org, 24h/200 email, 1h block) — Resend cost-cap
- *
- * Codex M1: dry-run all → consume after all-pass (lockout-amplifikáció elkerülése).
- * Codex Q1 verdict: weight=1 IP/user-scope (CF-call freq), weight=emailCount org-day (Resend cost).
- *
- * @param {object} ctx CF context
- * @param {string} callerId Appwrite user ID
- * @param {string} organizationId target org
- * @param {number} emailCount érvényes (validated) email count (1 single, N batch)
- * @returns {Promise<{scope: string, retryAfter: string}|null>} 429 payload ha blocked, null ha pass
- */
-async function _checkInviteRateLimits(ctx, callerId, organizationId, emailCount) {
-    const ipEval = await evaluateRateLimit(ctx, 'invite_send_ip');
-    if (ipEval.blocked) return { scope: 'ip', retryAfter: ipEval.retryAfter };
-    const userEval = await evaluateRateLimit(ctx, 'invite_send_user', { subject: callerId });
-    if (userEval.blocked) return { scope: 'user', retryAfter: userEval.retryAfter };
-    const orgEval = await evaluateRateLimit(ctx, 'invite_send_org_day', { subject: organizationId, weight: emailCount });
-    if (orgEval.blocked) return { scope: 'org', retryAfter: orgEval.retryAfter };
-    return null;
-}
-
-async function _consumeInviteRateLimits(ctx, callerId, organizationId, emailCount) {
-    await consumeRateLimit(ctx, 'invite_send_ip');
-    await consumeRateLimit(ctx, 'invite_send_user', { subject: callerId });
-    await consumeRateLimit(ctx, 'invite_send_org_day', { subject: organizationId, weight: emailCount });
-}
-
-/**
  * ACTION='create' — admin meghívó küldés (single, ADR 0010 W2/W3).
  *
  * Bővítések 2026-05-08 ADR 0010-hez:
@@ -652,12 +622,12 @@ async function createInvite(ctx) {
         });
     }
 
-    // S.2.2/S.2.6 — multi-scope rate-limit. Codex M1: dry-run all → consume after
+    // S.2.2/S.2.6 — multi-scope rate-limit. Codex M1: evaluate all → consume after
     // all-pass (lockout-amplifikáció elkerülése). Codex M2: permission/validation
     // UTÁN, expensive work (createCore + email-send) ELŐTT.
-    const limited = await _checkInviteRateLimits(ctx, callerId, organizationId, 1);
-    if (limited) return fail(res, 429, 'rate_limited', limited);
-    await _consumeInviteRateLimits(ctx, callerId, organizationId, 1);
+    // S.2.7 harden HIGH-2: storage-down → 503 fail-closed (NEM email-küldés).
+    const rateLimited = await evaluateAndConsume(ctx, inviteSendScopes(callerId, organizationId, 1));
+    if (rateLimited) return fail(res, rateLimited.code, rateLimited.reason, rateLimited.payload);
 
     // Core create
     const result = await _createInviteCore(ctx, {
@@ -789,15 +759,21 @@ async function createBatchInvites(ctx) {
         normalizedEmails.push(normalized);
     }
 
-    // Email-regex pre-filter (rate-limit weight = valid email count — Codex M2:
-    // malformed email NE égesse az org-day quota-t).
-    const validEmailCount = normalizedEmails.filter(e => EMAIL_REGEX.test(e)).length;
-    if (validEmailCount === 0) {
+    // Email-regex single-pass split (simplify Efficiency F7) — valid/invalid külön
+    // gyűjtés, a Promise.all CSAK validEmails-en fut (NEM kell redundáns regex-test).
+    // Rate-limit weight = validEmails.length (Codex M2: malformed email NE égesse
+    // az org-day quota-t).
+    const validEmails = [];
+    const earlyResults = [];
+    for (const email of normalizedEmails) {
+        if (EMAIL_REGEX.test(email)) validEmails.push(email);
+        else earlyResults.push({ email, status: 'error', reason: 'invalid_email' });
+    }
+    if (validEmails.length === 0) {
         return fail(res, 400, 'no_valid_emails', { total: normalizedEmails.length });
     }
-    const limited = await _checkInviteRateLimits(ctx, callerId, organizationId, validEmailCount);
-    if (limited) return fail(res, 429, 'rate_limited', limited);
-    await _consumeInviteRateLimits(ctx, callerId, organizationId, validEmailCount);
+    const rateLimited = await evaluateAndConsume(ctx, inviteSendScopes(callerId, organizationId, validEmails.length));
+    if (rateLimited) return fail(res, rateLimited.code, rateLimited.reason, rateLimited.payload);
 
     // Org + inviter cache (egy fetch per batch — lookup költség minimalizálás).
     // Rate-limit UTÁN: a 429 ág NEM fizet érte.
@@ -823,15 +799,14 @@ async function createBatchInvites(ctx) {
         }
     }
 
-    // 10-es Promise.all batchekben
+    // 10-es Promise.all batchekben — CSAK validEmails-en (invalid eredmények
+    // earlyResults-ben). Simplify Efficiency F7: NEM kell redundáns EMAIL_REGEX
+    // teszt a per-email Promise-on belül.
     const BATCH_SIZE = 10;
-    const results = [];
-    for (let i = 0; i < normalizedEmails.length; i += BATCH_SIZE) {
-        const slice = normalizedEmails.slice(i, i + BATCH_SIZE);
+    const results = [...earlyResults];
+    for (let i = 0; i < validEmails.length; i += BATCH_SIZE) {
+        const slice = validEmails.slice(i, i + BATCH_SIZE);
         const sliceResults = await Promise.all(slice.map(async (email) => {
-            if (!EMAIL_REGEX.test(email)) {
-                return { email, status: 'error', reason: 'invalid_email' };
-            }
             try {
                 const result = await _createInviteCore(ctx, {
                     organizationId, email, role, expiryDays, customMessage

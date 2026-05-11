@@ -106,13 +106,26 @@ function redactUrl(rawUrl) {
 // --- WS upgrade rate-limit (memory-store, multi-instance limitations dokumentálva) ---
 const WS_UPGRADE_WINDOW_MS = 60 * 1000;  // 1 perc ablak
 const WS_UPGRADE_MAX = 60;               // 60 upgrade / perc / IP
-const wsUpgradeRateLimit = new Map();    // ip → {count, windowStart}
+// S.2.7 harden LOW-1 (2026-05-11): hard cap a Map méretére. Spoofolt XFF + sok
+// különböző IP-vel támadó a periodikus takarítás (60s) közötti ablakban nagyra
+// növeszthette volna a Map-et. LRU-szerű evikció: a legrégebbi windowStart-ú
+// entry megy ki, ha a cap-et elérnénk.
+const WS_UPGRADE_MAX_KEYS = 10_000;      // 10k IP/perc — bőven elég a legitim forgalomhoz
+const wsUpgradeRateLimit = new Map();    // ip → {count, windowStart} (insertion-order = LRU)
 
 /** Egy IP-re per-perc 60 WS upgrade. True ha engedett, false ha limit elérve. */
 function checkWsUpgradeRateLimit(ip) {
     const now = Date.now();
     const entry = wsUpgradeRateLimit.get(ip);
     if (!entry || now - entry.windowStart >= WS_UPGRADE_WINDOW_MS) {
+        // Hard cap: ha a Map tele van, evictáljuk a legrégebbi entry-t (insertion-order).
+        // A `Map` insertion-order-ben iterál, a `windowStart` rendezés helyett egyszerűen
+        // a legelső kulcsot dobjuk — eshetőleg fals-pozitív evikció, de a takarítás
+        // 60s-onként amúgy is fut.
+        if (!entry && wsUpgradeRateLimit.size >= WS_UPGRADE_MAX_KEYS) {
+            const oldestKey = wsUpgradeRateLimit.keys().next().value;
+            if (oldestKey !== undefined) wsUpgradeRateLimit.delete(oldestKey);
+        }
         wsUpgradeRateLimit.set(ip, { count: 1, windowStart: now });
         return true;
     }

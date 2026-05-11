@@ -19,6 +19,11 @@ const fs = require('fs');
 const path = require('path');
 const { Resend } = require('resend');
 const permissions = require('../permissions.js');
+// S.2.7 harden MED-1 (2026-05-11) — a manuális resend ugyanazt a 3-scope rate-limitet
+// kapja mint a `createInvite` flow. A `evaluateAndConsume` generic helper + `inviteSendScopes`
+// scope-builder a `helpers/`-ben.
+const { evaluateAndConsume } = require('../helpers/rateLimit.js');
+const { inviteSendScopes } = require('../helpers/inviteRateLimits.js');
 
 // MAJOR 6 (Codex review 2026-05-08) — backend cooldown a manuális resend
 // gombra. 60 másodpercen belül ugyanarra az invite-ra nem küldünk újra.
@@ -305,6 +310,12 @@ async function sendInviteEmail(ctx) {
             return fail(res, 429, 'resend_cooldown', { retryAfterSec: retryInSec });
         }
     }
+
+    // S.2.7 harden MED-1 (2026-05-11) — multi-scope rate-limit (IP/user/org-day),
+    // ugyanaz mint a createInvite flow. weight=1 egyetlen email. A 60s per-invite
+    // cooldown felett még egy globális gátként szolgál a manuális resend abuse ellen.
+    const rateLimited = await evaluateAndConsume(ctx, inviteSendScopes(callerId, invite.organizationId, 1));
+    if (rateLimited) return fail(res, rateLimited.code, rateLimited.reason, rateLimited.payload);
 
     // Org + inviter denormalizációhoz — ezeket a CF saját maga szedi össze.
     let organizationName = 'a szervezeted';

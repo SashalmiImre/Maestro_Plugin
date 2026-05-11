@@ -135,24 +135,21 @@ function getConfig(endpoint) {
  * @returns {Promise<string|null>} blockedUntil ISO timestamp ha blocked, null ha nem
  */
 async function isSubjectBlocked(ctx, subject, endpoint) {
+    // S.2.7 harden HIGH-2 fix: a try/catch eltávolítva — a hívó (`evaluateRateLimit`
+    // / `consumeRateLimit`) MAGA dönt fail-open vs fail-closed irányban.
     const { databases, env, sdk } = ctx;
-    try {
-        const result = await databases.listDocuments(
-            env.databaseId,
-            env.ipRateLimitBlocksCollectionId,
-            [
-                sdk.Query.equal('ip', subject),
-                sdk.Query.equal('endpoint', endpoint),
-                sdk.Query.greaterThan('blockedUntil', new Date().toISOString()),
-                sdk.Query.limit(1)
-            ]
-        );
-        if (result.documents.length === 0) return null;
-        return result.documents[0].blockedUntil;
-    } catch (err) {
-        ctx.log(`[RateLimit] isSubjectBlocked error (non-blocking): ${err.message}`);
-        return null;
-    }
+    const result = await databases.listDocuments(
+        env.databaseId,
+        env.ipRateLimitBlocksCollectionId,
+        [
+            sdk.Query.equal('ip', subject),
+            sdk.Query.equal('endpoint', endpoint),
+            sdk.Query.greaterThan('blockedUntil', new Date().toISOString()),
+            sdk.Query.limit(1)
+        ]
+    );
+    if (result.documents.length === 0) return null;
+    return result.documents[0].blockedUntil;
 }
 
 /**
@@ -164,35 +161,31 @@ async function isSubjectBlocked(ctx, subject, endpoint) {
  * @returns {Promise<number>} az aktuális counter érték (best-effort, hiba esetén 0)
  */
 async function readCounter(ctx, subject, endpoint, windowStart) {
-    const { databases, env, sdk, log } = ctx;
+    // S.2.7 harden HIGH-2 fix: try/catch eltávolítva (lásd `isSubjectBlocked`).
+    const { databases, env, sdk } = ctx;
     const COUNTER_PAGE_LIMIT = 100;
     let total = 0;
     let cursor;
-    try {
-        while (true) {
-            const queries = [
-                sdk.Query.equal('ip', subject),
-                sdk.Query.equal('endpoint', endpoint),
-                sdk.Query.equal('windowStart', windowStart),
-                sdk.Query.limit(COUNTER_PAGE_LIMIT)
-            ];
-            if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
-            const result = await databases.listDocuments(
-                env.databaseId,
-                env.ipRateLimitCountersCollectionId,
-                queries
-            );
-            for (const doc of result.documents) {
-                total += (typeof doc.count === 'number' && doc.count > 0) ? doc.count : 1;
-            }
-            if (result.documents.length < COUNTER_PAGE_LIMIT) break;
-            cursor = result.documents[result.documents.length - 1].$id;
+    while (true) {
+        const queries = [
+            sdk.Query.equal('ip', subject),
+            sdk.Query.equal('endpoint', endpoint),
+            sdk.Query.equal('windowStart', windowStart),
+            sdk.Query.limit(COUNTER_PAGE_LIMIT)
+        ];
+        if (cursor) queries.push(sdk.Query.cursorAfter(cursor));
+        const result = await databases.listDocuments(
+            env.databaseId,
+            env.ipRateLimitCountersCollectionId,
+            queries
+        );
+        for (const doc of result.documents) {
+            total += (typeof doc.count === 'number' && doc.count > 0) ? doc.count : 1;
         }
-        return total;
-    } catch (err) {
-        log(`[RateLimit] readCounter error: ${err.message}`);
-        return 0;
+        if (result.documents.length < COUNTER_PAGE_LIMIT) break;
+        cursor = result.documents[result.documents.length - 1].$id;
     }
+    return total;
 }
 
 /**
@@ -200,17 +193,14 @@ async function readCounter(ctx, subject, endpoint, windowStart) {
  * ír. A `weight` mezővel összegezhető batch invite-eknél (Resend cost-cap).
  */
 async function appendCounter(ctx, subject, endpoint, windowStart, weight) {
-    const { databases, env, sdk, log } = ctx;
-    try {
-        await databases.createDocument(
-            env.databaseId,
-            env.ipRateLimitCountersCollectionId,
-            sdk.ID.unique(),
-            { ip: subject, endpoint, windowStart, count: weight }
-        );
-    } catch (err) {
-        log(`[RateLimit] appendCounter error: ${err.message}`);
-    }
+    // S.2.7 harden HIGH-2 fix: try/catch eltávolítva — fail-closed propagálás.
+    const { databases, env, sdk } = ctx;
+    await databases.createDocument(
+        env.databaseId,
+        env.ipRateLimitCountersCollectionId,
+        sdk.ID.unique(),
+        { ip: subject, endpoint, windowStart, count: weight }
+    );
 }
 
 /**
@@ -239,11 +229,16 @@ function blockDocId(subject, endpoint) {
  * `createBlock` ugyanarra a subject/endpoint párra: első CREATE win, második
  * `document_already_exists` → `updateDocument` fallback).
  *
- * @returns {Promise<string|null>} `blockedUntil` ISO ha persisted, `null` ha minden
- *   írás bukott (a hívó tudja, hogy NEM perzisztens a block).
+ * S.2.7 harden HIGH-2 fix: az **egyéb** (NEM-`document_already_exists`) write-hiba
+ * THROW-olódik — az `evaluateRateLimit` / `consumeRateLimit` top-level try/catch-e
+ * `storageDown: true`-val kezeli. A `document_already_exists` ágon a `updateDocument`
+ * is NEM-try/catch-elt — ha az is bukik, propagálódik storage-down jelzésként.
+ *
+ * @returns {Promise<string>} `blockedUntil` ISO timestamp (sikeres persisted)
+ * @throws Storage error esetén — a hívó kezeli.
  */
 async function createBlock(ctx, subject, endpoint, blockMs) {
-    const { databases, env, log, error } = ctx;
+    const { databases, env, log } = ctx;
     const blockedAt = new Date().toISOString();
     const blockedUntil = new Date(Date.now() + blockMs).toISOString();
     const docId = blockDocId(subject, endpoint);
@@ -259,22 +254,17 @@ async function createBlock(ctx, subject, endpoint, blockMs) {
         return blockedUntil;
     } catch (err) {
         if (err?.type === 'document_already_exists' || /unique|duplicate/i.test(err?.message || '')) {
-            try {
-                await databases.updateDocument(
-                    env.databaseId,
-                    env.ipRateLimitBlocksCollectionId,
-                    docId,
-                    { blockedAt, blockedUntil }
-                );
-                log(`[RateLimit] subject=${hashSubject(subject)} block hosszabbítva (${endpoint})`);
-                return blockedUntil;
-            } catch (innerErr) {
-                error?.(`[RateLimit] block update fallback failed: ${innerErr.message}`);
-                return null;
-            }
+            // Idempotens upsert — updateDocument-tel hosszabbítjuk. Egyéb hiba propagálódik.
+            await databases.updateDocument(
+                env.databaseId,
+                env.ipRateLimitBlocksCollectionId,
+                docId,
+                { blockedAt, blockedUntil }
+            );
+            log(`[RateLimit] subject=${hashSubject(subject)} block hosszabbítva (${endpoint})`);
+            return blockedUntil;
         }
-        error?.(`[RateLimit] block create failed (non-persistent): ${err.message}`);
-        return null;
+        throw err;
     }
 }
 
@@ -298,10 +288,15 @@ function resolveSubject(ctx, options) {
  * szekvenciális overflow soha nem hozna létre block-doc-ot). Idempotens block
  * (composite docId, updateDocument fallback) — race-safe két paralel hívóra.
  *
+ * **Storage failure mode** (S.2.7 harden HIGH-2 fix, 2026-05-11): Appwrite
+ * outage / hiányzó env / collection-permission hiba esetén `storageDown: true`
+ * jön vissza. A hívó dönt: cost-érzékeny scope-okon 503 `rate_limit_storage_unavailable`
+ * (fail-closed), `accept_invite`-on legacy fail-open (NEM cost-cap).
+ *
  * @param {object} ctx CF context
  * @param {string} endpoint RATE_LIMIT_CONFIG key
  * @param {object} [options] { subject?: string, weight?: number }
- * @returns {Promise<{ blocked: boolean, retryAfter: string|null }>}
+ * @returns {Promise<{ blocked: boolean, retryAfter: string|null, storageDown: boolean }>}
  */
 async function evaluateRateLimit(ctx, endpoint, options = {}) {
     const config = getConfig(endpoint);
@@ -310,64 +305,70 @@ async function evaluateRateLimit(ctx, endpoint, options = {}) {
 
     if (!subject) {
         // Best-effort: XFF nélkül (és explicit subject nélkül) átengedjük.
-        return { blocked: false, retryAfter: null };
+        return { blocked: false, retryAfter: null, storageDown: false };
     }
 
-    // 1) Active block?
-    const blockedUntil = await isSubjectBlocked(ctx, subject, endpoint);
-    if (blockedUntil) {
-        return { blocked: true, retryAfter: blockedUntil };
-    }
+    try {
+        // 1) Active block?
+        const blockedUntil = await isSubjectBlocked(ctx, subject, endpoint);
+        if (blockedUntil) {
+            return { blocked: true, retryAfter: blockedUntil, storageDown: false };
+        }
 
-    // 2) Would-exceed check — a consume utáni állapot átlépné a max-ot. Codex
-    //    stop-time MAJOR 1: a dry-run blokkol, a hívó 429-cel kilép, a consume
-    //    NEM fut, ezért a block-doc soha NEM persistálódik normál crossing-on.
-    //    Fix: a would-exceed ágon ITT (a dry-run-ban) MEGEMELJÜK a blockot
-    //    perzisztensen, így a következő attempt is `isSubjectBlocked` → blocked
-    //    ágra esik. Multi-scope flow konzisztens: az első would-exceed scope-on
-    //    blockoljuk, a többi scope-on NINCS consume (lockout-amplifikáció kerül).
-    //
-    //    Race: két paralel hívó dry-run-on egyszerre would-exceed → mindkettő
-    //    createBlock hívás → idempotens (composite docId, updateDocument fallback).
-    const windowStart = alignedWindowStart(config.windowMs);
-    const current = await readCounter(ctx, subject, endpoint, windowStart);
-    if (current + weight > config.max) {
-        const persistedUntil = await createBlock(ctx, subject, endpoint, config.blockMs);
-        // Ha createBlock NEM perzisztens (write-bukott), a futás vissza-pontján
-        // adunk egy fallback ISO timestamp-et — a hívó akkor is megkapja a 429-et,
-        // és a következő attempt re-evaluálja a counter-overflow-t.
-        const retryAfter = persistedUntil || new Date(Date.now() + config.blockMs).toISOString();
-        return { blocked: true, retryAfter };
-    }
+        // 2) Would-exceed check (Codex stop-time MAJOR 1 fix — perzisztens block ITT).
+        //    Multi-scope flow konzisztens: az első would-exceed scope-on blokkoljuk,
+        //    a többi scope-on NINCS consume (lockout-amplifikáció kerül).
+        //    Race: két paralel hívó dry-run-on egyszerre would-exceed → mindkettő
+        //    createBlock hívás → idempotens (composite docId, updateDocument fallback).
+        const windowStart = alignedWindowStart(config.windowMs);
+        const current = await readCounter(ctx, subject, endpoint, windowStart);
+        if (current + weight > config.max) {
+            // `createBlock` storage-error esetén throw-ol — az outer catch storageDown
+            // ágra esik. Sikeres esetben mindig ISO timestamp jön vissza.
+            const blockedUntil = await createBlock(ctx, subject, endpoint, config.blockMs);
+            return { blocked: true, retryAfter: blockedUntil, storageDown: false };
+        }
 
-    return { blocked: false, retryAfter: null };
+        return { blocked: false, retryAfter: null, storageDown: false };
+    } catch (err) {
+        ctx.error?.(`[RateLimit] storage failure on evaluate ${endpoint} subj=${hashSubject(subject)}: ${err.message}`);
+        return { blocked: false, retryAfter: null, storageDown: true };
+    }
 }
 
 /**
  * CONSUME: counter +weight, és ha az új érték >max → block-doc létrejön.
  * NEM ellenőrzi a meglévő block-ot — a hívó dryRun-on már átment.
  *
- * @returns {Promise<string|null>} blockedUntil ISO ha újonnan blocked, else null
+ * Storage failure mode: lásd `evaluateRateLimit`.
+ *
+ * @returns {Promise<{ retryAfter: string|null, storageDown: boolean }>}
  */
 async function consumeRateLimit(ctx, endpoint, options = {}) {
     const config = getConfig(endpoint);
     const subject = resolveSubject(ctx, options);
     const weight = Math.max(1, options.weight || 1);
 
-    if (!subject) return null;
+    if (!subject) return { retryAfter: null, storageDown: false };
 
-    const windowStart = alignedWindowStart(config.windowMs);
-    await appendCounter(ctx, subject, endpoint, windowStart, weight);
+    try {
+        const windowStart = alignedWindowStart(config.windowMs);
+        await appendCounter(ctx, subject, endpoint, windowStart, weight);
 
-    const newTotal = await readCounter(ctx, subject, endpoint, windowStart);
-    if (newTotal > config.max) {
-        return await createBlock(ctx, subject, endpoint, config.blockMs);
+        const newTotal = await readCounter(ctx, subject, endpoint, windowStart);
+        if (newTotal > config.max) {
+            const blockedUntil = await createBlock(ctx, subject, endpoint, config.blockMs);
+            return { retryAfter: blockedUntil, storageDown: false };
+        }
+        return { retryAfter: null, storageDown: false };
+    } catch (err) {
+        ctx.error?.(`[RateLimit] storage failure on consume ${endpoint} subj=${hashSubject(subject)}: ${err.message}`);
+        return { retryAfter: null, storageDown: true };
     }
-    return null;
 }
 
 /**
- * Backward-compat shim: dryRun + consume egyetlen hívásban.
+ * Backward-compat shim: evaluate + consume egyetlen hívásban.
  *
  * Használat (legacy, S.2.1):
  *   const limited = await checkRateLimit(ctx, 'accept_invite');
@@ -376,18 +377,66 @@ async function consumeRateLimit(ctx, endpoint, options = {}) {
  * Új multi-scope flow esetén HASZNÁLD a `evaluateRateLimit` + `consumeRateLimit`
  * párost (lockout-amplifikáció elkerülése — Codex M1).
  *
- * @returns {Promise<string|null>} blockedUntil ISO ha rate-limited, null ha OK
+ * **S.2.7 harden HIGH-2 figyelmeztetés**: a shim a `storageDown` ágat fail-open-nel
+ * kezeli (NEM blocked, mert ez a legacy `accept_invite` viselkedés — token bruteforce
+ * mat. kizárt). **Cost-érzékeny új scope** (`invite_send_*`, `delete_my_account`)
+ * NE használja ezt a shim-et — közvetlenül `evaluateRateLimit` + `consumeRateLimit`
+ * párost a `storageDown` flag explicit kezelésével.
+ *
+ * @returns {Promise<string|null>} blockedUntil ISO ha rate-limited, null ha OK / storage-down
  */
 async function checkRateLimit(ctx, endpoint, options = {}) {
     const evaluation = await evaluateRateLimit(ctx, endpoint, options);
     if (evaluation.blocked) return evaluation.retryAfter;
-    return await consumeRateLimit(ctx, endpoint, options);
+    if (evaluation.storageDown) return null; // legacy fail-open accept_invite-on
+    const consumed = await consumeRateLimit(ctx, endpoint, options);
+    return consumed.retryAfter;
+}
+
+/**
+ * Multi-scope evaluate-then-consume helper. Egyetlen helyen kezel:
+ *   - sequential evaluate (short-circuit + first-fail attribution load-bearing —
+ *     a hívó a scope-tag-ből tudja melyik scope blokkolt vagy melyik storage döglött)
+ *   - parallel consume (storageDown attribution preserved by stable scope-order)
+ *   - storageDown vs blocked vs OK ágak egységes 503/429/null mapping
+ *
+ * Codex M1 invariáns megőrizve: evaluate ALL → consume ALL ha mind clean
+ * (lockout-amplifikáció kerül).
+ *
+ * @param {object} ctx CF context
+ * @param {Array<{ endpoint: string, options?: object, tag: string }>} scopes
+ * @returns {Promise<{ code: number, reason: string, payload: object }|null>}
+ *   null = mind pass, hívó folytat. Egyébként a hívó: `return fail(res, ret.code, ret.reason, ret.payload)`.
+ */
+async function evaluateAndConsume(ctx, scopes) {
+    // 1) Sequential evaluate — short-circuit az első blocking/storage-down scope-on.
+    for (const s of scopes) {
+        const ev = await evaluateRateLimit(ctx, s.endpoint, s.options || {});
+        if (ev.storageDown) {
+            return { code: 503, reason: 'rate_limit_storage_unavailable', payload: { scope: s.tag } };
+        }
+        if (ev.blocked) {
+            return { code: 429, reason: 'rate_limited', payload: { scope: s.tag, retryAfter: ev.retryAfter } };
+        }
+    }
+    // 2) Parallel consume — minden scope-ot mindenképp bumpolunk (storageDown
+    //    továbbra is propagálva 503-mal, stabil scope-order alapján).
+    const consumed = await Promise.all(
+        scopes.map(s => consumeRateLimit(ctx, s.endpoint, s.options || {}))
+    );
+    for (let i = 0; i < consumed.length; i++) {
+        if (consumed[i].storageDown) {
+            return { code: 503, reason: 'rate_limit_storage_unavailable', payload: { scope: scopes[i].tag } };
+        }
+    }
+    return null;
 }
 
 module.exports = {
     checkRateLimit,
     evaluateRateLimit,
     consumeRateLimit,
+    evaluateAndConsume,
     extractClientIp,
     hashSubject,
     RATE_LIMIT_CONFIG

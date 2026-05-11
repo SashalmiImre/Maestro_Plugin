@@ -100,6 +100,39 @@ A pre-review az alábbi 10 design-Q-ra felelt, az alábbi főbb verdiktekkel:
 | MINOR | XFF first-hop trust feltétel külön igazolás | Acknowledged: Appwrite CF trusted-XFF (platform-set, kliens NEM override-olható). Phase 2: `accept_invite`-ra opcionális token/email subject scope. |
 | NIT | `schemas.js:1591-99` + `rateLimit.js:35-46` schema kommentek elavult counter ID minta | Frissítve: counter `sdk.ID.unique()` append-only, block `rlb_${sha256(...)}` determinisztikus. |
 
+## Codex adversarial + simplify + verifying (harden Phase 4+5, 2026-05-11)
+
+A user kérésére a teljes worktree-re (`zealous-euler-00c483` 3 commit) lefuttatott `/harden` pipeline: adversarial review (NEM baseline — exploit-keresés perspektívával) + simplify pass + verifying CLEAN.
+
+### Adversarial findings (3 HIGH + 3 MEDIUM + 1 LOW + 8 CLEAN)
+
+| Severity | Finding | Kategória + akció |
+|---|---|---|
+| **HIGH-1** | `invite_send_org_day` paralel batch overshoot (10 paralel batch × 20 email = 200 email-en túllőhet a 200-as 24h cap-en) | **DESIGN QUESTION** — user dönt: best-effort accepted vs atomikus slot-foglalás (Appwrite-kompatibilis retry-loop slot-lock-okon). Pre-review M5 már acknowledge-elte, adversarial szigorúbb értelmezést követel. **Nem javítva** (Phase 2 follow-up). |
+| **HIGH-2** | Rate-limit storage fail-open (Appwrite outage / hiányzó env / collection-permission hiba → minden rate-limit OFF, Resend cost-cap kikerülhető) | **MUST FIX** — `evaluateRateLimit` + `consumeRateLimit` top-level try/catch + `storageDown: true` retval. Cost-érzékeny scope-okon (`invite_send_*`, `delete_my_account`) 503 `rate_limit_storage_unavailable` fail-closed. `accept_invite` legacy `checkRateLimit` shim fail-open marad (token bruteforce mat. kizárt). |
+| **HIGH-3** | `bootstrapRateLimitSchema` NEM hoz létre index-eket → productionban a counter/block query-k full-scan-re, doc-szám növekedésével CF timeout / DoS-vektor | **MUST FIX** — `createIndex` hívások: `subject_endpoint_window` (counters, `['ip', 'endpoint', 'windowStart']`) + `subject_endpoint_until` (blocks, `['ip', 'endpoint', 'blockedUntil']`). Type=`key` (composite szűrő). `indexesPending` aszinkron Appwrite attr-processing-re. |
+| MED-1 | `sendInviteEmail` (manuális resend) NEM használ rate-limit-et — csak per-invite 60s `lastSentAt` cooldown, abuse-vektor sok pending invite + script | **SHOULD FIX** — multi-scope rate-limit hookoltunk a `sendInviteEmail` action-be (60s cooldown felett, weight=1). Két throttle ortogonális (per-recipient mailbox-flood vs per-actor cost-cap). |
+| MED-2 | `TRUST_PROXY=1` Cloudflare+Railway esetén törékeny | **NOISE** — már doc-olt a [[ProxyHardening]] TODO szekciójában. Élesedés előtti env-config-kérdés. |
+| MED-3 | `accept_invite` IP-only scope rotáló proxy farm DoS | **NOISE** — sikeres token-guess matematikailag kizárt (256-bit), CF futás cost throttle Appwrite-szintű opció. Phase 2 follow-up token/email scope-pal. |
+| **LOW-1** | `wsUpgradeRateLimit` Map nincs hard cap (memory growth spoofed-XFF-fel) | **SHOULD FIX** — `WS_UPGRADE_MAX_KEYS=10_000`, LRU eviction `Map.keys().next().value` insertion-order alapján. Periodikus 60s cleanup mellett. |
+| 8× CLEAN | WS gate / pathMatchesAny / cookie regex / redactUrl / denyUpgrade / createBlock race / tenant-isolation / hashSubject collision / delete-retry self-heal | — |
+
+### Simplify pass (Reuse F2 + Efficiency F2 + F7)
+
+- **Reuse F2 — generic `evaluateAndConsume(ctx, scopes)`** a `rateLimit.js`-ben. Mind a 4 hívóhely (createInvite + createBatchInvites + sendInviteEmail + deleteMyAccount) egységesen ezen át megy. 5-soros `if-storageDown / if-blocked / consume / if-storageDown` minta → 2-soros `if (rl) return fail(...)`. **Kombinálva Efficiency F2-vel**: a consume-fázis `Promise.all`-os (~100ms hot-path saving createInvite-en). Sequential evaluate megmarad (short-circuit + first-fail scope-tag attribution load-bearing). Codex M1 invariáns megőrizve (evaluate ALL → consume ALL ha mind clean).
+- **`inviteRateLimits.js` lerövidül** egyetlen `inviteSendScopes(callerId, organizationId, emailCount)` factory-ra (a 3-scope endpoint-konfig DRY).
+- **Efficiency F7 — `createBatchInvites` single-pass email-filter**: dedup → `for`-loop valid/invalid split (`validEmails` + `earlyResults`). Promise.all CSAK `validEmails`-en (NEM duplikált EMAIL_REGEX teszt a per-email Promise-on belül). Invalid email-ek azonnal `{ status: 'error', reason: 'invalid_email' }`-vel kerülnek a `results` listába.
+
+### Verifying review
+
+Első kör: 1 új NIT — árva `_checkInviteRateLimits` docblock a törölt helper helyén. Második kör (törlés után): **CLEAN**, 0 új BLOCKER / MAJOR / MINOR / NIT. Verify pontok:
+- HIGH-2 fail-closed mind a 4 cost-érzékeny hívóhelyen ✓
+- HIGH-3 indexek lefedik a counter + block query-mintákat ✓
+- HIGH-1 továbbra is DESIGN-Q (NEM regresszió, ismert) ✓
+- MED-1 ortogonális 60s + multi-scope ✓
+- LOW-1 bounded memory 10k + LRU ✓
+- Simplify F2/F7 Codex M1 invariáns megmaradt ✓
+
 ## Codex verifying review (`task-mp2*`) — második fix
 
 Első verifying review: **Fix 2 ❌ "nem javítva"** — a Codex a `checkRateLimitDry` névből szigorúbb "no-writes" semantikát várt, a would-exceed perzisztens block side-effect-nek jelölve.
