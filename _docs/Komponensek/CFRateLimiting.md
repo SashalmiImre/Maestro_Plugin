@@ -108,7 +108,7 @@ A user kérésére a teljes worktree-re (`zealous-euler-00c483` 3 commit) lefutt
 
 | Severity | Finding | Kategória + akció |
 |---|---|---|
-| **HIGH-1** | `invite_send_org_day` paralel batch overshoot (10 paralel batch × 20 email = 200 email-en túllőhet a 200-as 24h cap-en) | **DESIGN QUESTION** — user dönt: best-effort accepted vs atomikus slot-foglalás (Appwrite-kompatibilis retry-loop slot-lock-okon). Pre-review M5 már acknowledge-elte, adversarial szigorúbb értelmezést követel. **Nem javítva** (Phase 2 follow-up). |
+| **HIGH-1** | `invite_send_org_day` paralel batch overshoot (10 paralel batch × 20 email = 200 email-en túllőhet a 200-as 24h cap-en) | **Mitigated 2026-05-11** — DESIGN-Q user-döntés A: best-effort soft-throttle + Resend account-szintű hard-cap + S.13 monitoring alert (`org-day counter > 250`). Lásd a `## Accepted Risks` szekciót lent. B opció (atomikus slot-foglalás) vázlat is ott, re-evaluation trigger-rel. |
 | **HIGH-2** | Rate-limit storage fail-open (Appwrite outage / hiányzó env / collection-permission hiba → minden rate-limit OFF, Resend cost-cap kikerülhető) | **MUST FIX** — `evaluateRateLimit` + `consumeRateLimit` top-level try/catch + `storageDown: true` retval. Cost-érzékeny scope-okon (`invite_send_*`, `delete_my_account`) 503 `rate_limit_storage_unavailable` fail-closed. `accept_invite` legacy `checkRateLimit` shim fail-open marad (token bruteforce mat. kizárt). |
 | **HIGH-3** | `bootstrapRateLimitSchema` NEM hoz létre index-eket → productionban a counter/block query-k full-scan-re, doc-szám növekedésével CF timeout / DoS-vektor | **MUST FIX** — `createIndex` hívások: `subject_endpoint_window` (counters, `['ip', 'endpoint', 'windowStart']`) + `subject_endpoint_until` (blocks, `['ip', 'endpoint', 'blockedUntil']`). Type=`key` (composite szűrő). `indexesPending` aszinkron Appwrite attr-processing-re. |
 | MED-1 | `sendInviteEmail` (manuális resend) NEM használ rate-limit-et — csak per-invite 60s `lastSentAt` cooldown, abuse-vektor sok pending invite + script | **SHOULD FIX** — multi-scope rate-limit hookoltunk a `sendInviteEmail` action-be (60s cooldown felett, weight=1). Két throttle ortogonális (per-recipient mailbox-flood vs per-actor cost-cap). |
@@ -128,7 +128,7 @@ A user kérésére a teljes worktree-re (`zealous-euler-00c483` 3 commit) lefutt
 Első kör: 1 új NIT — árva `_checkInviteRateLimits` docblock a törölt helper helyén. Második kör (törlés után): **CLEAN**, 0 új BLOCKER / MAJOR / MINOR / NIT. Verify pontok:
 - HIGH-2 fail-closed mind a 4 cost-érzékeny hívóhelyen ✓
 - HIGH-3 indexek lefedik a counter + block query-mintákat ✓
-- HIGH-1 továbbra is DESIGN-Q (NEM regresszió, ismert) ✓
+- HIGH-1 továbbra is DESIGN-Q a verify-időpontban (NEM regresszió, ismert) ✓ — döntés azóta: Mitigated 2026-05-11, lásd `## Accepted Risks`
 - MED-1 ortogonális 60s + multi-scope ✓
 - LOW-1 bounded memory 10k + LRU ✓
 - Simplify F2/F7 Codex M1 invariáns megmaradt ✓
@@ -143,10 +143,38 @@ Első verifying review: **Fix 2 ❌ "nem javítva"** — a Codex a `checkRateLim
 
 Második verifying review: **CLEAN** (`grep checkRateLimitDry` 0 match, exports/imports konzisztens, docstring explicit a write-szándékot illetően).
 
+## Accepted Risks
+
+### R.S.2.15 — `invite_send_org_day` paralel batch overshoot (Mitigated 2026-05-11)
+
+**Kockázat:** Az `evaluateRateLimit` → `consume` szekvencia NEM atomikus Appwrite-on. Ha 10+ paralel `createBatchInvites` hívás fut ugyanazon orgra ugyanazon CF-másodpercben, mindegyik `current=0`-t lát az evaluate-ben, mind átengedi, és a consume-fázis +20 +20 +20… email-kreditet ír → worst-case **+200 email overshoot** (összesen ~400 email/nap/org a 200-as soft-cap helyett).
+
+**Likelihood:** Low (10+ paralel batch ugyanazon orgra ugyanazon másodpercben — extrém ritka Resend onboarding-flow-ban).
+**Severity:** HIGH (Resend cost-cap soft-throttle, de bounded).
+
+**DESIGN-Q döntés 2026-05-11 (user):** **A opció — best-effort soft-throttle megtartása** atomikus slot-foglalás helyett.
+
+**Indoklás:**
+1. **Bounded overshoot** — worst-case +200 email/nap/org, Resend pro plan-en ~$0.04 többletköltség/incidens.
+2. **Resend account-szintű hard-cap** — Resend dashboard daily quota az ABSZOLÚT védvonal account-szinten (egyetlen org sem tudja kimeríteni a CF-rate-limit nélkül sem).
+3. **Monitoring alert** — `org-day counter > 250` (25% overshoot threshold) az S.13 (logging/monitoring) blokk része lesz amúgy is.
+4. **Komplexitás aránytalan** — atomikus slot-foglalás `inviteSendSlots` collection + retry-loop + cleanup-bővítés + per-email +30–50ms Appwrite latency (batch=20 → +600–1000ms hot-path) Low likelihood + alacsony cost-vonzatú kockázathoz.
+5. **Iparági mainstream** — token-bucket / leaky-bucket throttling (Stripe, AWS API Gateway, Mailgun) best-effort; hard-cap csak account-szinten van.
+
+**Re-evaluation trigger** — a döntés újratárgyalandó ha:
+- Élesedés után incidens-volumen >1/hó (Slack alert),
+- Resend költségvonzat észrevehetővé válik (>$5/hó org-overshoot kapcsán), vagy
+- Jogi/compliance ok megköveteli a hard-cap-et per-org-szinten.
+
+**B opció vázlat (atomikus slot-foglalás) — ha re-evaluation pozitív:**
+- Új `inviteSendSlots` collection: `(orgId, dayBucket, slotNumber 0..199)` composite unique key.
+- `consume` fázis helyett retry-loop: `createDocument` 411-conflict-ra re-read + retry, ha `slotNumber > 199` → 429.
+- Cleanup CF (S.2.5 része) napi rotáció `dayBucket` szerint.
+- Becsült munka: ~1 session implementáció + Codex pre+stop-time review + 1 új migration.
+
 ## Tervezett kockázat-tudomás
 
 - **Counter accumulating** (S.2.5 deferred): kb. 500 doc/CF/nap × 30 nap = ~15k counter-doc/hó. A `readCounter` lapozott (`limit=100` + cursor), egy 200-max scope-ban max 2 lap. Tolerable, de S.2.5 cleanup CF élesedéskor kötelező.
-- **Counter race / paralel overshoot** (`invite_send_org_day` weight=N): 2 paralel batch (100+100) ugyanazon orgra, mindkettő `current=0`, mindkettő pass → consume +100 +100 = 200. Best-effort accepted (Codex pre-review M5).
 - **`evaluateRateLimit` would-exceed double-block** (két paralel `createBlock`): idempotens — composite docId, updateDocument fallback.
 - **Hash collision** `hashSubject` 12-hex (48 bit): csak log-prefix, NEM security döntés. Acceptable.
 - **`delete_my_account` partial cleanup + retry**: 3 attempt / 5 perc → 5 perc várakozás → újabb 3 attempt. Kézi self-heal retry: OK. Loop-spam: blokkolva.
@@ -163,7 +191,7 @@ Második verifying review: **CLEAN** (`grep checkRateLimitDry` 0 match, exports/
 ## Kapcsolódó
 
 - [[SecurityBaseline]] STRIDE CF sor — ASVS V11 (Communication), V13 (API), CIS 13
-- [[SecurityRiskRegister]] R.S.2.2 / R.S.2.3 / R.S.2.6 zárása, R.S.2.5 marad open
+- [[SecurityRiskRegister]] R.S.2.2 / R.S.2.3 / R.S.2.6 / R.S.2.7–2.14 closed; R.S.2.5 open (cleanup CF), R.S.2.15 Mitigated (DESIGN-Q user-döntés, lásd fent)
 - [[ProxyHardening]] — S.1 layer 1 (proxy), ez a layer 2 (CF)
 - [[Feladatok#S.2 Rate-limit kiterjesztés CF-szinten (CRITICAL, 2 session) — ASVS V11/V13, CIS 13|S.2 Feladatok]]
 - [[Döntések/0010-meghivasi-flow-redesign]] — ADR 0010 W2 IP-rate-limit alapja (S.2.1 forrás)
