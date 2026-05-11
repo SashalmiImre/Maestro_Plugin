@@ -1595,10 +1595,10 @@ async function bootstrapInvitesSchemaV2(ctx) {
  * `IP_RATE_LIMIT_BLOCKS_COLLECTION_ID`) megadják a használandó collection
  * ID-t. Ha az env nincs beállítva → 400 `missing_env_var` error.
  *
- * A `helpers/rateLimit.js` `incrementCounter` és `blockIp` custom doc-ID-t
- * használ (`${ip}::${endpoint}::${windowStart}` és `${ip}::${endpoint}`),
- * ezért a collection `documentSecurity=false` és nincs ACL-szűrés —
- * a CF API key-jel ír.
+ * A `helpers/rateLimit.js` counter append-only `sdk.ID.unique()` doc-ID-vel,
+ * a block determinisztikus `rlb_${sha256(subject + '\0' + endpoint).slice(0, 32)}`
+ * doc-ID-vel (S.2.2 Codex stop-time fix). A collection `documentSecurity=false`
+ * és nincs ACL-szűrés — a CF API key-jel ír.
  */
 async function bootstrapRateLimitSchema(ctx) {
     const { databases, env, log, error, res, fail } = ctx;

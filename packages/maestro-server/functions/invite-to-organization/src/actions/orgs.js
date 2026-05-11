@@ -17,6 +17,7 @@ const {
 } = require('../helpers/util.js');
 const { CASCADE_BATCH_LIMIT, WORKFLOW_VISIBILITY_DEFAULT } = require('../helpers/constants.js');
 const { deleteByQuery, cascadeDeleteOffice } = require('../helpers/cascade.js');
+const { evaluateRateLimit, consumeRateLimit } = require('../helpers/rateLimit.js');
 const { createWorkflowDoc } = require('../helpers/workflowDoc.js');
 const { seedDefaultPermissionSets } = require('../helpers/groupSeed.js');
 const {
@@ -1626,6 +1627,19 @@ async function deleteMyAccount(ctx) {
         }
         error(`[DeleteMyAccount] users.write preflight ismeretlen hiba: ${e.message}`);
         return fail(res, 500, 'preflight_failed', { message: e.message });
+    }
+
+    // 3.6. S.2.3 (2026-05-11) — `delete_my_account` attempt-throttle rate-limit.
+    //      Codex Q7: semantic pre-checks (confirm/too_many_orgs/last_owner/users.write
+    //      scope) UTÁN, cleanup ELŐTT — a 400/409/503 ágak NEM bumpolják a counter-t.
+    //      5 perc window / max 3 attempt / 5 perc block (Codex stop-time MAJOR 3 fix):
+    //      partial cleanup után a self-heal retry megengedhető (NEM 24h hard cooldown).
+    {
+        const evaluation = await evaluateRateLimit(ctx, 'delete_my_account', { subject: callerId });
+        if (evaluation.blocked) {
+            return fail(res, 429, 'rate_limited', { scope: 'user', retryAfter: evaluation.retryAfter });
+        }
+        await consumeRateLimit(ctx, 'delete_my_account', { subject: callerId });
     }
 
     // 4. Per-org sequential cleanup (Codex baseline P1 #2 / adversarial high #1, 2026-05-10).

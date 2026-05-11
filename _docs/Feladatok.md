@@ -32,12 +32,12 @@ tags: [feladatok]
 #### S.2 Rate-limit kiterjesztés CF-szinten (CRITICAL, 2 session) — ASVS V11/V13, CIS 13
 
 - [x] **S.2.1** — `acceptInvite` IP rate-limit verify (5/15min/IP, 1h block). **Done 2026-05-11**: a `checkRateLimit(ctx, 'accept_invite')` ténylegesen hívott az `actions/invites.js:860`-on. A `helpers/rateLimit.js` fájl tetejének "SKELETON" megjegyzése frissítve "STATUS — bekötve"-re. **Halasztva S.2.5 — Cleanup CF**: lejárt counter (24h+) és block (lejárt blockedUntil) doc-ok periodikus törlése (új scheduled CF). Collection schema deploy + env var verify production-előtt (nincs éles, halaszthatjuk).
-- [ ] **S.2.2** — `invite_to_organization` rate-limit: IP + user-id, per-day cap (max 50 invite/admin/nap). Az auto-send batch (`MAX_BATCH_INVITES=20`) cost-spam védelem.
-- [ ] **S.2.3** — `delete_my_account` cooldown: per-user-id-per-24h idempotency window (vagy 7 napos retry-window).
+- [x] **S.2.2** — `invite_to_organization` rate-limit: IP + user-id + per-org-day. **Done 2026-05-11**: multi-scope `evaluateRateLimit` + `consumeRateLimit` (`invite_send_ip` 30/15min, `invite_send_user` 50/24h, `invite_send_org_day` 200 email/24h). Codex pre-review + stop-time + verifying CLEAN. Lásd [[Komponensek/CFRateLimiting]].
+- [x] **S.2.3** — `delete_my_account` cooldown. **Done 2026-05-11**: attempt-throttle 3/5min/5min block (Codex stop-time MAJOR 3: NEM 24h hard cooldown — self-heal retry megengedhető partial cleanup után).
 - [ ] **S.2.4** — Appwrite-built-in login throttle audit (Console "Sessions Limit" beállítások) + alkalmazás-szintű login-fail counter ha hiányzik.
-- [ ] **S.2.5** — Cleanup CF: lejárt `ipRateLimitCounters` (24h+ régebbi) + `ipRateLimitBlocks` (lejárt) periodikus törlése. Új scheduled CF: `cleanup-rate-limits` napi futás.
-- [ ] **S.2.6** — Resend cost-control: per-org-per-day cap a teljes invite-küldési mennyiségre (`organizationDailySendCounter` collection vagy hasonló).
-- [ ] **S.2.7** — Stop-time Codex review. Update: [[Komponensek/PermissionHelpers]] vagy új [[Komponensek/RateLimiting]].
+- [ ] **S.2.5** — Cleanup CF: lejárt `ipRateLimitCounters` (24h+ régebbi) + `ipRateLimitBlocks` (lejárt) periodikus törlése. Új scheduled CF: `cleanup-rate-limits` napi futás. **Élesedés előtt kötelező** (S.2.2/S.2.6 deploy után counter-doc-ok napi ~500/CF tempóval halmozódnak — a `readCounter` lapozott, tolerable, de 30 nap után kötelező takarítás).
+- [x] **S.2.6** — Resend cost-control per-org-per-day. **Done 2026-05-11**: folded into `invite_send_org_day` endpoint (200 email/24h, weight=validEmailCount). Codex M2: malformed email NE égesse a quota-t — `EMAIL_REGEX` pre-filter rate-limit ELŐTT.
+- [x] **S.2.7** — Stop-time Codex review + verifying. **Done 2026-05-11**: 1 BLOCKER (block docId) + 3 MAJOR (createBlock placement / batch lookups / delete cooldown) + 1 MINOR (XFF trust acknowledged) + 1 NIT (schema komment) — mind javítva. Verifying review CLEAN (rename `checkRateLimitDry` → `evaluateRateLimit` + docstring tisztázás). Új jegyzet: [[Komponensek/CFRateLimiting]]. Risk register: R.S.2.2/R.S.2.3/R.S.2.6/R.S.2.7/R.S.2.8/R.S.2.9/R.S.2.10 closed.
 
 #### S.7 Realtime + cross-tenant data leak (HIGH — Codex előrehozta, 2 session) — ASVS V4/V5, CIS 3
 

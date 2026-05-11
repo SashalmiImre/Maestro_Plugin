@@ -1,0 +1,137 @@
+---
+aliases: [CF Rate Limiting, Rate Limit, S.2]
+tags: [biztonság, rate-limit, S2]
+status: Implemented
+created: 2026-05-11
+related: [SecurityBaseline, SecurityRiskRegister, ProxyHardening]
+---
+
+# CF Rate Limiting (S.2)
+
+> Az `invite-to-organization` CF rate-limit infrastruktúrája — multi-scope (IP / user / org), weighted increment, per-endpoint config. ProxyHardening (S.1) layer-2 párja, az S blokk S.2.2/S.2.3/S.2.6 al-pontjai. Codex-egyeztetett (`evaluateRateLimit` + `consumeRateLimit` separáció, lockout-amplifikáció elkerülése). Implementáció 2026-05-11.
+
+## Mit változtattunk
+
+| ID | Változás | Korábbi állapot | Új állapot |
+|---|---|---|---|
+| **S.2.1** | `acceptInvite` IP-rate-limit | helpers/rateLimit.js SKELETON | bekötve `actions/invites.js:914` (5/15min/IP, 1h block) |
+| **S.2.2 (IP)** | `invite_send_ip` rate-limit `createInvite` + `createBatchInvites`-ben | nincs | per-IP 30/15min, 1h block |
+| **S.2.2 (user)** | `invite_send_user` rate-limit | nincs | per-callerId 50/24h, 1h soft-throttle |
+| **S.2.3** | `delete_my_account` attempt-throttle | nincs | per-callerId 3/5min, 5min block (Codex MAJOR 3: NEM 24h hard, hogy self-heal retry megengedhető legyen) |
+| **S.2.6** | Resend cost-control per-org-per-day | nincs | `invite_send_org_day` 200 email/24h, 1h soft-throttle (weight=validEmailCount) |
+| **API refactor** | `helpers/rateLimit.js` — per-endpoint config + subject paraméter + dry-run/consume separáció | `checkRateLimit(ctx, endpoint)` IP-only | `evaluateRateLimit` + `consumeRateLimit` + `checkRateLimit` (legacy shim) — multi-scope kompatibilis, weighted increment, hash-prefix logolás |
+
+## Új helperek
+
+`helpers/rateLimit.js`:
+
+- **`RATE_LIMIT_CONFIG`** — `Object.freeze`, per-endpoint `{ windowMs, max, blockMs }`. 5 endpoint:
+  - `'accept_invite'` (15min/5/1h block) — S.2.1
+  - `'invite_send_ip'` (15min/30/1h block) — S.2.2 IP-scope
+  - `'invite_send_user'` (24h/50/1h block) — S.2.2 user-day soft-throttle
+  - `'invite_send_org_day'` (24h/200/1h block) — S.2.6 Resend cost-cap soft-throttle
+  - `'delete_my_account'` (5min/3/5min block) — S.2.3 attempt-throttle
+- **`evaluateRateLimit(ctx, endpoint, options)`** — counter-szintű evaluation, NEM ír counter-doc-ot, DE would-exceed ágon perzisztens block-doc-ot ír (a normál szekvenciális overflow így is blokkká válik). Returns `{ blocked, retryAfter }`.
+- **`consumeRateLimit(ctx, endpoint, options)`** — counter +weight (`appendCounter`), race miatti overflow esetén block-doc.
+- **`checkRateLimit(ctx, endpoint, options)`** — backward-compat shim (`acceptInvite` legacy hívása).
+- **`extractClientIp(req)`** — XFF first-IP (Appwrite CF trusted header).
+- **`hashSubject(s)`** — SHA-256 first 12 hex chars, logoláshoz (S.13.2 PII-redaction future-proof).
+- **`blockDocId(subject, endpoint)`** — determinisztikus Appwrite-safe block docId: `rlb_${sha256(subject + '\0' + endpoint).slice(0, 32)}` (NUL-separator collision-mentes).
+- **`alignedWindowStart(windowMs)`** — paraméterezett window-aligned ISO timestamp.
+- **`readCounter(...)`** — lapozott (limit=100) counter-aggregate, `total += doc.count` (weighted).
+
+`actions/invites.js` privát helperek:
+
+- **`_checkInviteRateLimits(ctx, callerId, orgId, emailCount)`** — 3-scope evaluation: IP/user weight=1, org-day weight=emailCount.
+- **`_consumeInviteRateLimits(ctx, callerId, orgId, emailCount)`** — 3-scope consume, csak ha az evaluation mind clean.
+
+## Új response code-ok
+
+- **429 `rate_limited`** — `{ scope: 'ip' | 'user' | 'org', retryAfter: ISOString }` payload.
+- **400 `no_valid_emails`** — `createBatchInvites`-ben, ha a dedup után egyetlen érvényes email sincs (Codex M2 batch placement fix: malformed email NE égesse az org-day quota-t).
+
+## Schema kompatibilitás
+
+Az `ipRateLimitCounters` + `ipRateLimitBlocks` collection-ök változatlanok S.2.1 óta:
+- `ip` (string, 64) — funkcionálisan "subject" (IP / userId / orgId)
+- `endpoint` (string, 32) — pl. `'invite_send_org_day'` (19 char, befér)
+- `windowStart` / `blockedAt` / `blockedUntil` — paraméterezett window-aligned
+
+A `count` field (`integer, min: 0`) most ténylegesen használva: a `appendCounter` `weight` értékkel ír (1 vagy batch email-count). A `readCounter` `total += doc.count` (fallback 1 régi doc-okra). **Nincs schema migration** — backward-compat.
+
+## Codex pre-review (`task-mp2*`)
+
+A pre-review az alábbi 10 design-Q-ra felelt, az alábbi főbb verdiktekkel:
+
+| Q | Verdict |
+|---|---|
+| Q1 Batch weight | **+N per email `invite_send_org_day`, +1 per CF call IP/user** — cost-cap email-volume, throttle CF-frequency |
+| Q2 XFF skip-on-null | best-effort acceptable IP-scope-on (user/org subject jelen marad) |
+| Q3 Batch=20 vs cap=200 | sufficient baseline, recovery path TBD |
+| Q4 Counter race | acceptable best-effort (S.2.1 parity), gyengébb cost-control esetén |
+| Q5 Block/window alignment | acceptable (`blockedUntil` source-of-truth) |
+| Q6 Cleanup defer (S.2.5) | acceptable rövid-távon, 15k docs/hét tolerable |
+| Q7 Cooldown UX | **AFTER pre-checks, BEFORE cleanup** (felülírva stop-time MAJOR 3-ra: NEM 24h hard, attempt-throttle) |
+| Q8 endpoint 32 char | fits |
+| Q9 subject 64 char | fits, hash future-composite |
+| Q10 PII redaction | **hash-prefix now** (S.13.2 future-proof) |
+
+**1 BLOCKER + 4 MAJOR + 4 MINOR + 2 NIT** finding, mind beépítve:
+
+- **BLOCKER weight propagation** → `options.weight`, `count: weight` field, `readCounter` aggregate.
+- **MAJOR M1 lockout-amplifikáció** → `evaluateRateLimit` + `consumeRateLimit` separáció (multi-scope: dry-eval all → consume after all-pass).
+- **MAJOR M2 placement** → permission + email-validation + dedup UTÁN, expensive work (createCore / Resend-send / org-lookup) ELŐTT.
+- **MAJOR M3 24h block** → `invite_send_user` / `invite_send_org_day` blockMs=1h soft-throttle (a 24h window megmarad).
+- **MAJOR M4 subject + endpoint together** → minden query MINDIG `equal('ip', subject) + equal('endpoint', endpoint)`, soha NEM subject-only.
+- MINOR subject naming → helper internals `subject`, schema column marad `ip`.
+- MINOR XFF skip log → silent skip.
+- MINOR retryAfter units → ISO timestamp (konzisztens `acceptInvite`-tel).
+- NIT `Object.freeze(RATE_LIMIT_CONFIG)` → done.
+- NIT `Unknown endpoint` → server-side `throw` (500, NEM user-facing policy).
+
+## Codex stop-time review (`task-mp2*`) + fix-ek
+
+| Severity | Finding | Fix |
+|---|---|---|
+| **BLOCKER** | Block doc ID `${subject}::${endpoint}` invalid Appwrite ID (`:` tiltott + lehet >36 char) → silent write-fail, mégis `blockedUntil`-t ad vissza | Új `blockDocId(subject, endpoint)`: `rlb_${sha256(subject + '\0' + endpoint).slice(0, 32)}` (36 char, `[A-Za-z0-9._-]` only). `createBlock` retval `null` write-bukáskor (hívó tudja, hogy NEM perzisztens). |
+| **MAJOR 1** | `evaluateRateLimit` would-exceed → 429, de `consumeRateLimit` NEM fut → block-doc NEM perzisztens normál crossing-on | `evaluateRateLimit` would-exceed ágon `createBlock` ITT (multi-scope: első buktató scope blokkol, többi consume kihagyva — lockout-amplifikáció kerül). Race-safe idempotens block-doc. **Rename**: `checkRateLimitDry` → `evaluateRateLimit` (a `dry` szó konfúz, perzisztens block szándékos). |
+| **MAJOR 2** | `createBatchInvites` org/inviter lookup rate-limit ELŐTT fut → 429 ág drága | Sorrend-csere: dedup + email-regex pre-filter + rate-limit ELŐSZÖR (in-memory + DB rate-counter), aztán `databases.getDocument(org)` + `usersApi.get(inviter)`. 429 ág NEM fizet érte. |
+| **MAJOR 3** | `delete_my_account` 24h hard cooldown blokkolja a self-heal retry-t partial cleanup után | `RATE_LIMIT_CONFIG.delete_my_account`: 24h/1/24h → **5min/3/5min attempt-throttle**. Kézi retry megengedhető, paralel/loop spam NEM. |
+| MINOR | XFF first-hop trust feltétel külön igazolás | Acknowledged: Appwrite CF trusted-XFF (platform-set, kliens NEM override-olható). Phase 2: `accept_invite`-ra opcionális token/email subject scope. |
+| NIT | `schemas.js:1591-99` + `rateLimit.js:35-46` schema kommentek elavult counter ID minta | Frissítve: counter `sdk.ID.unique()` append-only, block `rlb_${sha256(...)}` determinisztikus. |
+
+## Codex verifying review (`task-mp2*`) — második fix
+
+Első verifying review: **Fix 2 ❌ "nem javítva"** — a Codex a `checkRateLimitDry` névből szigorúbb "no-writes" semantikát várt, a would-exceed perzisztens block side-effect-nek jelölve.
+
+**Fix**: **rename + docstring tisztázás** (NEM viselkedés-változtatás — a perzisztens block szándékos a MAJOR 1-hez):
+- `checkRateLimitDry` → `evaluateRateLimit` (mindenhol cserélve: 1 helper + 2 hívó fájl)
+- Docstring: "**NEM ír** counter-doc-ot (nincs `appendCounter`), DE a would-exceed ágon PERZISZTENS block-doc-ot ír — különben a normál szekvenciális overflow soha nem hozna létre block-doc-ot. Idempotens block (composite docId, updateDocument fallback) — race-safe két paralel hívóra."
+
+Második verifying review: **CLEAN** (`grep checkRateLimitDry` 0 match, exports/imports konzisztens, docstring explicit a write-szándékot illetően).
+
+## Tervezett kockázat-tudomás
+
+- **Counter accumulating** (S.2.5 deferred): kb. 500 doc/CF/nap × 30 nap = ~15k counter-doc/hó. A `readCounter` lapozott (`limit=100` + cursor), egy 200-max scope-ban max 2 lap. Tolerable, de S.2.5 cleanup CF élesedéskor kötelező.
+- **Counter race / paralel overshoot** (`invite_send_org_day` weight=N): 2 paralel batch (100+100) ugyanazon orgra, mindkettő `current=0`, mindkettő pass → consume +100 +100 = 200. Best-effort accepted (Codex pre-review M5).
+- **`evaluateRateLimit` would-exceed double-block** (két paralel `createBlock`): idempotens — composite docId, updateDocument fallback.
+- **Hash collision** `hashSubject` 12-hex (48 bit): csak log-prefix, NEM security döntés. Acceptable.
+- **`delete_my_account` partial cleanup + retry**: 3 attempt / 5 perc → 5 perc várakozás → újabb 3 attempt. Kézi self-heal retry: OK. Loop-spam: blokkolva.
+
+## TODO (S blokk follow-up)
+
+- **S.2.5 Cleanup CF** (deferred, élesedés előtt kötelező): lejárt `ipRateLimitCounters` (24h+ régi) + `ipRateLimitBlocks` (lejárt `blockedUntil`) periodikus törlése. Új scheduled CF `cleanup-rate-limits` napi futás.
+- **S.2.4** Appwrite-built-in login throttle audit (Console "Sessions Limit" beállítások) + alkalmazás-szintű login-fail counter.
+- **`accept_invite` Phase 2 token/email scope** — a jelenlegi 5/15min/IP védelem az IP-scope-ra szűkül. Codex MINOR (S.2.7): ha az `X-Forwarded-For` valamilyen reason override-olható, token-szintű kiegészítő scope javasolt.
+- **Recovery path `invite_send_org_day` 1h block** (Codex M3 alt): admin-only `clear_rate_limit_block` action — ha első incident jön onboarding-flow-ról, megfontolható.
+- **`MAX_BATCH_INVITES=20` × `invite_send_org_day=200`** → 10 batch-call/org/day. Ha élesedéskor sok org tipikusan ennél több onboarding-emailt küld egy napon, a cap-et vagy a batch-méretet emelni kell.
+- **`MAX_ORGS_PER_DELETE_CALL=10` + `delete_my_account` 3 attempt** → max 30 org per 5 perc fiók-törléskor. Ha élesedéskor sok user 10+ orgban tag, az UX-flow megfontolható (chunkolás).
+
+## Kapcsolódó
+
+- [[SecurityBaseline]] STRIDE CF sor — ASVS V11 (Communication), V13 (API), CIS 13
+- [[SecurityRiskRegister]] R.S.2.2 / R.S.2.3 / R.S.2.6 zárása, R.S.2.5 marad open
+- [[ProxyHardening]] — S.1 layer 1 (proxy), ez a layer 2 (CF)
+- [[Feladatok#S.2 Rate-limit kiterjesztés CF-szinten (CRITICAL, 2 session) — ASVS V11/V13, CIS 13|S.2 Feladatok]]
+- [[Döntések/0010-meghivasi-flow-redesign]] — ADR 0010 W2 IP-rate-limit alapja (S.2.1 forrás)
+- [[Komponensek/PermissionHelpers]] — server-side permission guards (S.2 sorrendileg utáni)
