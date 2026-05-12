@@ -174,14 +174,44 @@ Második verifying review: **CLEAN** (`grep checkRateLimitDry` 0 match, exports/
 
 ## Tervezett kockázat-tudomás
 
-- **Counter accumulating** (S.2.5 deferred): kb. 500 doc/CF/nap × 30 nap = ~15k counter-doc/hó. A `readCounter` lapozott (`limit=100` + cursor), egy 200-max scope-ban max 2 lap. Tolerable, de S.2.5 cleanup CF élesedéskor kötelező.
+- **Counter accumulating** (S.2.5 done 2026-05-11): kb. 500 doc/CF/nap × 30 nap = ~15k counter-doc/hó. A `readCounter` lapozott (`limit=100` + cursor), egy 200-max scope-ban max 2 lap. **Cleanup CF napi futás** `$updatedAt < 48h` cutoff-fal — R.S.2.5 closed.
 - **`evaluateRateLimit` would-exceed double-block** (két paralel `createBlock`): idempotens — composite docId, updateDocument fallback.
 - **Hash collision** `hashSubject` 12-hex (48 bit): csak log-prefix, NEM security döntés. Acceptable.
 - **`delete_my_account` partial cleanup + retry**: 3 attempt / 5 perc → 5 perc várakozás → újabb 3 attempt. Kézi self-heal retry: OK. Loop-spam: blokkolva.
 
+## Cleanup CF (S.2.5, Done 2026-05-11)
+
+Új scheduled CF: **`cleanup-rate-limits`** ([packages/maestro-server/functions/cleanup-rate-limits/src/main.js](../../packages/maestro-server/functions/cleanup-rate-limits/src/main.js)). Lejárt counter + block doc-ok periodikus törlése a két collection-ből.
+
+- **Cron**: `0 2 * * *` UTC napi (a `cleanup-orphaned-locks` 3:00 előtt)
+- **Timeout**: 300s (worst-case 2 × 2_000 delete × 30ms = 120s)
+- **Specification**: `s-0.5vcpu-512mb` (mint a többi cleanup CF)
+- **Scopes**: `databases.read`, `databases.write`
+
+**Cleanup target — `$updatedAt` szűrés (Codex stop-time BLOCKER fix)**:
+- `ipRateLimitCounters`: `$updatedAt < now - 48h` (24h max runtime-window + 24h grace). Append-only model (`appendCounter` minden hit-en új doc `sdk.ID.unique()`-vel), így `$createdAt ≈ $updatedAt` per-doc — `$updatedAt`-választás **jövőbiztos** (ha valaha update-elnénk a model-t).
+- `ipRateLimitBlocks`: `$updatedAt < now - 6h` (1h max blockMs + 6× grace). `setBlock` `document_already_exists` ágon `updateDocument`-tel HOSSZABBÍTJA a meglévő determinisztikus-ID block-ot — ezért `$createdAt` stale (akár hetes), **kötelezően** `$updatedAt`-en szűrünk.
+
+**Index-stratégia (Codex pre-review Opció Y)**: a `[ip, endpoint, ...]` composite indexek leftmost-prefix szabály miatt NEM hatékonyak `lessThan(time, ...)` lookupra. A `$updatedAt` system-mezőn system-index van — schema-bővítés NEM szükséges.
+
+**Cap**: `MAX_DELETES_PER_COLLECTION=2_000`/futás. Codex pre-review BLOCKER (10_000 → ~10 perc, NEM fér 5 perc timeout-ba) csökkentve. Worst-case 2 × 2_000 × 30ms = 120s.
+
+**dryRun**: `CLEANUP_DRY_RUN=1` env — első batch loggolása, NEM iterál tovább (infinite-loop guard, `listDocuments` ugyanazt adná).
+
+**Admin email triggers** (`RESEND_API_KEY` + `ADMIN_NOTIFICATION_EMAIL` env): `failedAny` (permission-misconfig) **VAGY** `cappedAtAny` (folytatható következő futásban) **VAGY** `totalDeleted >= 1_000` (anomáliás volumen). Codex stop-time MAJOR fix: `failedAny` is trigger, hogy permission-incidens NE menjen csendben.
+
+**Hibakezelés (ops-policy egységes `orphan-sweeper`-rel)**:
+- `listDocuments` fail → `success: false` 500 + `stats.collectionScanFailed`
+- per-doc `deleteDocument` 404 → idempotens (másik futás vagy konkurens cleanup), continue
+- per-doc `deleteDocument` egyéb hiba → `stats.failed++` + log + continue, **futás végén** `hasFailure = collectionScanFailed.length > 0 || counters.failed > 0 || blocks.failed > 0` → 500 választ
+- **no-progress guard**: ha egy iter 0 successful delete-tel zárul (mind 404/permission-failed), break — infinite-loop védelem
+
+**Best-effort tolerable** (Codex stop-time MINOR, accepted): konkurens cleanup pont az egész első page-et 404-re zárhatja → no-progress guard break → későbbi eligible doc-ok a következő cronra maradnak. NEM correctness bug.
+
+**Codex pipeline**: pre-review (1 BLOCKER cap + 2 MAJOR index/audit + 1 MINOR + 1 NIT) → implement → stop-time (1 BLOCKER `$updatedAt` + 1 MAJOR `failed`-handling + 1 MINOR tolerable + 1 NIT validation) → fixes → verifying (CLEAN + 1 doku NIT) → fixed.
+
 ## TODO (S blokk follow-up)
 
-- **S.2.5 Cleanup CF** (deferred, élesedés előtt kötelező): lejárt `ipRateLimitCounters` (24h+ régi) + `ipRateLimitBlocks` (lejárt `blockedUntil`) periodikus törlése. Új scheduled CF `cleanup-rate-limits` napi futás.
 - **S.2.4** Appwrite-built-in login throttle audit (Console "Sessions Limit" beállítások) + alkalmazás-szintű login-fail counter.
 - **`accept_invite` Phase 2 token/email scope** — a jelenlegi 5/15min/IP védelem az IP-scope-ra szűkül. Codex MINOR (S.2.7): ha az `X-Forwarded-For` valamilyen reason override-olható, token-szintű kiegészítő scope javasolt.
 - **Recovery path `invite_send_org_day` 1h block** (Codex M3 alt): admin-only `clear_rate_limit_block` action — ha első incident jön onboarding-flow-ról, megfontolható.
@@ -191,7 +221,7 @@ Második verifying review: **CLEAN** (`grep checkRateLimitDry` 0 match, exports/
 ## Kapcsolódó
 
 - [[SecurityBaseline]] STRIDE CF sor — ASVS V11 (Communication), V13 (API), CIS 13
-- [[SecurityRiskRegister]] R.S.2.2 / R.S.2.3 / R.S.2.6 / R.S.2.7–2.14 closed; R.S.2.5 open (cleanup CF), R.S.2.15 Mitigated (DESIGN-Q user-döntés, lásd fent)
+- [[SecurityRiskRegister]] R.S.2.2 / R.S.2.3 / R.S.2.5 / R.S.2.6 / R.S.2.7–2.14 closed; R.S.2.15 Mitigated (DESIGN-Q user-döntés, lásd fent)
 - [[ProxyHardening]] — S.1 layer 1 (proxy), ez a layer 2 (CF)
 - [[Feladatok#S.2 Rate-limit kiterjesztés CF-szinten (CRITICAL, 2 session) — ASVS V11/V13, CIS 13|S.2 Feladatok]]
 - [[Döntések/0010-meghivasi-flow-redesign]] — ADR 0010 W2 IP-rate-limit alapja (S.2.1 forrás)
