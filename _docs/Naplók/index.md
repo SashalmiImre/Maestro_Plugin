@@ -19,6 +19,7 @@ Daily notes — időrendi munkajegyzetek. Érdemes hosszabb session végén kés
 - [[2026-05-07]] — ADR 0009 (membership user-identity denormalizáció), `change_organization_member_role` CF action (8 védelmi réteg)
 - [[2026-05-09]] — Meghívási flow ÉLES (2026-05-08–09 kombinált session: 18 commit, 11 CF deploy) + D blokk follow-up: D.0/D.1.1/D.1.3/D.5.4/D.6.1/D.5.2/D.7 implementáció. [[Komponensek/SessionPreflight]] + [[Komponensek/CFTemplate]] új atomic note-ok
 - [[2026-05-11]] — Security audit S blokk kick-off: S.0 (baseline + risk register) + S.1 (proxy hardening) + S.2 (CF rate-limit) + R.S.2.15 mitigated. 5 commit push-olva, 1 lemaradva (Karbantartás.md merge konfliktus). [[Komponensek/SecurityBaseline]] + [[Komponensek/SecurityRiskRegister]] + [[Komponensek/ProxyHardening]] + [[Komponensek/CFRateLimiting]] új atomic note-ok
+- [[2026-05-12]] — S.2.5 commit + push + PR [Maestro_Plugin#3](https://github.com/SashalmiImre/Maestro_Plugin/pull/3) + S.7.1 cross-tenant code-audit (Codex pre + stop-time + verifying CLEAN). 8 `createDocument` üres-permission fix `withCreator(buildXxxAclPerms(...), callerId)`-rel a defense-in-depth team-membership-race ellen. Új [[Komponensek/TenantIsolation]] atomic note
 
 ## Új daily note
 1. Másold a [[Templates/daily-note-template]] tartalmát.
