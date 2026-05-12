@@ -41,12 +41,13 @@ tags: [feladatok]
 
 #### S.7 Realtime + cross-tenant data leak (HIGH — Codex előrehozta, 2 session) — ASVS V4/V5, CIS 3
 
-- [ ] **S.7.1** — `appwrite.json` minden collection `rowSecurity` flag audit. Hiányzó → enable (új deployment).
-- [ ] **S.7.2** — Per-tenant ACL coverage verify: `backfill_tenant_acl` + `backfill_admin_team_acl` minden orgon lefuttatva (dryRun → éles). Update [[H.6]] smoke-teszt-checklist.
+- [x] **S.7.1** — `createDocument` permissions audit + fix (CF-szintű invariáns). **Done 2026-05-12**: 8 üres-permission `createDocument` hívás (collection-szintű `read("users")` örökölt → cross-tenant Realtime push szivárgás) javítva `withCreator(buildXxxAclPerms(...), callerId)`-rel. Új helper `withCreator(perms, callerId)` a `teamHelpers.js`-ben — defense-in-depth `Permission.read(user(callerId))` a team-membership-timing-race ellen (creator a `createDocument` időpontban MÉG NEM team-tag). Codex pipeline: pre-review (Q1.D GO — code-audit első, adversarial későbbre) → stop-time (2 MAJOR: bootstrap creator race + acceptInvite race; 1 MINOR backfill; 1 NIT positiveIntEnv-szerű guard) → verifying CLEAN. Érintett fájlok: `orgs.js` (×4), `offices.js` (×2), `invites.js` (×1), `publications.js` (×1) + `teamHelpers.js` (új helper). Lásd [[Komponensek/TenantIsolation]].
+- [ ] **S.7.2** — Per-tenant ACL coverage verify: `backfill_tenant_acl` + `backfill_admin_team_acl` minden orgon lefuttatva (dryRun → éles). + Új `backfill_acl_phase2` action vázlatban: legacy üres-permission doc-okra `updateDocument({permissions: ...})` retroaktívan a 8 collection-en (Codex MINOR fix). Update [[H.6]] smoke-teszt-checklist.
 - [ ] **S.7.3** — Realtime channel filter audit: `realtimeBus.js` `subscribeRealtime()` listáz minden csatornát, ellenőrizni hogy tenant-prefix-szűrés (defensive depth) van-e.
 - [ ] **S.7.4** — Cross-org membership ACL: ha user több org-ban van, milyen Realtime payload-okat lát. Adversarial verify.
-- [ ] **S.7.5** — Adversarial 2-tab teszt: két browser-tab, két különböző org, `localStorage.maestro.activeEditorialOfficeId` csere → más org adata láthatóvá válik-e? (Tilos.)
-- [ ] **S.7.6** — Stop-time Codex review. Új jegyzet: [[Komponensek/TenantIsolation]].
+- [ ] **S.7.5** — Adversarial 2-tab teszt: két browser-tab, két különböző org, `localStorage.maestro.activeEditorialOfficeId` csere → más org adata láthatóvá válik-e? (Tilos.) **User-task** (fejlesztői env-en).
+- [ ] **S.7.6** — Stop-time Codex review az S.7.2–S.7.5 eredményeken.
+- [ ] **S.7.7** — `articles.createDocument` frontend-fix: az `articles` doc-okat a plugin / dashboard direktbe írja Appwrite SDK-val. A `permissions` paraméter pótolása `withCreator(buildOfficeAclPerms(officeId), userId)`-mintán a `validate-article-creation` post-event-validator helyett.
 
 #### S.3 Security headers + CSP (HIGH, 2 session — CSP report-only rollout) — ASVS V14, CIS 4
 

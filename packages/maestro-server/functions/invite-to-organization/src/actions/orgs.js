@@ -24,8 +24,10 @@ const {
     buildOrgTeamId,
     buildOrgAdminTeamId,
     buildOfficeTeamId,
+    buildOrgAclPerms,
     buildOfficeAclPerms,
     buildWorkflowAclPerms,
+    withCreator,
     ensureTeam,
     ensureTeamMembership,
     removeTeamMembership,
@@ -171,17 +173,26 @@ async function bootstrapOrCreateOrganization(ctx) {
     };
 
     // 1. organizations
-    let newOrgId = null;
+    // S.7.1 fix (2026-05-12): doc-szintű ACL `Permission.read(team:org_${orgId})`.
+    // Az ID-t előre generáljuk, hogy a `buildOrgAclPerms(newOrgId)` a `createDocument`
+    // paraméterében felhasználható legyen (egy API-hívás, atomikus).
+    let newOrgId = sdk.ID.unique();
     try {
         const newOrg = await databases.createDocument(
             env.databaseId,
             env.organizationsCollectionId,
-            sdk.ID.unique(),
+            newOrgId,
             {
                 name: orgName,
                 slug: orgSlug,
                 ownerUserId: callerId
-            }
+            },
+            // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
+            // A `Permission.read(team:org_${orgId})` ACL még NEM hat a creator-ra,
+            // mert az `org_${orgId}` team létrejön (204) ÉS a `ensureTeamMembership`
+            // (247) csak később fut. Az explicit `Permission.read(user(callerId))`
+            // azonnali read jogot ad — a team-szintű read a többi tagra is.
+            withCreator(buildOrgAclPerms(newOrgId), callerId)
         );
         newOrgId = newOrg.$id;
         rollbackSteps.push(() => databases.deleteDocument(env.databaseId, env.organizationsCollectionId, newOrgId));
@@ -207,6 +218,11 @@ async function bootstrapOrCreateOrganization(ctx) {
     }
 
     // 2. organizationMemberships — owner role
+    // S.7.1 fix (2026-05-12): doc-szintű ACL `Permission.read(team:org_${orgId})`.
+    // Korábban üres permission-paraméter → collection-szintű `read("users")`
+    // örökölt → cross-tenant Realtime push szivárgás. A doc most csak az
+    // `org_${orgId}` team tagjainak olvasható (server-szintű REST + Realtime
+    // filter), write-joga továbbra is kizárólag a CF API key-jé.
     let newMembershipId = null;
     try {
         const membership = await databases.createDocument(
@@ -221,7 +237,12 @@ async function bootstrapOrCreateOrganization(ctx) {
                 // 2026-05-07 denormalizáció (snapshot-at-join)
                 userName: callerIdentity.userName,
                 userEmail: callerIdentity.userEmail
-            }
+            },
+            // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
+            // A `ensureTeamMembership(orgTeamId)` 247. sorban fut le — a `createDocument`
+            // időpontban a creator még NEM team-tag. Az explicit `user(callerId)` Role
+            // azonnali read jogot ad a saját membership doc-jára.
+            withCreator(buildOrgAclPerms(newOrgId), callerId)
         );
         newMembershipId = membership.$id;
         rollbackSteps.push(() => databases.deleteDocument(env.databaseId, env.membershipsCollectionId, newMembershipId));
@@ -288,18 +309,28 @@ async function bootstrapOrCreateOrganization(ctx) {
     }
 
     // 3. editorialOffices
-    let newOfficeId = null;
+    // S.7.1 fix (2026-05-12): doc-szintű ACL `Permission.read(team:org_${orgId})`.
+    // **Org-scope** (NEM office-scope) — minden org-tag látja az office-listát
+    // (admin UI office-választó dropdown stb.). Office-tagság a per-office
+    // membershipekben dől el, NEM az office doc read-jogán.
+    let newOfficeId = sdk.ID.unique();
     try {
         const office = await databases.createDocument(
             env.databaseId,
             env.officesCollectionId,
-            sdk.ID.unique(),
+            newOfficeId,
             {
                 organizationId: newOrgId,
                 name: officeName,
                 slug: officeSlug
                 // workflowId: a 7. lépésben (workflow seeding) töltjük ki
-            }
+            },
+            // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
+            // Az `ensureTeamMembership(orgTeamId)` (247) már lefutott (a creator
+            // org-team-tag), de a `Permission.read(user)` explicit redundáns
+            // védelmet ad arra az esetre, ha az org-team membership add-ja
+            // valamilyen race-en bukna.
+            withCreator(buildOrgAclPerms(newOrgId), callerId)
         );
         newOfficeId = office.$id;
         rollbackSteps.push(() => databases.deleteDocument(env.databaseId, env.officesCollectionId, newOfficeId));
@@ -326,6 +357,10 @@ async function bootstrapOrCreateOrganization(ctx) {
     }
 
     // 4. editorialOfficeMemberships — admin role
+    // S.7.1 fix (2026-05-12): doc-szintű ACL `Permission.read(team:office_${officeId})`.
+    // Korábban üres permission-paraméter → collection-szintű `read("users")`
+    // örökölt → cross-office szivárgás. Office-scope a logikusabb (a membership
+    // CSAK az adott office tagjainak releváns).
     let newOfficeMembershipId;
     try {
         const officeMembershipDoc = await databases.createDocument(
@@ -341,7 +376,11 @@ async function bootstrapOrCreateOrganization(ctx) {
                 // ugyanaz a `callerIdentity` cache-ből, nincs 2. usersApi.get
                 userName: callerIdentity.userName,
                 userEmail: callerIdentity.userEmail
-            }
+            },
+            // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
+            // A `ensureTeamMembership(officeTeamId)` (377) későbbi sorban fut —
+            // a `createDocument` időpontban a creator NEM office-team-tag.
+            withCreator(buildOfficeAclPerms(newOfficeId), callerId)
         );
         newOfficeMembershipId = officeMembershipDoc.$id;
         rollbackSteps.push(() => databases.deleteDocument(env.databaseId, env.officeMembershipsCollectionId, newOfficeMembershipId));

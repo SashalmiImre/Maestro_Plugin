@@ -76,6 +76,36 @@ function buildOfficeAclPerms(editorialOfficeId) {
 }
 
 /**
+ * Defense-in-depth wrapper: a callerId-re explicit `Permission.read(user)` perm
+ * pótlása az alap ACL-hez (S.7 stop-time MAJOR 2026-05-12 fix).
+ *
+ * **Indok**: a `bootstrap_organization` és `acceptOrganizationInvite` action-ök
+ * a doc-ot a `createDocument` 5. paraméterén át team-szintű ACL-lel
+ * `read(team:org_${orgId})` látják el. A creator (vagy meghívott elfogadó) a
+ * `createDocument` időpontban MÉG NEM team-tag — az `ensureTeamMembership`
+ * vagy a team létrehozása csak később fut. Emiatt a creator a saját doc-ját
+ * NEM látja, amíg a team-tagság lefut.
+ *
+ * A `Permission.read(user(callerId))` Role azonnal hat (independent of
+ * team-membership timing), így a creator a doc-ot rögtön látja. A team-szintű
+ * read a többi tagra továbbra is alkalmazódik (defense-in-depth, redundáns
+ * de korrekt).
+ *
+ * @param {string[]} perms — alap ACL (pl. `buildOrgAclPerms(orgId)` eredménye)
+ * @param {string} callerId — Appwrite user ID, akinek azonnali read jogot adunk
+ * @returns {string[]} — kombinált perm-array
+ */
+function withCreator(perms, callerId) {
+    // Codex verifying review NIT (2026-05-12): explicit guard — különben
+    // `user:undefined`/`user:null` permission string-et adna ki (érvénytelen
+    // ACL, Appwrite 400-zal szállna el a `createDocument`-en).
+    if (!callerId || typeof callerId !== 'string') {
+        throw new Error('withCreator: callerId required (non-empty string)');
+    }
+    return [...perms, sdk.Permission.read(sdk.Role.user(callerId))];
+}
+
+/**
  * 3-way visibility scope-pal védett dokumentum ACL — közös helper a
  * workflow-k és workflow extension-ök számára (Feladat #80, ADR 0006/0007).
  *
@@ -268,6 +298,7 @@ module.exports = {
     buildOfficeAclPerms,
     buildWorkflowAclPerms,
     buildExtensionAclPerms,
+    withCreator,
     ensureTeam,
     ensureTeamMembership,
     removeTeamMembership,

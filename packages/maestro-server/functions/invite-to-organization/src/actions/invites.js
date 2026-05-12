@@ -13,9 +13,11 @@ const {
     TOKEN_BYTES
 } = require('../helpers/util.js');
 const {
+    buildOrgAclPerms,
     buildOrgAdminAclPerms,
     buildOrgTeamId,
     buildOrgAdminTeamId,
+    withCreator,
     ensureTeam,
     ensureTeamMembership
 } = require('../teamHelpers.js');
@@ -1001,6 +1003,10 @@ async function acceptInvite(ctx) {
     // fenti duplikátum check mindkét esetben 0-t adhat vissza, de a
     // DB insert ütközni fog. Ilyenkor újraolvassuk a membershipet és
     // idempotens `already_member` választ adunk vissza.
+    // S.7.1 fix (2026-05-12): doc-szintű ACL `Permission.read(team:org_${orgId})`.
+    // Korábban üres permission-paraméter → collection-szintű `read("users")`
+    // örökölt → cross-tenant Realtime push szivárgás. A doc most csak az
+    // `org_${invite.organizationId}` team tagjainak olvasható.
     let membership;
     try {
         membership = await databases.createDocument(
@@ -1018,7 +1024,14 @@ async function acceptInvite(ctx) {
                 // `usersApi.get` hívás.
                 userName: callerUserDoc.name || null,
                 userEmail: callerUserDoc.email || null
-            }
+            },
+            // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
+            // A meghívott (`callerId`) a `createDocument` időpontban MÉG NEM
+            // `org_${orgId}` team-tag — az `ensureTeamMembership` (1088) későbbi
+            // sorban fut. Az explicit `user(callerId)` Role azonnali read jogot
+            // ad a saját membership doc-jára (különben a meghívott NEM látja a
+            // saját elfogadását, amíg az ensureTeamMembership le nem fut).
+            withCreator(buildOrgAclPerms(invite.organizationId), callerId)
         );
     } catch (err) {
         if (err?.type === 'document_already_exists' || /unique/i.test(err?.message || '')) {

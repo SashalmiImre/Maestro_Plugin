@@ -23,8 +23,10 @@ const {
     buildOfficeTeamId,
     buildOrgTeamId,
     buildOrgAdminTeamId,
+    buildOrgAclPerms,
     buildOfficeAclPerms,
     buildWorkflowAclPerms,
+    withCreator,
     ensureTeam,
     ensureTeamMembership,
     removeTeamMembership,
@@ -367,6 +369,9 @@ async function createEditorialOffice(ctx) {
     // 3. Office létrehozás — slug auto-generálás + ütközéskor retry
     //    random suffix-szel. Max 3 próba.
     const baseSlug = slugifyName(sanitizedName);
+    // S.7.1 fix (2026-05-12): doc-szintű ACL `Permission.read(team:org_${orgId})`.
+    // **Org-scope**: minden org-tag látja az office-listát (admin UI dropdown stb.).
+    // Office-tagság a per-office membershipek-en dől el, NEM az office doc read-jogán.
     let newOfficeId = null;
     let usedSlug = null;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -382,7 +387,12 @@ async function createEditorialOffice(ctx) {
                     organizationId,
                     name: sanitizedName,
                     slug: candidateSlug
-                }
+                },
+                // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
+                // A caller már `org_${organizationId}` team-tag (a permission check
+                // ELŐRE fut), így a `buildOrgAclPerms` ACL hat. A `user(callerId)`
+                // explicit védelem redundáns de robust.
+                withCreator(buildOrgAclPerms(organizationId), callerId)
             );
             newOfficeId = officeDoc.$id;
             usedSlug = candidateSlug;
@@ -415,6 +425,9 @@ async function createEditorialOffice(ctx) {
     //    mezőkre. A `fetchUserIdentity` failure-tolerant (404 / hálózati hiba
     //    esetén `null` marad), és a per-request cache idempotens.
     const callerIdentity = await fetchUserIdentity(usersApi, callerId, userIdentityCache, log);
+    // S.7.1 fix (2026-05-12): doc-szintű ACL `Permission.read(team:office_${officeId})`.
+    // Office-scope: a membership doc CSAK az adott office tagjainak releváns
+    // (más office-tagok NEM látják ki tag az adott office-ban).
     let newOfficeMembershipId = null;
     try {
         const memDoc = await databases.createDocument(
@@ -428,7 +441,11 @@ async function createEditorialOffice(ctx) {
                 role: 'admin',
                 userName: callerIdentity.userName,
                 userEmail: callerIdentity.userEmail
-            }
+            },
+            // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
+            // A `ensureTeamMembership(officeTeamId)` később fut (sor 467+) — a
+            // `createDocument` időpontban a creator MÉG NEM office-team-tag.
+            withCreator(buildOfficeAclPerms(newOfficeId), callerId)
         );
         newOfficeMembershipId = memDoc.$id;
         rollbackSteps.push(() => databases.deleteDocument(env.databaseId, env.officeMembershipsCollectionId, newOfficeMembershipId));
