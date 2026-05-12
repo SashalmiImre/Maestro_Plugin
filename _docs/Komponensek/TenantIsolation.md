@@ -6,8 +6,12 @@ related:
   - "[[SecurityBaseline]]"
   - "[[SecurityRiskRegister]]"
   - "[[Döntések/0003-tenant-team-acl]]"
+  - "[[Döntések/0014-tenant-doc-acl-with-creator]]"
   - "[[Komponensek/Permissions]]"
 ---
+
+> **ADR-szintű döntés**: a `withCreator` defense-in-depth minta + 3-réteges ACL [[Döntések/0014-tenant-doc-acl-with-creator|ADR 0014]]-ben rögzítve (Codex Harden P8 GO 2026-05-12). Ez a jegyzet a komponens-szintű aktuális implementáció + 8 fix tábla; az ADR a tradeoff-okat + alternatívákat rögzíti.
+
 
 # Tenant Isolation
 
