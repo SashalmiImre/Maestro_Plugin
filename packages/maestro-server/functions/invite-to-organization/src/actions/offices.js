@@ -443,7 +443,7 @@ async function createEditorialOffice(ctx) {
                 userEmail: callerIdentity.userEmail
             },
             // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
-            // A `ensureTeamMembership(officeTeamId)` később fut (sor 467+) — a
+            // A `ensureTeamMembership(officeTeamId)` lentebb, az office-create action végén fut — a
             // `createDocument` időpontban a creator MÉG NEM office-team-tag.
             withCreator(buildOfficeAclPerms(newOfficeId), callerId)
         );

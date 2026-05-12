@@ -326,7 +326,7 @@ async function bootstrapOrCreateOrganization(ctx) {
                 // workflowId: a 7. lépésben (workflow seeding) töltjük ki
             },
             // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
-            // Az `ensureTeamMembership(orgTeamId)` (247) már lefutott (a creator
+            // Az `ensureTeamMembership(orgTeamId)` előbb (org-membership lépés végén) már lefutott (a creator
             // org-team-tag), de a `Permission.read(user)` explicit redundáns
             // védelmet ad arra az esetre, ha az org-team membership add-ja
             // valamilyen race-en bukna.
@@ -378,7 +378,7 @@ async function bootstrapOrCreateOrganization(ctx) {
                 userEmail: callerIdentity.userEmail
             },
             // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
-            // A `ensureTeamMembership(officeTeamId)` (377) későbbi sorban fut —
+            // A `ensureTeamMembership(officeTeamId)` lentebb, az office-flow végén fut —
             // a `createDocument` időpontban a creator NEM office-team-tag.
             withCreator(buildOfficeAclPerms(newOfficeId), callerId)
         );

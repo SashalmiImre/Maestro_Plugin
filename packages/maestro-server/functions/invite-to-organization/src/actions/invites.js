@@ -1027,8 +1027,8 @@ async function acceptInvite(ctx) {
             },
             // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
             // A meghívott (`callerId`) a `createDocument` időpontban MÉG NEM
-            // `org_${orgId}` team-tag — az `ensureTeamMembership` (1088) későbbi
-            // sorban fut. Az explicit `user(callerId)` Role azonnali read jogot
+            // `org_${orgId}` team-tag — az `ensureTeamMembership` lentebb,
+            // ezen action végén fut. Az explicit `user(callerId)` Role azonnali read jogot
             // ad a saját membership doc-jára (különben a meghívott NEM látja a
             // saját elfogadását, amíg az ensureTeamMembership le nem fut).
             withCreator(buildOrgAclPerms(invite.organizationId), callerId)
@@ -1068,6 +1068,24 @@ async function acceptInvite(ctx) {
                     } catch (adminErr) {
                         log(`[Accept] Race admin-team retry hiba (non-blocking — backfill pótolja): ${adminErr.message}`);
                     }
+                }
+
+                // Harden Phase 2 adversarial P2 fix (2026-05-12): a fallback ágon is
+                // ensureTeamMembership(orgTeamId) — különben a legacy/race-winner ágon
+                // a meghívott NEM kerül be az `org_${orgId}` base team-be, és NEM látja
+                // a tenant-szintű doc-okat (groups, publications stb.). Non-blocking:
+                // ha a team nem létezik (legacy org backfill előtt), a `team_not_found`
+                // visszajelzést loggoljuk; a `backfill_tenant_acl` action pótolja.
+                try {
+                    const orgTeamId = buildOrgTeamId(invite.organizationId);
+                    const r = await ensureTeamMembership(teamsApi, orgTeamId, callerId, [existing.role]);
+                    if (r.skipped === 'team_not_found') {
+                        // NB: az org-team-blokk NEM hív `ensureTeam`-et (a base org-team
+                        // a `bootstrap_organization`-ban épül) — a not-found legacy / pre-backfill jel.
+                        log(`[Accept] Race org-team retry: team_not_found (org-team nem létezik) — backfill pótolja`);
+                    }
+                } catch (orgTeamErr) {
+                    log(`[Accept] Race org-team retry hiba (non-blocking — backfill pótolja): ${orgTeamErr.message}`);
                 }
 
                 try {

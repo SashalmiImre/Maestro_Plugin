@@ -96,11 +96,13 @@ function buildOfficeAclPerms(editorialOfficeId) {
  * @returns {string[]} — kombinált perm-array
  */
 function withCreator(perms, callerId) {
-    // Codex verifying review NIT (2026-05-12): explicit guard — különben
-    // `user:undefined`/`user:null` permission string-et adna ki (érvénytelen
-    // ACL, Appwrite 400-zal szállna el a `createDocument`-en).
-    if (!callerId || typeof callerId !== 'string') {
-        throw new Error('withCreator: callerId required (non-empty string)');
+    // Codex NIT + Harden P6 fix (2026-05-12): explicit string + non-empty +
+    // trim-equality guard. Üres/whitespace-only/leading-trailing-space callerId
+    // érvénytelen ACL-t (`user:undefined` / `user:  `) generálna — throw,
+    // NEM csendben normalizálunk.
+    const trimmed = typeof callerId === 'string' ? callerId.trim() : '';
+    if (!trimmed || trimmed !== callerId) {
+        throw new Error('withCreator: callerId required (non-empty, non-whitespace, no leading/trailing space)');
     }
     return [...perms, sdk.Permission.read(sdk.Role.user(callerId))];
 }
