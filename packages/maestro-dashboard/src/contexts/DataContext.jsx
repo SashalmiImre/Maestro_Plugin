@@ -19,7 +19,7 @@
 
 import React, { createContext, useContext, useState, useCallback, useEffect, useLayoutEffect, useRef, useMemo } from 'react';
 import { Databases, Storage, Query, ID } from 'appwrite';
-import { getClient } from './AuthContext.jsx';
+import { getClient, useAuth } from './AuthContext.jsx';
 import { subscribeRealtime, collectionChannel } from './realtimeBus.js';
 import { useScope } from './ScopeContext.jsx';
 import {
@@ -30,6 +30,7 @@ import {
     buildWorkflowVisibilityQueries,
     isWorkflowInScope
 } from '../utils/workflowVisibility.js';
+import { buildOfficeAclPerms, withCreator } from 'maestro-shared/teamHelpers.client.js';
 
 const DataContext = createContext(null);
 
@@ -39,6 +40,15 @@ export function useData() {
 
 export function DataProvider({ children }) {
     const { activeOrganizationId, activeEditorialOfficeId } = useScope();
+    // Tenant-doc ACL `withCreator` perm-jéhez szükséges (ADR 0014, 3. réteg).
+    // Hangos throw a DataProvider-mounted-outside-AuthProvider hibára — különben
+    // az ACL-határ csendben degradálódna (`useAuth()` null → `permissions: undefined`),
+    // és a tenant-isolation hamis biztonságérzetet adna (ASVS V14.2.1).
+    const authValue = useAuth();
+    if (!authValue) {
+        throw new Error('DataProvider must be mounted inside AuthProvider (S.7.7 ACL invariant).');
+    }
+    const { user } = authValue;
 
     const [publications, setPublications] = useState([]);
     const [articles, setArticles] = useState([]);
@@ -104,8 +114,10 @@ export function DataProvider({ children }) {
     // szinkronizálnánk, stale office-szal fetchelne (A→B→A esetben A-n is üres lenne).
     const activeOrganizationIdRef = useRef(activeOrganizationId);
     const activeEditorialOfficeIdRef = useRef(activeEditorialOfficeId);
+    const userRef = useRef(user);
     useLayoutEffect(() => { activeOrganizationIdRef.current = activeOrganizationId; }, [activeOrganizationId]);
     useLayoutEffect(() => { activeEditorialOfficeIdRef.current = activeEditorialOfficeId; }, [activeEditorialOfficeId]);
+    useLayoutEffect(() => { userRef.current = user; }, [user]);
 
     // Appwrite szolgáltatások
     const servicesRef = useRef(null);
@@ -546,28 +558,50 @@ export function DataProvider({ children }) {
 
     // ─── Write-through metódusok ────────────────────────────────────────────
     //
-    // A Dashboard szerkesztőfelületek (CreatePublicationModal, PublicationSettingsModal)
-    // ezeken keresztül írnak az Appwrite DB-be. A scope mezők (`organizationId`,
-    // `editorialOfficeId`) automatikusan injektálódnak a `withScope()` helper-rel.
+    // A Dashboard szerkesztőfelületek ezeken keresztül írnak az Appwrite DB-be.
+    // A scope mezők (`organizationId`, `editorialOfficeId`) és a doc-szintű ACL
+    // (ADR 0014) automatikusan injektálódnak a `buildTenantDocOptions()` helper-rel.
     // A Realtime $updatedAt guard az optimista update-et védi a régi payload ellen.
 
-    const withScope = useCallback((data) => {
-        const officeId = activeEditorialOfficeIdRef.current;
+    /**
+     * Tenant-érintő `createDocument` hívásokhoz scope+ACL builder: snapshot
+     * orgId+officeId+userId, scope-os data, doc-szintű ACL (ADR 0014:
+     * `team:office_X` + `user:creatorId` defense-in-depth).
+     *
+     * Single snapshot per call — a `data` és `permissions` ugyanazt az officeId-t
+     * használja, így ref-update és request között nincs interleaving race.
+     *
+     * Fail-closed: hiányzó scope/user → throw (NEM csendben `team:office_undefined`).
+     *
+     * @param {Object} data
+     * @returns {{data: Object, permissions: string[]}}
+     */
+    const buildTenantDocOptions = useCallback((data) => {
         const orgId = activeOrganizationIdRef.current;
+        const officeId = activeEditorialOfficeIdRef.current;
+        const userId = userRef.current?.$id;
         if (!officeId || !orgId) {
             throw new Error('Nincs aktív szerkesztőség — a művelet nem hajtható végre.');
         }
-        return { ...data, organizationId: orgId, editorialOfficeId: officeId };
+        if (!userId) {
+            throw new Error('Nincs bejelentkezett felhasználó — a művelet nem hajtható végre.');
+        }
+        return {
+            data: { ...data, organizationId: orgId, editorialOfficeId: officeId },
+            permissions: withCreator(buildOfficeAclPerms(officeId), userId)
+        };
     }, []);
 
     // Publications
 
     const createPublication = useCallback(async (data) => {
+        const { data: scopedData, permissions } = buildTenantDocOptions(data);
         const doc = await databases.createDocument({
             databaseId: DATABASE_ID,
             collectionId: COLLECTIONS.PUBLICATIONS,
             documentId: ID.unique(),
-            data: withScope(data)
+            data: scopedData,
+            permissions
         });
         setPublications((prev) => {
             if (prev.some((p) => p.$id === doc.$id)) return prev;
@@ -578,7 +612,7 @@ export function DataProvider({ children }) {
         // utólag létrehozott default layout is az aktív pub-hoz kerül be.
         await switchPublication(doc.$id);
         return doc;
-    }, [databases, withScope, switchPublication]);
+    }, [databases, buildTenantDocOptions, switchPublication]);
 
     const updatePublication = useCallback(async (id, data) => {
         const doc = await databases.updateDocument({
@@ -676,11 +710,13 @@ export function DataProvider({ children }) {
     // Layouts
 
     const createLayout = useCallback(async (data) => {
+        const { data: scopedData, permissions } = buildTenantDocOptions(data);
         const doc = await databases.createDocument({
             databaseId: DATABASE_ID,
             collectionId: COLLECTIONS.LAYOUTS,
             documentId: ID.unique(),
-            data: withScope(data)
+            data: scopedData,
+            permissions
         });
         // Csak akkor rakjuk be a helyi state-be, ha az aktív kiadványhoz tartozik
         if (doc.publicationId === activePublicationIdRef.current) {
@@ -690,7 +726,7 @@ export function DataProvider({ children }) {
             });
         }
         return doc;
-    }, [databases, withScope]);
+    }, [databases, buildTenantDocOptions]);
 
     const updateLayout = useCallback(async (id, data) => {
         const doc = await databases.updateDocument({
@@ -740,11 +776,13 @@ export function DataProvider({ children }) {
     // Deadlines
 
     const createDeadline = useCallback(async (data) => {
+        const { data: scopedData, permissions } = buildTenantDocOptions(data);
         const doc = await databases.createDocument({
             databaseId: DATABASE_ID,
             collectionId: COLLECTIONS.DEADLINES,
             documentId: ID.unique(),
-            data: withScope(data)
+            data: scopedData,
+            permissions
         });
         if (doc.publicationId === activePublicationIdRef.current) {
             setDeadlines((prev) => {
@@ -753,7 +791,7 @@ export function DataProvider({ children }) {
             });
         }
         return doc;
-    }, [databases, withScope]);
+    }, [databases, buildTenantDocOptions]);
 
     const updateDeadline = useCallback(async (id, data) => {
         const doc = await databases.updateDocument({

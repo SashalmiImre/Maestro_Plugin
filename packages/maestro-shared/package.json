@@ -17,6 +17,11 @@
     "./deadlineValidator": "./deadlineValidator.js",
     "./publicationActivation": "./publicationActivation.js",
     "./extensionContract": "./extensionContract.js",
-    "./extensionContract.js": "./extensionContract.js"
+    "./extensionContract.js": "./extensionContract.js",
+    "./teamHelpers.client": "./teamHelpers.client.js",
+    "./teamHelpers.client.js": "./teamHelpers.client.js"
+  },
+  "peerDependencies": {
+    "appwrite": "^24.1.1"
   }
 }
