@@ -103,7 +103,10 @@ const VALID_ACTIONS = new Set([
     // S.7.7b (2026-05-15) — R.S.7.6 close: collection-meta `documentSecurity`
     // flag verify a 6 user-data collection-en (ADR 0014 Layer 1 prerequisite).
     // Read-only deploy-gate. Target-org-owner auth.
-    'verify_collection_document_security'
+    'verify_collection_document_security',
+    // S.7.7c (2026-05-15) — R.S.7.7 close: legacy ACL backfill a 6 user-data
+    // collection-en. Scope-paraméteres + kategória 1/2 fallback + audit log.
+    'backfill_acl_phase3'
 ]);
 
 // Slug formátum: kisbetű, szám, kötőjel. A frontend is ugyanezt alkalmazza.
@@ -341,6 +344,22 @@ async function listOfficeIdsForOrg(databases, env, sdk, organizationId, batchLim
     return officeIds;
 }
 
+/**
+ * Doc-szintű `read("user:X")` permission-ok preserve-elése (ADR 0014 defense-in-depth).
+ *
+ * A `backfill_acl_phase2` és `backfill_acl_phase3` action-ök közös helpere
+ * (Harden Phase 5 Reuse #1 fix, 2026-05-15). Csak a `read("user:*")` formát
+ * preserve-eli — `write`/`update`/`delete` user perm-eket NEM (Codex S.7.7c
+ * pre-review MAJOR 2).
+ *
+ * @param {unknown} currentPermissions — Appwrite `$permissions` tömb a doc-on
+ * @returns {string[]} csak a `read("user:X")` perm-ek (üres tömb ha nincs)
+ */
+function preserveUserReadPermissions(currentPermissions) {
+    if (!Array.isArray(currentPermissions)) return [];
+    return currentPermissions.filter(p => typeof p === 'string' && /^read\("user:/.test(p));
+}
+
 module.exports = {
     DEFAULT_WORKFLOW,
     INVITE_VALIDITY_DAYS,
@@ -354,6 +373,7 @@ module.exports = {
     SLUG_MAX_LENGTH,
     NAME_MAX_LENGTH,
     fetchUserIdentity,
+    preserveUserReadPermissions,
     HUN_ACCENT_MAP,
     fail,
     slugifyName,

@@ -24,13 +24,15 @@ const {
     buildOrgAdminAclPerms,
     buildOfficeAclPerms,
     ensureTeam,
-    ensureTeamMembership
+    ensureTeamMembership,
+    withCreator
 } = require('../teamHelpers.js');
 const {
     isAlreadyExists,
     requireOwnerAnywhere,
     requireOrgOwner,
-    fetchUserIdentity
+    fetchUserIdentity,
+    preserveUserReadPermissions
 } = require('../helpers/util.js');
 const {
     listAllByQuery,
@@ -1483,15 +1485,10 @@ async function backfillAclPhase2(ctx) {
     const listAll = (collectionId, queries = []) =>
         listAllByQuery(databases, env.databaseId, collectionId, queries, sdk, { batchSize: CASCADE_BATCH_LIMIT });
 
-    // Codex pre-review Q1 fix: a meglévő `read("user:X")` perm-eket átemeljük
-    // (ADR 0014 defense-in-depth). NEM vakon overwrite. A Permission string
-    // formátuma `read("user:abc123")` — a regex csak a user-read-eket tartja meg,
-    // a `read("users")` (collection-szintű), `read("team:...")` (legacy team)
-    // és minden más perm leesik (overwrite a team-perm-mel).
-    function preserveUserReads(currentPermissions) {
-        if (!Array.isArray(currentPermissions)) return [];
-        return currentPermissions.filter(p => typeof p === 'string' && /^read\("user:/.test(p));
-    }
+    // user-read preserve helper a `helpers/util.js`-ből (Harden Phase 5 Reuse #1
+    // hoist, 2026-05-15). Egyetlen single-source ADR 0014 defense-in-depth-en.
+    // (Korábban inline regex; phase3-vel közös.)
+    const preserveUserReads = preserveUserReadPermissions;
 
     const orgPerms = buildOrgAclPerms(targetOrgId);
     const wantOrgs = scope === 'all' || scope === 'organizations';
@@ -1747,6 +1744,664 @@ async function backfillAclPhase2(ctx) {
     return res.json({
         success: stats.errorCount === 0,
         action: 'backfilled_acl_phase2',
+        stats
+    });
+}
+
+/**
+ * ACTION='backfill_acl_phase3' (S.7.7c, 2026-05-15) — R.S.7.7 close.
+ *
+ * Legacy doc-ok (S.7.7 fix ELŐTT létrejött `articles`/`publications`/`layouts`/
+ * `deadlines`/`userValidations`/`systemValidations`) retroaktív ACL korrekciója.
+ * A S.7.7 (2026-05-14) fix-csomag CSAK a friss `createRow`/`createDocument`
+ * hívásokra ad doc-szintű `withCreator(buildOfficeAclPerms(...))` ACL-t; a fix
+ * előtt létrejött doc-ok üres `permissions`-szel hagyatkoznak a collection-
+ * fallback-ra → cross-tenant `read("users")` szivárgás.
+ *
+ * **Scope** (6 user-data collection, S.7.7 fix-csomag tükörképe):
+ *
+ *   | # | Collection alias    | Office-resolution                                |
+ *   |---|---------------------|--------------------------------------------------|
+ *   | 1 | publications        | direkt `editorialOfficeId` mező                  |
+ *   | 2 | articles            | `publicationId` → publications.editorialOfficeId |
+ *   | 3 | layouts             | `publicationId` → publications.editorialOfficeId |
+ *   | 4 | deadlines           | `publicationId` → publications.editorialOfficeId |
+ *   | 5 | userValidations     | `articleId` → articles.publicationId → ...       |
+ *   | 6 | systemValidations   | `articleId` → articles.publicationId → ...       |
+ *
+ * **Fallback policy** (Codex verifying C5 2026-05-14, KÖTELEZŐ):
+ *   - Kategória 1: `doc.createdBy` érvényes user-$id + Auth user lookup SIKERES
+ *     → `withCreator(buildOfficeAclPerms(office.$id), doc.createdBy)`
+ *   - Kategória 2: `createdBy` hiányzik / invalid / Auth user 404 / transient
+ *     → CSAK `buildOfficeAclPerms(office.$id)` — NINCS user-read fallback
+ *       (NE inferáljunk `modifiedBy`-ból — ASVS V4.1.3 + ownership enforcement)
+ *
+ * **user-read preserve**: meglévő `read("user:*")` perm-eket regex átemeli
+ * (mint phase2, ADR 0014 defense-in-depth). Codex pre-review MAJOR 2 fix:
+ * CSAK `read("user:X")` formát preserve-eli — write/update/delete user perm-et
+ * NEM.
+ *
+ * **Audit log** (Codex pre-review MAJOR 1 fix): minden kategória-2 doc per-
+ * collection + per-$id `fallbackUsedDocs: [{alias, collectionId, docId,
+ * fallbackReason}]` arrayba a response-ba + CF stdout. `fallbackReason` 4-féle
+ * (`createdBy_missing` / `createdBy_invalid` / `auth_user_not_found` /
+ * `auth_lookup_failed_transient`) — 404 vs transient NEM mosódik össze.
+ * Cap: `MAX_FALLBACKS = 100` + `fallbackUsedDocsTruncated` flag.
+ *
+ * **Office-resolution failure policy** (Codex pre-review BLOCKER, KÖTELEZŐ):
+ *   - Hiányzó `publicationId` (articles/layouts/deadlines) →
+ *     `kind: 'missing_publication_link'`, NEM ACL-write
+ *   - publication NEM létezik a pre-load Map-ben (törölt parent) →
+ *     `kind: 'orphan_publication'`
+ *   - Publication `editorialOfficeId` mező missing/invalid →
+ *     `kind: 'publication_missing_office'`
+ *   - userValidations/systemValidations: `articleId` missing →
+ *     `kind: 'missing_article_link'`; article nem található →
+ *     `kind: 'orphan_article'`; parent publication nem található →
+ *     `kind: 'orphan_publication_via_article'`
+ *
+ * **Scope param** (CF 60s timeout-bypass nagy orgon): `'all'` (default) vagy
+ * a 6 alias bármelyike. Az admin többször futtathatja collection-enként.
+ *
+ * **Idempotens overwrite** (mint phase2): 2. futtatás `$updatedAt`-ot mozdít,
+ * de nem semantikusan változtat. Realtime push storm tolerable (300ms debounce).
+ *
+ * **Execution constraint** (Codex verifying C2 fix, 2026-05-15): **operator-
+ * supervised only** — egy CF-invocation EGY `scope` payload-ot futtat, NEM
+ * autonóm batch-en az összes 6 aliast. Az admin szekvenciálisan futtatja
+ * scope-okat a runbook-szerint.
+ *
+ * **Accepted runtime tradeoffs** (Codex stop-time MAJOR 2+3, 2026-05-15):
+ *   - `usersApi.get(createdBy)` per egyedi `createdBy` SDK-call: egy nagy org
+ *     1000+ egyedi createdBy → ~100s, CF 60s timeout-ot átléphet. Mitigáció:
+ *     scope-by-scope MANUÁLIS admin futtatás (a `scope` paraméterrel), és a
+ *     `createdByAuthCache` (Map, lokális a function-invocation-höz — NEM durable,
+ *     a 6 alias-scan KÖZÖSEN használja az adott CF-call alatt, de a következő
+ *     invocation friss Map-pel kezd).
+ *     Observable stop conditions (admin per-invocation figyelje):
+ *       - max ~500 egyedi createdBy / scope-CF-call → biztosan gyors (<60s)
+ *       - 500-1000 között → óvatos retry (a Codex pre-review MAJOR 2 bound)
+ *       - >1000 → scope-bontás VAGY a Streaming-page-local refactor
+ *       - timeout / elevated `auth_lookup_failed_transient` fallback >50% →
+ *         admin abort + retry kisebb scope-pal
+ *   - `articlesList` pre-load `articleId → publicationId` Map a 2 validation
+ *     scope-on: nagy orgon 100k+ article = 100k Map-entry. `Query.select(['$id',
+ *     'publicationId'])` projection-szel ~20B/entry → 100k = ~2MB (tolerable
+ *     a CF memory-limit-en belül). Observable stop:
+ *       - >50k article a target-orgon → admin futtassa a 4 non-validation scope-ot
+ *         előbb, és csak utána a 2 validation-t külön
+ *       - memory-pressure (CF OOM) → admin abort + streaming refactor escalation
+ *     Streaming page-local join refactor halasztva (a kód-egyszerűségéért).
+ *   Runbook a [[Komponensek/TenantIsolation#S.7.7c operations runbook]]-on.
+ *
+ * **Office team-ensure HARD prerequisite** (mint phase2): minden érintett
+ * `office_${officeId}` team létezzen, különben doc-szintű `read(team:X)` ACL
+ * semmit nem ér. `ensureTeam` idempotens (409 → skip); CREATE-fail per-office
+ * skip + errors[].
+ *
+ * **Stats** (Codex pre-review MINOR fix: collection-alias szerint bontva,
+ * `wouldRewrite` vs `rewritten` szétválasztva dryRun esetén, + `fallbackUsed`):
+ *
+ *   { dryRun, organizationId, scope, partialFailure, errorCount,
+ *     errorsTruncated, fallbackUsedDocsCount, fallbackUsedDocsTruncated,
+ *     publications:      { scanned, wouldRewrite, rewritten, skipped, fallbackUsed },
+ *     articles:          { ... },
+ *     layouts:           { ... },
+ *     deadlines:         { ... },
+ *     userValidations:   { ... },
+ *     systemValidations: { ... },
+ *     errors: [{kind, ...id, message}],
+ *     fallbackUsedDocs: [{alias, collectionId, docId, fallbackReason}] }
+ *
+ * **Payload**: `{ action: 'backfill_acl_phase3', organizationId, dryRun?, scope? }`
+ *
+ * **Auth**: target org `owner` (mint `backfill_acl_phase2`, audit-trail +
+ * ASVS V4.1.1 least privilege).
+ *
+ * @param {Object} ctx
+ * @returns {Promise<Object>}
+ */
+async function backfillAclPhase3(ctx) {
+    const { databases, env, callerId, payload, log, error, res, fail, sdk, teamsApi, usersApi } = ctx;
+    const dryRun = payload && payload.dryRun === true;
+    const { organizationId: targetOrgId, scope: scopeRaw } = payload || {};
+
+    // 6 alias scope + 'all' (REQUIRED_SECURED_COLLECTIONS single-source — S.7.7b).
+    const VALID_SCOPES = ['all', ...REQUIRED_SECURED_COLLECTIONS.map(c => c.alias)];
+    // Trim a scope-string-et (mint phase2 SHOULD FIX #5 minta). Üres / nem-string → 'all'.
+    const scope = (typeof scopeRaw === 'string' ? scopeRaw.trim() : '') || 'all';
+
+    if (!targetOrgId || typeof targetOrgId !== 'string') {
+        return fail(res, 400, 'missing_fields', { required: ['organizationId'] });
+    }
+    if (!VALID_SCOPES.includes(scope)) {
+        return fail(res, 400, 'invalid_scope', { received: scope, allowed: VALID_SCOPES });
+    }
+
+    const denied = await requireOrgOwner(ctx, targetOrgId);
+    if (denied) return denied;
+
+    // Target org létezés-check — defensive (a `requireOrgOwner` membership-doc-on
+    // futott, de explicit org-fetch a `name` mezőhöz az office-team-ensure
+    // title-jéhez kell).
+    let targetOrgDoc;
+    try {
+        targetOrgDoc = await databases.getDocument(
+            env.databaseId, env.organizationsCollectionId, targetOrgId
+        );
+    } catch (err) {
+        if (err?.code === 404) return fail(res, 404, 'organization_not_found');
+        error(`[BackfillAclPhase3] org fetch hiba: ${err.message}`);
+        return fail(res, 500, 'organization_fetch_failed');
+    }
+
+    const MAX_ERRORS = 100;
+    const MAX_FALLBACKS = 100;
+    const stats = {
+        dryRun,
+        organizationId: targetOrgId,
+        scope,
+        partialFailure: false,
+        publications:      { scanned: 0, wouldRewrite: 0, rewritten: 0, skipped: 0, fallbackUsed: 0 },
+        articles:          { scanned: 0, wouldRewrite: 0, rewritten: 0, skipped: 0, fallbackUsed: 0 },
+        layouts:           { scanned: 0, wouldRewrite: 0, rewritten: 0, skipped: 0, fallbackUsed: 0 },
+        deadlines:         { scanned: 0, wouldRewrite: 0, rewritten: 0, skipped: 0, fallbackUsed: 0 },
+        userValidations:   { scanned: 0, wouldRewrite: 0, rewritten: 0, skipped: 0, fallbackUsed: 0 },
+        systemValidations: { scanned: 0, wouldRewrite: 0, rewritten: 0, skipped: 0, fallbackUsed: 0 },
+        errorCount: 0,
+        errorsTruncated: false,
+        errors: [],
+        fallbackUsedDocsCount: 0,
+        fallbackUsedDocsTruncated: false,
+        fallbackUsedDocs: []
+    };
+
+    function recordError(entry) {
+        stats.errorCount++;
+        if (stats.errors.length < MAX_ERRORS) {
+            stats.errors.push(entry);
+        } else {
+            stats.errorsTruncated = true;
+        }
+    }
+    function recordFallback(entry) {
+        stats.fallbackUsedDocsCount++;
+        if (stats.fallbackUsedDocs.length < MAX_FALLBACKS) {
+            stats.fallbackUsedDocs.push(entry);
+        } else {
+            stats.fallbackUsedDocsTruncated = true;
+        }
+    }
+
+    const listAll = (collectionId, queries = []) =>
+        listAllByQuery(databases, env.databaseId, collectionId, queries, sdk, { batchSize: CASCADE_BATCH_LIMIT });
+
+    // user-read preserve helper a `helpers/util.js`-ből (Harden Phase 5 Reuse #1
+    // hoist, 2026-05-15). Single-source phase2 + phase3 között.
+    const preserveUserReads = preserveUserReadPermissions;
+
+    // Want flags per alias
+    const wantPubs = scope === 'all' || scope === 'publications';
+    const wantArt  = scope === 'all' || scope === 'articles';
+    const wantLay  = scope === 'all' || scope === 'layouts';
+    const wantDl   = scope === 'all' || scope === 'deadlines';
+    const wantUv   = scope === 'all' || scope === 'userValidations';
+    const wantSv   = scope === 'all' || scope === 'systemValidations';
+
+    // Pub pre-load minden non-empty scope-on kell (child collection-ök rajta resolve-elnek).
+    const needPubPreload = wantPubs || wantArt || wantLay || wantDl || wantUv || wantSv;
+    // Article pre-load csak a 2 validation-scope-on kell (articleId JOIN).
+    const needArtPreload = wantUv || wantSv;
+
+    // Collection-ID resolver — env hiánya scope-szintű skip + recordError.
+    // A S.7.7b óta a 4 új env var opcionális; ha hiányzik, csak az érintett scope
+    // skip-elt (NEM hard-fail az egész action-en, mert pl. csak `articles`-en hív
+    // a caller).
+    const collectionsByAlias = {
+        publications:      env.publicationsCollectionId,
+        articles:          env.articlesCollectionId,
+        layouts:           env.layoutsCollectionId,
+        deadlines:         env.deadlinesCollectionId,
+        userValidations:   env.userValidationsCollectionId,
+        systemValidations: env.systemValidationsCollectionId
+    };
+    function missingCollectionId(alias) {
+        const id = collectionsByAlias[alias];
+        if (!id || typeof id !== 'string' || id.length === 0) {
+            recordError({
+                kind: 'missing_env_collection_id',
+                alias,
+                message: `Env var hiányzik a '${alias}' collection ID-jához (set ${(REQUIRED_SECURED_COLLECTIONS.find(c => c.alias === alias) || {}).envVar || alias.toUpperCase()}_COLLECTION_ID).`
+            });
+            return true;
+        }
+        return false;
+    }
+
+    // ── Office target-org boundary pre-load: `validOfficesForTargetOrg` Set ──
+    // Harden Phase 2 adversarial HIGH fix (2026-05-15): cross-tenant attack
+    // vector prevention. A `publications.editorialOfficeId` mező NEM ellenőrzött
+    // a target-orgra: egy korrupt vagy malicious pub-doc org-A-ban office-B-re
+    // (másik org) mutathat — a backfill `read("team:office_B")` perm-eket adna
+    // a doc-okra, cross-tenant escalation. MEGOLDÁS: target-org office-ID-k
+    // pre-load Set-be, és minden office-ID-referenciát ellenőrzünk a Set-en
+    // (ha NEM benne → recordError `cross_org_office_violation` + skip).
+    let officesForTargetOrg = [];
+    const validOfficesForTargetOrg = new Set();
+    if (needPubPreload) {
+        try {
+            officesForTargetOrg = await listAll(
+                env.officesCollectionId,
+                [
+                    sdk.Query.equal('organizationId', targetOrgId),
+                    sdk.Query.select(['$id'])
+                ]
+            );
+            for (const o of officesForTargetOrg) {
+                if (o.$id && typeof o.$id === 'string') {
+                    validOfficesForTargetOrg.add(o.$id);
+                }
+            }
+        } catch (err) {
+            recordError({ kind: 'offices_list', message: err.message });
+        }
+    }
+
+    // ── Publication pre-load: `pubId → editorialOfficeId` Map ──
+    // Single-pass `listAllByQuery` `Query.select` projection-szel (memory-friendly
+    // nagy orgon: 10k pub × 25KB → ~5MB; projection-szel ~50KB).
+    //
+    // Harden adversarial HIGH fix: `editorialOfficeId` cross-tenant validation
+    // — csak `validOfficesForTargetOrg`-tagokat fogadunk a Map-be. Egy korrupt
+    // pub-doc office-B-re mutató referenciája NEM kerül a Map-be, recordError
+    // jelzi a violation-t.
+    let pubsList = [];
+    const pubOfficeMap = new Map();
+    if (needPubPreload && !missingCollectionId('publications')) {
+        try {
+            pubsList = await listAll(
+                env.publicationsCollectionId,
+                [
+                    sdk.Query.equal('organizationId', targetOrgId),
+                    sdk.Query.select(['$id', '$permissions', 'createdBy', 'editorialOfficeId'])
+                ]
+            );
+            for (const p of pubsList) {
+                if (p.editorialOfficeId && typeof p.editorialOfficeId === 'string') {
+                    if (validOfficesForTargetOrg.has(p.editorialOfficeId)) {
+                        pubOfficeMap.set(p.$id, p.editorialOfficeId);
+                    } else {
+                        // Cross-tenant office reference — BLOCK (security violation).
+                        recordError({
+                            kind: 'cross_org_office_violation',
+                            pubId: p.$id,
+                            officeId: p.editorialOfficeId,
+                            message: 'publication.editorialOfficeId NEM tartozik target-orghoz (potential cross-tenant attack vector vagy data-corruption — ACL rewrite skip)'
+                        });
+                    }
+                }
+            }
+        } catch (err) {
+            recordError({ kind: 'publications_list', message: err.message });
+        }
+    }
+
+    // ── Article pre-load: `articleId → publicationId` Map ──
+    // CSAK validation-scope esetén (uv|sv) — `articleId → publicationId → office`
+    // 2-step JOIN.
+    let articlesList = [];
+    const artPubMap = new Map();
+    if (needArtPreload && !missingCollectionId('articles')) {
+        try {
+            articlesList = await listAll(
+                env.articlesCollectionId,
+                [
+                    sdk.Query.equal('organizationId', targetOrgId),
+                    sdk.Query.select(['$id', 'publicationId'])
+                ]
+            );
+            for (const a of articlesList) {
+                if (a.publicationId && typeof a.publicationId === 'string') {
+                    artPubMap.set(a.$id, a.publicationId);
+                }
+            }
+        } catch (err) {
+            recordError({ kind: 'articles_list', message: err.message });
+        }
+    }
+
+    // ── Office team-ensure HARD prerequisite (mint phase2) ──
+    // pubOfficeMap-ből összegyűjtjük az érintett officeId Set-et, és mindegyikre
+    // `ensureTeam(office_${officeId})` idempotens hívást futtatunk. Dry-run-on
+    // a team-ensure kihagyva.
+    //
+    // Harden Phase 1 baseline P1 fix (2026-05-15): ha `ensureTeam` fail-el egy
+    // office-on, a `failedOfficeTeams` Set jelzi — a doc-szintű rewrite-ban a
+    // `resolveOffice` skip-eli (NEM ír `read("team:office_X")` perm-et nem-létező
+    // team-re, ami lockout-ot okozna a real user-ekre).
+    const failedOfficeTeams = new Set();
+    if (!dryRun) {
+        const officeIds = new Set();
+        for (const officeId of pubOfficeMap.values()) {
+            if (officeId) officeIds.add(officeId);
+        }
+        for (const officeId of officeIds) {
+            try {
+                await ensureTeam(teamsApi, buildOfficeTeamId(officeId), `Office: ${officeId}`);
+            } catch (err) {
+                failedOfficeTeams.add(officeId);
+                recordError({ kind: 'office_team_ensure', officeId, message: err.message });
+            }
+        }
+    }
+
+    // ── Kategória 1 vs 2 fallback build per doc (Codex pre-review MAJOR 1 fix) ──
+    //
+    // Aszinkron `usersApi.get(createdBy)` lookup + lokális `createdByAuthCache`
+    // (Map<userId, true|false|'transient'>). NEM reuse-oljuk a ctx `userIdentityCache`-t,
+    // mert az `{userName, userEmail}` shape — itt csak Auth-létezik-e jel kell.
+    //
+    // Visszatérési érték: { perms: Permission[]|null, fallbackUsed: boolean,
+    //                        fallbackReason: 'createdBy_missing' | 'createdBy_invalid' |
+    //                                        'auth_user_not_found' |
+    //                                        'auth_lookup_failed_transient' | null }
+    // (Codex stop-time MAJOR 1 fix: 4-reason contract — a cache-hit 404
+    // ugyanazt a `auth_user_not_found` reason-t adja, nem külön cached-jelet.)
+    const createdByAuthCache = new Map();
+    async function buildDocAcl({ alias, doc, officeId }) {
+        const officePerms = buildOfficeAclPerms(officeId);
+        const createdBy = doc.createdBy;
+        if (createdBy === undefined || createdBy === null) {
+            return { perms: officePerms, fallbackUsed: true, fallbackReason: 'createdBy_missing' };
+        }
+        if (typeof createdBy !== 'string' || createdBy.length === 0 || createdBy.trim() !== createdBy) {
+            return { perms: officePerms, fallbackUsed: true, fallbackReason: 'createdBy_invalid' };
+        }
+        // Cache-check.
+        // Codex stop-time MAJOR 1 fix (2026-05-15): a 4-reason contract egységes —
+        // a cache-hit 404-re UGYANAZT a `auth_user_not_found` reason-t adjuk, mint
+        // az első miss. A cache implementational detail, NEM audit-grain.
+        if (createdByAuthCache.has(createdBy)) {
+            const cached = createdByAuthCache.get(createdBy);
+            if (cached === true) {
+                return { perms: withCreator(officePerms, createdBy), fallbackUsed: false, fallbackReason: null };
+            }
+            return {
+                perms: officePerms,
+                fallbackUsed: true,
+                fallbackReason: cached === 'transient' ? 'auth_lookup_failed_transient' : 'auth_user_not_found'
+            };
+        }
+        // Cache miss — lookup
+        try {
+            await usersApi.get(createdBy);
+            createdByAuthCache.set(createdBy, true);
+            return { perms: withCreator(officePerms, createdBy), fallbackUsed: false, fallbackReason: null };
+        } catch (err) {
+            const is404 = err?.code === 404 || err?.type === 'user_not_found';
+            createdByAuthCache.set(createdBy, is404 ? false : 'transient');
+            return {
+                perms: officePerms,
+                fallbackUsed: true,
+                fallbackReason: is404 ? 'auth_user_not_found' : 'auth_lookup_failed_transient'
+            };
+        }
+    }
+
+    // ── Common rewrite-loop helper (mint phase2 rewriteAclBatch, kibővítve
+    // fallback-policy + audit-rekord-szal) ──
+    async function rewriteAclBatchPhase3({ alias, docs, collectionId, statBucket, resolveOffice, errorKind, idField }) {
+        for (const doc of docs) {
+            statBucket.scanned++;
+            const officeId = resolveOffice(doc);
+            if (!officeId) {
+                statBucket.skipped++;
+                continue; // resolveOffice maga loggolta a BLOCKER hibát
+            }
+            // Harden Phase 5 Quality #4 fix (2026-05-15): a `failedOfficeTeams`
+            // filter EGY helyen — post-resolve, pre-dryRun. A 3 resolveOffice
+            // callback (publications + scanByPublicationLink + scanByArticleLink)
+            // korábban DRY-fail-jelölést duplikált; itt egyetlen biztonsági
+            // invariáns-pont (ADR 0014 Layer 2 prevent-lockout).
+            if (failedOfficeTeams.has(officeId)) {
+                statBucket.skipped++;
+                recordError({
+                    kind: 'office_team_unavailable',
+                    alias,
+                    [idField]: doc.$id,
+                    officeId,
+                    message: 'office team-ensure failed — doc skipped to avoid lockout'
+                });
+                continue;
+            }
+            if (dryRun) {
+                statBucket.wouldRewrite++;
+                continue;
+            }
+            const aclResult = await buildDocAcl({ alias, doc, officeId });
+            if (!aclResult.perms) {
+                statBucket.skipped++;
+                continue;
+            }
+            if (aclResult.fallbackUsed) {
+                statBucket.fallbackUsed++;
+                recordFallback({
+                    alias,
+                    collectionId,
+                    docId: doc.$id,
+                    fallbackReason: aclResult.fallbackReason
+                });
+            }
+            try {
+                // Harden Phase 6 verifying P2 fix (2026-05-15): a `Set` dedupe-olja
+                // a `read("user:X")` perm-et, ha a doc már tartalmazta — különben
+                // a `withCreator` + `preserveUserReads` duplikát perm-et adna,
+                // és az Appwrite `updateDocument` rejeject-elné (idempotens
+                // re-run break).
+                const newPerms = Array.from(new Set([...aclResult.perms, ...preserveUserReads(doc.$permissions)]));
+                await databases.updateDocument(env.databaseId, collectionId, doc.$id, {}, newPerms);
+                statBucket.rewritten++;
+            } catch (err) {
+                recordError({ kind: `${errorKind}_acl`, [idField]: doc.$id, message: err.message });
+            }
+        }
+    }
+
+    // ── 1) publications ── direkt `editorialOfficeId` mező
+    if (wantPubs && !missingCollectionId('publications')) {
+        await rewriteAclBatchPhase3({
+            alias: 'publications',
+            docs: pubsList,
+            collectionId: env.publicationsCollectionId,
+            statBucket: stats.publications,
+            resolveOffice: (p) => {
+                const officeId = p.editorialOfficeId;
+                if (!officeId || typeof officeId !== 'string') {
+                    recordError({
+                        kind: 'publication_missing_office',
+                        pubId: p.$id,
+                        message: 'editorialOfficeId missing or invalid — orphan child doc'
+                    });
+                    return null;
+                }
+                // Harden adversarial HIGH fix: cross-tenant boundary defensive guard
+                // (a pubOfficeMap-be már csak valid office-ok kerültek a pre-load alatt,
+                // de a direkt resolve nem a Map-en megy — explicit check kell).
+                if (!validOfficesForTargetOrg.has(officeId)) {
+                    recordError({
+                        kind: 'cross_org_office_violation',
+                        pubId: p.$id,
+                        officeId,
+                        message: 'publication.editorialOfficeId NEM tartozik target-orghoz (potential cross-tenant — ACL rewrite skip)'
+                    });
+                    return null;
+                }
+                // `failedOfficeTeams` filter a `rewriteAclBatchPhase3`-ban (Phase 5
+                // Quality #4 fix) — egyetlen biztonsági invariáns-pont.
+                return officeId;
+            },
+            errorKind: 'publication',
+            idField: 'pubId'
+        });
+    }
+
+    // ── 2-4) articles / layouts / deadlines ── `publicationId → editorialOfficeId` JOIN
+    async function scanByPublicationLink({ alias, collectionId, statBucket, errorKind, idField }) {
+        if (missingCollectionId(alias)) return;
+        let docs = [];
+        try {
+            docs = await listAll(
+                collectionId,
+                [
+                    sdk.Query.equal('organizationId', targetOrgId),
+                    sdk.Query.select(['$id', '$permissions', 'createdBy', 'publicationId'])
+                ]
+            );
+        } catch (err) {
+            recordError({ kind: `${alias}_list`, message: err.message });
+            return;
+        }
+        await rewriteAclBatchPhase3({
+            alias,
+            docs,
+            collectionId,
+            statBucket,
+            resolveOffice: (doc) => {
+                const pubId = doc.publicationId;
+                if (!pubId || typeof pubId !== 'string') {
+                    recordError({
+                        kind: 'missing_publication_link',
+                        alias,
+                        [idField]: doc.$id,
+                        message: 'publicationId mező missing or invalid'
+                    });
+                    return null;
+                }
+                const officeId = pubOfficeMap.get(pubId);
+                if (!officeId) {
+                    recordError({
+                        kind: 'orphan_publication',
+                        alias,
+                        [idField]: doc.$id,
+                        pubId,
+                        message: 'Parent publication NEM létezik a Map-ben (törölt, cross-org, vagy validOfficesForTargetOrg-en kívüli)'
+                    });
+                    return null;
+                }
+                // `failedOfficeTeams` filter a `rewriteAclBatchPhase3`-ban (Phase 5 Quality #4 fix).
+                return officeId;
+            },
+            errorKind,
+            idField
+        });
+    }
+
+    if (wantArt) await scanByPublicationLink({ alias: 'articles',  collectionId: env.articlesCollectionId,  statBucket: stats.articles,  errorKind: 'article',  idField: 'articleId' });
+    if (wantLay) await scanByPublicationLink({ alias: 'layouts',   collectionId: env.layoutsCollectionId,   statBucket: stats.layouts,   errorKind: 'layout',   idField: 'layoutId' });
+    if (wantDl)  await scanByPublicationLink({ alias: 'deadlines', collectionId: env.deadlinesCollectionId, statBucket: stats.deadlines, errorKind: 'deadline', idField: 'deadlineId' });
+
+    // ── 5-6) userValidations / systemValidations ── `articleId → publicationId → office` 2-step JOIN
+    //
+    // Harden Phase 6 verifying P1 fix (2026-05-15): a validation collection-ök
+    // (`userValidations`, `systemValidations`) NEM tárolnak `organizationId`
+    // mezőt (a frontend `useOverlapValidation` / `useWorkflowValidation` csak
+    // `articleId`/`publicationId`/`source` + permissions-t írnak). Ezért a
+    // query NEM filter-elhet org-ra — ehelyett a target-orgon belüli article-ID-kkal
+    // batch-szerűen scan-elünk (`Query.equal('articleId', batch)`).
+    async function scanByArticleLink({ alias, collectionId, statBucket, errorKind, idField }) {
+        if (missingCollectionId(alias)) return;
+        const articleIds = Array.from(artPubMap.keys());
+        if (articleIds.length === 0) {
+            return; // Nincs article a target-orgban — nem lehet hozzá tartozó validation
+        }
+        const BATCH = 25; // Appwrite Query.equal IN-batch limit (konzervatív)
+        const docs = [];
+        for (let i = 0; i < articleIds.length; i += BATCH) {
+            const batch = articleIds.slice(i, i + BATCH);
+            try {
+                const batchDocs = await listAll(
+                    collectionId,
+                    [
+                        sdk.Query.equal('articleId', batch),
+                        sdk.Query.select(['$id', '$permissions', 'createdBy', 'articleId'])
+                    ]
+                );
+                docs.push(...batchDocs);
+            } catch (err) {
+                recordError({
+                    kind: `${alias}_list`,
+                    message: err.message,
+                    batchStartIndex: i,
+                    batchSize: batch.length
+                });
+                // Folytatás a következő batch-szel (partial-failure tolerable).
+            }
+        }
+        await rewriteAclBatchPhase3({
+            alias,
+            docs,
+            collectionId,
+            statBucket,
+            resolveOffice: (doc) => {
+                const artId = doc.articleId;
+                if (!artId || typeof artId !== 'string') {
+                    recordError({
+                        kind: 'missing_article_link',
+                        alias,
+                        [idField]: doc.$id,
+                        message: 'articleId mező missing or invalid'
+                    });
+                    return null;
+                }
+                const pubId = artPubMap.get(artId);
+                if (!pubId) {
+                    recordError({
+                        kind: 'orphan_article',
+                        alias,
+                        [idField]: doc.$id,
+                        artId,
+                        message: 'Parent article NEM létezik a Map-ben (törölt vagy NEM target-org)'
+                    });
+                    return null;
+                }
+                const officeId = pubOfficeMap.get(pubId);
+                if (!officeId) {
+                    recordError({
+                        kind: 'orphan_publication_via_article',
+                        alias,
+                        [idField]: doc.$id,
+                        artId,
+                        pubId,
+                        message: 'Parent publication NEM létezik a Map-ben (törölt, cross-org, vagy validOfficesForTargetOrg-en kívüli)'
+                    });
+                    return null;
+                }
+                // `failedOfficeTeams` filter a `rewriteAclBatchPhase3`-ban (Phase 5 Quality #4 fix).
+                return officeId;
+            },
+            errorKind,
+            idField
+        });
+    }
+
+    if (wantUv) await scanByArticleLink({ alias: 'userValidations',   collectionId: env.userValidationsCollectionId,   statBucket: stats.userValidations,   errorKind: 'user_validation',   idField: 'uvId' });
+    if (wantSv) await scanByArticleLink({ alias: 'systemValidations', collectionId: env.systemValidationsCollectionId, statBucket: stats.systemValidations, errorKind: 'system_validation', idField: 'svId' });
+
+    stats.partialFailure = stats.errorCount > 0;
+
+    // Audit log (mint phase2): caller + org + scope + dryRun + per-collection counts + fallback count.
+    log(`[BackfillAclPhase3] caller=${callerId} org=${targetOrgId} scope=${scope} dryRun=${dryRun} errorCount=${stats.errorCount} errorsTruncated=${stats.errorsTruncated} fallbackCount=${stats.fallbackUsedDocsCount} fallbackTruncated=${stats.fallbackUsedDocsTruncated} partial=${stats.partialFailure} counts=${JSON.stringify({
+        publications: stats.publications,
+        articles: stats.articles,
+        layouts: stats.layouts,
+        deadlines: stats.deadlines,
+        userValidations: stats.userValidations,
+        systemValidations: stats.systemValidations
+    })}`);
+
+    return res.json({
+        success: stats.errorCount === 0,
+        action: 'backfilled_acl_phase3',
         stats
     });
 }
@@ -2617,5 +3272,10 @@ module.exports = {
     // S.7.7b (2026-05-15) — R.S.7.6 close: collection-meta `documentSecurity`
     // flag verify a 6 user-data collection-en (ADR 0014 Layer 1 prerequisite).
     // Read-only deploy-gate. Target-org-owner auth.
-    verifyCollectionDocumentSecurity
+    verifyCollectionDocumentSecurity,
+    // S.7.7c (2026-05-15) — R.S.7.7 close: legacy ACL backfill a 6 user-data
+    // collection-en (publications + articles + layouts + deadlines + 2 validation).
+    // Kategória 1/2 fallback policy + `fallbackUsedDocs` audit + 2-step JOIN
+    // (articleId → publicationId → editorialOfficeId).
+    backfillAclPhase3
 };

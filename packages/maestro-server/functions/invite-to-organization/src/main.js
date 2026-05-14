@@ -143,6 +143,10 @@ const ACTION_HANDLERS = {
     // flag verify a 6 user-data collection-en. Read-only deploy-gate
     // (ADR 0014 Layer 1 prerequisite). Target-org-owner auth.
     'verify_collection_document_security': schemaActions.verifyCollectionDocumentSecurity,
+    // S.7.7c (2026-05-15) — R.S.7.7 close: legacy ACL backfill a 6 user-data
+    // collection-en (publications + articles + layouts + deadlines + 2 validation).
+    // Kategória 1/2 fallback policy + `fallbackUsedDocs` audit + 2-step JOIN.
+    'backfill_acl_phase3': schemaActions.backfillAclPhase3,
 
     // Permission set CRUD (A.3 + A.3.6)
     'create_permission_set': permissionSetActions.createPermissionSet,
