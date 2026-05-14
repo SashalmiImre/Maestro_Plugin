@@ -135,6 +135,10 @@ const ACTION_HANDLERS = {
     'bootstrap_organization_invite_history_schema': schemaActions.bootstrapOrganizationInviteHistorySchema,
     // E (2026-05-09 follow-up) — Q1 ACL refactor: admin-team scoped backfill
     'backfill_admin_team_acl': schemaActions.backfillAdminTeamAcl,
+    // S.7.2 (2026-05-12) — R.S.7.2 close: legacy ACL backfill 5 collection-én.
+    // Target-org-owner auth + scope-paraméter (multi-call, kerüli a CF 60s
+    // timeout-ot egy nagy orgon) + user-read preserve (ADR 0014).
+    'backfill_acl_phase2': schemaActions.backfillAclPhase2,
 
     // Permission set CRUD (A.3 + A.3.6)
     'create_permission_set': permissionSetActions.createPermissionSet,

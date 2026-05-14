@@ -94,7 +94,12 @@ const VALID_ACTIONS = new Set([
     'bootstrap_organization_invite_history_schema', // D.3.1 — audit-trail collection schema
     // E (2026-05-09 follow-up) — Q1 ACL refactor: admin-team scoped backfill.
     // (Korábbi drift-fix 2026-05-10: a router-ben már szerepelt, a VALID_ACTIONS-ból hiányzott.)
-    'backfill_admin_team_acl'
+    'backfill_admin_team_acl',
+    // S.7.2 (2026-05-12) — R.S.7.2 close: legacy üres-permission doc backfill
+    // a S.7.1 fix-csomag 5 collection-én (organizations, organizationMemberships,
+    // editorialOffices, editorialOfficeMemberships, publications). Scope-paraméteres,
+    // user-read preserve, target-org-owner auth. Codex pre-review fix-ekkel.
+    'backfill_acl_phase2'
 ]);
 
 // Slug formátum: kisbetű, szám, kötőjel. A frontend is ugyanezt alkalmazza.
@@ -185,6 +190,63 @@ async function requireOwnerAnywhere(ctx) {
     );
     if (ownerships.documents.length === 0) {
         return failFn(res, 403, 'insufficient_role', { requiredRole: 'owner' });
+    }
+    return null;
+}
+
+/**
+ * Org-scope-szűkített owner-only auth check a 3 backfill action-höz
+ * (`backfill_tenant_acl`, `backfill_admin_team_acl`, `backfill_acl_phase2`) és
+ * minden jövőbeli target-org-scope-os action-höz. Az "owner-anywhere"-rel
+ * szemben itt a `(organizationId, userId)` páros membership-jét nézzük, és
+ * elvárjuk, hogy `role === 'owner'`.
+ *
+ * **Indok**: a target-org-owner-szűkítés tisztább per-org-backfill action-ön —
+ * az owner csak a saját org-jain végezhet ACL-rewrite-ot, NEM más org-okon
+ * (a `requireOwnerAnywhere` minta a globális schema-bootstrap action-öknek
+ * megfelelő).
+ *
+ * **Hibakezelés** (3 ág):
+ *  - 5xx `membership_lookup_failed` — lookup-bukás (network/SDK error)
+ *  - 403 `not_a_member` — nincs membership a target orgban
+ *  - 403 `insufficient_role` — van membership, de `role !== 'owner'`
+ *
+ * **Visszatérés** (idiomatikus minta a `requireOwnerAnywhere` mintáján):
+ *  - `null` — caller jogosult, folytasd
+ *  - `failFn(res, ...)` response — adj `return denied;`-vel vissza
+ *
+ * @param {Object} ctx — handler-context (`databases`, `env`, `callerId`, `sdk`,
+ *   `res`, `fail`, `error`).
+ * @param {string} organizationId — target org $id
+ * @returns {Promise<Object|null>}
+ */
+async function requireOrgOwner(ctx, organizationId) {
+    const { databases, env, callerId, sdk, res, fail: failFn, error } = ctx;
+    let membership;
+    try {
+        membership = await databases.listDocuments(
+            env.databaseId, env.membershipsCollectionId,
+            [
+                sdk.Query.equal('organizationId', organizationId),
+                sdk.Query.equal('userId', callerId),
+                sdk.Query.select(['role']),
+                sdk.Query.limit(1)
+            ]
+        );
+    } catch (err) {
+        if (typeof error === 'function') {
+            error(`[requireOrgOwner] membership lookup hiba (org=${organizationId}): ${err.message}`);
+        }
+        return failFn(res, 500, 'membership_lookup_failed');
+    }
+    if (membership.documents.length === 0) {
+        return failFn(res, 403, 'not_a_member');
+    }
+    if (membership.documents[0].role !== 'owner') {
+        return failFn(res, 403, 'insufficient_role', {
+            yourRole: membership.documents[0].role,
+            required: 'owner'
+        });
     }
     return null;
 }
@@ -283,6 +345,7 @@ module.exports = {
     TOKEN_BYTES,
     EMAIL_REGEX,
     VALID_ACTIONS,
+    requireOrgOwner,
     SLUG_REGEX,
     SLUG_MAX_LENGTH,
     NAME_MAX_LENGTH,

@@ -29,6 +29,7 @@ const {
 const {
     isAlreadyExists,
     requireOwnerAnywhere,
+    requireOrgOwner,
     fetchUserIdentity
 } = require('../helpers/util.js');
 const {
@@ -840,26 +841,11 @@ async function backfillTenantAcl(ctx) {
         return fail(res, 400, 'missing_fields', { required: ['organizationId'] });
     }
 
-    // Caller jogosultság: target org `owner` role.
-    const ownerMembership = await databases.listDocuments(
-        env.databaseId,
-        env.membershipsCollectionId,
-        [
-            sdk.Query.equal('organizationId', targetOrgId),
-            sdk.Query.equal('userId', callerId),
-            sdk.Query.select(['role']),
-            sdk.Query.limit(1)
-        ]
-    );
-    if (ownerMembership.documents.length === 0) {
-        return fail(res, 403, 'not_a_member');
-    }
-    if (ownerMembership.documents[0].role !== 'owner') {
-        return fail(res, 403, 'insufficient_role', {
-            yourRole: ownerMembership.documents[0].role,
-            required: 'owner'
-        });
-    }
+    // Caller jogosultság: target org `owner` role. Harden Phase 5 simplify
+    // (2026-05-13): single-source `requireOrgOwner(ctx, orgId)` helper a
+    // `helpers/util.js`-ben — 3 backfill action duplikációja megszüntetve.
+    const denied = await requireOrgOwner(ctx, targetOrgId);
+    if (denied) return denied;
 
     // Target org fetch — name kell a team labelnek + létezés check.
     let targetOrg;
@@ -1126,32 +1112,11 @@ async function backfillAdminTeamAcl(ctx) {
 
     // Caller jogosultság: target org `owner`. (NEM `userHasOrgPermission`,
     // mert orphaned org-on is futtatható az ACL backfill — a caller-hez
-    // direkt membership-check tisztább.)
-    let ownerMembership;
-    try {
-        ownerMembership = await databases.listDocuments(
-            env.databaseId,
-            env.membershipsCollectionId,
-            [
-                sdk.Query.equal('organizationId', targetOrgId),
-                sdk.Query.equal('userId', callerId),
-                sdk.Query.select(['role']),
-                sdk.Query.limit(1)
-            ]
-        );
-    } catch (err) {
-        error(`[BackfillAdminAcl] caller membership lookup hiba: ${err.message}`);
-        return fail(res, 500, 'membership_lookup_failed');
-    }
-    if (ownerMembership.documents.length === 0) {
-        return fail(res, 403, 'not_a_member');
-    }
-    if (ownerMembership.documents[0].role !== 'owner') {
-        return fail(res, 403, 'insufficient_role', {
-            yourRole: ownerMembership.documents[0].role,
-            required: 'owner'
-        });
-    }
+    // direkt membership-check tisztább.) Harden Phase 5 simplify (2026-05-13):
+    // single-source `requireOrgOwner` helper, `backfillTenantAcl` és
+    // `backfillAclPhase2` ugyanezt használja.
+    const denied = await requireOrgOwner(ctx, targetOrgId);
+    if (denied) return denied;
 
     // Target org létezés-check (és név a team labelhez).
     let targetOrg;
@@ -1354,6 +1319,430 @@ async function backfillAdminTeamAcl(ctx) {
     log(`[BackfillAdminAcl] User ${callerId} — org=${targetOrgId}, dryRun=${dryRun}, errors=${stats.errors.length}`);
 
     return res.json({ success: true, action: 'backfilled_admin_team_acl', stats });
+}
+
+/**
+ * ACTION='backfill_acl_phase2' (S.7.2, 2026-05-12) — R.S.7.2 close.
+ *
+ * Az S.7.1 fix-csomag (2026-05-12) 8 `createDocument` hívásán
+ * `withCreator(buildXxxAclPerms(...), callerId)` ACL-t alkalmaztunk, hogy a
+ * frissen létrejövő doc-okon a cross-tenant Realtime push szivárgás
+ * lezáruljon. A `document_already_exists` race-fallback ágon és a S.7.1 ELŐTT
+ * létrejött legacy doc-okon a permissions üres / `read("users")` collection-
+ * szintű örökölt — ezeket NEM korrigáltuk inline. Ez az action retroaktívan
+ * `updateDocument(..., perms)`-szel pótolja a helyes team-szintű ACL-t.
+ *
+ * **Scope** (5 collection, S.7.1 fix-csomag tükörképe):
+ *
+ *   | # | Collection                  | Apply                                    |
+ *   |---|-----------------------------|------------------------------------------|
+ *   | 1 | organizations               | buildOrgAclPerms(targetOrgId)            |
+ *   | 2 | organizationMemberships     | buildOrgAclPerms(targetOrgId)            |
+ *   | 3 | editorialOffices            | buildOrgAclPerms(targetOrgId) — ORG-scope|
+ *   | 4 | editorialOfficeMemberships  | buildOfficeAclPerms(office.$id)          |
+ *   | 5 | publications                | buildOfficeAclPerms(office.$id)          |
+ *
+ * **user-read preservation** (Codex pre-review Q1 fix): a Phase 2 backfill
+ * NEM vakon törli a doc-on lévő `read("user:X")` perm-eket (ADR 0014
+ * defense-in-depth) — csak a team-szintű read-et alkalmazza ÚJRA, és a
+ * meglévő user-read-eket átemeli. Friss S.7.1 doc-okon a `withCreator(...)`
+ * `read(user(creatorId))` megmarad; legacy doc-okon ahol ilyen NEM volt,
+ * csak a team-perm lesz aktív (Phase 3 GDPR Art. 17 stale anonymize-olás
+ * külön action S.7.9-en — lásd ADR 0014).
+ *
+ * **Scope param** (Codex pre-review Q3 fix): a CF 60s timeout-ja egy nagy
+ * orgon (100+ office × 50+ pub) szétesne single-pass-ban. Ezért a payload
+ * `scope` mezője korlátozza a futást — `'all'` (default) vagy a fenti 5
+ * collection bármelyikét célzó key. Az admin többször futtathatja
+ * collection-enként.
+ *
+ * **Idempotens overwrite**: a backfill MINDIG újraírja a doc permissions-jét
+ * (mint `backfillTenantAcl`). Egy második futtatás zaj-mentes (a már-helyes
+ * doc-on `updateDocument` no-op szemantikája — a perms egyezik, csak az
+ * `$updatedAt` mozdul). Ha a `databases.updateDocument` szigorúan equality-
+ * check-elt diff-output volna, érdemes lenne előbb getDocument + diff, de a
+ * jelenlegi Appwrite Cloud SDK mindenképp ír — szándékos egyszerűség.
+ *
+ * **Caller auth**: target org `owner` role (NEM `requireOwnerAnywhere`,
+ * mert org-scope action — caller nem futtathat más org-on backfill-t).
+ * Konzisztens `backfillTenantAcl` és `backfillAdminTeamAcl` mintájával.
+ *
+ * **Hibakezelés**: per-doc try/catch → errors[]-be sorolva, flow folytatódik
+ * (Codex pre-review MINOR fix: `partialFailure: true` flag a stats-ban, ha
+ * `errors.length > 0` — automatizált futtatók így megkülönböztetik a teljes-
+ * sikert a részleges-sikertől).
+ *
+ * **Stats** (Codex pre-review MAJOR fix: `wouldRewrite` vs `rewritten`
+ * szétválasztva dryRun esetén — különben félreérthető, mert dryRun NEM
+ * rewrite):
+ *
+ *   { dryRun, organizationId, scope, partialFailure,
+ *     organizations:               { scanned, wouldRewrite, rewritten },
+ *     organizationMemberships:     { scanned, wouldRewrite, rewritten },
+ *     editorialOffices:            { scanned, wouldRewrite, rewritten },
+ *     editorialOfficeMemberships:  { scanned, wouldRewrite, rewritten },
+ *     publications:                { scanned, wouldRewrite, rewritten },
+ *     errors: [{kind, ...id, message}] }
+ *
+ * **Payload**: `{ action: 'backfill_acl_phase2', organizationId, dryRun?, scope? }`
+ *   - `scope`: 'all' (default) | 'organizations' | 'organizationMemberships'
+ *     | 'editorialOffices' | 'editorialOfficeMemberships' | 'publications'
+ *
+ * @param {Object} ctx
+ * @returns {Promise<Object>} `{ success: true, action: 'backfilled_acl_phase2', stats }`
+ */
+async function backfillAclPhase2(ctx) {
+    const { databases, env, callerId, payload, log, error, res, fail, sdk, teamsApi } = ctx;
+    const dryRun = payload && payload.dryRun === true;
+    const { organizationId: targetOrgId, scope: scopeRaw } = payload || {};
+
+    const VALID_SCOPES = [
+        'all',
+        'organizations',
+        'organizationMemberships',
+        'editorialOffices',
+        'editorialOfficeMemberships',
+        'publications'
+    ];
+    // Harden SHOULD FIX #5 (Claude self-finding): trim a scope-string-et — egy
+    // `scope: '  all  '` payload-t a `VALID_SCOPES.includes` strict-check 400-zal
+    // ütött, ami félrevezető hiba. Üres / nem-string → default `'all'`.
+    const scope = (typeof scopeRaw === 'string' ? scopeRaw.trim() : '') || 'all';
+
+    if (!targetOrgId || typeof targetOrgId !== 'string') {
+        return fail(res, 400, 'missing_fields', { required: ['organizationId'] });
+    }
+    if (!VALID_SCOPES.includes(scope)) {
+        return fail(res, 400, 'invalid_scope', { received: scope, allowed: VALID_SCOPES });
+    }
+
+    // Caller jogosultság: target org `owner`. Harden Phase 5 simplify
+    // (2026-05-13): single-source `requireOrgOwner` helper a `helpers/util.js`-
+    // ben, mind a 3 backfill action közös. NEM `userHasOrgPermission`, mert
+    // orphaned org-on is futtatható az ACL backfill — a caller-hez direkt
+    // membership-check tisztább. (Orphan org-on a
+    // `transfer_orphaned_org_ownership` recovery flow után jut owner-hez a
+    // caller; addig nincs miért backfill-elnie.)
+    const denied = await requireOrgOwner(ctx, targetOrgId);
+    if (denied) return denied;
+
+    // Target org létezés-check + name fetch a team labelhez. Harden SHOULD FIX #4
+    // (DRY, Claude self-finding): a `targetOrgDoc`-ot a `wantOrgs` ágban
+    // újrahasználjuk a `$permissions` user-read preserve-hez — 1 extra
+    // getDocument hívás megtakarítva.
+    let targetOrgDoc;
+    try {
+        targetOrgDoc = await databases.getDocument(
+            env.databaseId, env.organizationsCollectionId, targetOrgId
+        );
+    } catch (err) {
+        if (err?.code === 404) return fail(res, 404, 'organization_not_found');
+        error(`[BackfillAclPhase2] org fetch hiba: ${err.message}`);
+        return fail(res, 500, 'organization_fetch_failed');
+    }
+
+    const MAX_ERRORS = 100;
+    const stats = {
+        dryRun,
+        organizationId: targetOrgId,
+        scope,
+        partialFailure: false,
+        organizations:              { scanned: 0, wouldRewrite: 0, rewritten: 0 },
+        organizationMemberships:    { scanned: 0, wouldRewrite: 0, rewritten: 0 },
+        editorialOffices:           { scanned: 0, wouldRewrite: 0, rewritten: 0 },
+        editorialOfficeMemberships: { scanned: 0, wouldRewrite: 0, rewritten: 0 },
+        publications:               { scanned: 0, wouldRewrite: 0, rewritten: 0 },
+        // Harden SHOULD FIX #6 (Codex adversarial #9): `errors[]` cap-pel megy,
+        // különben egy nagy tenant tömeges-failure-je túllöki az Appwrite CF
+        // ~6MB response-limit-jét, és pont a hibajelentés veszik el. Az
+        // `errorCount` mindenképp aggregálja az összes-darabszámot, függetlenül
+        // a cap-tól; az `errorsTruncated` jelzi, hogy a részletes lista
+        // csonkolt.
+        errorCount: 0,
+        errorsTruncated: false,
+        errors: []
+    };
+
+    // Per-doc / per-step error helper. A push-cap a stats szerződésen belül
+    // (`MAX_ERRORS`); a `errorCount` továbbra is összes-darabszám.
+    function recordError(entry) {
+        stats.errorCount++;
+        if (stats.errors.length < MAX_ERRORS) {
+            stats.errors.push(entry);
+        } else {
+            stats.errorsTruncated = true;
+        }
+    }
+
+    const listAll = (collectionId, queries = []) =>
+        listAllByQuery(databases, env.databaseId, collectionId, queries, sdk, { batchSize: CASCADE_BATCH_LIMIT });
+
+    // Codex pre-review Q1 fix: a meglévő `read("user:X")` perm-eket átemeljük
+    // (ADR 0014 defense-in-depth). NEM vakon overwrite. A Permission string
+    // formátuma `read("user:abc123")` — a regex csak a user-read-eket tartja meg,
+    // a `read("users")` (collection-szintű), `read("team:...")` (legacy team)
+    // és minden más perm leesik (overwrite a team-perm-mel).
+    function preserveUserReads(currentPermissions) {
+        if (!Array.isArray(currentPermissions)) return [];
+        return currentPermissions.filter(p => typeof p === 'string' && /^read\("user:/.test(p));
+    }
+
+    const orgPerms = buildOrgAclPerms(targetOrgId);
+    const wantOrgs = scope === 'all' || scope === 'organizations';
+    const wantMems = scope === 'all' || scope === 'organizationMemberships';
+    const wantOffices = scope === 'all' || scope === 'editorialOffices';
+    const wantOfficeMems = scope === 'all' || scope === 'editorialOfficeMemberships';
+    const wantPubs = scope === 'all' || scope === 'publications';
+    const wantAnyOffice = wantOffices || wantOfficeMems || wantPubs;
+
+    // ── Office-listázás (egyetlen scan, újrahasznosítva) ──
+    // Harden MUST FIX #1 (Codex baseline P1a) feloldja a per-office-loop minta
+    // egyik felét: az `editorialOffices` doc-rewrite-hoz kell az office-lista,
+    // és az ensureTeam prerequisite-hez (MUST FIX #2) is. A child collection-
+    // ök (memberships, publications) viszont `organizationId`-szal listáznak
+    // (orphan-safe scan), így NEM iterálnak az office-okon.
+    //
+    // Harden Phase 5 simplify (Efficiency #1): `Query.select(...)` projection
+    // a 4 listAll-on csökkenti a memory-footprint-et 60-80%-kal nagy orgon
+    // (10k doc × 25KB → ~5MB). `$id` + `$permissions` rendszer-mező a
+    // SDK-által amúgy is visszajön, defensive explicit listing.
+    let officesList = [];
+    if (wantAnyOffice) {
+        try {
+            officesList = await listAll(
+                env.officesCollectionId,
+                [
+                    sdk.Query.equal('organizationId', targetOrgId),
+                    sdk.Query.select(['$id', '$permissions', 'name'])
+                ]
+            );
+        } catch (err) {
+            recordError({ kind: 'offices_list', message: err.message });
+        }
+    }
+
+    // ── Team-existence HARD prerequisite ──
+    // Harden MUST FIX #2 (Codex baseline P1b): a doc-szintű `read(team:X)`
+    // ACL semmit nem ér, ha a team nem létezik — a backfill `success`-szel
+    // térne vissza, miközben minden user-t kizártunk a doc-okból. `ensureTeam`
+    // idempotens (409 → skip); ha a CREATE NEM-409 hibára esik, az org-team
+    // ágon HARD-FAIL abort, az office-team ágon per-office skip + errors[].
+    // (Konzisztens: `backfillTenantAcl:899-916` org-team HARD, :990-1002
+    // office-team skipping.) Dry-run-on a team-ensure kihagyva — a stats
+    // csak előrejelez.
+    if (!dryRun) {
+        if (wantOrgs || wantMems) {
+            const orgTeamId = buildOrgTeamId(targetOrgId);
+            try {
+                await ensureTeam(teamsApi, orgTeamId, `Org: ${targetOrgDoc.name}`);
+            } catch (err) {
+                error(`[BackfillAclPhase2] org team ensure hard-fail (${targetOrgId}): ${err.message}`);
+                return fail(res, 500, 'org_team_ensure_failed', {
+                    orgId: targetOrgId,
+                    message: err.message,
+                    hint: 'Org team ensure failure megakadályozta az ACL rewrite-ot. Futtasd a `backfill_tenant_acl`-t előbb, vagy verify Console-on az `org_${id}` team-et.'
+                });
+            }
+        }
+        if (wantAnyOffice) {
+            for (const office of officesList) {
+                try {
+                    await ensureTeam(teamsApi, buildOfficeTeamId(office.$id), `Office: ${office.name}`);
+                } catch (err) {
+                    recordError({ kind: 'office_team_ensure', officeId: office.$id, message: err.message });
+                }
+            }
+        }
+    }
+
+    // ── Common rewrite-loop helper (Harden Phase 5 simplify, Quality #3) ──
+    // Az 5 collection-scan ág (~150 sor) közeli-duplikációját ezzel az inline
+    // higher-order helperrel egyesítjük. A `#1 organizations` egy single-doc
+    // ág (NEM listAll) — külön marad. A 4 többi (#2-#5) `rewriteAclBatch`-en
+    // át fut.
+    //
+    // A `buildPerms(doc)` callback adja vissza a doc-specifikus team-perm
+    // tömböt — vagy `null`-t, ha az adott doc skip-elendő (pl. orphan
+    // child-doc, `editorialOfficeId` missing). A skip-előtt a callback maga
+    // hívja a `recordError`-t a megfelelő `kind`-dal.
+    //
+    // Args:
+    //   docs         — előre listázott doc-tömb
+    //   collectionId — env.<...>CollectionId
+    //   statBucket   — stats.<collection>     (scanned/wouldRewrite/rewritten)
+    //   buildPerms   — (doc) => Permission[]|null
+    //   errorKind    — string prefix az updateDocument-fail rekordjához (pl. 'office')
+    //   idField      — string key az error-rekord per-doc id-mezőjéhez
+    async function rewriteAclBatch({ docs, collectionId, statBucket, buildPerms, errorKind, idField }) {
+        for (const doc of docs) {
+            statBucket.scanned++;
+            if (dryRun) {
+                statBucket.wouldRewrite++;
+                continue;
+            }
+            const perms = buildPerms(doc);
+            if (!perms) continue; // skip — buildPerms már loggolta a hibát
+            try {
+                const newPerms = [...perms, ...preserveUserReads(doc.$permissions)];
+                await databases.updateDocument(env.databaseId, collectionId, doc.$id, {}, newPerms);
+                statBucket.rewritten++;
+            } catch (err) {
+                recordError({ kind: `${errorKind}_acl`, [idField]: doc.$id, message: err.message });
+            }
+        }
+    }
+
+    // ── 1) organizations[targetOrgId] doc (single-doc, külön ág) ──
+    if (wantOrgs) {
+        stats.organizations.scanned = 1;
+        if (dryRun) {
+            stats.organizations.wouldRewrite = 1;
+        } else {
+            try {
+                const newPerms = [...orgPerms, ...preserveUserReads(targetOrgDoc.$permissions)];
+                await databases.updateDocument(
+                    env.databaseId, env.organizationsCollectionId, targetOrgId, {}, newPerms
+                );
+                stats.organizations.rewritten++;
+            } catch (err) {
+                recordError({ kind: 'organization_acl', orgId: targetOrgId, message: err.message });
+            }
+        }
+    }
+
+    // ── 2) organizationMemberships per org ──
+    if (wantMems) {
+        let memberships = [];
+        try {
+            memberships = await listAll(env.membershipsCollectionId, [
+                sdk.Query.equal('organizationId', targetOrgId),
+                sdk.Query.select(['$id', '$permissions'])
+            ]);
+        } catch (err) {
+            recordError({ kind: 'memberships_list', message: err.message });
+        }
+        await rewriteAclBatch({
+            docs: memberships,
+            collectionId: env.membershipsCollectionId,
+            statBucket: stats.organizationMemberships,
+            buildPerms: () => orgPerms,
+            errorKind: 'membership',
+            idField: 'membershipId'
+        });
+    }
+
+    // ── 3) editorialOffices doc-rewrite (org-scope ACL) ──
+    if (wantOffices) {
+        await rewriteAclBatch({
+            docs: officesList,
+            collectionId: env.officesCollectionId,
+            statBucket: stats.editorialOffices,
+            buildPerms: () => orgPerms,
+            errorKind: 'office',
+            idField: 'officeId'
+        });
+    }
+
+    // ── 4) editorialOfficeMemberships per org (orphan-safe scan) ──
+    // Harden MUST FIX #1 (Codex baseline P1a): NEM per-office iteráció.
+    // A doc `organizationId` mezővel listázunk, így a `editorialOfficeId`-vel
+    // árva (törölt office-ra hivatkozó) doc is bekerül a scan-be. Per-doc
+    // származtatjuk az office-perm-et a `om.editorialOfficeId`-ből;
+    // missing/invalid esetén `buildPerms` `null`-t ad + recordError.
+    if (wantOfficeMems) {
+        let officeMems = [];
+        try {
+            officeMems = await listAll(env.officeMembershipsCollectionId, [
+                sdk.Query.equal('organizationId', targetOrgId),
+                sdk.Query.select(['$id', '$permissions', 'editorialOfficeId'])
+            ]);
+        } catch (err) {
+            recordError({ kind: 'office_memberships_list', message: err.message });
+        }
+        await rewriteAclBatch({
+            docs: officeMems,
+            collectionId: env.officeMembershipsCollectionId,
+            statBucket: stats.editorialOfficeMemberships,
+            buildPerms: (om) => {
+                const officeId = om.editorialOfficeId;
+                if (!officeId || typeof officeId !== 'string') {
+                    recordError({
+                        kind: 'office_membership_missing_office',
+                        omId: om.$id,
+                        message: 'editorialOfficeId missing or invalid — orphan child doc, ACL rewrite skip'
+                    });
+                    return null;
+                }
+                return buildOfficeAclPerms(officeId);
+            },
+            errorKind: 'office_membership',
+            idField: 'omId'
+        });
+    }
+
+    // ── 5) publications per org (orphan-safe scan) ──
+    // Harden MUST FIX #1 (Codex baseline P1a): mint #4 — `organizationId`-vel
+    // listázunk, NEM `editorialOfficeId`-vel. Az env.publicationsCollectionId
+    // opcionális — ha hiányzik (régebbi deploy), skipping a stat 0-rewrite-os
+    // state-tel.
+    if (wantPubs && env.publicationsCollectionId) {
+        let pubs = [];
+        try {
+            pubs = await listAll(env.publicationsCollectionId, [
+                sdk.Query.equal('organizationId', targetOrgId),
+                sdk.Query.select(['$id', '$permissions', 'editorialOfficeId'])
+            ]);
+        } catch (err) {
+            recordError({ kind: 'publications_list', message: err.message });
+        }
+        await rewriteAclBatch({
+            docs: pubs,
+            collectionId: env.publicationsCollectionId,
+            statBucket: stats.publications,
+            buildPerms: (p) => {
+                const officeId = p.editorialOfficeId;
+                if (!officeId || typeof officeId !== 'string') {
+                    recordError({
+                        kind: 'publication_missing_office',
+                        pubId: p.$id,
+                        message: 'editorialOfficeId missing or invalid — orphan child doc, ACL rewrite skip'
+                    });
+                    return null;
+                }
+                return buildOfficeAclPerms(officeId);
+            },
+            errorKind: 'publication',
+            idField: 'pubId'
+        });
+    }
+
+    stats.partialFailure = stats.errorCount > 0;
+
+    // Codex pre-review MINOR fix: audit-log a caller + org + scope + dryRun
+    // + per-collection stats. Az automatizált futtató (admin UI / shell-script)
+    // ezt grep-elheti a CF logokból, és a `partialFailure: true` esetén
+    // emelt-státusz retry-t indít. A teljes `stats` JSON.stringify-olva (kivéve
+    // `errors`, hogy a log-line max 2-3 KB maradjon).
+    log(`[BackfillAclPhase2] caller=${callerId} org=${targetOrgId} scope=${scope} dryRun=${dryRun} errorCount=${stats.errorCount} truncated=${stats.errorsTruncated} partial=${stats.partialFailure} counts=${JSON.stringify({
+        organizations: stats.organizations,
+        organizationMemberships: stats.organizationMemberships,
+        editorialOffices: stats.editorialOffices,
+        editorialOfficeMemberships: stats.editorialOfficeMemberships,
+        publications: stats.publications
+    })}`);
+
+    // Harden MUST FIX #3 (Codex adversarial #5): `success: true` + `partialFailure:
+    // true` kombináció false-positive szerződés egy automatizált futtatónak —
+    // `success`-t csak akkor jelentjük, ha tényleg minden doc rewrite-elve. A
+    // konzisztencia-trade-off: a régi `backfillTenantAcl`/`backfillAdminTeamAcl`
+    // mind `success: true`-t adott errors[] mellett — itt szándékosan szakítunk
+    // ezzel, az adversarial review felülbírál. A HTTP-status 200 marad
+    // (Appwrite CF idiom; a body-mező hordozza a gépbarát szerződést).
+    return res.json({
+        success: stats.errorCount === 0,
+        action: 'backfilled_acl_phase2',
+        stats
+    });
 }
 
 /**
@@ -2102,5 +2491,8 @@ module.exports = {
     // D.3 (2026-05-09) — invite audit-trail collection
     bootstrapOrganizationInviteHistorySchema,
     // E (2026-05-09 follow-up) — Q1 ACL refactor admin-team
-    backfillAdminTeamAcl
+    backfillAdminTeamAcl,
+    // S.7.2 (2026-05-12) — R.S.7.2 close: legacy üres-permission doc-ok backfill-je
+    // a S.7.1 fix-csomag 5 collection-én. Scope-paraméteres + user-read preserve.
+    backfillAclPhase2
 };
