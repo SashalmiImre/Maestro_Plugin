@@ -338,10 +338,136 @@ A `summary.missingCollection` count a 404-es lookup-failure-t is felöleli (Hard
 4. **Ha `criticalFail: true`**: az érintett collection-eken Appwrite Console → Database → Collection → Settings → "Document Security" toggle bekapcsolása + ismételt verify.
 5. **`criticalFail: false`** mind az éles orgokon → **S.7.7c** (legacy backfill) deploy mehet.
 
+## S.7.7c `backfill_acl_phase3` action (2026-05-15, R.S.7.7 close code-only)
+
+Új CF action a S.7.7 fix ELŐTT létrejött legacy doc-ok retroaktív ACL korrekciójára a 6 user-data collection-en. A S.7.7 fix CSAK a friss `createRow`/`createDocument` hívásokra ad doc-szintű ACL-t — a legacy doc-ok üres permissions-szal hagyatkoznak a collection-fallback-ra → cross-tenant read("users") szivárgás. A `backfill_acl_phase3` retroaktívan `updateDocument(..., perms)`-szel helyes team-perm-et ad.
+
+### Architektúra
+
+| Modul | Cél |
+|---|---|
+| `actions/schemas.js` (~470 sor új) | `backfillAclPhase3(ctx)` handler — payload validation + `requireOrgOwner` + pre-load Map-ek + office team-ensure + per-doc kategória 1/2 fallback + scope-onkénti scan + audit log |
+| `helpers/util.js` | Új export `preserveUserReadPermissions` (Harden Reuse #1: phase2+phase3 közös, ADR 0014 single-source) |
+| `teamHelpers.js` | `withCreator` import (kategória-1 ACL build-hez) |
+| `helpers/collectionMetadata.js` | `REQUIRED_SECURED_COLLECTIONS` reuse (S.7.7b single-source) |
+
+### Office-resolution mátrix
+
+| Alias | Resolution | Pre-load |
+|---|---|---|
+| `publications` | direkt `editorialOfficeId` mező | `pubOfficeMap` (Map<pubId, officeId>) |
+| `articles`/`layouts`/`deadlines` | `publicationId` → pubOfficeMap | `pubOfficeMap` |
+| `userValidations`/`systemValidations` | `articleId` → `artPubMap` → `pubOfficeMap` (2-step JOIN) | `artPubMap` (Map<articleId, pubId>) + `pubOfficeMap` |
+
+A validation collection-ök NEM tárolnak `organizationId`-t (frontend `useOverlapValidation`/`useWorkflowValidation` hookok csak `articleId`/`publicationId`/`source` + permissions-t írnak) — ezért `Query.equal('articleId', batch)` BATCH-szel scan-elünk (BATCH=25, Verifying P1 fix).
+
+### Fallback policy (4-reason enum)
+
+| Kategória | Feltétel | Apply ACL | `fallbackReason` |
+|---|---|---|---|
+| 1 | `createdBy` valid + Auth user létezik | `withCreator(buildOfficeAclPerms(office.$id), createdBy)` | — |
+| 2 | `createdBy` undefined/null | `buildOfficeAclPerms(office.$id)` | `createdBy_missing` |
+| 2 | `createdBy` invalid (nem-string / üres / whitespace) | mint fent | `createdBy_invalid` |
+| 2 | `createdBy` valid + Auth user 404 | mint fent | `auth_user_not_found` |
+| 2 | `createdBy` valid + transient SDK-hiba | mint fent | `auth_lookup_failed_transient` |
+
+ASVS V4.1.3 + ownership enforcement: kategória-2-ben NINCS user-read inference (NE inferáljunk `modifiedBy`-ból vagy más mezőből arbitrary usert).
+
+### Biztonsági guardok (Harden Phase 1+2)
+
+| Guard | Cél | Fail-mode |
+|---|---|---|
+| `validOfficesForTargetOrg` Set (Harden adversarial HIGH) | Cross-tenant `editorialOfficeId` attack vector — egy korrupt vagy malicious pub-doc office-B (másik org) ID-re mutathat → backfill office_B perm-eket adna | `kind: 'cross_org_office_violation'` recordError + skip (ACL NEM íródik) |
+| `failedOfficeTeams` Set (Harden baseline P1) | `ensureTeam(office_X)` failure → NE írjunk `read(team:office_X)` perm-et nem-létező team-re (lockout-prevent) | `kind: 'office_team_unavailable'` recordError + skipped++ |
+| `Set` dedupe a `newPerms`-en (Verifying P2) | Duplikált `read("user:X")` perm `updateDocument` reject — idempotens re-run break | `Array.from(new Set(...))` build a `updateDocument` előtt |
+
+### Payload + Auth
+
+```json
+{
+  "action": "backfill_acl_phase3",
+  "organizationId": "<orgId>",
+  "scope": "all",        // OR articles | publications | layouts | deadlines | userValidations | systemValidations
+  "dryRun": true         // ELŐBB minden orgon, majd false éles
+}
+```
+
+**Auth**: target org `owner` (mint `backfill_acl_phase2` + verify, audit-trail + ASVS V4.1.1 least privilege).
+
+### Output
+
+```json
+{
+  "success": true,        // false ha errorCount > 0
+  "action": "backfilled_acl_phase3",
+  "stats": {
+    "dryRun": false,
+    "organizationId": "...",
+    "scope": "all",
+    "partialFailure": false,
+    "publications":      { "scanned": 12, "wouldRewrite": 0, "rewritten": 12, "skipped": 0, "fallbackUsed": 1 },
+    "articles":          { "scanned": 240, ... },
+    "layouts":           { "scanned": 48, ... },
+    "deadlines":         { "scanned": 36, ... },
+    "userValidations":   { "scanned": 89, ... },
+    "systemValidations": { "scanned": 142, ... },
+    "errorCount": 0,
+    "errorsTruncated": false,
+    "errors": [],
+    "fallbackUsedDocsCount": 1,
+    "fallbackUsedDocsTruncated": false,
+    "fallbackUsedDocs": [{ "alias": "publications", "collectionId": "...", "docId": "...", "fallbackReason": "auth_user_not_found" }]
+  }
+}
+```
+
+### Codex pipeline
+
+| Iteráció | Eredmény | Lényeges fix |
+|---|---|---|
+| Pre-review | 10/10 GO + 1 BLOCKER + 2 MAJOR + 1 MINOR | Office-resolution failure policy explicit, 4-reason fallback enum, `read("user:X")`-only regex, per-alias stats |
+| Stop-time | **NEEDS-WORK** 1 MAJOR audit-noise + 2 MAJOR runtime tradeoff | `auth_user_not_found_cached` → `auth_user_not_found` egységes; runtime accept-tradeoff dokumentálva (operator-supervised scope-by-scope) |
+| Verifying | C1 GO + C2 NEEDS-WORK (ops-doc-hardening) + C3 GO | Observable stop conditions + `createdByAuthCache` wording |
+
+### Harden pipeline (7 fázis)
+
+| Fázis | Eredmény | Fix |
+|---|---|---|
+| Baseline | 1 P1 (team-ensure lockout) | `failedOfficeTeams` Set + filter |
+| Adversarial | 1 HIGH (cross-tenant office attack vector) | `validOfficesForTargetOrg` Set + pre-validation |
+| Simplify Reuse #1 | `preserveUserReads` duplikáció phase2+phase3 | Hoist `helpers/util.js`-be `preserveUserReadPermissions` |
+| Simplify Quality #4 | `failedOfficeTeams` filter 3 callback-en duplikált | `rewriteAclBatchPhase3` post-resolve filter (1 hely) |
+| Verifying iter 1 | 2 P1+P2 | Validation `Query.equal('articleId', batch)` BATCH-scan + `Set` dedupe |
+| Verifying iter 2 | 1 P2 LOW (dry-run nem számolja a fallback stats-ot) | **SHOULD FIX halasztott** — operator-UX gap, nem regresszió |
+
+### Operations runbook (S.7.7c deploy)
+
+**Pre-requisite**: S.7.7b (verify_collection_document_security) `criticalFail: false` minden orgon. Ha bármelyik collection `documentSecurity: false` → manuálisan beállítani előbb.
+
+**Deploy steps** (user-trigger, off-peak window):
+
+1. CF redeploy (`invite-to-organization`) — a `backfill_acl_phase3` action plus a `helpers/util.js` `preserveUserReadPermissions` export-tal.
+2. **DryRun minden orgon**: `{action: 'backfill_acl_phase3', organizationId: '<X>', scope: 'all', dryRun: true}`. Ellenőrizd:
+   - `wouldRewrite` counts plausible-ek (a doc-szám-becsléssel egyezzen)
+   - `errorCount === 0`
+   - `fallbackUsedDocsCount` várt (operator-UX gap: ez 0 marad dry-run-ban a Verifying P2 LOW miatt — ne támaszkodj rá pre-migration audit-ban)
+   - **Ha `cross_org_office_violation` vagy `office_team_unavailable` error** → admin manuálisan vizsgálja (potential data-corruption vagy missing-team)
+3. **Éles futtatás scope-by-scope** (operator-supervised, Codex stop-time MAJOR 2+3 + Verifying C2 minta):
+   - Sorrend: `publications` → `articles` → `layouts` → `deadlines` → **utolsónak** `userValidations` + `systemValidations` (2-step JOIN memory-intensív)
+   - Per-scope: `dryRun: false`. Observable stop conditions: ~500 egyedi createdBy / scope-CF-call biztos; 500-1000 között óvatos; >1000 esetén bontás.
+4. **Verify smoke**: 2-tab adversarial teszt (S.7.5 — user-task fejlesztői env-en).
+5. **S.7.7 production close**: ha S.7.7c és S.7.7b mind kész és `criticalFail: false` → a S.7.7 production deploy mehet (frontend tenant ACL fix ÉLES).
+
+### Accepted runtime tradeoffs (Codex stop-time)
+
+- **`usersApi.get` per egyedi `createdBy` SDK-call**: 1000+ egyedi createdBy → ~100s, CF 60s timeout-ot átléphet. Mitigáció: scope-by-scope MANUÁLIS futtatás + lokális `createdByAuthCache` per-invocation reuse.
+- **`articlesList` pre-load Map**: nagy orgon 100k+ article = ~2MB (projection-szel). Memory-pressure → admin abort + streaming refactor escalation.
+- **Operator-supervised only** — NEM autonóm batch. A `scope` paraméter MINDIG explicit (NE futtass `all`-t scriptből nagy orgon).
+
 ## Kapcsolódó
 
 - [[SecurityBaseline]] — STRIDE per komponens (V4, V5, CIS 3)
-- [[SecurityRiskRegister]] — R.S.7.1 + R.S.7.2 closed, R.S.7.3 closed (code-only 2026-05-14), R.S.7.6 closed (code-only 2026-05-15), R.S.7.4 + R.S.7.5 + R.S.7.7 open
+- [[SecurityRiskRegister]] — R.S.7.1 + R.S.7.2 closed, R.S.7.3 closed (code-only 2026-05-14), R.S.7.6 closed (code-only 2026-05-15), R.S.7.7 closed (code-only 2026-05-15), R.S.7.4 + R.S.7.5 open
 - [[Döntések/0003-tenant-team-acl]] — ADR per-tenant Team ACL alapja
 - [[Komponensek/Permissions]] — server-side permission guards (S.7 sorrendileg utáni layer)
 - `packages/maestro-server/functions/invite-to-organization/src/teamHelpers.js` — minden ACL helper
