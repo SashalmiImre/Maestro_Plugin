@@ -210,10 +210,138 @@ A 2 validation hookban (`useOverlapValidation`, `useWorkflowValidation`) **silen
 
 A 2-tab cross-org adversarial teszt ([[Feladatok#S.7.5]]) most a 6 user-data collection-re is kiterjed (Realtime push + REST `listDocuments` egyaránt). Ez zárja le a Codex MINOR (Realtime smoke gap)-et.
 
+## S.7.7b `verify_collection_document_security` action (2026-05-15, R.S.7.6 close code-only)
+
+Új CF action az `invite-to-organization` CF-ben — programatikus deploy-gate a S.7.7 frontend ACL fix Layer 1 prerequisite (`documentSecurity: true` flag) verify-jére a 6 user-data collection-en. Read-only `databases.getCollection` lookup, nincs mutation.
+
+### Architektúra
+
+| Modul | Cél |
+|---|---|
+| `helpers/collectionMetadata.js` (új, ~210 sor) | REQUIRED + OPTIONAL diagnostic whitelist alias-tömb + `Object.freeze` immutable konstans-tábla + `findUnknownAliases` (strict whitelist reject) + `resolveCollectionId` (env-var → collection ID, `missingEnv` flag) + `verifyDocumentSecurity` (paralel `databases.getCollection` lookup, determinisztikus output rendezés) |
+| `actions/schemas.js` | `verifyCollectionDocumentSecurity(ctx)` action handler + import + export |
+| `helpers/util.js` | `'verify_collection_document_security'` a `VALID_ACTIONS` set-be |
+| `main.js` | 4 új opcionális env var (`LAYOUTS_COLLECTION_ID`, `DEADLINES_COLLECTION_ID`, `USER_VALIDATIONS_COLLECTION_ID`, `SYSTEM_VALIDATIONS_COLLECTION_ID`) + ACTION_HANDLERS bejegyzés |
+
+### Whitelist alias-tábla
+
+**REQUIRED set** (6 user-data collection — `criticalFail` scope):
+
+| Alias | Env var | Env key |
+|---|---|---|
+| `articles` | `ARTICLES_COLLECTION_ID` | `articlesCollectionId` |
+| `publications` | `PUBLICATIONS_COLLECTION_ID` | `publicationsCollectionId` |
+| `layouts` | `LAYOUTS_COLLECTION_ID` | `layoutsCollectionId` |
+| `deadlines` | `DEADLINES_COLLECTION_ID` | `deadlinesCollectionId` |
+| `userValidations` | `USER_VALIDATIONS_COLLECTION_ID` | `userValidationsCollectionId` |
+| `systemValidations` | `SYSTEM_VALIDATIONS_COLLECTION_ID` | `systemValidationsCollectionId` |
+
+**OPTIONAL diagnostic set** (drift-monitoring, NEM blokkol deploy-t):
+
+| Alias | Env var |
+|---|---|
+| `organizations` | `ORGANIZATIONS_COLLECTION_ID` |
+| `organizationMemberships` | `ORGANIZATION_MEMBERSHIPS_COLLECTION_ID` |
+| `editorialOffices` | `EDITORIAL_OFFICES_COLLECTION_ID` |
+| `editorialOfficeMemberships` | `EDITORIAL_OFFICE_MEMBERSHIPS_COLLECTION_ID` |
+| `groups` | `GROUPS_COLLECTION_ID` |
+| `groupMemberships` | `GROUP_MEMBERSHIPS_COLLECTION_ID` |
+
+### Payload + Auth
+
+**Payload**:
+```json
+{
+  "action": "verify_collection_document_security",
+  "organizationId": "<orgId>",
+  "collections": ["organizationMemberships"]   // OPCIONÁLIS — ADDITIVE
+}
+```
+
+A `collections` paraméter **ADDITIVE** (Harden Phase 2 adversarial HIGH fix, 2026-05-15): a REQUIRED-set MINDIG benne, a caller-passed alias-ok csak APPEND-elnek (optional diagnostic). NEM tud subset-re csökkenteni — ezzel kizárt a "false-pass deploy-gate" támadási vektor (`collections: ['articles']`-szel kerülő `criticalFail: false`).
+
+**Auth**: target org `owner` (`requireOrgOwner(ctx, targetOrgId)`). NEM mert org-specific doc-ot olvas (csak collection meta), hanem mert (1) az action collection enum-állapotot exponál, (2) audit-trail (`who-checked-what`), (3) ASVS V4.1.1 least privilege baseline. Codex Q2 GO.
+
+### Output
+
+```json
+{
+  "success": true,
+  "action": "verified_collection_document_security",
+  "results": [
+    {
+      "alias": "articles",
+      "collectionId": "articles",
+      "envVar": "ARTICLES_COLLECTION_ID",
+      "missingEnv": false,
+      "exists": true,
+      "documentSecurity": true,
+      "enabled": true,
+      "name": "Articles",
+      "error": null
+    },
+    {
+      "alias": "publications",
+      "collectionId": "publications",
+      "envVar": "PUBLICATIONS_COLLECTION_ID",
+      "missingEnv": false,
+      "exists": true,
+      "documentSecurity": false,    // ← Layer 1 FAIL
+      "enabled": true,
+      "name": "Publications",
+      "error": null
+    }
+  ],
+  "summary": {
+    "total": 6,
+    "secured": 5,
+    "unsecured": 1,
+    "missingEnv": 0,
+    "missingCollection": 0,
+    "errors": 0
+  },
+  "criticalFail": true
+}
+```
+
+### `criticalFail` szemantika (Codex BLOCKER fix)
+
+`criticalFail: true` ha BÁRMELY REQUIRED collection bármelyik kifogást ad:
+- `missingEnv: true` (CF env var hiányzik — konfiguráció-failure)
+- `error` truthy (SDK lookup-failure — perm denied, network, 5xx; explicit Codex MAJOR fix az olvashatóságért)
+- `!exists` (collection NEM létezik Appwrite-on — 404)
+- `documentSecurity !== true` (a flag NEM be van kapcsolva — Layer 1 fail)
+
+Optional diagnostic collection drift `criticalFail`-ből KIMARAD — csak `summary` jelez. Deploy-gate-en a script `criticalFail`-re bail-elhet.
+
+A `summary.missingCollection` count a 404-es lookup-failure-t is felöleli (Harden Phase 1 baseline P2 fix, 2026-05-15): ha az `err.code === 404` vagy `err.type === 'collection_not_found'`, akkor `missingCollection++`, NEM `errors++`. Egy delete-elt vagy elgépelt collection ID a deploy-gate diagnostikai üzenetében a "configured collection ID does not exist" kategóriát kap; az `errors` count a generic perm-denied / network / 5xx hibákra marad.
+
+### Codex pipeline + Harden pass
+
+| Iteráció | Eredmény | Lényeges fix |
+|---|---|---|
+| **Pre-review** | 5×GO Q2-Q7 + 1 NEEDS-WORK Q1 + 1 BLOCKER + 2 MAJOR + 1 MINOR + 1 NIT | (1) default scope hardcoded canonical 6 REQUIRED; (2) `criticalFail` csak required-set; (3) whitelist strict reject unknown aliases; (4) missingEnv külön hibakód-osztály lookup-failure-től; (5) paralel + determinisztikus rendezés |
+| **Stop-time** | **GO** 0 BLOCKER + 1 MAJOR (`r.error` explicit a `criticalFail` feltételben) + 1 MINOR (rate-limit defer) + 1 NIT (Map freeze N/A) | `r.error` hozzáadva olvashatóságért |
+| **Verifying** | **GO CLEAN** C1+C2+C3 | — |
+| **Harden baseline** | 1 P2 (`summary.missingCollection` 404 misclassification) | 404 SDK lookup-failure dedicated `missingCollection++` ág a summary loop-ban |
+| **Harden adversarial** | 1 HIGH (caller scope-bypass) | `collections` paraméter **ADDITIVE** — REQUIRED-set MINDIG benne, caller-passed csak APPEND. Üres `collections: []` is OK (omitted-egyenértékű). |
+
+### Deploy steps (user-trigger, halasztott)
+
+1. **CF redeploy**: `invite-to-organization` Appwrite Function új deployment.
+2. **4 új CF env var** Appwrite Console → Function → Variables:
+   - `LAYOUTS_COLLECTION_ID=layouts`
+   - `DEADLINES_COLLECTION_ID=deadlines`
+   - `USER_VALIDATIONS_COLLECTION_ID=userValidations`
+   - `SYSTEM_VALIDATIONS_COLLECTION_ID=systemValidations`
+3. **Verify minden orgon**: `appwrite functions createExecution` payload-szal `{action: 'verify_collection_document_security', organizationId: '<X>'}`.
+4. **Ha `criticalFail: true`**: az érintett collection-eken Appwrite Console → Database → Collection → Settings → "Document Security" toggle bekapcsolása + ismételt verify.
+5. **`criticalFail: false`** mind az éles orgokon → **S.7.7c** (legacy backfill) deploy mehet.
+
 ## Kapcsolódó
 
 - [[SecurityBaseline]] — STRIDE per komponens (V4, V5, CIS 3)
-- [[SecurityRiskRegister]] — R.S.7.1 + R.S.7.2 closed, R.S.7.3 closed (code-only 2026-05-14), R.S.7.4 + R.S.7.5 + R.S.7.6 + R.S.7.7 open
+- [[SecurityRiskRegister]] — R.S.7.1 + R.S.7.2 closed, R.S.7.3 closed (code-only 2026-05-14), R.S.7.6 closed (code-only 2026-05-15), R.S.7.4 + R.S.7.5 + R.S.7.7 open
 - [[Döntések/0003-tenant-team-acl]] — ADR per-tenant Team ACL alapja
 - [[Komponensek/Permissions]] — server-side permission guards (S.7 sorrendileg utáni layer)
 - `packages/maestro-server/functions/invite-to-organization/src/teamHelpers.js` — minden ACL helper
