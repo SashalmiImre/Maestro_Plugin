@@ -165,6 +165,31 @@ created: YYYY-MM-DD
 4. **Branch konfliktus / Appwrite outage** STOP.
 5. **Context window**: `/loop` self-pace mode ~2-3 iteráció után context-fogyás. `/schedule` cron friss sessionökkel ezt megoldja.
 
+## Concurrency guard (KÖTELEZŐ minden iteráción)
+
+Két autonomous mechanizmus (`/loop` + `/schedule`) párhuzamosan futhat ütközés-helyzetben. **Minden iteráció ELSŐ lépése**:
+
+```bash
+WT=/Users/imre.sashalmi/Documents/Maestro/Plugin/.claude/worktrees/zealous-euler-00c483
+# 1. git pull (defenzív, megelőzi a "push rejected" konfliktust)
+git -C "$WT" pull --rebase origin claude/zealous-euler-00c483
+# 2. Working tree clean check
+git -C "$WT" status --short
+# Ha bármi (M / A / D / R) → STOP. Egy másik instance dolgozik.
+# 3. Legutóbbi commit time-stamp check
+LAST_COMMIT_AGE=$(git -C "$WT" log -1 --format="%cr")
+# Ha "less than 5 minutes ago" → STOP (egy másik instance most fejezte be).
+```
+
+**STOP feltételek**:
+- `git status --short` NEM üres (kivéve a `_docs/Komponensek/LoggingMonitoring.md` placeholder untracked) → másik instance dolgozik
+- Legutóbbi commit < 5 perc régi → másik instance épp fejezett
+- `git pull` konfliktust ad → másik instance commit-olt párhuzamosan
+
+**Action ha STOP**: az iteráció NEM kezdődik el. A routine-prompt visszatér üresen, a következő cron-fire vagy /loop wake-up később ellenőrzi újra.
+
+**Single-instance invariáns**: egy idő-pontban CSAK egy autonomous instance dolgozhat a worktree-n. A /loop self-pace és /schedule cron ÜTKÖZÉS-MENTES módon élhet együtt csak akkor, ha mindkettő tiszteletben tartja a fenti guard-ot.
+
 ## Karbantartás
 
 A meta-routine-prompt **változhat** a projekt fejlődésével. Frissítendő:
