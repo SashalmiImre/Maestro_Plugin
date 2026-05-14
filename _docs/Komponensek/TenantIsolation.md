@@ -163,14 +163,57 @@ A Harden Phase 7 prezentált 4 design-Q-ra a user-döntések:
 | Q3 | Partial-state CF timeout | **B + C (idempotens újrafuttatás + 2. réteg server-side guard véd)** | Default minta, semmi kódváltozás. A `permissions.js` slug-guard kiegészíti az ACL-szintű enforcement-et. Acceptable risk |
 | Q4 | Realtime push flood | **B + C (meglévő 300ms debounce + off-peak runbook)** | Kliens-szintű debounce már él. Worldwide deploy később frissítendő (`S.7.13`) |
 
-## Nyitott kockázat (R.S.7.3 — articles frontend)
+## S.7.7 frontend ACL fix (2026-05-14, R.S.7.3 close)
 
-Az `articles` doc-okat a plugin / dashboard frontend **direktbe írja** Appwrite SDK-val, NEM CF-eken keresztül. A `validate-article-creation` post-event CF csak **utólagosan** validál + töröl ha cross-tenant ütközés — **race-ablak** maradt a create és validate között. Fix: `articles.createDocument` hívásokon `withCreator(buildOfficeAclPerms(officeId), userId)` pótlása mindkét frontend-ben.
+A frontend (plugin + dashboard) **direkt írja** az Appwrite-ot 7 helyen — a S.7.7 fix-csomag mind a 7 helyen `withCreator(buildOfficeAclPerms(officeId), userId)`-mintán épít doc-szintű ACL-t (ADR 0014 3. réteg, defense-in-depth). Új helper-fájl mindkét csomagban (`teamHelpers.client.js`).
+
+### Új shared helper-fájl (ESM, web `appwrite` SDK)
+
+- `packages/maestro-shared/teamHelpers.client.js` (kanonikus single-source, 2026-05-14 refactor)
+
+API IDENTIKUS a server-side `teamHelpers.js`-rel (azonos nevek, azonos fail-closed viselkedés). A `maestro-shared/package.json`-ban `appwrite` mint `peerDependency` (`^24.1.1`) — mind a plugin, mind a dashboard amúgy is bundle-be hozza, így a peer-dep nem okoz duplikációt. A CF (`node-appwrite`) NEM importálja ezt a modult — server-side külön `teamHelpers.js` él.
+
+**Refactor history (2026-05-14)**: az S.7.7 elsőként **két különálló** helper-fájllal indult (plugin + dashboard, Codex pre-review Q1 GO A), de stop-time után összevontuk a `maestro-shared`-be (Codex GO "B is reasonable later"). Indok: a két helper diff-je 1 sor volt (header `@description` szöveg), DRY-win + drift-kockázat megszűnik + jövőbeli új tenant-érintő frontend `createX` hívás 1 modulból importál → ADR 0014 invariáns 1 helyen ellenőrizhető. Importálás mindkét csomagban: `import { buildOfficeAclPerms, withCreator } from 'maestro-shared/teamHelpers.client.js'`.
+
+### 7 fix-hívóhely
+
+| # | Csomag | Fájl / sor | Hívás | Collection | ACL applikálva |
+|---|---|---|---|---|---|
+| 1 | Plugin | `core/contexts/DataContext.jsx` (`createArticle`) | `tables.createRow` | `articles` | `withCreator(buildOfficeAclPerms(officeId), userId)` |
+| 2 | Plugin | `core/contexts/DataContext.jsx` (`createValidation`) | `tables.createRow` | `userValidations` | mint #1 |
+| 3 | Plugin | `data/hooks/useOverlapValidation.js` (`persistStructureValidation`) | `tables.createRow` | `systemValidations` | mint #1 |
+| 4 | Plugin | `data/hooks/useWorkflowValidation.js` (`persistToDatabase`) | `tables.createRow` | `systemValidations` | mint #1 |
+| 5 | Dashboard | `contexts/DataContext.jsx` (`createPublication`) | `databases.createDocument` | `publications` | mint #1 |
+| 6 | Dashboard | `contexts/DataContext.jsx` (`createLayout`) | `databases.createDocument` | `layouts` | mint #1 |
+| 7 | Dashboard | `contexts/DataContext.jsx` (`createDeadline`) | `databases.createDocument` | `deadlines` | mint #1 |
+
+### Belső helper: `buildTenantDocOptions(data)` (mindkét DataContext)
+
+A DataContext-en belüli helper: egyetlen snapshot a callback elején — orgId + officeId + userId egyhelyben olvasva, fail-closed throw bármelyik hiányzásra. Output `{data: scopedData, permissions: [Permission.read(team:office_X), Permission.read(user(creatorId))]}`. A két writer-callback (`tables.createRow` / `databases.createDocument`) ugyanazt az officeId-t használja a data injection-höz és a perm-buildhez → **interleaving race-mentes** (Codex MAJOR S.7.7 absorb).
+
+A 2 validation hookban (`useOverlapValidation`, `useWorkflowValidation`) **silent log+skip** mintán a `persistToDatabase` callback elején, mert ezek fire-and-forget background flow-k — egy throw a `pageRangesChanged` event-handlerből UX-szintű kárt okozna. `logError` emitti a skipping-eseményt.
+
+### Codex pipeline
+
+| Iteráció | Eredmény | Lényeges fix |
+|---|---|---|
+| Pre-review | 5×GO (Q1 helper-distribution A, Q2 separate S.7.7b, Q3 internal hooks A, Q4 withCreator mandate A, Q5 no test infra) | Design GO |
+| Stop-time | **NO-GO**: 2 BLOCKER (deploy-prerequisite) + 1 MAJOR + 1 MINOR | (a) `useAuth() ?? {}` → explicit `if (!authValue) throw` — javítva |
+| Verifying | TBD | — |
+
+### Deploy-blokkolók (Codex stop-time BLOCKER 1+2 → új al-pontok)
+
+- **S.7.7b** ([[Feladatok#S.7.7b]], R.S.7.6): `documentSecurity: true` flag verify a 6 érintett collection-en (`articles`, `publications`, `layouts`, `deadlines`, `userValidations`, `systemValidations`). ADR 0014 Layer 1 prerequisite. **Nem fizikai close** ezen al-pont nélkül.
+- **S.7.7c** ([[Feladatok#S.7.7c]], R.S.7.7): legacy backfill action a 6 collection-re — a S.7.2 NEM fedte ezt le. Új `backfill_acl_phase3` vagy `backfill_acl_phase2` bővítés. **Nem fizikai close** ezen al-pont nélkül.
+
+### S.7.5 adversarial verifikáció
+
+A 2-tab cross-org adversarial teszt ([[Feladatok#S.7.5]]) most a 6 user-data collection-re is kiterjed (Realtime push + REST `listDocuments` egyaránt). Ez zárja le a Codex MINOR (Realtime smoke gap)-et.
 
 ## Kapcsolódó
 
 - [[SecurityBaseline]] — STRIDE per komponens (V4, V5, CIS 3)
-- [[SecurityRiskRegister]] — R.S.7.1 + R.S.7.2 closed, R.S.7.3 + R.S.7.4 + R.S.7.5 open
+- [[SecurityRiskRegister]] — R.S.7.1 + R.S.7.2 closed, R.S.7.3 closed (code-only 2026-05-14), R.S.7.4 + R.S.7.5 + R.S.7.6 + R.S.7.7 open
 - [[Döntések/0003-tenant-team-acl]] — ADR per-tenant Team ACL alapja
 - [[Komponensek/Permissions]] — server-side permission guards (S.7 sorrendileg utáni layer)
 - `packages/maestro-server/functions/invite-to-organization/src/teamHelpers.js` — minden ACL helper
