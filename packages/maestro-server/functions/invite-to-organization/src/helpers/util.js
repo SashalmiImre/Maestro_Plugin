@@ -99,7 +99,11 @@ const VALID_ACTIONS = new Set([
     // a S.7.1 fix-csomag 5 collection-én (organizations, organizationMemberships,
     // editorialOffices, editorialOfficeMemberships, publications). Scope-paraméteres,
     // user-read preserve, target-org-owner auth. Codex pre-review fix-ekkel.
-    'backfill_acl_phase2'
+    'backfill_acl_phase2',
+    // S.7.7b (2026-05-15) — R.S.7.6 close: collection-meta `documentSecurity`
+    // flag verify a 6 user-data collection-en (ADR 0014 Layer 1 prerequisite).
+    // Read-only deploy-gate. Target-org-owner auth.
+    'verify_collection_document_security'
 ]);
 
 // Slug formátum: kisbetű, szám, kötőjel. A frontend is ugyanezt alkalmazza.

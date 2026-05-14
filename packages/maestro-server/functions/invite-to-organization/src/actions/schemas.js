@@ -36,6 +36,12 @@ const {
     listAllByQuery,
     paginateByQuery
 } = require('../helpers/pagination.js');
+const {
+    REQUIRED_SECURED_COLLECTIONS,
+    ALL_KNOWN_ALIASES,
+    findUnknownAliases,
+    verifyDocumentSecurity
+} = require('../helpers/collectionMetadata.js');
 
 /**
  * ACTION='bootstrap_workflow_schema' (#30 + #80) — owner-only schema-bővítés
@@ -2474,6 +2480,119 @@ async function bootstrapOrganizationInviteHistorySchema(ctx) {
     });
 }
 
+/**
+ * ACTION='verify_collection_document_security' (S.7.7b, 2026-05-15) — R.S.7.6 close.
+ *
+ * Olvassa a collection-meta `documentSecurity` flag-et a 6 user-data collection-en
+ * (`articles`, `publications`, `layouts`, `deadlines`, `userValidations`,
+ * `systemValidations`). Ha bármelyik flag NEM `true`, a S.7.7 frontend ACL fix
+ * (doc-szintű `Permission.read(team:office_X)`) IGNORÁLÓDIK — collection-szintű
+ * `read("users")` továbbra is rétegesen exponál cross-tenant.
+ *
+ * **ADR 0014 Layer 1 verify**: a 3-réteges defense-in-depth első rétege.
+ * Layer 2 (`Permission.read(team:office_X)`) és Layer 3 (`withCreator`) NEM
+ * tudnak segíteni, ha Layer 1 (collection `documentSecurity: true`) hiányzik.
+ *
+ * **Use case**: deploy-gate a S.7.7 production close ELŐTT (CF helper). Output
+ * `criticalFail: true` → a deploy script bail-elhet és Appwrite Console-on
+ * manuálisan kell beállítani a flag-et a hibás collection(ök)ön. S.13 logging
+ * blokk később scheduled CF-re emelheti drift-monitoringra.
+ *
+ * **Read-only**: `databases.getCollection` lookup, nincs mutation. Biztonságos
+ * gyakori futtatás.
+ *
+ * **Payload**:
+ *   `{ action: 'verify_collection_document_security', organizationId, collections? }`
+ *
+ *   - `organizationId`: target org (auth scope, NEM olvas org-specific doc-ot).
+ *   - `collections`: opcionális alias-tömb whitelistből. Default = a 6 required
+ *     user-data collection (Codex Q1 NEEDS-WORK fix: hardcoded canonical scope).
+ *     Whitelist = REQUIRED + OPTIONAL_DIAGNOSTIC (lásd `collectionMetadata.js`).
+ *
+ * **Auth**: target org `owner` (mint `backfill_acl_phase2`). Az action RO,
+ * de a least-privilege + audit-trail (who-checked-what) ASVS V4.1.1.
+ *
+ * **Output**:
+ *   `{ success: true, action: 'verified_collection_document_security',
+ *      results: [{alias, collectionId, envVar, missingEnv, exists, documentSecurity,
+ *                enabled, name, error: {code, message} | null}],
+ *      summary: {total, secured, unsecured, missingEnv, missingCollection, errors},
+ *      criticalFail: boolean }`
+ *
+ *   `criticalFail = true` ha BÁRMELY required collection: missingEnv, exists=false,
+ *   vagy documentSecurity !== true (Codex BLOCKER fix: optional drift NEM blokkol).
+ *
+ * @param {Object} ctx
+ * @returns {Promise<Object>}
+ */
+async function verifyCollectionDocumentSecurity(ctx) {
+    const { databases, env, callerId, payload, log, res, fail } = ctx;
+    const { organizationId: targetOrgId, collections: requestedRaw } = payload || {};
+
+    if (!targetOrgId || typeof targetOrgId !== 'string') {
+        return fail(res, 400, 'missing_fields', { required: ['organizationId'] });
+    }
+
+    // Caller auth: target org owner (mint `backfill_acl_phase2`).
+    const denied = await requireOrgOwner(ctx, targetOrgId);
+    if (denied) return denied;
+
+    // Default scope = REQUIRED user-data set (Codex Q1 fix: hardcoded canonical).
+    //
+    // Harden Phase 2 adversarial HIGH fix (2026-05-15): a caller-passed `collections`
+    // paraméter NEM csökkentheti a verify scope-ot — különben egy `collections:
+    // ['articles']` hívás `criticalFail: false`-t adna a másik 5 REQUIRED collection
+    // ellenőrzése nélkül (false-pass deploy-gate, S.7.7 production close
+    // védelem-megkerülés). MEGOLDÁS: a `collections` paraméter csak ADDITIVE —
+    // a REQUIRED-set MINDIG benne van, a caller-passed alias-ok dedupe-olva
+    // append-elődnek (csak az optional diagnostic alias-ok adnak új belépést).
+    const defaultAliases = REQUIRED_SECURED_COLLECTIONS.map(c => c.alias);
+    let aliases;
+    if (requestedRaw === undefined || requestedRaw === null) {
+        aliases = defaultAliases;
+    } else if (!Array.isArray(requestedRaw)) {
+        return fail(res, 400, 'invalid_collections', {
+            hint: 'collections must be an array of alias strings (or omitted for default REQUIRED set)'
+        });
+    } else {
+        const unknown = findUnknownAliases(requestedRaw);
+        if (unknown.length > 0) {
+            return fail(res, 400, 'unknown_collection_aliases', {
+                unknown,
+                allowed: [...ALL_KNOWN_ALIASES]
+            });
+        }
+        // ADDITIVE: REQUIRED set MINDIG benne, caller-passed extras dedupe-olva.
+        // Üres `collections: []` is OK — egyenértékű az omitted formával.
+        const requiredSet = new Set(defaultAliases);
+        const extras = requestedRaw.filter(a => !requiredSet.has(a));
+        aliases = [...defaultAliases, ...extras];
+    }
+
+    let result;
+    try {
+        result = await verifyDocumentSecurity({ databases, env, aliases });
+    } catch (err) {
+        log(`[VerifyCollectionDocSec] hiba (caller=${callerId} org=${targetOrgId}): ${err.message}`);
+        return fail(res, 500, 'verify_failed', { message: err.message });
+    }
+
+    // Audit log — caller + org + aliases + summary + criticalFail JSON.
+    log(
+        `[VerifyCollectionDocSec] caller=${callerId} org=${targetOrgId} `
+        + `aliases=[${aliases.join(',')}] summary=${JSON.stringify(result.summary)} `
+        + `criticalFail=${result.criticalFail}`
+    );
+
+    return res.json({
+        success: true,
+        action: 'verified_collection_document_security',
+        results: result.results,
+        summary: result.summary,
+        criticalFail: result.criticalFail
+    });
+}
+
 module.exports = {
     bootstrapWorkflowSchema,
     bootstrapPublicationSchema,
@@ -2494,5 +2613,9 @@ module.exports = {
     backfillAdminTeamAcl,
     // S.7.2 (2026-05-12) — R.S.7.2 close: legacy üres-permission doc-ok backfill-je
     // a S.7.1 fix-csomag 5 collection-én. Scope-paraméteres + user-read preserve.
-    backfillAclPhase2
+    backfillAclPhase2,
+    // S.7.7b (2026-05-15) — R.S.7.6 close: collection-meta `documentSecurity`
+    // flag verify a 6 user-data collection-en (ADR 0014 Layer 1 prerequisite).
+    // Read-only deploy-gate. Target-org-owner auth.
+    verifyCollectionDocumentSecurity
 };

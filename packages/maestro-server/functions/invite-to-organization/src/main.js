@@ -139,6 +139,10 @@ const ACTION_HANDLERS = {
     // Target-org-owner auth + scope-paraméter (multi-call, kerüli a CF 60s
     // timeout-ot egy nagy orgon) + user-read preserve (ADR 0014).
     'backfill_acl_phase2': schemaActions.backfillAclPhase2,
+    // S.7.7b (2026-05-15) — R.S.7.6 close: collection-meta `documentSecurity`
+    // flag verify a 6 user-data collection-en. Read-only deploy-gate
+    // (ADR 0014 Layer 1 prerequisite). Target-org-owner auth.
+    'verify_collection_document_security': schemaActions.verifyCollectionDocumentSecurity,
 
     // Permission set CRUD (A.3 + A.3.6)
     'create_permission_set': permissionSetActions.createPermissionSet,
@@ -504,6 +508,18 @@ module.exports = async function ({ req, res, log, error }) {
         // action-höz kötelező.
         const organizationInviteHistoryCollectionId = process.env.ORGANIZATION_INVITE_HISTORY_COLLECTION_ID || '';
 
+        // S.7.7b (2026-05-15) — `verify_collection_document_security` action env varok.
+        // OPCIONÁLISAK (NEM fail-fast): csak az új RO action használja, így a meglévő
+        // CF deploy-okat NEM töri. Hiányuk az action stats-ban `missingEnv: true`
+        // jelzéssel megjelenik + `criticalFail: true` (a 6 required user-data
+        // collection-re hat). A 2 új CF env var (`LAYOUTS_COLLECTION_ID`,
+        // `DEADLINES_COLLECTION_ID`, `USER_VALIDATIONS_COLLECTION_ID`,
+        // `SYSTEM_VALIDATIONS_COLLECTION_ID`) a deploy-trigger user-task része.
+        const layoutsCollectionId = process.env.LAYOUTS_COLLECTION_ID || '';
+        const deadlinesCollectionId = process.env.DEADLINES_COLLECTION_ID || '';
+        const userValidationsCollectionId = process.env.USER_VALIDATIONS_COLLECTION_ID || '';
+        const systemValidationsCollectionId = process.env.SYSTEM_VALIDATIONS_COLLECTION_ID || '';
+
         // ── Fail-fast env var guard ──
         const missingEnvVars = [];
         if (!databaseId) missingEnvVars.push('DATABASE_ID');
@@ -618,7 +634,13 @@ module.exports = async function ({ req, res, log, error }) {
             ipRateLimitCountersCollectionId,
             ipRateLimitBlocksCollectionId,
             // D.3 (2026-05-09) — invite audit-trail (opcionális, ld. fent)
-            organizationInviteHistoryCollectionId
+            organizationInviteHistoryCollectionId,
+            // S.7.7b (2026-05-15) — opcionális collection ID-k a
+            // `verify_collection_document_security` action számára.
+            layoutsCollectionId,
+            deadlinesCollectionId,
+            userValidationsCollectionId,
+            systemValidationsCollectionId
         };
         const ctx = {
             databases,
