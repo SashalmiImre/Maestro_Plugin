@@ -64,7 +64,7 @@ created: 2026-05-11
 | R.S.3.3 | Nincs X-Frame-Options (clickjacking) | HIGH | Med | V14 | Frontend explorer | Claude+Codex | 2026-05-15 | **Closed (code-only) 2026-05-15** (`X-Frame-Options: DENY` + `frame-ancestors 'none'` defense-in-depth) |
 | R.S.3.4 | Nincs Referrer-Policy | MEDIUM | Med | V14 | Frontend explorer | Claude+Codex | 2026-05-15 | **Closed (code-only) 2026-05-15** (`strict-origin-when-cross-origin`) |
 | R.S.3.6 | Nincs HSTS header | MEDIUM | Med | V9 | Frontend explorer | Claude+Codex | 2026-05-15 | **Closed (code-only) 2026-05-15** (`Strict-Transport-Security: max-age=31536000` conservative — `includeSubDomains; preload` halasztott Codex MAJOR fix HIGH-commitment miatt) |
-| R.S.4.2 | ImportDialog nincs file size + MIME check | HIGH | Med | V12 | Frontend explorer | TBD | TBD | Open |
+| R.S.4.2 | ImportDialog nincs file size + MIME check | HIGH | Med | V12 | Frontend explorer | Claude+Codex | 2026-05-15 | **Closed (code-only) 2026-05-15** (`parseImportFile` central helper-en `MAX_IMPORT_FILE_SIZE=5MB` + `ALLOWED_IMPORT_MIME_TYPES={'application/json','text/json',''}` pre-check. `JSON.parse` final content-validator. /harden baseline GO + adversarial 2 MEDIUM accept/verified-not-real. XSS-grep CLEAN.) |
 | R.S.5.1 | Git secret-scan nem futott | HIGH | Low | V6, CIS 6 | Infra explorer | TBD | TBD | Open |
 | R.S.5.3 | Appwrite API key rotáció policy nincs dokumentálva | HIGH | Low | V6 | Infra explorer | TBD | TBD | Open |
 | R.S.6.1 | UXP `network.domains: "all"` (whitelist hiányzik) | MEDIUM | Low | V14 | Infra explorer | TBD | TBD | Open |
