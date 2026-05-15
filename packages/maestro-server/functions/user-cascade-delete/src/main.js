@@ -1,5 +1,9 @@
 const sdk = require('node-appwrite');
 
+// S.13.2 Phase 2 + S.13.3 Phase 2.0c (2026-05-15) — PII-redaction log wrap +
+// response info-disclosure védelem. Részletek: `_docs/Komponensek/LoggingMonitoring.md`.
+const { redactArgs, isRedactionDisabled } = require('./_generated_piiRedaction.js');
+
 /**
  * Appwrite Function: User Cascade Delete (Phase 1)
  *
@@ -110,7 +114,9 @@ async function removeUserFromTeam(teams, teamId, userId, log, error) {
     } catch (err) {
         if (err?.code === 404) return { found: 0, deleted: 0, failed: 0, skipped: 'team_not_found' };
         error(`[UserCascade] team ${teamId} listMemberships bukott: ${err.message}`);
-        return { found: 0, deleted: 0, failed: 1, error: err.message };
+        // S.13.3 Phase 2.0c: belső helper return — defense-in-depth, NEM raw
+        // err.message a hívó-flow-on át a kliens-response-be.
+        return { found: 0, deleted: 0, failed: 1 };
     }
 
     const list = memberships?.memberships || [];
@@ -131,7 +137,11 @@ async function removeUserFromTeam(teams, teamId, userId, log, error) {
     return { found: list.length, deleted, failed };
 }
 
-module.exports = async ({ req, res, log, error }) => {
+module.exports = async ({ req, res, log: rawLog, error: rawError }) => {
+    // S.13.2 Phase 2 PII-redaction wrap. KRITIKUS: spread (redactArgs egy
+    // array-t ad vissza). Részletek: shared `maestro-shared/piiRedaction.js`.
+    const log = (...args) => isRedactionDisabled() ? rawLog(...args) : rawLog(...redactArgs(args));
+    const error = (...args) => isRedactionDisabled() ? rawError(...args) : rawError(...redactArgs(args));
     const event = req.headers?.['x-appwrite-event'] || '';
 
     if (!event.startsWith('users.') || !event.endsWith('.delete')) {
@@ -212,19 +222,19 @@ module.exports = async ({ req, res, log, error }) => {
     try { orgMems = await listAllByUserId(databases, databaseId, orgMemsCol, userId); }
     catch (err) {
         error(`[UserCascade] orgMemberships list bukott: ${err.message}`);
-        stats.listFailures.push({ collection: 'organizationMemberships', error: err.message });
+        stats.listFailures.push({ collection: 'organizationMemberships' });
     }
 
     try { officeMems = await listAllByUserId(databases, databaseId, officeMemsCol, userId); }
     catch (err) {
         error(`[UserCascade] officeMemberships list bukott: ${err.message}`);
-        stats.listFailures.push({ collection: 'editorialOfficeMemberships', error: err.message });
+        stats.listFailures.push({ collection: 'editorialOfficeMemberships' });
     }
 
     try { groupMems = await listAllByUserId(databases, databaseId, groupMemsCol, userId); }
     catch (err) {
         error(`[UserCascade] groupMemberships list bukott: ${err.message}`);
-        stats.listFailures.push({ collection: 'groupMemberships', error: err.message });
+        stats.listFailures.push({ collection: 'groupMemberships' });
     }
 
     const orgIds = new Set(orgMems.map(m => m.organizationId).filter(Boolean));
@@ -318,10 +328,10 @@ module.exports = async ({ req, res, log, error }) => {
                         // best-effort. NEM blokkoljuk a cascade-et, csak loggoljuk.
                         // A `verificationFailures` listára kerül, hogy admin lássa.
                         error(`[UserCascade] orphan marker write hiba (org=${orgId}): ${markErr.message}`);
+                        // S.13.3 Phase 2.0c: NE szivárogtassunk raw markErr.message-et.
                         stats.verificationFailures.push({
                             check: 'orphan_marker_write',
-                            organizationId: orgId,
-                            error: markErr.message
+                            organizationId: orgId
                         });
                     }
                 } else {
@@ -341,7 +351,7 @@ module.exports = async ({ req, res, log, error }) => {
             }
         } catch (err) {
             error(`[UserCascade] last-owner check dobott (org=${orgId}): ${err.message}`);
-            stats.verificationFailures.push({ check: 'last_owner', organizationId: orgId, error: err.message });
+            stats.verificationFailures.push({ check: 'last_owner', organizationId: orgId });
         }
     }
 
