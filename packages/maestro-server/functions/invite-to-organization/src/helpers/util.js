@@ -118,11 +118,60 @@ const SLUG_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SLUG_MAX_LENGTH = 64;
 const NAME_MAX_LENGTH = 128;
 
+// S.13.3 (2026-05-15, R.S.13.3 Phase 1.0 partial close) — info-disclosure
+// védelem a `fail()`-szintű kliens-response-okra. A `fail(res, statusCode,
+// reason, extra)` hívók (~30 hely az action-okban) gyakran beletesznek
+// `error: err.message`, `message: cleanupErr.message`, `details`, `stack`,
+// `cause` mezőt — a `extra.failures.push({ docId, message: err.message })`
+// typed mintán is. ASVS V7 + V13: a kliens-response NE szivárogtasson belső
+// error-message-t, stack-trace-t, internal code-path-t.
+//
+// **Centralized strip**: `fail()` előbb deep-strip-eli a sensitive mezőket
+// (top-level + nested array/object szinten), majd a piiRedaction.js
+// `redactValue`-jén deep-redact-elve továbbítja (PII catch a nem-sensitive
+// mezőkben is, pl. `domain: 'user@example.com'`-szerű mezők). A reason ad
+// domain-szintű kontextust, az `executionId` ad support-csatornát.
+//
+// **Phase 1.0 SCOPE** (jelenlegi): `fail()` helper minden ~30 callsite-ra
+// + main.js top-level catch + 2 ad-hoc `success: true` fix (invites.js:837
+// `results[].reason`, schemas.js:3414 `stats.errors[].error`).
+//
+// **Phase 1.5 (külön iter)** scope: a `success: true` response-okban
+// MARADÉK leak-ek — `stats.errors[].message` minta minden bootstrap/backfill
+// schema action-ben (~12 hely), `orgCleanup.memberships.error = cleanupErr.message`
+// (orgs.js:850), és `_finalizeOrgIfProvisioning` `error: e.message`
+// (orgs.js:95-111) propagálva `provisioningStuckReason`-be a callsite-okon.
+// **Phase 2 (külön iter)**: maradék 10-15 CF (update-article, validate-
+// publication-update, user-cascade-delete, set-publication-root-path, stb.).
+const { redactValue } = require('./piiRedaction.js');
+
+const SENSITIVE_RESPONSE_FIELDS = new Set(['error', 'message', 'details', 'stack', 'cause']);
+
+function stripSensitive(value) {
+    if (Array.isArray(value)) return value.map(stripSensitive);
+    if (value !== null && typeof value === 'object') {
+        const out = {};
+        for (const key of Object.keys(value)) {
+            if (SENSITIVE_RESPONSE_FIELDS.has(key)) continue;
+            out[key] = stripSensitive(value[key]);
+        }
+        return out;
+    }
+    return value;
+}
+
 /**
- * JSON válasz hibakóddal — egyszerű wrapper a `res.json` köré.
+ * JSON válasz hibakóddal — sensitive-field strip + PII deep-redact.
+ *
+ * 1. `stripSensitive(extra)` — minden nested `error`/`message`/`details`/
+ *    `stack`/`cause` kulcs törlése (top-level és array/object minden mélységben).
+ * 2. `redactValue(...)` — a többi mezőből email/JWT/Bearer/long-token deep-
+ *    redact (Phase 1 PII-redaction — `_docs/Komponensek/LoggingMonitoring.md`).
  */
 function fail(res, statusCode, reason, extra = {}) {
-    return res.json({ success: false, reason, ...extra }, statusCode);
+    const cleaned = stripSensitive(extra);
+    const redacted = redactValue(cleaned, 0);
+    return res.json({ success: false, reason, ...redacted }, statusCode);
 }
 
 /**

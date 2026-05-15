@@ -834,7 +834,12 @@ async function createBatchInvites(ctx) {
                 };
             } catch (err) {
                 ctx.error?.(`[CreateBatch] ${email} hiba: ${err.message}`);
-                return { email, status: 'error', reason: err.message || 'create_failed' };
+                // S.13.3 (R.S.13.3 close, Phase 1): NE szivárogtassunk raw
+                // err.message-et a `success: true` response `results[].reason`
+                // mezőbe sem. A `reason`-nek domain-kódot adunk; a részletes
+                // hiba a `ctx.error` log-ban marad (PII-redacted Phase 1 wrap).
+                const code = typeof err?.code === 'string' ? err.code : 'create_failed';
+                return { email, status: 'error', reason: code };
             }
         }));
         results.push(...sliceResults);

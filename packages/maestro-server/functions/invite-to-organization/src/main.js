@@ -723,6 +723,14 @@ module.exports = async function ({ req, res, log: rawLog, error: rawError }) {
     } catch (err) {
         error(`Function hiba: ${err.message}`);
         error(`Stack: ${err.stack}`);
-        return res.json({ success: false, error: err.message }, 500);
+        // S.13.3 (R.S.13.3 Phase 1.0 partial close) — kliens-response NEM
+        // tartalmazhat raw `err.message`-et. A `fail()` helper a sensitive
+        // mezőket strip-eli és PII-redact-eli (a piiRedaction.js-en át). Az
+        // `executionId` az Appwrite runtime-tól érkezik (NEM kliens-spoofable,
+        // szigorúan platform-generated) — support-jegy korreláció a Console
+        // execution log-okkal.
+        return fail(res, 500, 'internal_error', {
+            executionId: req?.headers?.['x-appwrite-execution-id']
+        });
     }
 };

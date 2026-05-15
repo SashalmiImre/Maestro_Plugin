@@ -3411,7 +3411,11 @@ async function backfillOrganizationStatus(ctx) {
                         );
                         stats.backfilled++;
                     } catch (err) {
-                        stats.errors.push({ orgId: orgDoc.$id, error: err.message });
+                        // S.13.3 (R.S.13.3 close, Phase 1): a `success: true` response
+                        // `stats.errors[]` mezőbe NE szivárogtassunk raw err.message-et.
+                        // Az orgId elég support-triage-hez, részletes hiba az error
+                        // log-ban marad (PII-redacted Phase 1 wrap).
+                        stats.errors.push({ orgId: orgDoc.$id });
                         error(`[BackfillOrgStatus] update ${orgDoc.$id} hiba: ${err.message}`);
                     }
                 }
