@@ -79,14 +79,14 @@ tags: [feladatok]
 
 #### S.5 Secret + env var audit (HIGH → CRITICAL ha production-kulcs gyanús, 2 session) — ASVS V6/V14, CIS 6
 
-- [ ] **S.5.1** — Git secret-scan: `gitleaks` vagy `detect-secrets` lokálisan a teljes history-n. Eredmény → `_docs/Komponensek/SecretsRotation.md` snapshot.
-- [ ] **S.5.2** — `.env.production` tartalom verify: csak `VITE_*` (frontend public) — semmi server-side secret.
-- [ ] **S.5.3** — Appwrite API key rotáció dokumentáció: mikor, hogyan, mely CF-eket érint. Új jegyzet [[Komponensek/SecretsRotation]].
-- [ ] **S.5.4** — Resend `RESEND_WEBHOOK_SECRET` + `RESEND_API_KEY` rotáció policy.
-- [ ] **S.5.5** — GROQ_API_KEY + ANTHROPIC_API_KEY használat audit: csak szerver-oldal? `dangerouslyAllowBrowser` ellenőrzés (Anthropic SDK).
-- [ ] **S.5.6** — `.gitignore` completeness: minden `.env*` variáns, `.mcp.json`, lokális dev-secret fájlok.
-- [ ] **S.5.7** — Phase 2: rotáció éles végrehajtás (külön session, **user-trigger** mert prod-érintő destruktív lépés).
-- [ ] **S.5.8** — Stop-time Codex review.
+- [x] **S.5.1** — Git secret-scan partial close. **Done 2026-05-15** (`gitleaks`/`trufflehog` NEM telepített → manual regex-grep fallback teljes history-n). **TALÁLT** 1 leaked production Appwrite API key (`standard_b823bd9f...8d5f`) a `7474619` legelső commit-ban (`packages/maestro-indesign/appwrite_functions/delete-article-messages/environments.env`). A fájl később törölve `898f4ea`-ban, és a user-verify szerint a key a Console-on **NEM látszik** → manuálisan revoked. **Phase 2 (PENDING)**: `git filter-repo` history-rewrite a leaked-key blob-ok eltávolítására (GitHub secret-scanner false-positive + audit-clean). **AUDIT** ajánlott: Console Logs → `b823bd9f` mintán `Last used` keres — ha új-keletű hozzáférés, incident-response (egyébként revoked-only confirmed).
+- [ ] **S.5.2** — `.env.production` tartalom verify: csak `VITE_*` (frontend public) — semmi server-side secret. NEM closed (külön audit-iter).
+- [ ] **S.5.3** — Appwrite API key rotáció dokumentáció — `_docs/Komponensek/SecretsRotation.md` halasztott a history-rewrite-tal együtt.
+- [ ] **S.5.4** — Resend `RESEND_WEBHOOK_SECRET` + `RESEND_API_KEY` rotáció policy halasztott.
+- [ ] **S.5.5** — GROQ_API_KEY + ANTHROPIC_API_KEY használat audit halasztott.
+- [x] **S.5.6** — `.gitignore` `*.env` glob bővítés. **Done 2026-05-15**: a gyökér `.gitignore` + `packages/maestro-indesign/.gitignore` mind `*.env` + `.env.*` glob mintán bővítve. A leak okát megelőzi: a `environments.env` konvenció (Appwrite Functions) eddig kikerülte a `.env`-only szabályt; `*.env` mindent fed.
+- [ ] **S.5.7** — Phase 2: rotáció éles végrehajtás (USER-DECISION 2026-05-15: a leaked key a Console-on NEM látszik → revoked-only confirmed). History-rewrite külön iter.
+- [ ] **S.5.8** — Stop-time Codex review (halasztott a Phase 2-vel).
 
 #### S.12 Auth / Session / Access Control (HIGH, 1 session) — ASVS V2/V3/V4
 
