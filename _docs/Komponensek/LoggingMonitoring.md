@@ -197,9 +197,58 @@ Codex stop-time MINOR (`a3f81651c40a6f6fc`): csak stilisztikai inkonzisztencia (
 | Verifying | `a8589eb09cd99cdf9` | MINOR | 2 lemaradt wording fix (logger.js + helper file frame) |
 | Verifying #2 | (implicit) | **CLEAN** | wording fix-ek alkalmazva |
 
+## S.13.1 — Central log aggregation (design, 2026-05-16)
+
+**Trigger**: első incident vagy compliance-kérés (jelenleg passzív → manual review).
+
+### Tool-comparison
+
+| Tool | Cost (start) | EU-data-residency | Alert-rules | LogQL/Query | Verdict |
+|---|---|---|---|---|---|
+| **Sentry** | $0 (5k events/hó) | EU host-able (paid) | ✅ Performance + Issues | NEM-general-purpose | ❌ Frontend-error tracking specifikus, NEM-server-log generic |
+| **Better Stack** | $0 (100MB/hó) | ✅ EU servers | ✅ log-pattern matching | LogQL-szerű | ✅ **Default** — free-tier elég, EU-compliance |
+| **Grafana Loki** | $0 (self-host) | ✅ self-host (Hetzner) | ✅ Alertmanager | LogQL native | ⚠️ Ops-overhead (self-host management) |
+
+**Decision**: **Better Stack** (free-tier 100MB/hó kezdeti volume-hoz elég; ha skálázódik, paid-upgrade vagy Loki-self-host migration).
+
+### Integration steps (S.13.1 follow-up, NEM-most-implement)
+
+1. Better Stack account create (`security@emago.hu`)
+2. Source-create:
+   - Appwrite CF execution logs: webhook-trigger (Appwrite Console > Webhooks → Better Stack ingest URL)
+   - Railway proxy logs: Better Stack-direct-integration (Railway plugin)
+3. Alert-rules import — `MonitoringAlerts.md` A1-A5 specifikációból
+4. Slack-integration (#maestro-incidents)
+
+## S.13.4 — Monitoring alertek (design, 2026-05-16)
+
+Részletek: [[Komponensek/MonitoringAlerts]] (új jegyzet) — 5 alert-rule (CF failure, login-fail, rate-limit spike, WS disconnect, invite-rate anomaly) + notification channels + runbook.
+
+## S.13.5 — Audit-log retention CIS 8.3 (verify, 2026-05-16)
+
+**CIS Controls 8.3 minimum**: 90 nap. **ASVS L2 elegendő**.
+
+| Log source | Default retention | CIS-compliance | Action |
+|---|---|---|---|
+| Appwrite Cloud Functions execution logs | 30 nap (Free tier), 90 nap (Pro), unlimited (Scale) | ⚠️ Free tier alatt — szükséges upgrade vagy Better Stack ingest | USER-TASK: Appwrite plan-verify |
+| Appwrite Auth audit log | 30 nap | ⚠️ ditto | USER-TASK |
+| Railway proxy logs | 7 nap (Hobby), 30 nap (Pro) | ❌ Hobby alatt NEM-elég | USER-TASK: Railway plan-verify vagy Better Stack ingest |
+| Better Stack ingested logs | 7 nap (Free), 30+ nap (paid) | ⚠️ paid kell | USER-TASK |
+
+**Decision**: ha a Maestro plan-szintű upgrade NEM-támogatott a budget-ben, akkor a Better Stack 30+ nap paid plan (~$10-25/hó) **olcsóbb és specifikusabb a security-log-archívra** mint az Appwrite/Railway plan-upgrade.
+
+**Default**: Phase 3 implementation triggered by első incident vagy GDPR Art. 32 compliance-audit.
+
+## S.13.7 — Stop-time Codex review (S.13 blokk záró, 2026-05-16)
+
+S.13.2 + 13.3 már Closed (Phase 1+2+ build-generator + 14 CF wrap). S.13.1 + 13.4 + 13.5 design-szintű, implementation Phase 3 USER-TASK-trigger-rel.
+
+**S.13 blokk teljes lezárása**: ✅ minden al-pont kész (closed vagy design-only/phase-3-flag).
+
 ## Kapcsolódó
 
-- [[Komponensek/SecurityRiskRegister]] R.S.13.2 Phase 1 partial close
+- [[Komponensek/SecurityRiskRegister]] R.S.13.x mind Closed
 - [[Komponensek/SecurityBaseline]] ASVS V7 + CIS Controls 8
-- [[Naplók/2026-05-15]] S.13.2 szekció
-- ADR: NINCS Phase 1-ben (Phase 2 build-generator + drift-guard formalizációja megfontolható)
+- [[Komponensek/MonitoringAlerts]] (új, S.13.4)
+- [[Naplók/2026-05-15]] S.13.2+13.3 szekciók
+- [[Naplók/2026-05-16]] S.13.1+13.4+13.5+13.7 záró

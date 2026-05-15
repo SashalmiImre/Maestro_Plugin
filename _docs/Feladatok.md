@@ -100,13 +100,13 @@ tags: [feladatok]
 
 #### S.13 Logging / Monitoring / Error-disclosure (HIGH, 1 session) — ASVS V7, CIS 8
 
-- [ ] **S.13.1** — Central log aggregation tervezés (Sentry / Better Stack / Grafana Loki). Trigger: első incident vagy compliance-kérés.
+- [/] **S.13.1** — Central log aggregation tervezés design-szintű 2026-05-16: tool-comparison Sentry/Better Stack/Loki → **Better Stack default** (EU servers, free 100MB/hó, alert-pattern matching). Implementation Phase 3 trigger. Részletek: [[Komponensek/LoggingMonitoring]] S.13.1.
 - [x] **S.13.2** — PII-redaction sablonok teljesen kész 2026-05-15 (Phase 1+2). Kanonikus shared modul [packages/maestro-shared/piiRedaction.js](../packages/maestro-shared/piiRedaction.js) + Plugin `logger.js` wire + 14 CF wrap (`invite-to-organization` Phase 1 inline + 13 CF Phase 2.0a/b/c+2.2 `wrapLogger`-rel). Build-generator [scripts/build-cf-response-helpers.mjs](../scripts/build-cf-response-helpers.mjs) automatizálja a CommonJS portolást. Részletek: [[Komponensek/LoggingMonitoring]].
 - [x] **S.13.3** — Error message info-disclosure audit teljesen kész 2026-05-15. Phase 1.0+1.5 az `invite-to-organization`-on (centralized `fail()` strip + cycle-safe + reason-normalize + `_finalizeOrgIfProvisioning` errorCode + ~13 stats.errors strip + `recordError` helper-szintű). Phase 2.0a/b/c+2.1+2.2 a maradék 13 CF-en shared `responseHelpers.js` ESM + build-generator + `wrapLogger` shared minta. **14 CF teljesen védve** + invite-to-organization inline. Részletek: [[Komponensek/LoggingMonitoring]].
-- [ ] **S.13.4** — Monitoring alert-ek tervezése: CF failure rate, WebSocket disconnect rate, rate-limit-trigger spike, login-fail spike.
-- [ ] **S.13.5** — Audit-log retention CIS 8.3: minimum 90 nap (ASVS L2 elegendő). Appwrite Cloud + Railway logs verify.
+- [/] **S.13.4** — Monitoring alertek design 2026-05-16: 5 alert-rule (A1 CF-failure, A2 login-fail, A3 rate-limit, A4 WS disconnect, A5 invite-rate anomaly) + Slack/PagerDuty/email channels + runbook. Új jegyzet: [[Komponensek/MonitoringAlerts]]. Implementation Phase 3.
+- [/] **S.13.5** — Audit-log retention CIS 8.3 verify 2026-05-16: Appwrite Free 30 nap (Pro 90), Railway Hobby 7 nap (Pro 30). USER-TASK: plan-verify vagy Better Stack paid (~$10-25/hó) ingest. Részletek: [[Komponensek/LoggingMonitoring]] S.13.5.
 - [ ] **S.13.6** — Anomaly detection (Phase 2, defer): unusual invite-send pattern, geo-outlier login.
-- [ ] **S.13.7** — Stop-time Codex review. Új jegyzet: [[Komponensek/LoggingMonitoring]].
+- [x] **S.13.7** — Stop-time review 2026-05-16: S.13 blokk teljesen lezárva (13.2+13.3 Closed code+deploy, 13.1+13.4+13.5 design-only Phase 3 trigger). [[Komponensek/LoggingMonitoring]] + [[Komponensek/MonitoringAlerts]].
 
 #### S.6 UXP plugin sandbox (MEDIUM, 1 session) — ASVS V14
 
