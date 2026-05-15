@@ -33,6 +33,8 @@ const {
     deleteTeamIfExists
 } = require('../teamHelpers.js');
 const permissions = require('../permissions.js');
+// S.7.9 Phase 4b (2026-05-15) — self-anonymize integrate a `leaveOrganization`-ban.
+const { anonymizeUserAclCore } = require('./schemas.js');
 
 /**
  * ACTION='leave_organization' (#41).
@@ -171,6 +173,37 @@ async function leaveOrganization(ctx) {
         return fail(res, 500, 'team_cleanup_failed', { message: teamErr.message });
     }
 
+    // 3.6) S.7.9 (2026-05-15) — GDPR Art. 17 self-anonymize. A team cleanup
+    //      UTÁN (Codex Q7 GO sorrend), a DB-delete ELŐTT, hogy a stale
+    //      `Permission.read(user:X)` perm-ek se maradjanak a tenant doc-okon.
+    //      Best-effort: partial-failure NEM blokkolja a kilépési flow-t —
+    //      a tag már a team-ekből kívül van, a stale perm csendben marad
+    //      és admin manuálisan futtathat re-anonymize-ot. Self-anonymize,
+    //      callerId === targetUserId, NEM kér extra auth-ot a core-tól.
+    let anonStats = null;
+    try {
+        // Time-budget 30s (Harden Phase 6 verifying P1): a self-service flow
+        // garantáltan a CF 60s timeout-on belül lefut. Ha exceed → partial,
+        // a flow folytatódik, és admin re-anonymize a fallback path.
+        const r = await anonymizeUserAclCore(ctx, {
+            organizationId,
+            targetUserId: callerId,
+            dryRun: false,
+            callerId,
+            maxRunMs: 30_000
+        });
+        if (r.orgNotFound || r.orgFetchFailed) {
+            error(`[LeaveOrg] anonymize_user_acl preflight hiba (NEM blokkol, kilépés folytatódik): orgNotFound=${!!r.orgNotFound} orgFetchFailed=${!!r.orgFetchFailed}`);
+        } else if (r.stats) {
+            anonStats = r.stats;
+            if (r.stats.errorCount > 0) {
+                error(`[LeaveOrg] anonymize_user_acl partial-failure: errorCount=${r.stats.errorCount} (NEM blokkol; admin re-anonymize ajánlott)`);
+            }
+        }
+    } catch (anonErr) {
+        error(`[LeaveOrg] anonymize_user_acl hiba (NEM blokkol): ${anonErr.message}`);
+    }
+
     // 4) Caller saját office membership-ek törlése. Az
     //    `editorialOfficeMemberships` collection a `(officeId, userId)`
     //    composite indexen unique, de egy user több office-ban is lehet
@@ -263,7 +296,7 @@ async function leaveOrganization(ctx) {
         return fail(res, 500, 'membership_delete_failed');
     }
 
-    log(`[LeaveOrg] User ${callerId} kilépett org ${organizationId}-ból — office=${officeMembershipsRemoved}, groupMemberships=${groupMembershipsRemoved}, teams.office=${teamCleanup.officeTeams}, teams.org=${teamCleanup.orgTeam}`);
+    log(`[LeaveOrg] User ${callerId} kilépett org ${organizationId}-ból — office=${officeMembershipsRemoved}, groupMemberships=${groupMembershipsRemoved}, teams.office=${teamCleanup.officeTeams}, teams.org=${teamCleanup.orgTeam}, anonymizeErrors=${anonStats ? anonStats.errorCount : 'skipped'}`);
 
     return res.json({
         success: true,
@@ -274,7 +307,10 @@ async function leaveOrganization(ctx) {
             editorialOfficeMemberships: officeMembershipsRemoved,
             groupMemberships: groupMembershipsRemoved
         },
-        teamCleanup
+        teamCleanup,
+        // S.7.9 audit — anonymize stats (null ha preflight failed, NEM-null
+        // ha a flow lefutott akár partial-failure-rel).
+        anonymizeStats: anonStats
     });
 }
 

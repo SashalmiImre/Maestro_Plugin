@@ -106,7 +106,11 @@ const VALID_ACTIONS = new Set([
     'verify_collection_document_security',
     // S.7.7c (2026-05-15) — R.S.7.7 close: legacy ACL backfill a 6 user-data
     // collection-en. Scope-paraméteres + kategória 1/2 fallback + audit log.
-    'backfill_acl_phase3'
+    'backfill_acl_phase3',
+    // S.7.9 (2026-05-15) — R.S.7.5 close: GDPR Art. 17 stale `withCreator`
+    // user-read cleanup. Self + admin auth. Hívja a leave_organization +
+    // delete_my_account self-service flow is.
+    'anonymize_user_acl'
 ]);
 
 // Slug formátum: kisbetű, szám, kötőjel. A frontend is ugyanezt alkalmazza.

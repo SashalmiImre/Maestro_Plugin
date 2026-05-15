@@ -15,6 +15,8 @@ const {
     fetchUserIdentity,
     listOfficeIdsForOrg
 } = require('../helpers/util.js');
+// S.7.9 Phase 4b (2026-05-15) — self-anonymize integrate a `deleteMyAccount`-ban.
+const { anonymizeUserAclCore } = require('./schemas.js');
 const { CASCADE_BATCH_LIMIT, WORKFLOW_VISIBILITY_DEFAULT } = require('../helpers/constants.js');
 const { deleteByQuery, cascadeDeleteOffice } = require('../helpers/cascade.js');
 const { evaluateAndConsume } = require('../helpers/rateLimit.js');
@@ -1690,7 +1692,7 @@ async function deleteMyAccount(ctx) {
     const cleanupStats = [];
     for (const m of callerMemberships) {
         const orgId = m.organizationId;
-        const stat = { organizationId: orgId, officeMemberships: 0, groupMemberships: 0, teams: { officeTeams: 0, orgTeam: false, orgAdminTeam: false } };
+        const stat = { organizationId: orgId, officeMemberships: 0, groupMemberships: 0, teams: { officeTeams: 0, orgTeam: false, orgAdminTeam: false }, anonymizeErrors: null };
 
         // 4a. Office-IDs listing — helper-extracted.
         let officeIds;
@@ -1751,6 +1753,35 @@ async function deleteMyAccount(ctx) {
         } catch (teamErr) {
             error(`[DeleteMyAccount] team cleanup hiba (${orgId}, org-membership már törölve): ${teamErr.message}`);
             return fail(res, 500, 'partial_cleanup', { stage: 'team_cleanup', organizationId: orgId, message: teamErr.message, completedOrgs: cleanupStats });
+        }
+
+        // 4d.5) S.7.9 (2026-05-15) — GDPR Art. 17 self-anonymize a target-org-on.
+        //       Best-effort: partial-failure NEM blokkolja a flow-t (a user már
+        //       team-en kívül + org-membership törölve). Self-anonymize, NEM
+        //       kér extra auth-ot a core-tól. NEM minősül `partial_cleanup`-nak,
+        //       mert a tag-eltávolítás cél már elérve — csak a stale `read("user:X")`
+        //       perm marad, ami admin re-anonymize-cal pótolható.
+        try {
+            // Time-budget 10s per-org (deleteMyAccount = up to 10 org × 10s
+            // = 100s budget; reszervált a flow közben az `usersApi.delete` +
+            // 4e/4f cascade-delete-hez). Harden Phase 6 verifying P1 fix.
+            const r = await anonymizeUserAclCore(ctx, {
+                organizationId: orgId,
+                targetUserId: callerId,
+                dryRun: false,
+                callerId,
+                maxRunMs: 10_000
+            });
+            if (r.orgNotFound || r.orgFetchFailed) {
+                error(`[DeleteMyAccount] anonymize preflight hiba (${orgId}, NEM blokkol): orgNotFound=${!!r.orgNotFound} orgFetchFailed=${!!r.orgFetchFailed}`);
+            } else if (r.stats) {
+                stat.anonymizeErrors = r.stats.errorCount;
+                if (r.stats.errorCount > 0) {
+                    error(`[DeleteMyAccount] anonymize partial-failure (${orgId}): errorCount=${r.stats.errorCount} (NEM blokkol)`);
+                }
+            }
+        } catch (anonErr) {
+            error(`[DeleteMyAccount] anonymize hiba (${orgId}, NEM blokkol): ${anonErr.message}`);
         }
 
         // 4e. Office memberships cascade (callerId + org-szűrt, paginált)

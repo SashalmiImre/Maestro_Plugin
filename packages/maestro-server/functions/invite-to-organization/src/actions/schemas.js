@@ -2407,6 +2407,445 @@ async function backfillAclPhase3(ctx) {
 }
 
 /**
+ * ACTION='anonymize_user_acl' (S.7.9, 2026-05-15) — R.S.7.5 close.
+ *
+ * GDPR Art. 17 stale `withCreator` user-read cleanup. Az S.7.1 (2026-05-12)
+ * bevezette a `withCreator(perms, callerId)` mintát — minden tenant-érintő
+ * `createDocument` doc-szintű `Permission.read(user(callerId))` perm-et kap
+ * a creator-race-resilience-hez. **STALE problem**: amikor a user kilép a
+ * tenant-ből (`leave_organization`) vagy törli a fiókját (`delete_my_account`),
+ * a `Permission.read(user:X)` perm a meglévő doc-okon **megmarad** —
+ * `removeTeamMembership` NEM törli a doc-szintű perm-et. GDPR Art. 17
+ * (right to be forgotten) sérülés-kockázat: a volt user a saját régi
+ * history-jét továbbra is látja.
+ *
+ * **Q1 user-decision B** (2026-05-13 Harden Phase 7): külön action,
+ * NEM a `backfill_acl_phase2`/phase3-ba építve. Indok: 1 felelősség per
+ * action, eltérő cadence (backfill 1× a S.7.1 fix után, cleanup havonta/
+ * évente vagy a self-service flow-on).
+ *
+ * **Scope** (12 collection, target-orgon belül):
+ *
+ *   | # | Collection                  | Org-id-filter                 |
+ *   |---|-----------------------------|-------------------------------|
+ *   | 1 | organizations (1 doc)        | direkt $id === targetOrgId    |
+ *   | 2 | organizationMemberships      | Query.equal('organizationId') |
+ *   | 3 | editorialOffices             | Query.equal('organizationId') |
+ *   | 4 | editorialOfficeMemberships   | Query.equal('organizationId') |
+ *   | 5 | publications                 | Query.equal('organizationId') |
+ *   | 6 | articles                     | Query.equal('organizationId') |
+ *   | 7 | layouts                      | Query.equal('organizationId') |
+ *   | 8 | deadlines                    | Query.equal('organizationId') |
+ *   | 9 | userValidations              | Query.equal('articleId', batch) — articleIds a target-org articles-ból (Codex BLOCKER fix) |
+ *   | 10 | systemValidations           | mint #9                       |
+ *   | 11 | organizationInvites          | Query.equal('organizationId') (csak ha env-collection-id beállítva) |
+ *   | 12 | organizationInviteHistory    | Query.equal('organizationId') (csak ha env-collection-id beállítva) |
+ *
+ * **Algoritmus** (Q1 GO):
+ *   - Per-doc: `currentPerms.filter(p => !PERM_PATTERN.test(p))`, ahol
+ *     `PERM_PATTERN = /^.*\("user:${escapeRegex(targetUserId)}"\)$/` —
+ *     strict end-anchored regex. Minden ACL-művelet (read|write|update|
+ *     delete|create) target-user-id-jét eltávolítja. Codex MAJOR fix:
+ *     `escapeRegex` a `targetUserId`-n a regex-metakaraktereket escape-eli.
+ *   - Ha a filter ELTÁVOLÍTOTT legalább 1 perm-et → `updateDocument(...,
+ *     filteredPerms)`. NEM no-op write (csak ha tényleg volt perm).
+ *
+ * **Set dedupe** (Codex Q8 GO, S.7.7c Verifying P2 minta): a `filteredPerms`
+ * `Array.from(new Set(...))`-szel duplikáció-mentes.
+ *
+ * **Auth** (Q3 + Q5 GO — kettős):
+ *   - Self-anonymize: `callerId === targetUserId` → NEM kér extra auth-ot
+ *     (a self-service flow `leave_organization` / `delete_my_account`
+ *     ezt a self-anonymize-pathway-en hívja).
+ *   - Admin-anonymize: `callerId !== targetUserId` → `requireOrgOwner(ctx,
+ *     organizationId)` auth (mint `backfill_acl_phase2`/phase3).
+ *
+ * **Audit** (Q6 GO): per-collection `scanned`/`anonymized`/`skipped`/`errors`
+ * + caller + targetUserId + organizationId + dryRun + partialFailure flag.
+ *
+ * **Idempotens** (Q7 GO): 2. futtatás `filteredPerms.length === currentPerms.length`
+ * → no-op (NEM hív `updateDocument`-et, megtakarít Realtime push storm-ot).
+ * Eltér phase2/phase3-tól, mert ott rewrite-elnek (mindig $updatedAt mozdul);
+ * itt csak akkor írunk, ha tényleg volt eltávolítandó perm.
+ *
+ * **Payload**: `{ action: 'anonymize_user_acl', organizationId, targetUserId, dryRun? }`
+ *
+ * **Accepted runtime tradeoffs** (Codex stop-time MAJOR 1, 2026-05-15):
+ *   - Nagy org-on (10k+ doc, 100k+ article) a 12-collection scan + 25-batch
+ *     validation-query CF 60s timeout-ot átléphet. Operational bound: max
+ *     ~10k doc / org / flow synchron biztos lefutáshoz. Self-service flow-ban
+ *     (`leaveOrganization` / `deleteMyAccount`) ezt fail-soft kezeljük —
+ *     a tag-eltávolítás cél már elérve a team-cleanup-ban, az ACL-residual
+ *     admin re-anonymize-cal pótolható később.
+ *   - **Re-anonymize fallback path** (Codex MAJOR 2): admin manuálisan
+ *     futtathatja az action-t `{organizationId, targetUserId}` payload-szal
+ *     az admin-anonymize ágon (`requireOrgOwner` auth). Auditálható a
+ *     stdout log `[AnonymizeUserAcl]` prefix-szel grep-elve a CF logokból
+ *     (caller + targetUserId + org + errorCount + partial JSON).
+ *   - **Partial-failure semantics** (Codex MAJOR 3): a stats `errors[]` cap
+ *     100 + `errorsTruncated` flag + `partialFailure: errorCount > 0`. A
+ *     `success` boolean csak akkor `true`, ha `errorCount === 0` —
+ *     automatizált futtató megkülönbözteti a teljes-sikert a részlegestől.
+ *   - **Optional collection skip** (Codex MINOR): a `organizationInviteHistory`
+ *     env-var OPCIONÁLIS (history halasztott deploy). Ha hiányzik,
+ *     `stats.skippedCollections[]` arrayba kerül + audit-log a stdout-on
+ *     (NE legyen silent — admin tudja, hogy NEM volt scan-elve).
+ *
+ * @param {Object} ctx
+ * @returns {Promise<Object>} `{ success: true, action: 'anonymized_user_acl', stats }`
+ */
+/**
+ * Belső helper `anonymize_user_acl`-hez (S.7.9 Phase 4b refactor, 2026-05-15).
+ *
+ * Az action handler `anonymizeUserAcl(ctx)` és a self-service flow-k
+ * (`leaveOrganization` az `offices.js`-ben, `deleteMyAccount` az `orgs.js`-ben)
+ * KÖZÖSEN hívják a core-t. A core NEM csinál auth-check-et (a hívó dolga) és
+ * NEM hív `res.json`-t (visszaadja a stats-ot). A thin wrapper `anonymizeUserAcl(ctx)`
+ * felelős: payload-validation + auth + res.json csomagolás.
+ *
+ * @param {Object} ctx — handler context (databases, env, sdk, log, error)
+ * @param {Object} params - { organizationId, targetUserId, dryRun }
+ * @returns {Promise<{ success: boolean, stats: Object, orgNotFound?: boolean }>}
+ */
+async function anonymizeUserAclCore(ctx, { organizationId: targetOrgId, targetUserId, dryRun = false, callerId, maxRunMs = null }) {
+    const { databases, env, log, error, sdk } = ctx;
+    // Harden Phase 1 P1 + Phase 2 medium fix (2026-05-15): a callerId paraméter
+    // explicit a params-ban — a `ctx.callerId` action-handler-szintű, de a core
+    // a self-service flow-kból is hívható, ahol a hívó saját callerId-jét adja
+    // át. A log-statement-en undefined-ReferenceError-t okozott korábban.
+    const callerForLog = typeof callerId === 'string' && callerId.length > 0
+        ? callerId
+        : (ctx && ctx.callerId) || 'unknown';
+    // Harden Phase 6 verifying P1 fix (2026-05-15): time-budget a self-service
+    // flow-knak (`leave_organization` / `delete_my_account`). A platform timeout
+    // 60s NEM catch-elhető — ha az anonymize közelít hozzá, a flow split-brain
+    // állapotba kerülhet (team out, DB membership még in). A `maxRunMs` bound
+    // partial-return-rel garantálja a flow-folytatást. Admin re-anonymize a
+    // fallback path.
+    const startTime = Date.now();
+    const isOverBudget = () => maxRunMs !== null && (Date.now() - startTime > maxRunMs);
+
+    // Target org létezés-check (defensive — a hívó esetleg már ellenőrizte).
+    try {
+        await databases.getDocument(env.databaseId, env.organizationsCollectionId, targetOrgId);
+    } catch (err) {
+        if (err?.code === 404) {
+            return { success: false, stats: null, orgNotFound: true };
+        }
+        error(`[AnonymizeUserAclCore] org fetch hiba: ${err.message}`);
+        return { success: false, stats: null, orgFetchFailed: true };
+    }
+
+    // PERM_PATTERN: strict end-anchored regex (Codex MAJOR fix — escapeRegex
+    // a regex-metakaraktereket sanitálja). Match: minden ACL-művelet
+    // (read|write|update|delete|create) "user:${targetUserId}" perm-en.
+    const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const PERM_PATTERN = new RegExp(`^[a-z]+\\("user:${escapeRegex(targetUserId)}"\\)$`);
+
+    const MAX_ERRORS = 100;
+    const stats = {
+        dryRun,
+        organizationId: targetOrgId,
+        targetUserId,
+        partialFailure: false,
+        // Codex stop-time MINOR fix (2026-05-15): silent-skip → explicit
+        // `skippedCollections[]` audit-mező. Ha `organizationInviteHistory`
+        // env-var hiányzik (halasztott deploy), itt jelez.
+        skippedCollections: [],
+        // Harden Phase 6 verifying P1 fix: a `maxRunMs` time-budget kivánás
+        // jelölése. Ha `true`, a self-service hívó tudja, hogy partial-cleanup,
+        // és admin re-anonymize szükséges a maradék collection-ekre.
+        timeBudgetExceeded: false,
+        organizations:              { scanned: 0, anonymized: 0, skipped: 0 },
+        organizationMemberships:    { scanned: 0, anonymized: 0, skipped: 0 },
+        editorialOffices:           { scanned: 0, anonymized: 0, skipped: 0 },
+        editorialOfficeMemberships: { scanned: 0, anonymized: 0, skipped: 0 },
+        publications:               { scanned: 0, anonymized: 0, skipped: 0 },
+        articles:                   { scanned: 0, anonymized: 0, skipped: 0 },
+        layouts:                    { scanned: 0, anonymized: 0, skipped: 0 },
+        deadlines:                  { scanned: 0, anonymized: 0, skipped: 0 },
+        userValidations:            { scanned: 0, anonymized: 0, skipped: 0 },
+        systemValidations:          { scanned: 0, anonymized: 0, skipped: 0 },
+        organizationInvites:        { scanned: 0, anonymized: 0, skipped: 0 },
+        organizationInviteHistory:  { scanned: 0, anonymized: 0, skipped: 0 },
+        errorCount: 0,
+        errorsTruncated: false,
+        errors: []
+    };
+
+    function recordError(entry) {
+        stats.errorCount++;
+        if (stats.errors.length < MAX_ERRORS) {
+            stats.errors.push(entry);
+        } else {
+            stats.errorsTruncated = true;
+        }
+    }
+
+    const listAll = (collectionId, queries = []) =>
+        listAllByQuery(databases, env.databaseId, collectionId, queries, sdk, { batchSize: CASCADE_BATCH_LIMIT });
+
+    // Per-doc anonymize loop. Q6 idempotens: csak akkor `updateDocument`,
+    // ha legalább 1 perm eltávolítva. Q8 Set dedupe (S.7.7c Verifying P2).
+    async function anonymizeDoc({ doc, collectionId, statBucket, errorKind, idField }) {
+        statBucket.scanned++;
+        const currentPerms = Array.isArray(doc.$permissions) ? doc.$permissions : [];
+        const filteredPerms = currentPerms.filter(p => !PERM_PATTERN.test(p));
+        if (filteredPerms.length === currentPerms.length) {
+            statBucket.skipped++;
+            return; // no-op (idempotens — semmi user:X perm-et nem találtunk)
+        }
+        if (dryRun) {
+            statBucket.anonymized++;
+            return;
+        }
+        try {
+            const dedupedPerms = Array.from(new Set(filteredPerms));
+            await databases.updateDocument(env.databaseId, collectionId, doc.$id, {}, dedupedPerms);
+            statBucket.anonymized++;
+        } catch (err) {
+            recordError({ kind: `${errorKind}_acl`, [idField]: doc.$id, message: err.message });
+        }
+    }
+
+    // ── 1) organizations (single-doc) ──
+    try {
+        const orgDoc = await databases.getDocument(env.databaseId, env.organizationsCollectionId, targetOrgId);
+        await anonymizeDoc({
+            doc: orgDoc,
+            collectionId: env.organizationsCollectionId,
+            statBucket: stats.organizations,
+            errorKind: 'organization',
+            idField: 'orgId'
+        });
+    } catch (err) {
+        recordError({ kind: 'organization_fetch', message: err.message });
+    }
+
+    // Time-budget check helper — break-eli a scan-eket. A meglévő `recordError`
+    // NEM jelez timeout-ot, csak a `stats.timeBudgetExceeded = true` flag-en
+    // jut tudomásra a hívó.
+    const checkBudget = () => {
+        if (isOverBudget()) {
+            stats.timeBudgetExceeded = true;
+            return true;
+        }
+        return false;
+    };
+
+    // ── 2-8) Org-id-filter-elt collection-ök ──
+    const orgIdScans = [
+        { alias: 'organizationMemberships',    collectionId: env.membershipsCollectionId,            errorKind: 'org_membership',    idField: 'memId' },
+        { alias: 'editorialOffices',           collectionId: env.officesCollectionId,                errorKind: 'office',            idField: 'officeId' },
+        { alias: 'editorialOfficeMemberships', collectionId: env.officeMembershipsCollectionId,      errorKind: 'office_membership', idField: 'memId' },
+        { alias: 'publications',               collectionId: env.publicationsCollectionId,           errorKind: 'publication',       idField: 'pubId' },
+        { alias: 'articles',                   collectionId: env.articlesCollectionId,               errorKind: 'article',           idField: 'articleId' },
+        { alias: 'layouts',                    collectionId: env.layoutsCollectionId,                errorKind: 'layout',            idField: 'layoutId' },
+        { alias: 'deadlines',                  collectionId: env.deadlinesCollectionId,              errorKind: 'deadline',          idField: 'deadlineId' }
+    ];
+    for (const scan of orgIdScans) {
+        if (checkBudget()) break;
+        if (!scan.collectionId) {
+            recordError({ kind: 'missing_env_collection_id', alias: scan.alias });
+            continue;
+        }
+        try {
+            const docs = await listAll(
+                scan.collectionId,
+                [
+                    sdk.Query.equal('organizationId', targetOrgId),
+                    sdk.Query.select(['$id', '$permissions'])
+                ]
+            );
+            for (const doc of docs) {
+                if (checkBudget()) break;
+                await anonymizeDoc({
+                    doc,
+                    collectionId: scan.collectionId,
+                    statBucket: stats[scan.alias],
+                    errorKind: scan.errorKind,
+                    idField: scan.idField
+                });
+            }
+        } catch (err) {
+            recordError({ kind: `${scan.alias}_list`, message: err.message });
+        }
+    }
+
+    // ── 9-10) Validation collections (articleId batch-scan, Codex BLOCKER fix) ──
+    // A validation collection-ök NEM tárolnak organizationId-t (S.7.7c Verifying
+    // P1). Az `artPubMap` mintára: pre-load minden article-id-t a target-org-ból
+    // és batch-szerűen scan-elünk a validation collection-ön.
+    let targetArticleIds = [];
+    if (env.articlesCollectionId) {
+        try {
+            const articles = await listAll(
+                env.articlesCollectionId,
+                [
+                    sdk.Query.equal('organizationId', targetOrgId),
+                    sdk.Query.select(['$id'])
+                ]
+            );
+            targetArticleIds = articles.map(a => a.$id).filter(id => typeof id === 'string');
+        } catch (err) {
+            recordError({ kind: 'articles_id_list', message: err.message });
+        }
+    }
+    const validationScans = [
+        { alias: 'userValidations',   collectionId: env.userValidationsCollectionId,   errorKind: 'user_validation',   idField: 'uvId' },
+        { alias: 'systemValidations', collectionId: env.systemValidationsCollectionId, errorKind: 'system_validation', idField: 'svId' }
+    ];
+    for (const scan of validationScans) {
+        if (checkBudget()) break;
+        if (!scan.collectionId) {
+            recordError({ kind: 'missing_env_collection_id', alias: scan.alias });
+            continue;
+        }
+        if (targetArticleIds.length === 0) continue;
+        const BATCH = 25;
+        for (let i = 0; i < targetArticleIds.length; i += BATCH) {
+            if (checkBudget()) break;
+            const batch = targetArticleIds.slice(i, i + BATCH);
+            try {
+                const docs = await listAll(
+                    scan.collectionId,
+                    [
+                        sdk.Query.equal('articleId', batch),
+                        sdk.Query.select(['$id', '$permissions'])
+                    ]
+                );
+                for (const doc of docs) {
+                    if (checkBudget()) break;
+                    await anonymizeDoc({
+                        doc,
+                        collectionId: scan.collectionId,
+                        statBucket: stats[scan.alias],
+                        errorKind: scan.errorKind,
+                        idField: scan.idField
+                    });
+                }
+            } catch (err) {
+                recordError({
+                    kind: `${scan.alias}_list`,
+                    message: err.message,
+                    batchStartIndex: i,
+                    batchSize: batch.length
+                });
+            }
+        }
+    }
+
+    // ── 11-12) Invite-collection-ök (W3 admin-team scoped, defense-in-depth) ──
+    const inviteScans = [
+        { alias: 'organizationInvites',       collectionId: env.invitesCollectionId,                   errorKind: 'invite',         idField: 'inviteId' },
+        { alias: 'organizationInviteHistory', collectionId: env.organizationInviteHistoryCollectionId, errorKind: 'invite_history', idField: 'historyId' }
+    ];
+    for (const scan of inviteScans) {
+        if (checkBudget()) break;
+        if (!scan.collectionId) {
+            // Codex stop-time MINOR fix: explicit audit a silent-skip helyett.
+            stats.skippedCollections.push({ alias: scan.alias, reason: 'env_var_missing' });
+            continue;
+        }
+        try {
+            const docs = await listAll(
+                scan.collectionId,
+                [
+                    sdk.Query.equal('organizationId', targetOrgId),
+                    sdk.Query.select(['$id', '$permissions'])
+                ]
+            );
+            for (const doc of docs) {
+                await anonymizeDoc({
+                    doc,
+                    collectionId: scan.collectionId,
+                    statBucket: stats[scan.alias],
+                    errorKind: scan.errorKind,
+                    idField: scan.idField
+                });
+            }
+        } catch (err) {
+            recordError({ kind: `${scan.alias}_list`, message: err.message });
+        }
+    }
+
+    stats.partialFailure = stats.errorCount > 0;
+
+    log(`[AnonymizeUserAcl] caller=${callerForLog} target=${targetUserId} org=${targetOrgId} dryRun=${dryRun} errorCount=${stats.errorCount} partial=${stats.partialFailure} counts=${JSON.stringify({
+        organizations: stats.organizations,
+        organizationMemberships: stats.organizationMemberships,
+        editorialOffices: stats.editorialOffices,
+        editorialOfficeMemberships: stats.editorialOfficeMemberships,
+        publications: stats.publications,
+        articles: stats.articles,
+        layouts: stats.layouts,
+        deadlines: stats.deadlines,
+        userValidations: stats.userValidations,
+        systemValidations: stats.systemValidations,
+        organizationInvites: stats.organizationInvites,
+        organizationInviteHistory: stats.organizationInviteHistory
+    })}`);
+
+    return { success: stats.errorCount === 0, stats };
+}
+
+/**
+ * ACTION='anonymize_user_acl' (S.7.9, 2026-05-15) — R.S.7.5 close.
+ *
+ * Thin wrapper a `anonymizeUserAclCore`-on. Payload validation + auth check
+ * (self vs admin) + res.json csomagolás. A `leaveOrganization` és
+ * `deleteMyAccount` self-service flow-k a core-t hívják KÖZVETLENÜL
+ * (saját security guard-okkal already authorized).
+ *
+ * Lásd a core JSDoc-ot a fenti `anonymizeUserAclCore`-on.
+ *
+ * @param {Object} ctx
+ * @returns {Promise<Object>} `{ success, action: 'anonymized_user_acl', stats }`
+ */
+async function anonymizeUserAcl(ctx) {
+    const { callerId, payload, res, fail } = ctx;
+    const dryRun = payload && payload.dryRun === true;
+    const { organizationId: targetOrgId, targetUserId } = payload || {};
+
+    if (!targetOrgId || typeof targetOrgId !== 'string') {
+        return fail(res, 400, 'missing_fields', { required: ['organizationId'] });
+    }
+    if (!targetUserId || typeof targetUserId !== 'string' || targetUserId.trim() !== targetUserId) {
+        return fail(res, 400, 'missing_fields', { required: ['targetUserId'] });
+    }
+
+    // Auth (Harden Phase 2 HIGH fix, 2026-05-15): a public action ADMIN-ONLY —
+    // self-path TILOS (a `callerId === targetUserId` ág korábban auth-gap volt:
+    // egy authenticated user `targetUserId === callerId`-val ANY org-on
+    // futtathatott anonymize-ot, beleértve azokat, ahol már nem tag).
+    // Self-service GDPR cleanup CSAK a `leave_organization` / `delete_my_account`
+    // flow-kból megengedett — azok a saját security guard-jaikkal autorizáltak,
+    // és a `anonymizeUserAclCore`-t KÖZVETLENÜL hívják (NEM az action-en át).
+    if (callerId === targetUserId) {
+        return fail(res, 403, 'self_anonymize_disallowed', {
+            hint: 'Self-service GDPR anonymize a leave_organization / delete_my_account flow-kból megengedett, NEM az anonymize_user_acl action közvetlen.'
+        });
+    }
+    const denied = await requireOrgOwner(ctx, targetOrgId);
+    if (denied) return denied;
+
+    const result = await anonymizeUserAclCore(ctx, {
+        organizationId: targetOrgId,
+        targetUserId,
+        dryRun,
+        callerId
+    });
+    if (result.orgNotFound) return fail(res, 404, 'organization_not_found');
+    if (result.orgFetchFailed) return fail(res, 500, 'organization_fetch_failed');
+
+    return res.json({
+        success: result.success,
+        action: 'anonymized_user_acl',
+        stats: result.stats
+    });
+}
+
+/**
  * ACTION='backfill_membership_user_names' (2026-05-07) — global owner-only
  * migrációs action. Az `organizationMemberships` és `editorialOfficeMemberships`
  * collection-ök minden rekordjára `usersApi.get(userId)`-t hív, és írja a
@@ -3277,5 +3716,12 @@ module.exports = {
     // collection-en (publications + articles + layouts + deadlines + 2 validation).
     // Kategória 1/2 fallback policy + `fallbackUsedDocs` audit + 2-step JOIN
     // (articleId → publicationId → editorialOfficeId).
-    backfillAclPhase3
+    backfillAclPhase3,
+    // S.7.9 (2026-05-15) — R.S.7.5 close: GDPR Art. 17 stale `withCreator`
+    // user-read cleanup a 12 collection-en. Self-anonymize + admin-anonymize
+    // kettős auth. Idempotens (csak akkor ír, ha valódi perm eltávolítható).
+    anonymizeUserAcl,
+    // Core helper a self-service flow-knak (leave_organization + delete_my_account).
+    // NEM hív res.json-t, visszaad {success, stats, orgNotFound?, orgFetchFailed?}.
+    anonymizeUserAclCore
 };

@@ -147,6 +147,10 @@ const ACTION_HANDLERS = {
     // collection-en (publications + articles + layouts + deadlines + 2 validation).
     // Kategória 1/2 fallback policy + `fallbackUsedDocs` audit + 2-step JOIN.
     'backfill_acl_phase3': schemaActions.backfillAclPhase3,
+    // S.7.9 (2026-05-15) — R.S.7.5 close: GDPR Art. 17 stale withCreator
+    // user-read cleanup. 12 collection scan, self-anonymize + admin-anonymize
+    // kettős auth. Auto-trigger a leave_organization + delete_my_account flow-ban.
+    'anonymize_user_acl': schemaActions.anonymizeUserAcl,
 
     // Permission set CRUD (A.3 + A.3.6)
     'create_permission_set': permissionSetActions.createPermissionSet,
