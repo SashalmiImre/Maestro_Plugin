@@ -146,7 +146,17 @@ async function fetchMemberships(userId) {
             ? databases.listDocuments({
                 databaseId: DATABASE_ID,
                 collectionId: COLLECTIONS.ORGANIZATIONS,
-                queries: [Query.equal('$id', orgIds), Query.limit(100)]
+                // S.7.8 Phase 2 (2026-05-15) — phantom-org window filter.
+                // A `bootstrap_organization` flow `status: 'provisioning'`-szel
+                // hozza létre a doc-ot, és a flow VÉGÉN finalize-eli `'active'`-ra.
+                // Codex stop-time NO-GO Q1 fix: null-tolerant — legacy null-status
+                // doc-ok (a `backfill_organization_status` ELŐTT) NEM tűnnek el.
+                // A `provisioning` szigorúan NEM-null érték → szűrve.
+                queries: [
+                    Query.equal('$id', orgIds),
+                    Query.or([Query.equal('status', 'active'), Query.isNull('status')]),
+                    Query.limit(100)
+                ]
             })
             : Promise.resolve({ documents: [] }),
         officeIds.length > 0
@@ -407,6 +417,13 @@ export function AuthProvider({ children }) {
 
             if (eventChannels.some(ch => ch.includes(COLLECTIONS.ORGANIZATIONS))) {
                 if (!organizationIdsRef.current.has(payload?.$id)) {
+                    return { relevant: false, destructive: false };
+                }
+                // S.7.8 Phase 2 (2026-05-15) — phantom-org window defense-in-depth.
+                // A `provisioning` payload-okat NEM hagyjuk a UI cache state-be —
+                // a query-szintű filter (Query.equal('status', 'active')) elsődleges,
+                // a callback-szintű check Realtime push-race-protect.
+                if (payload?.status === 'provisioning') {
                     return { relevant: false, destructive: false };
                 }
                 return { relevant: true, destructive: isDelete };
