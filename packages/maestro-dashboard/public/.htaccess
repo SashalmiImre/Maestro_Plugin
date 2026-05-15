@@ -12,6 +12,57 @@
 # 2. Minden más kérés átíródik az /index.html-re — a kliens JS betölti
 #    a React app-ot, ami elolvassa a window.location.pathname-t és
 #    megjeleníti a megfelelő route-ot.
+
+# S.3 Security headers (2026-05-15) — R.S.3.1+R.S.3.3+R.S.3.4+R.S.3.6 close.
+# A `mod_headers` LiteSpeed/Apache 2.0+ alapfeature. A `Header always set`
+# minden response-on alkalmazza (200 + 3xx + 4xx + 5xx).
+<IfModule mod_headers.c>
+    # HSTS — 1 év max-age, NEM includeSubDomains és NEM preload.
+    # Codex pre-review MAJOR fix (2026-05-15): `includeSubDomains; preload`
+    # HIGH-commitment — minden `emago.hu` subdomain HTTPS-clean kell hogy
+    # legyen, és a `hstspreload.org` preload-list-bejegyzés irreverzibilis
+    # (~6 hónap rollback). Conservative első deploy: csak `max-age`,
+    # `includeSubDomains` és `preload` halasztott külön user-decision-re.
+    Header always set Strict-Transport-Security "max-age=31536000"
+
+    # Clickjacking prevent — legacy header (Safari < 14 + IE 11). Modern
+    # browser a `Content-Security-Policy: frame-ancestors 'none'`-t használja
+    # (lentebb). Mindkettő defense-in-depth (Codex Q5 GO).
+    Header always set X-Frame-Options "DENY"
+
+    # MIME-sniffing prevent — opportunistic hardening (Codex MINOR audit-id
+    # halasztott külön R-id-re). A böngésző NEM próbál `text/plain` Content-Type-on
+    # script-execution-t guess-elni.
+    Header always set X-Content-Type-Options "nosniff"
+
+    # Referrer-Policy — `strict-origin-when-cross-origin` HTTPS-on belül
+    # origin-only, cross-origin downgrade-on (HTTP) semmit nem küld.
+    Header always set Referrer-Policy "strict-origin-when-cross-origin"
+
+    # Permissions-Policy (S.3.5) — letiltja a felesleges SDK-szintű
+    # device-access-eket. A dashboard NEM használ kamera/mikrofon/
+    # geolocation/sensor-eket; az explicit deny csökkenti a 3rd-party SDK
+    # (Sentry, Stripe, etc.) potenciális ujjlenyomatozási surface-jét.
+    Header always set Permissions-Policy "accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()"
+
+    # CSP report-only — 1. deploy gyűjtő mode-ban. Browser DevTools console-on
+    # látható a violation-lista; egyetlen `report-uri`/`report-to` endpoint NEM
+    # konfigurált 1. fázisban (Codex Q6 GO). 2. iteráció enforce-mode-ra váltás.
+    #
+    # Policy összetevők (Codex Q2-Q4 GO):
+    # - `default-src 'self'` — minden fall-back resource csak self-origin
+    # - `script-src 'self'` — Vite prod-build NINCS inline script
+    # - `style-src 'self' 'unsafe-inline'` — CSS-in-JS (styled-components stb.)
+    #   inline style-okra, prag-matikus tolerance (XSS impact alacsony)
+    # - `img-src 'self' data: https://api.maestro.emago.hu` — Appwrite Storage
+    # - `connect-src` — Appwrite custom domain + fallback cloud.appwrite.io
+    #   (ADR 0001 dual-proxy failover) + WSS Realtime
+    # - `frame-ancestors 'none'` — clickjacking modern variánsa, X-Frame-Options
+    #   ekvivalens (defense-in-depth)
+    # - `base-uri 'self'` + `form-action 'self'` — DOM-clobbering + form-hijack
+    Header always set Content-Security-Policy-Report-Only "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://api.maestro.emago.hu; connect-src 'self' https://api.maestro.emago.hu wss://api.maestro.emago.hu https://cloud.appwrite.io wss://cloud.appwrite.io; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';"
+</IfModule>
+
 <IfModule mod_rewrite.c>
     RewriteEngine On
     RewriteBase /
