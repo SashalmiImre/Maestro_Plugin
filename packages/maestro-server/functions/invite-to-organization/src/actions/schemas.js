@@ -3271,23 +3271,55 @@ async function bootstrapOrganizationStatusSchema(ctx) {
     const skipped = [];
     const indexesPending = [];
 
-    // 1) `status` enum attribútum — `active` | `orphaned` | `archived`,
+    // 1) `status` enum attribútum — `provisioning` | `active` | `orphaned` | `archived`,
     // default `active`. Új org bootstrap-jén a `bootstrap_organization` és
-    // `create_organization` action-ök automatikusan `active`-ot kapnak.
+    // `create_organization` action-ök automatikusan `active`-ot kapnak, KIVÉVE
+    // ha az `ENABLE_PROVISIONING_GUARD` env-flag bekapcsolt → ekkor a flow
+    // `'provisioning'`-szel indít és a flow-végen `'active'`-ra finalize-el
+    // (S.7.8 phantom-org window mitigáció).
+    //
+    // S.7.8 Phase 1 (2026-05-15): az enum-bővítés `provisioning`-gal idempotens
+    // — ha létezik (already exists), `updateEnumAttribute`-szel frissítjük a
+    // 4-elem listára (Appwrite SDK `createEnumAttribute` NEM tudja BŐVÍTENI
+    // a meglévő enum-ot, csak az `updateEnumAttribute` ad új elemeket).
+    // Codex MAJOR fix (2026-05-15): a schema-bővítés MINDIG a CF action-eknél
+    // ELŐBB kell deploy-olva legyen, különben a `bootstrap_organization`
+    // `status: 'provisioning'` write 400 enum-validation-error-t adna élesben.
+    const STATUS_ENUM = ['provisioning', 'active', 'orphaned', 'archived'];
     try {
         await databases.createEnumAttribute(
             env.databaseId,
             env.organizationsCollectionId,
             'status',
-            ['active', 'orphaned', 'archived'],
+            STATUS_ENUM,
             false,        // required (false → default érvényes)
             'active',     // default
             false         // array
         );
         created.push('status');
     } catch (err) {
-        if (isAlreadyExists(err)) skipped.push('status');
-        else {
+        if (isAlreadyExists(err)) {
+            // Idempotens enum-bővítés — az új `provisioning` elem hozzáadása
+            // a meglévő attribute-hoz. NEM no-op (a meglévő attribute-on
+            // updateEnumAttribute frissít); a 2. futtatás zaj-mentes ha már
+            // 4-elem.
+            try {
+                await databases.updateEnumAttribute(
+                    env.databaseId,
+                    env.organizationsCollectionId,
+                    'status',
+                    STATUS_ENUM,
+                    false,        // required
+                    'active',     // default
+                    false         // array
+                );
+                skipped.push('status');
+                log(`[BootstrapOrgStatus] status enum frissítve (provisioning hozzáadva): ${STATUS_ENUM.join(',')}`);
+            } catch (updateErr) {
+                error(`[BootstrapOrgStatus] status enum update hiba: ${updateErr.message}`);
+                return fail(res, 500, 'schema_status_update_failed', { error: updateErr.message });
+            }
+        } else {
             error(`[BootstrapOrgStatus] status enum hiba: ${err.message}`);
             return fail(res, 500, 'schema_status_failed', { error: err.message });
         }

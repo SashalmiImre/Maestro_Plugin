@@ -57,6 +57,37 @@ async function _setOrgStatusActive(databases, env, organizationId) {
 }
 
 /**
+ * S.7.8 Phase 1 (2026-05-15) — phantom-org window finalize helper.
+ *
+ * Csak akkor finalize-eli a doc-ot (`status: 'provisioning' → 'active'`), ha az
+ * `env.enableProvisioningGuard` env-flag bekapcsolt. Fail-soft: a hibát NEM
+ * dobja, csak loggolja — a phantom-doc 'provisioning'-on marad, és a frontend
+ * filter Phase 2 NEM listázza. Admin a `_setOrgStatusActive`-szal manuálisan
+ * finalize-elheti (pl. `update_organization` action-en át).
+ *
+ * @param {Object} ctx - handler context
+ * @param {string} organizationId - frissen létrejött org $id
+ * @returns {Promise<void>}
+ */
+async function _finalizeOrgIfProvisioning(ctx, organizationId) {
+    if (!ctx.env.enableProvisioningGuard) {
+        return { finalized: true, skipped: true };
+    }
+    try {
+        await _setOrgStatusActive(ctx.databases, ctx.env, organizationId);
+        return { finalized: true };
+    } catch (e) {
+        // Codex stop-time MAJOR fix (2026-05-15): a finalize bukás esetén
+        // explicit jelez a caller-nek. A doc 'provisioning'-on marad, és a
+        // `isOrgWriteBlocked('provisioning')` minden CRUD action-t 403-mal
+        // blokkol. A return-ben `provisioningStuck: true` + `recoveryHint`
+        // → frontend észreveheti és figyelmeztetheti a usert / retry-zhet.
+        ctx.error(`[Bootstrap] status finalize hiba (org=${organizationId}, doc 'provisioning'-on marad): ${e.message}`);
+        return { finalized: false, error: e.message };
+    }
+}
+
+/**
  * ACTION='bootstrap_organization' | 'create_organization' (#40)
  *
  * Atomikus 4-collection write: organizations + organizationMemberships
@@ -152,12 +183,21 @@ async function bootstrapOrCreateOrganization(ctx) {
                 log(`[Bootstrap] Office membership lookup (idempotens ág) hiba: ${err.message}`);
             }
 
-            log(`[Bootstrap] Idempotens — caller ${callerId} már tagja az org ${existingOrgId}-nak, új rekord nem jött létre`);
+            // S.7.8 Phase 1 (2026-05-15) Codex stop-time MINOR fix: ha a
+            // pre-existing org `provisioning`-on ragadt egy korábbi sikertelen
+            // finalize miatt, self-heal — best-effort `_setOrgStatusActive`.
+            const reFinalizeResult = await _finalizeOrgIfProvisioning(ctx, existingOrgId);
+            log(`[Bootstrap] Idempotens — caller ${callerId} már tagja az org ${existingOrgId}-nak, új rekord nem jött létre, reFinalized=${reFinalizeResult.finalized}`);
             return res.json({
                 success: true,
                 action: 'existing',
                 organizationId: existingOrgId,
-                editorialOfficeId: existingOfficeId
+                editorialOfficeId: existingOfficeId,
+                ...(reFinalizeResult.finalized === false && {
+                    provisioningStuck: true,
+                    provisioningStuckReason: reFinalizeResult.error,
+                    recoveryHint: 'Admin manuálisan futtathat `update_organization`-t a status: "active"-ra állításhoz.'
+                })
             });
         }
     }
@@ -178,6 +218,13 @@ async function bootstrapOrCreateOrganization(ctx) {
     // S.7.1 fix (2026-05-12): doc-szintű ACL `Permission.read(team:org_${orgId})`.
     // Az ID-t előre generáljuk, hogy a `buildOrgAclPerms(newOrgId)` a `createDocument`
     // paraméterében felhasználható legyen (egy API-hívás, atomikus).
+    //
+    // S.7.8 Phase 1 (2026-05-15): phantom-org window mitigáció. Ha az
+    // `enableProvisioningGuard` env-flag bekapcsolt, a doc `status: 'provisioning'`-szel
+    // jön létre — a frontend filter (Phase 2) `Query.equal('status', 'active')`-szel
+    // szűri ki, és a `userHasOrgPermission()` `isOrgWriteBlocked('provisioning')`-szel
+    // fail-closed. A flow-vég finalize-eli `'active'`-ra. Rollback ágon a status
+    // `provisioning`-on marad (admin törölheti / recovery-zheti).
     let newOrgId = sdk.ID.unique();
     try {
         const newOrg = await databases.createDocument(
@@ -187,7 +234,8 @@ async function bootstrapOrCreateOrganization(ctx) {
             {
                 name: orgName,
                 slug: orgSlug,
-                ownerUserId: callerId
+                ownerUserId: callerId,
+                status: env.enableProvisioningGuard ? permissions.ORG_STATUS.PROVISIONING : permissions.ORG_STATUS.ACTIVE
             },
             // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
             // A `Permission.read(team:org_${orgId})` ACL még NEM hat a creator-ra,
@@ -295,7 +343,11 @@ async function bootstrapOrCreateOrganization(ctx) {
     // szerkesztőség létrehozásához.
     // ─────────────────────────────────────────────────────────────
     if (!hasOffice) {
-        log(`[Bootstrap] User ${callerId} új szervezetet hozott létre (action=${action}, office=none): org=${newOrgId}`);
+        // S.7.8 Phase 1 (2026-05-15): phantom-org window finalize — a doc
+        // 'provisioning' → 'active'. Codex stop-time MAJOR fix: explicit
+        // `provisioningStuck` flag a return-ben, ha a finalize bukott.
+        const finalizeResult = await _finalizeOrgIfProvisioning(ctx, newOrgId);
+        log(`[Bootstrap] User ${callerId} új szervezetet hozott létre (action=${action}, office=none): org=${newOrgId}, finalized=${finalizeResult.finalized}`);
         return res.json({
             success: true,
             action: action === 'bootstrap_organization' ? 'bootstrapped' : 'created',
@@ -306,7 +358,14 @@ async function bootstrapOrCreateOrganization(ctx) {
             // A.3.2 — office-scope permission set-eket nem tudunk
             // seedelni office nélkül; a `create_editorial_office`
             // hívás majd seedeli az új office-ra.
-            permissionSetsSeeded: 0
+            permissionSetsSeeded: 0,
+            // S.7.8 Phase 1: phantom-org finalize státusz. Ha `provisioningStuck`,
+            // a frontend retry-zhet vagy admin-flag-et tehet ki a usernek.
+            ...(finalizeResult.finalized === false && {
+                provisioningStuck: true,
+                provisioningStuckReason: finalizeResult.error,
+                recoveryHint: 'Admin manuálisan futtathat `update_organization`-t a status: "active"-ra állításhoz.'
+            })
         });
     }
 
@@ -469,10 +528,19 @@ async function bootstrapOrCreateOrganization(ctx) {
         error(`[Bootstrap] workflow seed hiba: ${err.message}`);
     }
 
-    log(`[Bootstrap] User ${callerId} új szervezetet hozott létre (action=${action}): org=${newOrgId}, office=${newOfficeId}, workflow=${newWorkflowId || 'FAILED'}`);
+    // S.7.8 Phase 1 (2026-05-15): phantom-org window finalize — a doc
+    // 'provisioning' → 'active'. Codex stop-time MAJOR fix: explicit jelzés.
+    const finalizeResult = await _finalizeOrgIfProvisioning(ctx, newOrgId);
+
+    log(`[Bootstrap] User ${callerId} új szervezetet hozott létre (action=${action}): org=${newOrgId}, office=${newOfficeId}, workflow=${newWorkflowId || 'FAILED'}, finalized=${finalizeResult.finalized}`);
 
     return res.json({
         success: true,
+        ...(finalizeResult.finalized === false && {
+            provisioningStuck: true,
+            provisioningStuckReason: finalizeResult.error,
+            recoveryHint: 'Admin manuálisan futtathat `update_organization`-t a status: "active"-ra állításhoz.'
+        }),
         action: action === 'bootstrap_organization' ? 'bootstrapped' : 'created',
         organizationId: newOrgId,
         editorialOfficeId: newOfficeId,

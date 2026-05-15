@@ -528,6 +528,15 @@ module.exports = async function ({ req, res, log, error }) {
         const userValidationsCollectionId = process.env.USER_VALIDATIONS_COLLECTION_ID || '';
         const systemValidationsCollectionId = process.env.SYSTEM_VALIDATIONS_COLLECTION_ID || '';
 
+        // S.7.8 Phase 1 (2026-05-15) — phantom-org window mitigáció feature-flag.
+        // OPCIONÁLIS env-var, default `false` (visszafelé kompatibilis). Ha `'true'`,
+        // a `bootstrap_organization` flow `status: 'provisioning'`-szel indítja a
+        // doc-ot, és a flow VÉGÉN `updateDocument(status: 'active')`-szel finalize-el.
+        // A frontend filter (Phase 2) `Query.equal('status', 'active')`-szel szűri
+        // a phantom doc-okat. Deploy-sorrend: ELŐSZÖR `bootstrap_organization_status_schema`
+        // futtatás (idempotens enum-bővítés `provisioning`-szel), AZTÁN a flag bekapcsolása.
+        const enableProvisioningGuard = (process.env.ENABLE_PROVISIONING_GUARD || '').toLowerCase() === 'true';
+
         // ── Fail-fast env var guard ──
         const missingEnvVars = [];
         if (!databaseId) missingEnvVars.push('DATABASE_ID');
@@ -648,7 +657,9 @@ module.exports = async function ({ req, res, log, error }) {
             layoutsCollectionId,
             deadlinesCollectionId,
             userValidationsCollectionId,
-            systemValidationsCollectionId
+            systemValidationsCollectionId,
+            // S.7.8 Phase 1 (2026-05-15) — phantom-org window guard feature-flag.
+            enableProvisioningGuard
         };
         const ctx = {
             databases,
