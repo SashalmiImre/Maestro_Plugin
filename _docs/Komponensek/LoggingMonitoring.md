@@ -76,20 +76,81 @@ A jelenlegi state **NEM production-szintű teljes PII-redaction** (Codex adversa
 2. **Plugin bind UXP module-load failure** (MUST): `console.log.bind(console)` → lazy `callConsole(method, args)` try/catch fallback.
 3. **LONG_TOKEN_REGEX false-positive** (SHOULD): tradeoff dokumentálás komment-ben, kódbeli fix Phase 2-re.
 
-## S.13.3 — Error message info-disclosure (Open, HIGH)
+## S.13.3 — Error message info-disclosure (Phase 1.0 partial close 2026-05-15)
 
-A CF response továbbra is raw `err.message`-et ad vissza kliensnek:
+ASVS V7 + V13. Threat: a CF action-handler-ek `try/catch`-jeiből raw `err.message`, `err.stack`, internal-code-path-string-ek kerülnek a kliens-response body-jába.
+
+### Phase 1.0 fix (centralized minta)
+
+**`fail(res, statusCode, reason, extra)` helper** [helpers/util.js](../../packages/maestro-server/functions/invite-to-organization/src/helpers/util.js):
 
 ```javascript
-// packages/maestro-server/functions/invite-to-organization/src/main.js
-} catch (err) {
-    error(`Function hiba: ${err.message}`);
-    error(`Stack: ${err.stack}`);
-    return res.json({ success: false, error: err.message }, 500);
+const SENSITIVE_RESPONSE_FIELDS = new Set(['error', 'message', 'details', 'stack', 'cause']);
+
+function stripSensitive(value) {
+    if (Array.isArray(value)) return value.map(stripSensitive);
+    if (value !== null && typeof value === 'object') {
+        const out = {};
+        for (const key of Object.keys(value)) {
+            if (SENSITIVE_RESPONSE_FIELDS.has(key)) continue;
+            out[key] = stripSensitive(value[key]);
+        }
+        return out;
+    }
+    return value;
+}
+
+function fail(res, statusCode, reason, extra = {}) {
+    const cleaned = stripSensitive(extra);
+    const redacted = redactValue(cleaned, 0);
+    return res.json({ success: false, reason, ...redacted }, statusCode);
 }
 ```
 
-Audit szükséges: minden CF action-handler `try/catch`-jében mi kerül a `res.json` body-jába. Defense-in-depth: csak code-os error (`reason: 'misconfigured'` / `'forbidden'` / `'not_found'`), NEM raw `err.message`. Iter: külön S.13.3 al-pont.
+**Hatás**:
+- Az összes ~30 `fail(...)` callsite az action-okban (`schemas.js` bootstrap/backfill, `orgs.js` cleanup, `offices.js`, `publications.js`, `permissionSets.js`) AUTOMATIKUSAN javítva — a `extra.error: err.message`, `extra.message: cleanupErr.message`, `extra.failures.push({ docId, message: err.message })` minták mind strip-elve a kliens-response-ban.
+- A `error('...')` és `log('...')` logging VÁLTOZATLAN — a S.13.2 piiRedaction.js Phase 1 wrap-elve van, PII-mentes log-ba kerül.
+
+**main.js top-level catch fix**:
+```javascript
+} catch (err) {
+    error(`Function hiba: ${err.message}`);  // S.13.2 wrap-elve
+    error(`Stack: ${err.stack}`);           // S.13.2 wrap-elve
+    return fail(res, 500, 'internal_error', {
+        executionId: req?.headers?.['x-appwrite-execution-id']
+    });
+}
+```
+
+**Ad-hoc success-response fix**:
+- `invites.js:837` `create_batch_invites` results[].reason: raw `err.message` → `err.code || 'create_failed'` domain-code
+- `schemas.js:3414` `backfill_organization_status` stats.errors[].error: drop the field
+
+### Phase 1.5 — Success-response audit (külön iter, Open)
+
+Maradék `success: true` body leak-ek a Codex verifying #2 alapján:
+
+1. **`_finalizeOrgIfProvisioning`** (orgs.js:95-111): return `{ finalized: false, error: e.message }` → propagálja `provisioningStuckReason: finalizeResult.error` mezőbe (orgs.js:395, 570). Fix: `error: e.message` → `errorCode: 'finalize_failed'`.
+2. **`delete_organization`** orgCleanup (orgs.js:850, 862): `membershipsCleanup = { found, deleted, error: cleanupErr.message }` → drop the `.error` field.
+3. **`schemas.js`** backfill stats.errors[].message (919, 1085, 1192, 1329, 2950, 2971): drop the `.message` field. ~12 hely.
+
+### Phase 2 — Maradék 10-15 CF (külön iter, Open)
+
+A Codex verifying #2 hivatkozott példák:
+- `update-article/src/main.js:560-563` raw `err.message`
+- `validate-publication-update/src/main.js:706-709` raw `err.message + err.stack`
+- `user-cascade-delete/src/main.js:211-227, 371-373` raw error fields
+
+A `fail()`-szintű centralized strip mintát ki kell tolni minden CF-re. Vagy: shared util.js modul, ami a `fail()` helper-t centralizálja egy single source-on. Vagy: build-generator (S.7.7b precedens) automatikusan generálja a CF-eknek.
+
+### Codex pipeline (4 review iteráció)
+
+| Fázis | Agent ID | Verdict | Findings |
+|---|---|---|---|
+| Pre-review | `a1369cfb79cae8786` | BLOCKER → reduced | Q4 push-back: szélesebb audit kell (publications.js + schemas.js + orgs.js further) |
+| Stop-time #1 | `a040234890a764ded` | MAJOR | success-response bypass: invites.js batch + schemas.js backfill |
+| Verifying #1 | `a3cb2d11eb9b38d4c` | MAJOR | további success-response leak-ek: _finalizeOrgIfProvisioning + orgs.js:850 + schemas.js 6 hely |
+| Frame fix | (manual) | Phase 1.0 partial close | scope-redukció: Phase 1.0 fail() + main.js + 2 ad-hoc; Phase 1.5 success-audit külön iter |
 
 ## Codex pipeline (Phase 1, 5 review iteráció)
 
