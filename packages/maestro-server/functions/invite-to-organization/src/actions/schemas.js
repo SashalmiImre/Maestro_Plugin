@@ -916,7 +916,7 @@ async function backfillTenantAcl(ctx) {
                 [sdk.Query.equal('organizationId', org.$id)]
             );
         } catch (err) {
-            stats.errors.push({ kind: 'org_members_list', orgId: org.$id, message: err.message });
+            stats.errors.push({ kind: 'org_members_list', orgId: org.$id });
             orgMembers = [];
         }
 
@@ -937,9 +937,7 @@ async function backfillTenantAcl(ctx) {
                     });
                 }
             } catch (err) {
-                stats.errors.push({
-                    kind: 'org_membership', orgId: org.$id, userId: m.userId, message: err.message
-                });
+                stats.errors.push({ kind: 'org_membership', orgId: org.$id, userId: m.userId });
             }
         }
 
@@ -951,7 +949,7 @@ async function backfillTenantAcl(ctx) {
                 [sdk.Query.equal('organizationId', org.$id)]
             );
         } catch (err) {
-            stats.errors.push({ kind: 'invites_list', orgId: org.$id, message: err.message });
+            stats.errors.push({ kind: 'invites_list', orgId: org.$id });
             invites = [];
         }
         const orgPerms = buildOrgAclPerms(org.$id);
@@ -963,9 +961,7 @@ async function backfillTenantAcl(ctx) {
                 );
                 stats.acl.invites++;
             } catch (err) {
-                stats.errors.push({
-                    kind: 'invite_acl', inviteId: inv.$id, message: err.message
-                });
+                stats.errors.push({ kind: 'invite_acl', inviteId: inv.$id });
             }
         }
     }
@@ -990,7 +986,7 @@ async function backfillTenantAcl(ctx) {
                 const result = await ensureTeam(teamsApi, officeTeamId, `Office: ${office.name}`);
                 if (result.created) stats.offices.teamsCreated++;
             } catch (err) {
-                stats.errors.push({ kind: 'office_team', officeId: office.$id, message: err.message });
+                stats.errors.push({ kind: 'office_team', officeId: office.$id });
                 continue;
             }
         }
@@ -1002,7 +998,7 @@ async function backfillTenantAcl(ctx) {
                 [sdk.Query.equal('editorialOfficeId', office.$id)]
             );
         } catch (err) {
-            stats.errors.push({ kind: 'office_members_list', officeId: office.$id, message: err.message });
+            stats.errors.push({ kind: 'office_members_list', officeId: office.$id });
             officeMembers = [];
         }
 
@@ -1021,9 +1017,7 @@ async function backfillTenantAcl(ctx) {
                     });
                 }
             } catch (err) {
-                stats.errors.push({
-                    kind: 'office_membership', officeId: office.$id, userId: m.userId, message: err.message
-                });
+                stats.errors.push({ kind: 'office_membership', officeId: office.$id, userId: m.userId });
             }
         }
 
@@ -1037,7 +1031,7 @@ async function backfillTenantAcl(ctx) {
                 [sdk.Query.equal('editorialOfficeId', office.$id)]
             );
         } catch (err) {
-            stats.errors.push({ kind: 'groups_list', officeId: office.$id, message: err.message });
+            stats.errors.push({ kind: 'groups_list', officeId: office.$id });
             groups = [];
         }
         for (const g of groups) {
@@ -1048,9 +1042,7 @@ async function backfillTenantAcl(ctx) {
                 );
                 stats.acl.groups++;
             } catch (err) {
-                stats.errors.push({
-                    kind: 'group_acl', groupId: g.$id, message: err.message
-                });
+                stats.errors.push({ kind: 'group_acl', groupId: g.$id });
             }
         }
 
@@ -1062,7 +1054,7 @@ async function backfillTenantAcl(ctx) {
                 [sdk.Query.equal('editorialOfficeId', office.$id)]
             );
         } catch (err) {
-            stats.errors.push({ kind: 'group_memberships_list', officeId: office.$id, message: err.message });
+            stats.errors.push({ kind: 'group_memberships_list', officeId: office.$id });
             groupMembers = [];
         }
         for (const gm of groupMembers) {
@@ -1073,9 +1065,7 @@ async function backfillTenantAcl(ctx) {
                 );
                 stats.acl.groupMemberships++;
             } catch (err) {
-                stats.errors.push({
-                    kind: 'group_membership_acl', gmId: gm.$id, message: err.message
-                });
+                stats.errors.push({ kind: 'group_membership_acl', gmId: gm.$id });
             }
         }
     }
@@ -1189,7 +1179,7 @@ async function backfillAdminTeamAcl(ctx) {
             ]
         );
     } catch (err) {
-        stats.errors.push({ kind: 'memberships_list', message: err.message });
+        stats.errors.push({ kind: 'memberships_list' });
         privilegedMemberships = [];
     }
 
@@ -1210,9 +1200,7 @@ async function backfillAdminTeamAcl(ctx) {
                 });
             }
         } catch (err) {
-            stats.errors.push({
-                kind: 'admin_membership', userId: m.userId, message: err.message
-            });
+            stats.errors.push({ kind: 'admin_membership', userId: m.userId });
         }
     }
 
@@ -1249,7 +1237,7 @@ async function backfillAdminTeamAcl(ctx) {
                 cursor = items[items.length - 1].$id;
             }
         } catch (err) {
-            stats.errors.push({ kind: 'admin_team_list', message: err.message });
+            stats.errors.push({ kind: 'admin_team_list' });
         }
 
         for (let i = 0; i < staleQueue.length; i += STALE_DELETE_CONCURRENCY) {
@@ -1260,10 +1248,10 @@ async function backfillAdminTeamAcl(ctx) {
                     stats.adminTeam.staleRemoved++;
                     log(`[BackfillAdminAcl] stale admin-team tag eltávolítva (userId=${tm.userId}, membershipId=${tm.$id})`);
                 } catch (delErr) {
+                    // S.13.3 Phase 1.5: NE szivárogtassunk raw delErr.message-et.
                     stats.errors.push({
                         kind: 'admin_stale_remove',
-                        userId: tm.userId, membershipId: tm.$id,
-                        message: delErr.message
+                        userId: tm.userId, membershipId: tm.$id
                     });
                 }
             }));
@@ -1279,7 +1267,7 @@ async function backfillAdminTeamAcl(ctx) {
             [sdk.Query.equal('organizationId', targetOrgId)]
         );
     } catch (err) {
-        stats.errors.push({ kind: 'invites_list', message: err.message });
+        stats.errors.push({ kind: 'invites_list' });
         invites = [];
     }
     for (const inv of invites) {
@@ -1290,7 +1278,7 @@ async function backfillAdminTeamAcl(ctx) {
             );
             stats.acl.invites++;
         } catch (err) {
-            stats.errors.push({ kind: 'invite_acl', inviteId: inv.$id, message: err.message });
+            stats.errors.push({ kind: 'invite_acl', inviteId: inv.$id });
         }
     }
 
@@ -1303,7 +1291,7 @@ async function backfillAdminTeamAcl(ctx) {
                 [sdk.Query.equal('organizationId', targetOrgId)]
             );
         } catch (err) {
-            stats.errors.push({ kind: 'invite_history_list', message: err.message });
+            stats.errors.push({ kind: 'invite_history_list' });
             history = [];
         }
         for (const h of history) {
@@ -1314,9 +1302,7 @@ async function backfillAdminTeamAcl(ctx) {
                 );
                 stats.acl.inviteHistory++;
             } catch (err) {
-                stats.errors.push({
-                    kind: 'invite_history_acl', historyId: h.$id, message: err.message
-                });
+                stats.errors.push({ kind: 'invite_history_acl', historyId: h.$id });
             }
         }
     } else {
@@ -1476,7 +1462,12 @@ async function backfillAclPhase2(ctx) {
     function recordError(entry) {
         stats.errorCount++;
         if (stats.errors.length < MAX_ERRORS) {
-            stats.errors.push(entry);
+            // S.13.3 Phase 1.5: NE szivárogtassunk raw err.message / err.stack
+            // / err.details mezőt a kliens-response-ba (success: true body
+            // stats.errors[] array). Részletes hiba az error log-ban marad
+            // (S.13.2 piiRedaction.js Phase 1 wrap).
+            const { message, error, details, stack, cause, ...safeEntry } = entry || {};
+            stats.errors.push(safeEntry);
         } else {
             stats.errorsTruncated = true;
         }
@@ -1552,7 +1543,7 @@ async function backfillAclPhase2(ctx) {
                 try {
                     await ensureTeam(teamsApi, buildOfficeTeamId(office.$id), `Office: ${office.name}`);
                 } catch (err) {
-                    recordError({ kind: 'office_team_ensure', officeId: office.$id, message: err.message });
+                    recordError({ kind: 'office_team_ensure', officeId: office.$id });
                 }
             }
         }
@@ -1919,7 +1910,12 @@ async function backfillAclPhase3(ctx) {
     function recordError(entry) {
         stats.errorCount++;
         if (stats.errors.length < MAX_ERRORS) {
-            stats.errors.push(entry);
+            // S.13.3 Phase 1.5: NE szivárogtassunk raw err.message / err.stack
+            // / err.details mezőt a kliens-response-ba (success: true body
+            // stats.errors[] array). Részletes hiba az error log-ban marad
+            // (S.13.2 piiRedaction.js Phase 1 wrap).
+            const { message, error, details, stack, cause, ...safeEntry } = entry || {};
+            stats.errors.push(safeEntry);
         } else {
             stats.errorsTruncated = true;
         }
@@ -2576,7 +2572,12 @@ async function anonymizeUserAclCore(ctx, { organizationId: targetOrgId, targetUs
     function recordError(entry) {
         stats.errorCount++;
         if (stats.errors.length < MAX_ERRORS) {
-            stats.errors.push(entry);
+            // S.13.3 Phase 1.5: NE szivárogtassunk raw err.message / err.stack
+            // / err.details mezőt a kliens-response-ba (success: true body
+            // stats.errors[] array). Részletes hiba az error log-ban marad
+            // (S.13.2 piiRedaction.js Phase 1 wrap).
+            const { message, error, details, stack, cause, ...safeEntry } = entry || {};
+            stats.errors.push(safeEntry);
         } else {
             stats.errorsTruncated = true;
         }
@@ -2946,9 +2947,7 @@ async function backfillMembershipUserNames(ctx) {
                             );
                             bucket.updated++;
                         } catch (err) {
-                            stats.errors.push({
-                                kind, phase: 'update', $id: doc.$id, message: err.message
-                            });
+                            stats.errors.push({ kind, phase: 'update', $id: doc.$id });
                         }
                     }
                 },
@@ -2956,7 +2955,8 @@ async function backfillMembershipUserNames(ctx) {
             );
         } catch (err) {
             error(`[BackfillMembershipUserNames] ${kind} list hiba: ${err.message}`);
-            stats.errors.push({ kind, phase: 'list', message: err.message });
+            // S.13.3 Phase 1.5: NE szivárogtassunk raw err.message a kliens-response-ba.
+            stats.errors.push({ kind, phase: 'list' });
         }
     };
 

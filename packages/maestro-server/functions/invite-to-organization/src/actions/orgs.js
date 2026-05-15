@@ -92,7 +92,11 @@ async function _finalizeOrgIfProvisioning(ctx, organizationId) {
         );
     } catch (e) {
         ctx.error(`[Bootstrap] finalize pre-check hiba (org=${organizationId}): ${e.message}`);
-        return { finalized: false, error: e.message };
+        // S.13.3 Phase 1.5: NE raw e.message a kliens-response-ba (a hívó
+        // `provisioningStuckReason: finalizeResult.error` mezőbe tette).
+        // Domain-code: a precheck-bukás eltérő recovery-flow-t igényel mint
+        // a status-update bukás → `finalize_precheck_failed` distinctív.
+        return { finalized: false, errorCode: 'finalize_precheck_failed' };
     }
     if (currentDoc.status !== permissions.ORG_STATUS.PROVISIONING) {
         // NEM 'provisioning' → semmi tennivaló. archived/orphaned/active marad.
@@ -108,7 +112,8 @@ async function _finalizeOrgIfProvisioning(ctx, organizationId) {
         // blokkol. A return-ben `provisioningStuck: true` + `recoveryHint`
         // → frontend észreveheti és figyelmeztetheti a usert / retry-zhet.
         ctx.error(`[Bootstrap] status finalize hiba (org=${organizationId}, doc 'provisioning'-on marad): ${e.message}`);
-        return { finalized: false, error: e.message };
+        // S.13.3 Phase 1.5: domain-code, NEM raw e.message.
+        return { finalized: false, errorCode: 'finalize_status_update_failed' };
     }
 }
 
@@ -392,7 +397,7 @@ async function bootstrapOrCreateOrganization(ctx) {
             // a frontend retry-zhet vagy admin-flag-et tehet ki a usernek.
             ...(finalizeResult.finalized === false && {
                 provisioningStuck: true,
-                provisioningStuckReason: finalizeResult.error,
+                provisioningStuckReason: finalizeResult.errorCode,
                 recoveryHint: 'Admin manuálisan futtathat `update_organization`-t a status: "active"-ra állításhoz.'
             })
         });
@@ -567,7 +572,7 @@ async function bootstrapOrCreateOrganization(ctx) {
         success: true,
         ...(finalizeResult.finalized === false && {
             provisioningStuck: true,
-            provisioningStuckReason: finalizeResult.error,
+            provisioningStuckReason: finalizeResult.errorCode,
             recoveryHint: 'Admin manuálisan futtathat `update_organization`-t a status: "active"-ra állításhoz.'
         }),
         action: action === 'bootstrap_organization' ? 'bootstrapped' : 'created',
@@ -847,7 +852,11 @@ async function deleteOrganization(ctx) {
         // Ponton a szervezet már törölve van — a user-nek nem dobunk
         // hibát, csak hard log-ba tesszük a failure-t, hogy az ops
         // oldalon észrevehető legyen.
-        membershipsCleanup = { found: null, deleted: null, error: cleanupErr.message };
+        // S.13.3 Phase 1.5: NE raw cleanupErr.message a kliens-response-ba.
+        // A null `found`/`deleted` + `cleanupFailed: true` flag elég
+        // a frontend-detektáláshoz, a részletes hiba az error log-ban
+        // marad (S.13.2 piiRedaction.js Phase 1 wrap).
+        membershipsCleanup = { found: null, deleted: null, cleanupFailed: true };
     }
     const orgCleanup = { invites: invitesCleanup, memberships: membershipsCleanup };
 
