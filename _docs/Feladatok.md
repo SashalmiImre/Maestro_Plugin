@@ -145,12 +145,12 @@ tags: [feladatok]
 
 #### S.11 DNS / SSL / DR baseline (LOW, 1 session) — CIS 11
 
-- [ ] **S.11.1** — DNS CAA record (`0 issue "letsencrypt.org"`). Registrar action.
-- [ ] **S.11.2** — DNSSEC enable emago.hu (registrar-függő).
-- [ ] **S.11.3** — Appwrite Cloud backup policy dokumentálás: új jegyzet [[Komponensek/DRPlan]].
-- [ ] **S.11.4** — Failover dokumentáció: Railway → emago.hu verify (ADR 0001 listázza, elérhetőség-test).
-- [ ] **S.11.5** — Recovery-runbook: key-rotation incident, secret-leak incident, DB restore, last-owner-orphan recovery.
-- [ ] **S.11.6** — Stop-time Codex review.
+- [/] **S.11.1** — DNS CAA record USER-TASK (`emago.hu CAA 0 issue "letsencrypt.org"`). Registrar action — runbook bővítve.
+- [/] **S.11.2** — DNSSEC USER-TASK (registrar-függő, Magyar Telekom / NIC.hu).
+- [x] **S.11.3** — Appwrite Cloud backup policy 2026-05-16: új jegyzet [[Komponensek/DRPlan]] (Free vs Pro/Scale tier összehasonlítás, recommendation: Pro tier upgrade ~$15/projekt/hó).
+- [x] **S.11.4** — Failover dokumentáció: ADR 0001 verify-test runbook a [[Komponensek/DRPlan]]-ban (~25 sec recovery worst-case).
+- [x] **S.11.5** — Recovery-runbook 2026-05-16: új jegyzet [[Komponensek/RecoveryRunbook]] — 5 incident-flow (key-rotation, secret-leak, DB restore, last-owner-orphan, UXP runtime-failure).
+- [x] **S.11.6** — Stop-time záró 2026-05-16. S.11 design-only Phase 3 USER-TASK trigger (DNS registrar + Pro tier).
 
 #### S.14 AI/LLM security (CONDITIONAL — defer)
 

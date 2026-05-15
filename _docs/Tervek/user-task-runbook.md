@@ -392,6 +392,53 @@ Egyszerű → komplex. A first-3 (Console settings) ~30 perc, secret-rotation ~1
 
 ---
 
+## 🌐 DNS hardening (S.11.1+11.2, ~10 perc registrar-on)
+
+### USER-TASK 10 — DNS CAA record (S.11.1)
+
+**Cél**: megakadályozni, hogy bármely más CA (pl. attacker-controlled) SSL cert-et issue-eljen az `emago.hu`-ra.
+
+**Lépések**:
+1. Registrar DNS panel (Magyar Telekom Domain / NIC.hu)
+2. CAA record add:
+   ```
+   emago.hu. 86400 CAA 0 issue "letsencrypt.org"
+   ```
+3. Verify: `dig CAA emago.hu @8.8.8.8` (5-10 perc propagáció)
+
+**Plus**: subdomain-szintű CAA-k (pl. `maestro.emago.hu`, `api.maestro.emago.hu`) — opcionális, inheritance default.
+
+**Time**: ~10 perc + propagáció.
+
+### USER-TASK 11 — DNSSEC enable (S.11.2)
+
+**Registrar-függő**: Magyar Telekom Domain (vagy NIC.hu) DNSSEC support — verify.
+
+**Ha support**:
+1. Domain Tools > DNSSEC > Enable
+2. Registrar publishes DS record a parent zone-ban
+3. Verify: `dig +dnssec emago.hu @8.8.8.8` — `AD` flag a response-ban
+
+**Ha NEM-support**: skip + flag (low-priority, NEM-blocker).
+
+**Time**: ~15 perc.
+
+## 💾 Plan upgrade (S.11.3 + S.13.5, USER-DECISION)
+
+### USER-TASK 12 — Appwrite Cloud Pro tier (~$15/projekt/hó)
+
+**Indok**:
+- S.11.3: auto-backup + 7-napi retention (Free tier: manual backup only)
+- S.13.5: CIS 8.3 minimum 90 nap retention (Free tier: 30 nap)
+
+**Decision**: production-readiness vs cost. ~$15/hó Maestro production-projektre acceptable.
+
+### USER-TASK 13 — Better Stack paid plan (S.13.1+13.5, ~$10-25/hó)
+
+**Indok**: central log aggregation + alert-pattern matching + 30+ nap retention.
+
+**Decision**: production-deploy után, első incident-trigger-rel.
+
 ## ⚖️ Legal review (S.10.3, ~variable)
 
 ### USER-TASK 9 — GDPR-export pre-delete
