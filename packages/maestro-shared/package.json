@@ -21,7 +21,9 @@
     "./teamHelpers.client": "./teamHelpers.client.js",
     "./teamHelpers.client.js": "./teamHelpers.client.js",
     "./piiRedaction": "./piiRedaction.js",
-    "./piiRedaction.js": "./piiRedaction.js"
+    "./piiRedaction.js": "./piiRedaction.js",
+    "./responseHelpers": "./responseHelpers.js",
+    "./responseHelpers.js": "./responseHelpers.js"
   },
   "peerDependencies": {
     "appwrite": "^24.1.1"
