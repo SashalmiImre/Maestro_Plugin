@@ -61,13 +61,13 @@ tags: [feladatok]
 
 #### S.3 Security headers + CSP (HIGH, 2 session — CSP report-only rollout) — ASVS V14, CIS 4
 
-- [ ] **S.3.1** — CSP design: `default-src 'self'; script-src 'self' 'unsafe-inline'; connect-src 'self' https://api.maestro.emago.hu wss://api.maestro.emago.hu https://webhook.maestro.emago.hu; img-src 'self' data:; style-src 'self' 'unsafe-inline'`. Réteges: report-only mode → enforce.
-- [ ] **S.3.2** — Apache `.htaccess` (`packages/maestro-dashboard/public/.htaccess`) `Header set` direktívák: `Content-Security-Policy-Report-Only` (Phase 1) → `Content-Security-Policy` (Phase 2).
-- [ ] **S.3.3** — `X-Frame-Options: DENY`. (UXP plugin nem iframe.)
-- [ ] **S.3.4** — `Referrer-Policy: strict-origin-when-cross-origin`.
-- [ ] **S.3.5** — `Permissions-Policy: camera=(), microphone=(), geolocation=()`. Letiltja az SDK-szintű hozzáférést.
-- [ ] **S.3.6** — `Strict-Transport-Security: max-age=31536000; includeSubDomains; preload`. Verify: minden `*.emago.hu` HTTPS-en.
-- [ ] **S.3.7** — Stop-time Codex review. Új jegyzet: [[Komponensek/SecurityHeaders]].
+- [x] **S.3.1** — CSP design + report-only deploy. **Done 2026-05-15**: `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://api.maestro.emago.hu; connect-src 'self' https://api.maestro.emago.hu wss://api.maestro.emago.hu https://cloud.appwrite.io wss://cloud.appwrite.io; font-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';`. Phase 1 report-only mode (browser DevTools-on figyelni a violation-okat). Phase 2 enforce külön iterációba (a violation-finomítás után).
+- [x] **S.3.2** — Apache `.htaccess` `<IfModule mod_headers.c>` direktívák. **Done 2026-05-15**: `Content-Security-Policy-Report-Only` Phase 1.
+- [x] **S.3.3** — `X-Frame-Options: DENY`. **Done 2026-05-15**. Defense-in-depth a `frame-ancestors 'none'`-szal (Codex Q5 GO mindkettő).
+- [x] **S.3.4** — `Referrer-Policy: strict-origin-when-cross-origin`. **Done 2026-05-15**.
+- [x] **S.3.5** — `Permissions-Policy`. **Done 2026-05-15**: `accelerometer=(), camera=(), geolocation=(), gyroscope=(), magnetometer=(), microphone=(), payment=(), usb=()` — letiltja az SDK-szintű device-access-t.
+- [x] **S.3.6** — `Strict-Transport-Security: max-age=31536000`. **Done 2026-05-15** (Codex MAJOR fix: `includeSubDomains; preload` HALASZTOTT — high-commitment, minden `*.emago.hu` HTTPS-clean verify + `hstspreload.org` bejegyzés ~6 hónap rollback-risk). Phase 2 user-decision-re.
+- [x] **S.3.7** — Stop-time Codex review. **Done 2026-05-15**: pre-review 7/7 GO + 1 MAJOR (HSTS conservative) + 1 MINOR (`nosniff` audit-id) — javítva. Stop-time GO (Railway proxy NEM dashboard-on, csak Plugin EndpointManager). Új jegyzet [[Komponensek/SecurityHeaders]].
 
 #### S.4 XSS + input sanitization audit (HIGH, 1 session) — ASVS V5
 
