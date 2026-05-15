@@ -134,14 +134,23 @@ Maradék `success: true` body leak-ek a Codex verifying #2 alapján:
 2. **`delete_organization`** orgCleanup (orgs.js:850, 862): `membershipsCleanup = { found, deleted, error: cleanupErr.message }` → drop the `.error` field.
 3. **`schemas.js`** backfill stats.errors[].message (919, 1085, 1192, 1329, 2950, 2971): drop the `.message` field. ~12 hely.
 
-### Phase 2 — Maradék 10-15 CF (külön iter, Open)
+### Phase 2 — Maradék 10-15 CF (folyamatban, Phase 2.0a kész)
 
-A Codex verifying #2 hivatkozott példák:
-- `update-article/src/main.js:560-563` raw `err.message`
-- `validate-publication-update/src/main.js:706-709` raw `err.message + err.stack`
-- `user-cascade-delete/src/main.js:211-227, 371-373` raw error fields
+**Phase 2.0a (2026-05-15 close)** — `update-article` CF:
+- Új shared ESM canonical: [maestro-shared/responseHelpers.js](../../packages/maestro-shared/responseHelpers.js) (`fail`, `okJson`, `createRecordError`, `stripSensitive`, `normalizeReason`).
+- CommonJS portolt másolat a CF-ben: `_generated_piiRedaction.js` + `_generated_responseHelpers.js`.
+- `update-article/src/main.js` wrap: S.13.2 PII-redaction log + S.13.3 fail() strip + line 563 raw `err.message` fix.
+- Codex pipeline: stop-time+adversarial CLEAN (`a22bb93a3428aa871`).
 
-A `fail()`-szintű centralized strip mintát ki kell tolni minden CF-re. Vagy: shared util.js modul, ami a `fail()` helper-t centralizálja egy single source-on. Vagy: build-generator (S.7.7b precedens) automatikusan generálja a CF-eknek.
+**Phase 2.0b** — `validate-publication-update` CF (~3 leak, line 370/697/707).
+**Phase 2.0c** — `user-cascade-delete` CF (~6 leak, line 113/214/220/226 stb.).
+**Phase 2.1** — Build-generator (S.7.7b precedens) automatikusan generálja `_generated_*.js` minden CF-be + drift-guard `--check` mód. Plus `wrapLogger(rawLog, rawError)` shared helper a per-CF DRY-violation csökkentésére (S.13.2 wrap).
+**Phase 2.2** — Maradék 8+ CF (`set-publication-root-path`, `resend-webhook`, `orphan-sweeper`, `cleanup-orphaned-locks`, `cleanup-rate-limits`, `cleanup-archived-workflows`, `migrate-legacy-paths`, `cascade-delete`, `validate-article-creation`).
+
+**Phase 2.x hidden risks (Codex Phase 2.0a)**:
+- `permissionDenied()` bypassolja a `fail()`-et (future dynamic reason leak)
+- `success: true` body unfiltered (out-of-scope, S.13.5/Phase 3 audit-érdemes)
+- "AUTO-GENERATED" komment aspirational amíg Phase 2.1 build-generator NEM él
 
 ### Codex pipeline (4 review iteráció)
 
