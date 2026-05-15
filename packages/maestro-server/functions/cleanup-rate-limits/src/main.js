@@ -1,5 +1,9 @@
 const sdk = require("node-appwrite");
 
+// S.13.2+S.13.3 Phase 2.2 — PII-redaction log wrap + response info-disclosure védelem.
+const { wrapLogger } = require('./_generated_piiRedaction.js');
+const { fail } = require('./_generated_responseHelpers.js');
+
 /**
  * Appwrite Function: Cleanup Rate Limits (S.2.5, 2026-05-11)
  *
@@ -71,7 +75,8 @@ const DEFAULT_BLOCK_CUTOFF_HOURS = 6;
 const ADMIN_ALERT_TOTAL_THRESHOLD = 1_000; // totalDeleted küszöb az admin email-re
 const SAFETY_ITER_CAP = 50; // 50 × BATCH_LIMIT=100 = 5_000 max scan (> MAX_DELETES_PER_COLLECTION)
 
-module.exports = async function ({ req, res, log, error }) {
+module.exports = async function ({ req, res, log: rawLog, error: rawError }) {
+    const { log, error } = wrapLogger(rawLog, rawError);
     const startedAt = Date.now();
     try {
         const databaseId = process.env.DATABASE_ID;
@@ -169,7 +174,9 @@ module.exports = async function ({ req, res, log, error }) {
         return res.json(responsePayload);
     } catch (err) {
         error(`[CleanupRateLimits] uncaught: ${err.message}\n${err.stack}`);
-        return res.json({ success: false, reason: 'internal_error', message: err.message }, 500);
+        return fail(res, 500, 'internal_error', {
+            executionId: req?.headers?.['x-appwrite-execution-id']
+        });
     }
 };
 
@@ -196,7 +203,7 @@ async function sweepCollection({ databases, databaseId, collectionId, cutoffIso,
             page = await databases.listDocuments(databaseId, collectionId, queries);
         } catch (err) {
             error(`[CleanupRateLimits] listDocuments(${collectionId}, label=${label}) hiba: ${err.message}`);
-            collectionScanFailed.push({ collection: collectionId, label, error: err.message });
+            collectionScanFailed.push({ collection: collectionId, label });
             return;
         }
 

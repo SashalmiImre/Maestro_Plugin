@@ -30,9 +30,25 @@ const FUNCTIONS_DIR = resolve(REPO_ROOT, "packages/maestro-server/functions");
 // A CF-ek listája, amelyek a generált CommonJS portokat használják.
 // Phase 2.0a/b/c után 3 CF; Phase 2.2 bővíti.
 const TARGET_CFS = [
+    // Phase 2.0a/b/c (2026-05-15)
     "update-article",
     "validate-publication-update",
-    "user-cascade-delete"
+    "user-cascade-delete",
+    // Phase 2.2 (2026-05-15) — maradék CF-ek
+    "article-update-guard",
+    "cascade-delete",
+    "cleanup-archived-workflows",
+    "cleanup-orphaned-locks",
+    "cleanup-orphaned-thumbnails",
+    "cleanup-rate-limits",
+    "migrate-legacy-paths",
+    "orphan-sweeper",
+    "resend-webhook",
+    "set-publication-root-path",
+    "validate-article-creation"
+    // NEM ÉRINTVE: invite-to-organization (Phase 1.0+1.5 inline minta él
+    // `helpers/util.js fail()` + `helpers/piiRedaction.js`-ban — későbbi
+    // refactor-ral cserélhető shared importtal).
 ];
 
 // Modul-konfig: minden shared modul az exportjaival és path-eltolódásával.
@@ -160,13 +176,7 @@ function transformToCommonJs(source, modConfig) {
     return makeBanner(modConfig.sourceFile) + body.trimEnd() + "\n" + exportsBlock;
 }
 
-async function generateOne(cfName, modConfig, checkMode) {
-    const sourcePath = resolve(SHARED_DIR, modConfig.sourceFile);
-    const targetPath = resolve(FUNCTIONS_DIR, cfName, "src", modConfig.targetName);
-
-    const sourceText = await readFile(sourcePath, "utf8");
-    const generatedText = transformToCommonJs(sourceText, modConfig);
-
+async function writeTarget(targetPath, generatedText, checkMode) {
     let existing = null;
     try {
         existing = await readFile(targetPath, "utf8");
@@ -175,12 +185,8 @@ async function generateOne(cfName, modConfig, checkMode) {
     }
 
     if (checkMode) {
-        if (existing === null) {
-            return { ok: false, kind: "missing", targetPath };
-        }
-        if (existing !== generatedText) {
-            return { ok: false, kind: "drift", targetPath };
-        }
+        if (existing === null) return { ok: false, kind: "missing", targetPath };
+        if (existing !== generatedText) return { ok: false, kind: "drift", targetPath };
         return { ok: true, kind: "match", targetPath };
     }
 
@@ -196,10 +202,21 @@ async function main() {
     const args = process.argv.slice(2);
     const checkMode = args.includes("--check");
 
+    // Modulanként EGYSZER olvassuk + transzformáljuk a shared forrást, majd N
+    // target CF-re írjuk ki ugyanazt a kimenetet. Phase 2.2 előtt 3 CF × 2 modul
+    // = 6 transzform vs. 2; Phase 2.2 (12+ CF) után az aránya 24+ vs. 2.
+    const generatedByModule = new Map();
+    for (const modConfig of MODULES) {
+        const sourcePath = resolve(SHARED_DIR, modConfig.sourceFile);
+        const sourceText = await readFile(sourcePath, "utf8");
+        generatedByModule.set(modConfig, transformToCommonJs(sourceText, modConfig));
+    }
+
     const results = [];
     for (const cfName of TARGET_CFS) {
         for (const modConfig of MODULES) {
-            const result = await generateOne(cfName, modConfig, checkMode);
+            const targetPath = resolve(FUNCTIONS_DIR, cfName, "src", modConfig.targetName);
+            const result = await writeTarget(targetPath, generatedByModule.get(modConfig), checkMode);
             results.push({ cfName, mod: modConfig.targetName, ...result });
         }
     }

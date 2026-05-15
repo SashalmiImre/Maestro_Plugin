@@ -26,6 +26,9 @@
 const sdk = require('node-appwrite');
 const crypto = require('crypto');
 
+// S.13.2+S.13.3 Phase 2.2 — PII-redaction log wrap (shared piiRedaction.js).
+const { wrapLogger } = require('./_generated_piiRedaction.js');
+
 // ─── Svix HMAC verifikáció ─────────────────────────────────────────────
 //
 // A Resend a Svix-en át küldi a webhookot — három header:
@@ -111,7 +114,8 @@ const STATUS_MAP = {
 
 // ─── Function entry point ──────────────────────────────────────────────
 
-module.exports = async ({ req, res, log, error }) => {
+module.exports = async ({ req, res, log: rawLog, error: rawError }) => {
+    const { log, error } = wrapLogger(rawLog, rawError);
     // Appwrite dynamic API key: a `function.scopes` alapján a függvényhíváskor
     // a `x-appwrite-key` headerben érkezik egy frissen generált, scope-szűkített
     // kulcs. Ez biztonságosabb mint egy hardcoded `APPWRITE_API_KEY` env var,

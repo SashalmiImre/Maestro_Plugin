@@ -1,5 +1,9 @@
 const sdk = require("node-appwrite");
 
+// S.13.2+S.13.3 Phase 2.2 — PII-redaction log wrap + response info-disclosure védelem.
+const { wrapLogger } = require('./_generated_piiRedaction.js');
+const { fail } = require('./_generated_responseHelpers.js');
+
 /**
  * Appwrite Function: Migrate Legacy Paths
  *
@@ -98,7 +102,8 @@ function toRelativeArticlePath(absolutePath, canonicalRootPath) {
 
 // ─── Belépési pont ────────────────────────────────────────────────────────
 
-module.exports = async function ({ req, res, log, error }) {
+module.exports = async function ({ req, res, log: rawLog, error: rawError }) {
+    const { log, error } = wrapLogger(rawLog, rawError);
     const isDryRun = (process.env.DRY_RUN || 'true').toLowerCase() !== 'false';
 
     try {
@@ -207,6 +212,8 @@ module.exports = async function ({ req, res, log, error }) {
     } catch (err) {
         error(`Function hiba: ${err.message}`);
         error(`Stack: ${err.stack}`);
-        return res.json({ success: false, error: err.message }, 500);
+        return fail(res, 500, 'internal_error', {
+            executionId: req?.headers?.['x-appwrite-execution-id']
+        });
     }
 };

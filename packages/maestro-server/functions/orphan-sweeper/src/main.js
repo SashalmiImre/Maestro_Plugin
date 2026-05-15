@@ -1,5 +1,9 @@
 const sdk = require("node-appwrite");
 
+// S.13.2+S.13.3 Phase 2.2 — PII-redaction log wrap + response info-disclosure védelem.
+const { wrapLogger } = require('./_generated_piiRedaction.js');
+const { fail } = require('./_generated_responseHelpers.js');
+
 /**
  * Appwrite Function: Orphan Sweeper (D.4, 2026-05-09)
  *
@@ -60,7 +64,8 @@ const COLLECTION_CHECK_BUDGET = Math.floor(MAX_USER_CHECKS_PER_RUN / 3);
 const ADMIN_ALERT_THRESHOLD = 50;
 const DEFAULT_GRACE_WINDOW_MS = 60 * 60 * 1000; // 1 óra
 
-module.exports = async function ({ req, res, log, error }) {
+module.exports = async function ({ req, res, log: rawLog, error: rawError }) {
+    const { log, error } = wrapLogger(rawLog, rawError);
     const startedAt = Date.now();
     try {
         const databaseId = process.env.DATABASE_ID;
@@ -173,7 +178,7 @@ module.exports = async function ({ req, res, log, error }) {
                     // return — track-eljük a collection scan failure-t és a
                     // CF végén `success: false`-t adunk vissza.
                     error(`[OrphanSweeper] listDocuments(${collectionId}) hiba: ${err.message}`);
-                    stats.collectionScanFailed.push({ collection: collectionId, error: err.message });
+                    stats.collectionScanFailed.push({ collection: collectionId });
                     return;
                 }
 
@@ -293,7 +298,9 @@ module.exports = async function ({ req, res, log, error }) {
         return res.json(responsePayload);
     } catch (err) {
         error(`[OrphanSweeper] uncaught: ${err.message}\n${err.stack}`);
-        return res.json({ success: false, reason: 'internal_error', message: err.message }, 500);
+        return fail(res, 500, 'internal_error', {
+            executionId: req?.headers?.['x-appwrite-execution-id']
+        });
     }
 };
 
