@@ -73,6 +73,31 @@ async function _finalizeOrgIfProvisioning(ctx, organizationId) {
     if (!ctx.env.enableProvisioningGuard) {
         return { finalized: true, skipped: true };
     }
+    // Harden adversarial HIGH 5 fix (2026-05-15): a finalize CSAK akkor írja
+    // a status-t `'active'`-ra, ha a current status === `'provisioning'`. Ezzel
+    // megelőzzük a következő hibákat:
+    //   - **Archive-bypass** (HIGH 5): egy `archived` orgon idempotens re-bootstrap
+    //     ELŐSZÖR detektálja a meglévő membership-et → pre-existing ág →
+    //     `_finalizeOrgIfProvisioning` hívás → vakon `'active'`-ra állítana
+    //     egy archive-olt orgot. **Ez most NEM lehet** — a status-check elszűri.
+    //   - **Orphaned status overwrite** (Codex adversarial-derived): ugyanaz a
+    //     védés a `'orphaned'` állapotra is. Az org-ot CSAK a recovery flow
+    //     (`transfer_orphaned_org_ownership`) állíthatja vissza `'active'`-ra.
+    let currentDoc;
+    try {
+        currentDoc = await ctx.databases.getDocument(
+            ctx.env.databaseId,
+            ctx.env.organizationsCollectionId,
+            organizationId
+        );
+    } catch (e) {
+        ctx.error(`[Bootstrap] finalize pre-check hiba (org=${organizationId}): ${e.message}`);
+        return { finalized: false, error: e.message };
+    }
+    if (currentDoc.status !== permissions.ORG_STATUS.PROVISIONING) {
+        // NEM 'provisioning' → semmi tennivaló. archived/orphaned/active marad.
+        return { finalized: true, skipped: true, reason: `current_status_${currentDoc.status || 'null'}` };
+    }
     try {
         await _setOrgStatusActive(ctx.databases, ctx.env, organizationId);
         return { finalized: true };
@@ -183,21 +208,25 @@ async function bootstrapOrCreateOrganization(ctx) {
                 log(`[Bootstrap] Office membership lookup (idempotens ág) hiba: ${err.message}`);
             }
 
-            // S.7.8 Phase 1 (2026-05-15) Codex stop-time MINOR fix: ha a
-            // pre-existing org `provisioning`-on ragadt egy korábbi sikertelen
-            // finalize miatt, self-heal — best-effort `_setOrgStatusActive`.
-            const reFinalizeResult = await _finalizeOrgIfProvisioning(ctx, existingOrgId);
-            log(`[Bootstrap] Idempotens — caller ${callerId} már tagja az org ${existingOrgId}-nak, új rekord nem jött létre, reFinalized=${reFinalizeResult.finalized}`);
+            // Harden adversarial HIGH 6 fix (2026-05-15): a pre-existing
+            // re-bootstrap ágon NINCS self-heal `_finalizeOrgIfProvisioning`
+            // hívás. Indok: **concurrent premature-activation race**. Két
+            // párhuzamos bootstrap CF-call esetén az 1. instance létrehozza a
+            // `provisioning` org-ot + membership-et, és még épít (offices,
+            // workflow, etc.). A 2. instance pre-existing ágra téved (mert a
+            // membership már létezik), és ha self-heal-szel finalize-elné a
+            // status-t `'active'`-ra → a child-doc-építés race-window-ban a
+            // user `'active'` org-ot lát, de a child-doc-ok még nem készek.
+            //
+            // A self-heal funkció admin-manuális marad: `update_organization`
+            // action-en át `status: 'active'` set, vagy a `_finalizeOrgIfProvisioning`-t
+            // helyettesítő dedicated cleanup action (S.7.x al-pont).
+            log(`[Bootstrap] Idempotens — caller ${callerId} már tagja az org ${existingOrgId}-nak, új rekord nem jött létre`);
             return res.json({
                 success: true,
                 action: 'existing',
                 organizationId: existingOrgId,
-                editorialOfficeId: existingOfficeId,
-                ...(reFinalizeResult.finalized === false && {
-                    provisioningStuck: true,
-                    provisioningStuckReason: reFinalizeResult.error,
-                    recoveryHint: 'Admin manuálisan futtathat `update_organization`-t a status: "active"-ra állításhoz.'
-                })
+                editorialOfficeId: existingOfficeId
             });
         }
     }
