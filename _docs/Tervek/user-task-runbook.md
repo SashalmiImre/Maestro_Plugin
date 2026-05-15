@@ -8,6 +8,144 @@ created: 2026-05-15
 
 > Az autonóm /loop NEM tudja végrehajtani ezeket — Console-akciók, secret-rotation, manual test, legal review. Te a háttérben végzed őket.
 
+## ⚠️ KRITIKUS PRE-REQUIREMENT — Deploy
+
+A teljes S blokk audit-munka (2026-05-15, 17 /loop iter) **KÓDOLDALON KÉSZ**, **NEM-DEPLOYOLVA MÉG**. A USER-TASK-ok többsége (különösen az adversarial-test) HAMIS eredményt adna a production deploy nélkül.
+
+### Deploy sorrend (kötelező USER-TASK-ok ELŐTT)
+
+#### A) 15 Appwrite CF deploy
+
+A `claude/zealous-euler-00c483` branch összes CF-változtatása **NEM-deployolt**:
+- **S.7.x ACL fixes**: `invite-to-organization` (Phase 1.0+1.5 fail() strip + 14 leak fix), `backfill_acl_phase3`, `verify_collection_document_security`, `anonymize_user_acl`
+- **S.7.8 phantom-org window**: `bootstrap_organization` flow + `status: 'provisioning'` enum
+- **S.13.2 PII-redaction wrap**: 14 CF (`invite-to-organization` inline + 13 CF `_generated_piiRedaction.js` + `wrapLogger`)
+- **S.13.3 info-disclosure fix**: 14 CF `fail()` strip + executionId
+
+**Deploy módszer**:
+
+**B-opció: Appwrite Console manuális** (egyszerű, lassú):
+1. Console > Functions > `<function-name>` > Deployments > Create deployment
+2. **Source**: Git repository — minden CF saját Deployment
+3. Beállítások:
+   - Source code: `packages/maestro-server/functions/<function-name>` (path-on belül `src/main.js`)
+   - Branch: `claude/zealous-euler-00c483` (vagy merged `main` ha mar mergeled)
+   - Entry point: `src/main.js`
+4. Wait ~30-60 sec per CF
+5. Ismételd mind 15 CF-en (invite-to-organization, update-article, validate-publication-update, user-cascade-delete, validate-article-creation, article-update-guard, cascade-delete, cleanup-archived-workflows, cleanup-orphaned-locks, cleanup-orphaned-thumbnails, cleanup-rate-limits, migrate-legacy-paths, orphan-sweeper, resend-webhook, set-publication-root-path)
+
+**A-opció: Appwrite CLI** (gyorsabb, ha be van konfigurálva):
+```bash
+cd packages/maestro-server
+for fn in functions/*/; do
+    fnName=$(basename "$fn")
+    echo "Deploying $fnName..."
+    appwrite deploy function --functionId "$fnName" --code "./functions/$fnName" --activate
+done
+```
+
+**Verify**:
+- Console > Functions > minden CF > "Latest deployment" → `<friss-timestamp>` és "Active"
+- Smoke test: login, invite-create, publication-create
+- Console > Functions > `invite-to-organization` > Executions: új request → success: true
+
+**Time**: 15-30 perc (Console manuális) vagy ~5 perc (CLI batch).
+
+---
+
+#### B) Dashboard deploy
+
+`packages/maestro-dashboard` változások (NEM-deployolt):
+- **S.3 security headers** (`.htaccess`): HSTS, X-Frame-Options, CSP report-only, Permissions-Policy
+- **S.4 ImportDialog validation**: file size + MIME pre-check
+- **S.12.4 localStorage cleanup**: `clearMaestroLocalStorage` helper + 3 wire-pont (`logout`, `login`, JWT auto-login)
+- **S.13.2 PII-redaction**: dashboard CSAK skip-elve (CLAUDE.md `console.*` policy-elfogadott), DE a `.htaccess`-en új headers vannak.
+
+**Deploy módszer** (LiteSpeed/Apache shared hosting — NEM Next.js):
+
+```bash
+cd packages/maestro-dashboard
+yarn build
+# A dist/ mappa tartalmát fel kell tölteni a shared hosting-ra
+# (LiteSpeed/Apache, NEM Vercel/Netlify)
+```
+
+**FTP/SFTP upload** (ha ez a hosting-flow):
+- Source: `packages/maestro-dashboard/dist/*` (build output)
+- Destination: shared hosting `/var/www/maestro.emago.hu/htdocs/` (vagy hasonló path)
+- **KÖTELEZŐ**: `.htaccess` fájl is upload-eljen (a `public/.htaccess`-ből bekerül a `dist/`-be)
+
+**Verify**:
+1. `curl -I https://maestro.emago.hu/` — response headers:
+   - `Strict-Transport-Security: max-age=31536000`
+   - `X-Frame-Options: DENY`
+   - `Content-Security-Policy-Report-Only: ...`
+   - `Permissions-Policy: ...`
+2. Login flow: `localStorage.maestro.activeEditorialOfficeId` NEM-szivárog logout után (DevTools Application > Local Storage)
+
+**Time**: ~10-15 perc.
+
+---
+
+#### C) Plugin rebuild + UXP deploy
+
+`packages/maestro-indesign` változások (NEM-deployolt):
+- **S.13.2 logger wrap**: `core/utils/logger.js` redactArgs + lazy callConsole
+
+**Build**:
+```bash
+cd packages/maestro-indesign
+yarn build
+# Plugin distribution: dist/ vagy a UXP-konfig szerint
+```
+
+**UXP deploy módszer**:
+
+**1. Fejlesztői env (UXP Developer Tool)**:
+- UDT > "Load Plugin..." → `packages/maestro-indesign/dist/`
+- InDesign restart vagy plugin reload
+- Test login + Realtime + article-edit
+
+**2. Adobe Exchange (production distribution)**:
+- ExMan package (`.ccx` fájl) csomagolás
+- Adobe Exchange > Submit New Version
+- Review + approval ~24-48 óra
+- User-side update: Adobe ExMan auto-update
+
+**3. Belső team distribution** (ha ExMan-en kívüli):
+- `.ccx` fájl megosztása (`mediaserver` vagy Slack)
+- Manual install minden client-en
+
+**Time**: ~10 perc build + variable distribution.
+
+---
+
+#### D) Proxy redeploy (Railway)
+
+`packages/maestro-proxy` változások (ha vannak — most NEM kritikus, csak audit):
+- **S.5 audit**: secret keys frissítése (NEM kódváltozás, csak env-update — Railway dashboard)
+
+**Deploy módszer**:
+- Railway dashboard > Maestro proxy > Deployments > Trigger deploy (vagy auto-deploy-on-push)
+- Env-update: Variables tab > frissítés > Redeploy
+
+**Time**: ~5 perc.
+
+---
+
+### Deploy CHECKLIST
+
+- [ ] **A**: 15 Appwrite CF deploy (Console vagy CLI) — minden új feature production-on
+- [ ] **B**: Dashboard deploy (build + upload, `.htaccess` mellékelve)
+- [ ] **C**: Plugin rebuild + UXP Developer Tool reload (fejlesztői env) vagy ExMan package (production)
+- [ ] **D**: Proxy redeploy (csak env-update most, NEM kódváltozás)
+- [ ] **Smoke test**: login, invite-create, publication-create (mind 3 platform)
+- [ ] **Codex stop-time deploy review** (külön iter, opcionális — minta: 2026-05-09 commit `5ce596e` után)
+
+**Deploy után**: a USER-TASK-ok (különösen S.7.5 adversarial-test) **valid eredményeket** ad. Anélkül a régi-ACL marad production-on és a test HIBÁS.
+
+---
+
 ## Sorrend
 
 Egyszerű → komplex. A first-3 (Console settings) ~30 perc, secret-rotation ~1-2 óra, history-rewrite ~30 perc + verify.
