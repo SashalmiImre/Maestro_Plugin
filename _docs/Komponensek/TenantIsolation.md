@@ -573,6 +573,15 @@ A `_finalizeOrgIfProvisioning` visszaad `{finalized, error?}`. Ha bukik, a doc `
 
 Frontend észreveheti és figyelmeztetheti a usert / retry-zhet. Pre-existing re-bootstrap path (idempotens) is hív self-heal `_finalizeOrgIfProvisioning`-ot (Codex MINOR fix).
 
+### Post-hoc Harden (2026-05-15) — 2 HIGH adversarial finding fix
+
+Az S.7.8 Phase 1 commit (`07344e3`) idejekor a /harden iter elmaradt (/loop context-fogyás). Post-hoc futtatás a teljes harden pipeline-szal felfedte 2 valódi biztonsági finding-ot:
+
+- **HIGH 5 — Archive-bypass**: a `_finalizeOrgIfProvisioning` vakon hívta a `_setOrgStatusActive`-t. Egy `archived` org-on idempotens re-bootstrap → self-heal-szel `'active'`-ra revive-ol. **Fix**: status-check pre-update — CSAK akkor `_setOrgStatusActive`, ha `currentDoc.status === permissions.ORG_STATUS.PROVISIONING`. Más status (archived/orphaned/active/null) → `{ finalized: true, skipped: true, reason: 'current_status_<X>' }`.
+- **HIGH 6 — Concurrent premature-activation**: 2 párhuzamos `bootstrap_organization` CF-call (pl. duplicate-click). Instance 1 létrehozza a `provisioning` org-ot + membership-et, és még épít (offices, workflow, etc.). Instance 2 detektálja a meglévő membership-et → pre-existing ág → ha `_finalizeOrgIfProvisioning`-szel self-heal-elne → instance 1 még épít child-doc-okat, de a user `'active'` org-ot lát. **Fix**: a pre-existing-re-bootstrap ágról ELTÁVOLÍTVA a `_finalizeOrgIfProvisioning` hívás. A self-heal admin-manuális marad (`update_organization` action-en).
+
+**Verifying CLEAN** (1 follow-up note): a `getDocument` + `updateDocument` között narrow TOCTOU window (~10-100ms) marad. Phase 2 follow-up: CAS update `expectedUpdatedAt`-szel (mint `validate-publication-update`).
+
 ### Phase 2 DONE 2026-05-15 (frontend filter)
 
 Plugin + dashboard org-list query null-tolerant filter (Codex stop-time NO-GO Q1 fix):
