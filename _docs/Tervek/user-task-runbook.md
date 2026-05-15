@@ -1,0 +1,284 @@
+---
+tags: [terv, user-task, runbook, security, console, rotation]
+status: Active
+created: 2026-05-15
+---
+
+# USER-TASK runbook — S blokk biztonsági audit user-akciói
+
+> Az autonóm /loop NEM tudja végrehajtani ezeket — Console-akciók, secret-rotation, manual test, legal review. Te a háttérben végzed őket.
+
+## Sorrend
+
+Egyszerű → komplex. A first-3 (Console settings) ~30 perc, secret-rotation ~1-2 óra, history-rewrite ~30 perc + verify.
+
+---
+
+## ⚡ Quick wins (15-30 perc)
+
+### USER-TASK 1 — S.12.1 Appwrite Console password policy
+
+**URL**: `https://cloud.appwrite.io/console/project-<PROJECT_ID>/auth/security`
+
+**Beállítások**:
+- ☑ **Password history**: minimum 5 — megakadályozza a legutóbbi 5 jelszó újra-használatát
+- ☑ **Password dictionary**: enabled — közismert jelszavak (top-10k) tiltása
+- ☑ **Personal data check**: enabled — email/név alapú jelszavak tiltása
+- ☑ **Minimum length**: 12 char (vagy 14)
+- ☐ **Maximum length**: NEM állítja (default OK)
+- ☑ **Mock numbers blocked**: enabled (ha létezik)
+
+**Verifikáció**:
+1. Test-account-tal próbálj `password123`-at beállítani → blokkolva
+2. Próbálj saját email-helyett változatot (`saját@email.hu`-ból `sajat123`) → blokkolva
+3. Password history: állíts 6× egymás után különböző jelszavakat, a 7.-ben ismételd az 1.-t → blokkolva
+
+**Commit a vault-ba** (utánam): `_docs/Komponensek/AuthSessionAccess.md` "S.12.1 Password Policy Closed (2026-05-XX, screenshot link)".
+
+---
+
+### USER-TASK 2 — S.12.2 Appwrite Console admin MFA enforcement
+
+**URL**: `https://cloud.appwrite.io/console/project-<PROJECT_ID>/auth/security` (MFA szekció)
+
+**Beállítások**:
+- ☑ **MFA**: enabled
+- ☑ **TOTP**: enabled (Google Authenticator-szerű)
+- ☐ Email MFA: opcionális (csak ha admin user-ek vannak emailen szervezve)
+
+**Admin-specific enforcement**:
+- Az `org.admin` permission slug-os user-eknek MFA-t **kötelezővé tenni** a UI-flow-n: egy új feature flag a Dashboard `AuthContext.jsx`-ben, ha `user.labels.includes('org_admin_<orgId>')` és `!user.mfaEnabled` → redirect `/settings/mfa-setup`.
+- **DESIGN-Q**: ez code-change, NEM csak Console — később külön iter-ben? (Default: igen, S.12.2b külön iter, csak a Console MFA-enabled most kell.)
+
+**Verifikáció**:
+1. Admin-user belép → MFA challenge (egyetlen userrel a Console-on tesztelhető)
+2. Member-user belép → MFA challenge HA setup, NEM kötelező
+
+**Commit a vault-ba**: `AuthSessionAccess.md` "S.12.2 MFA enabled at Console (2026-05-XX), admin-enforcement code: S.12.2b külön iter".
+
+---
+
+### USER-TASK 3 — S.7.5 Adversarial 2-tab teszt (dev env)
+
+**Cél**: empirikusan verifikálni hogy a tenant-isolation (ADR 0003 + 0014) WORK.
+
+**Setup**:
+1. 2 különböző Maestro account (`alice@example.com` + `bob@example.com`)
+2. Alice 2 org-ban tag: `OrgA` (member) + `OrgB` (member). Bob csak `OrgC` (member).
+3. 2 browser-tab (vagy 2 incognito window)
+
+**Teszt 1: localStorage swap**:
+1. Tab A: Alice login, navigál OrgA-ba. `localStorage.maestro.activeEditorialOfficeId = "<OrgA office id>"`.
+2. Tab B: Bob login egy másik incognito-ban. `localStorage.maestro.activeEditorialOfficeId = "<OrgA office id>"` — **Bob NEM tagja OrgA-nak**.
+3. Bob refresh. DevTools Network tab: `listDocuments` requests.
+4. **VÁRT**: 403 Forbidden minden tenant-collection requestre (`articles`, `publications`, `layouts`, `deadlines`, `userValidations`, `systemValidations`). UI: error state vagy redirect.
+5. **HIBÁS**: Bob OrgA adatait látja → BLOCKER, ADR 0003/0014 ACL elszállt.
+
+**Teszt 2: Realtime push**:
+1. Tab A: Alice OrgA-ban marad. DevTools Network → WS tab.
+2. Tab B (másik browser): admin OrgA-ban új article-t hoz létre.
+3. Tab A WS frame: új article kerül a Realtime push-ba — ez OK (Alice tagja).
+4. Tab B: Bob (NEM tagja OrgA-nak) WS frame-jén → **NEM kerül** az új article. **VÁRT**.
+
+**Teszt 3: REST listDocuments cross-tenant**:
+1. Bob session-token-jével (`localStorage.cookieFallback` vagy Authorization header).
+2. curl/Postman: `GET /databases/<dbId>/collections/articles/documents?queries[]=equal("organizationId","<OrgA_id>")` Bob token-jével.
+3. **VÁRT**: 403 Forbidden vagy üres dokumentum-lista.
+
+**Eredmény**: ha 3/3 PASS, S.7.5 + S.7.6 closing → commit `_docs/Komponensek/TenantIsolation.md` "S.7.5 verified 2026-05-XX (3-tab adversarial test PASS)".
+
+**Hibás**: dokumentáld a hibát + nyiss issue-t `R.S.7.5-failure` címkével a risk-register-ben.
+
+---
+
+## 🔐 Secret rotation (S.5.2-5.5 + 5.7, ~1-2 óra)
+
+### USER-TASK 4 — Appwrite API key rotation
+
+**Trigger**: S.5 audit (2026-05-15) felfedezte hogy a `7474619` init-commit-ban leaked production API key (`...8d5f` last-4). User manuálisan revoked Console-on. **Phase 2 history-rewrite halasztott**.
+
+**Lépések**:
+
+1. **Új API key kreálás** (Appwrite Console > API keys > Create):
+   - Név: `production-2026-05-15`
+   - Scopes: ugyanazok mint a régi (databases.read, databases.write, users.read, users.write, teams.*, functions.read, functions.write)
+   - Expire: NEM (vagy 1 év, ha policy)
+   - **Másold a key-t — egyszer látható!**
+
+2. **Frissítés a CF env-ben**:
+   - Appwrite Console > Function: minden CF-en `APPWRITE_API_KEY` env var új értékre.
+   - 15 CF: `invite-to-organization`, `update-article`, `validate-publication-update`, `user-cascade-delete`, `validate-article-creation`, `article-update-guard`, `cascade-delete`, `cleanup-archived-workflows`, `cleanup-orphaned-locks`, `cleanup-orphaned-thumbnails`, `cleanup-rate-limits`, `migrate-legacy-paths`, `orphan-sweeper`, `resend-webhook`, `set-publication-root-path`
+   - **VAGY**: a CF runtime auto-inject-eli a `x-appwrite-key` header-t — akkor csak az `APPWRITE_API_KEY` env-fallback marad backward-compat, NEM kritikus update.
+
+3. **Frissítés a proxy env-ben** (Railway):
+   - Railway dashboard > Maestro proxy > Variables
+   - `APPWRITE_API_KEY` új értékre
+
+4. **Revoke a régi key-t** (csak akkor, ha biztos vagy hogy minden frissült):
+   - Appwrite Console > API keys > régi key (utolsó-4 `8d5f`) > Delete
+   - **5 perc várakozás** + smoke teszt (login, invite-create, publication-create)
+
+5. **Commit a vault-ba**:
+   - `_docs/Komponensek/SecretsRotation.md` új entry: "2026-05-XX — Appwrite API key rotation: old `...8d5f` revoked, new `...XXXX` deployed to 15 CF + Railway proxy"
+
+**Time**: ~30 perc + 5 perc smoke = 35 perc.
+
+---
+
+### USER-TASK 5 — Resend rotation (S.5.4)
+
+**Lépések**:
+
+1. **Új Resend API key** (Resend dashboard > API keys):
+   - Név: `production-2026-05-15`
+   - Full-access (or limited if policy)
+   - Másold
+
+2. **Új Resend Webhook secret** (Resend dashboard > Webhooks > Edit):
+   - Generate new secret
+   - Másold
+
+3. **Frissítés Appwrite CF env-ben**:
+   - `invite-to-organization` CF: `RESEND_API_KEY` új értékre
+   - `resend-webhook` CF: `RESEND_WEBHOOK_SECRET` új értékre
+
+4. **Verify**:
+   - Send test invite — kapsz emailt
+   - Resend dashboard > Webhooks > Test event → CF execution log: HMAC PASS
+
+5. **Revoke régi key + secret** Resend dashboard-on.
+
+6. **Commit**: `SecretsRotation.md` entry.
+
+**Time**: ~20 perc.
+
+---
+
+### USER-TASK 6 — GROQ + Anthropic key audit (S.5.5)
+
+**Cél**: ellenőrizni hogy a `maestro-proxy` package használ-e production-adatot a Groq/Anthropic SDK-kon. Ha NEM → S.14 conditional defer marad. Ha IGEN → S.14 reaktiválódik.
+
+**Lépések**:
+
+1. **Audit minden Groq/Anthropic API call-t**:
+   - `grep -rn "groq\|anthropic" packages/maestro-proxy/src/`
+   - Mit kérdezel le? Production user-data? Vagy csak fejlesztői segéd?
+
+2. **Ha production-data**: S.14 reaktiváció:
+   - Data flow doc: `_docs/Komponensek/AIDataFlow.md`
+   - Prompt injection mitigációk
+   - Retention policy (Groq/Anthropic Terms — 30 nap default)
+   - Provider key isolation: külön env-key, NEM ugyanaz mint az Appwrite key
+
+3. **Ha NEM production-data**: confirm S.14 marad-condition-defer. Commit Note.
+
+**Time**: ~30 perc audit + variable.
+
+---
+
+### USER-TASK 7 — `.env.production` audit (S.5.2)
+
+**Cél**: verify hogy CSAK `VITE_*` prefix-es (frontend public) változók vannak benne.
+
+**Lépések**:
+
+1. `cat packages/maestro-dashboard/.env.production` (helyileg, NEM commit-ban — `.gitignore` jegyzi)
+2. Audit minden env-var-t:
+   - ✅ `VITE_APPWRITE_ENDPOINT`
+   - ✅ `VITE_APPWRITE_PROJECT_ID`
+   - ✅ `VITE_DASHBOARD_URL`
+   - ❌ Bármi NEM `VITE_` prefix-szel → server-side secret leaked → SECURITY INCIDENT
+3. Commit `SecretsRotation.md` "S.5.2 .env.production audit PASS 2026-05-XX, csak VITE_* prefix".
+
+**Time**: ~10 perc.
+
+---
+
+## 🧹 Git history rewrite (S.5 Phase 2, ~30 perc)
+
+### USER-TASK 8 — Git filter-repo history-rewrite (LEAKED KEY ELTÁVOLÍTÁSA)
+
+**Kritikus**: a `7474619` init-commit (2026-02-22) tartalmazza a leaked Appwrite API key-t a `packages/maestro-indesign/appwrite_functions/delete-article-messages/environments.env`-ben (last-4 `8d5f`). A key Console-on revoked (S.5 audit confirmed), **DE a git history-ban még benne van**. Bárki, aki klónozza a repót, megkapja a (revoked) key-t.
+
+**Lépések**:
+
+1. **Backup**: `git clone --mirror <repo-url> /tmp/maestro-backup-$(date +%Y%m%d).git`
+
+2. **`git filter-repo` install** (ha nincs):
+   ```bash
+   brew install git-filter-repo
+   # vagy: pip install git-filter-repo
+   ```
+
+3. **Identify path-to-redact**:
+   ```bash
+   git log --all --full-history -- packages/maestro-indesign/appwrite_functions/delete-article-messages/environments.env
+   ```
+
+4. **Filter**: a SECRET tartalmat redacted-szel cseréljük (NEM teljes path delete, mert a fájl nincs jelen, csak history-ban):
+   ```bash
+   # Option A: replace the API key string mindenhol
+   echo 'standard_b823bd9fea2e7c3abef6ec240afc9e83d2e3c5ca2da949b0484c0779f9826327bfc2ba2de17efa34d962777215bcdbe11cd6ad77308e3ac188bbf82f12e9d5b7b887a53fddf15e5348a762972087c194f770a32d30385b7294ce73228fe32a873b8d026dcbc83232bb505a03293eca79caeb39a0a20f1b618ab77e62a26a8d5f==>***REDACTED_KEY_8d5f***' > /tmp/replacements.txt
+   
+   git filter-repo --replace-text /tmp/replacements.txt --force
+   ```
+
+5. **Verify**:
+   ```bash
+   git log --all -p | grep -c "8d5f" # 0 lehet csak (a placeholder kommentekben)
+   git log --all --oneline | wc -l # commit count változatlan
+   ```
+
+6. **Force-push**:
+   ```bash
+   git push --force --all origin
+   git push --force --tags origin
+   ```
+
+7. **Notify**: minden contributor klónozza újra:
+   ```bash
+   cd /old/clone
+   git fetch origin
+   git reset --hard origin/main
+   # vagy újra-klónozás
+   ```
+
+8. **Commit a vault-ba**: `SecretsRotation.md` "S.5 Phase 2 history-rewrite kész 2026-05-XX, force-pushed, contributor-notify done".
+
+**FIGYELEM**:
+- A force-push **TÖRI** minden meglévő clone-t. Csak akkor csináld, ha bizonyos vagy hogy minden contributor frissíthető.
+- A GitHub cache-eli a régi blob-okat ~14 napig. Ha sürgős törlés kell: GitHub Support contact.
+- Forks: ha publikus a repo és van fork, a fork-okban megmarad. Egy GitHub admin manuálisan kérheti a fork-tulajdonosokat.
+
+**Time**: ~30 perc + verify.
+
+---
+
+## ⚖️ Legal review (S.10.3, ~variable)
+
+### USER-TASK 9 — GDPR-export pre-delete
+
+**Cél**: `delete_my_account` flow előtt a user kapjon egy ZIP-et a saját adataival.
+
+**Lépések**:
+
+1. **Legal-Q**: GDPR Art. 20 (right to data portability) — kell-e prokvasen, vagy on-request elég?
+2. **Dev-ready-Q**: implementáljuk azonnal vagy várjunk első request-re?
+3. **Ha YES build-now**:
+   - Új CF action `export_my_data` az `invite-to-organization`-ban
+   - Endpoint: `GET /v1/functions/<id>/executions?action=export_my_data`
+   - Response: ZIP-stream URL (Appwrite Storage temporary bucket)
+   - Tartalmaz: user-doc, memberships, articles (csak `createdBy: user.$id`-jű), publications (ekv.), invite-history
+4. **Frontend**: `/settings/account` page-en új "Adataim letöltése" gomb a delete-account előtt.
+5. **Dokumentáció**: új jegyzet `_docs/Komponensek/GDPRExport.md`.
+
+**Time**: variable, ha implement: ~2-3 iter.
+
+---
+
+## 📋 Kapcsolódó
+
+- [[Feladatok#S.12]], [[Feladatok#S.5]], [[Feladatok#S.7]], [[Feladatok#S.10]]
+- [[Komponensek/SecurityRiskRegister]] R.S.12.1, R.S.12.2, R.S.7.5, R.S.5.x
+- [[Komponensek/TenantIsolation]] (S.7.5 adversarial-eredmény dokumentálás)
+- [[Komponensek/SecretsRotation]] (új jegyzet, S.5.3 halasztott — most generálva)
