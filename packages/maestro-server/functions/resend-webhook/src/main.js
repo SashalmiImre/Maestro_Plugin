@@ -126,6 +126,11 @@ module.exports = async ({ req, res, log: rawLog, error: rawError }) => {
         apiKey: req?.headers?.['x-appwrite-key'] || process.env.APPWRITE_API_KEY || '',
         databaseId: process.env.APPWRITE_DATABASE_ID || process.env.DATABASE_ID,
         invitesCollectionId: process.env.INVITES_COLLECTION_ID || process.env.ORGANIZATION_INVITES_COLLECTION_ID || 'organizationInvites',
+        // S.8.4 anti-replay collection — default `webhookEventIds`. Graceful-
+        // fallback: ha a collection nem-létezik (Appwrite 404), az anti-replay
+        // ellenőrzés skipping log-warningal. A user-task: manual collection-
+        // create vagy `bootstrap_webhook_event_ids_schema` CF action.
+        webhookEventIdsCollectionId: process.env.WEBHOOK_EVENT_IDS_COLLECTION_ID || 'webhookEventIds',
         webhookSecret: process.env.RESEND_WEBHOOK_SECRET
     };
 
@@ -183,6 +188,32 @@ module.exports = async ({ req, res, log: rawLog, error: rawError }) => {
         .setKey(env.apiKey);
     const databases = new sdk.Databases(client);
 
+    // S.8.4 (R.S.8.x) — anti-replay LOOKUP (NEM write): a Svix event-id egyedi.
+    // A `webhookEventIds` collection idempotency-key store. Két-fázisú flow
+    // (Codex stop-time BLOCKER fix 2026-05-15):
+    //   1. LOOKUP itt — ha létezik, skip (duplicate event).
+    //   2. WRITE a `updateDocument(invites)` UTÁN — ha a invite-update sikertelen,
+    //      az event-id NEM-marker, Resend retry újra-feldolgozza.
+    // Graceful-fallback: ha collection nem-létezik (404), continue.
+    const svixId = req?.headers?.['svix-id'];
+    let antiReplayAvailable = false;
+    if (svixId) {
+        try {
+            await databases.getDocument(env.databaseId, env.webhookEventIdsCollectionId, svixId);
+            log(`[Webhook] duplicate event ${svixId} (type=${type}) — skip`);
+            return res.json({ success: true, skipped: 'duplicate_event' });
+        } catch (lookupErr) {
+            if (lookupErr?.code === 404 && /Document.*could not be found/i.test(lookupErr?.message || '')) {
+                // Doc NEM létezik → első alkalom, anti-replay aktivált.
+                antiReplayAvailable = true;
+            } else if (lookupErr?.code === 404 && /Collection.*could not be found/i.test(lookupErr?.message || '')) {
+                log(`[Webhook] webhookEventIds collection nem-létezik — anti-replay disabled (graceful)`);
+            } else {
+                error(`[Webhook] anti-replay lookup hiba: ${lookupErr?.message} (${lookupErr?.code})`);
+            }
+        }
+    }
+
     const updates = { lastDeliveryStatus: newStatus };
     if (newStatus === 'bounced' || newStatus === 'failed') {
         const errorMsg = data.bounce?.diagnosticCode
@@ -204,6 +235,26 @@ module.exports = async ({ req, res, log: rawLog, error: rawError }) => {
         }
         error(`[Webhook] invite update failed: ${err.message}`);
         return res.json({ success: false, error: 'invite_update_failed' }, 500);
+    }
+
+    // S.8.4 POST-UPDATE MARKER (Codex BLOCKER fix): csak a sikeres
+    // `updateDocument(invites)` UTÁN írjuk az event-id-marker-t. Ha a marker-
+    // write fail-el (collection-missing, race), log + continue — a duplicate
+    // delivery a következő retry-on egy plusz `updateDocument(invites)`-hez
+    // vezet (idempotent: ugyanaz a `lastDeliveryStatus` overwrite).
+    if (svixId && antiReplayAvailable) {
+        try {
+            await databases.createDocument(env.databaseId, env.webhookEventIdsCollectionId, svixId, {
+                eventType: type,
+                processedAt: new Date().toISOString()
+            });
+        } catch (writeErr) {
+            if (writeErr?.code === 409) {
+                log(`[Webhook] concurrent event ${svixId} marker — already written by race-twin`);
+            } else {
+                log(`[Webhook] webhookEventIds marker write skipped (${writeErr?.code}): ${writeErr?.message}`);
+            }
+        }
     }
 
     return res.json({ success: true, inviteId, status: newStatus });

@@ -118,11 +118,11 @@ tags: [feladatok]
 
 #### S.8 Webhook + 3rd party trust (MEDIUM, 1 session)
 
-- [ ] **S.8.1** — `RESEND_WEBHOOK_SECRET` deploy verify: élesen kötve van-e, rotáció policy.
-- [ ] **S.8.2** — Webhook custom domain (`webhook.maestro.emago.hu`) IP-allowlist (Resend IP-tartomány) — best-effort, mert Resend nem ad fix IP-t (HMAC az autoritatív).
-- [ ] **S.8.3** — Bounce / spam-complaint kezelés audit: UI mutatja-e a `bounced` státuszt, Resend API rebound idempotency.
-- [ ] **S.8.4** — Idempotency-key tárolás: Resend `id` payload-mező → `webhookEventIds` collection (anti-replay).
-- [ ] **S.8.5** — Stop-time Codex review.
+- [x] **S.8.1** — `RESEND_WEBHOOK_SECRET` deploy verify ✅ env-set 2026-05-08 12:01, secret: true (MCP-verified). Rotation policy: manual 1×/év vagy incident.
+- [/] **S.8.2** — Webhook custom domain IP-allowlist: doku-only (Resend dinamikus IP-pool, HMAC autoritatív). Decision: NEM-implement.
+- [/] **S.8.3** — Bounce / spam-complaint UI audit: USER-TASK Dashboard `InviteHistory` view manual review (`bounced` badge + filter).
+- [x] **S.8.4** — `webhookEventIds` anti-replay ✅ — 2-fázisú flow: LOOKUP elöl + POST-UPDATE marker (Codex BLOCKER fix). Graceful-fallback ha collection nem-létezik. Collection-create USER-TASK / Phase 3 `cleanup-webhook-event-ids` retention CF.
+- [x] **S.8.5** — Stop-time Codex BLOCKER → CLEAN. Új jegyzet: [[Komponensek/ResendWebhook]].
 
 #### S.9 Dependency + supply chain (MEDIUM, 1 session) — CIS 7/16
 
