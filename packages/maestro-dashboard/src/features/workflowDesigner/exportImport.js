@@ -37,6 +37,20 @@ export function exportWorkflow(nodes, edges, metadata, viewport) {
     URL.revokeObjectURL(url);
 }
 
+// S.4 R.S.4.2 close (2026-05-15) — defense-in-depth file-upload guard-ok.
+// A `<input type="file" accept=".json">` UI-hint, NEM enforce-olt (curl
+// vagy DevTools-bypass ellen). A central `parseImportFile`-ban ellenőrizzük
+// size + MIME ELŐSZÖR — egy 1 GB JSON-fájlt NE próbáljunk `file.text()`-szel
+// memóriába olvasni (browser OOM crash).
+const MAX_IMPORT_FILE_SIZE = 5 * 1024 * 1024; // 5 MB — workflow JSON tipikusan <500 KB
+const ALLOWED_IMPORT_MIME_TYPES = new Set([
+    'application/json',
+    'text/json',
+    // Egyes böngészők NEM állítják be a `file.type`-ot a `.json` fájlokra
+    // (üres string). Engedjük, hogy a `JSON.parse` legyen a végső validátor.
+    ''
+]);
+
 /**
  * Import fájl validálása és feldolgozása.
  *
@@ -45,6 +59,24 @@ export function exportWorkflow(nodes, edges, metadata, viewport) {
  */
 export async function parseImportFile(file) {
     try {
+        // S.4 R.S.4.2 fix: size + MIME pre-check. A `<input accept>` csak
+        // UI-hint; programatikus / DevTools-bypass ellen explicit védés.
+        if (typeof file.size === 'number' && file.size > MAX_IMPORT_FILE_SIZE) {
+            const sizeMB = (file.size / 1024 / 1024).toFixed(2);
+            return {
+                compiled: null,
+                graph: null,
+                error: `Fájl túl nagy (${sizeMB} MB > 5 MB max). A workflow JSON tipikusan <500 KB.`
+            };
+        }
+        if (file.type && !ALLOWED_IMPORT_MIME_TYPES.has(file.type)) {
+            return {
+                compiled: null,
+                graph: null,
+                error: `Érvénytelen fájltípus (${file.type}). Csak JSON fájlt fogad el.`
+            };
+        }
+
         const text = await file.text();
         const data = JSON.parse(text);
 
