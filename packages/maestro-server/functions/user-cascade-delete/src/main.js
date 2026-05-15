@@ -2,7 +2,7 @@ const sdk = require('node-appwrite');
 
 // S.13.2 Phase 2 + S.13.3 Phase 2.0c (2026-05-15) — PII-redaction log wrap +
 // response info-disclosure védelem. Részletek: `_docs/Komponensek/LoggingMonitoring.md`.
-const { redactArgs, isRedactionDisabled } = require('./_generated_piiRedaction.js');
+const { wrapLogger } = require('./_generated_piiRedaction.js');
 
 /**
  * Appwrite Function: User Cascade Delete (Phase 1)
@@ -138,10 +138,8 @@ async function removeUserFromTeam(teams, teamId, userId, log, error) {
 }
 
 module.exports = async ({ req, res, log: rawLog, error: rawError }) => {
-    // S.13.2 Phase 2 PII-redaction wrap. KRITIKUS: spread (redactArgs egy
-    // array-t ad vissza). Részletek: shared `maestro-shared/piiRedaction.js`.
-    const log = (...args) => isRedactionDisabled() ? rawLog(...args) : rawLog(...redactArgs(args));
-    const error = (...args) => isRedactionDisabled() ? rawError(...args) : rawError(...redactArgs(args));
+    // S.13.2+S.13.3 Phase 2.1 — centralized wrapLogger (shared piiRedaction.js).
+    const { log, error } = wrapLogger(rawLog, rawError);
     const event = req.headers?.['x-appwrite-event'] || '';
 
     if (!event.startsWith('users.') || !event.endsWith('.delete')) {

@@ -236,7 +236,7 @@ const { getOrgStatus, isOrgWriteBlocked } = require('./_generated_orphanGuard.js
 // **DRIFT KOCKÁZAT**: a `_generated_piiRedaction.js` és `_generated_responseHelpers.js`
 // logikai-portolt másolatok a kanonikus shared modulokból. Phase 2.1: build-
 // generator (S.7.7b precedens) automatikusan generálja + drift-guard.
-const { redactArgs, isRedactionDisabled } = require('./_generated_piiRedaction.js');
+const { wrapLogger } = require('./_generated_piiRedaction.js');
 const { fail } = require('./_generated_responseHelpers.js');
 
 /**
@@ -253,11 +253,10 @@ function permissionDenied(res, reason, requiredGroups = []) {
 }
 
 module.exports = async function ({ req, res, log: rawLog, error: rawError }) {
-    // S.13.2 Phase 2 PII-redaction wrapper. KRITIKUS: spread (redactArgs
-    // egy array-t ad vissza, NEM egy object-et). Részletek: shared
-    // `maestro-shared/piiRedaction.js` docblock.
-    const log = (...args) => isRedactionDisabled() ? rawLog(...args) : rawLog(...redactArgs(args));
-    const error = (...args) => isRedactionDisabled() ? rawError(...args) : rawError(...redactArgs(args));
+    // S.13.2+S.13.3 Phase 2.1 — centralized logger wrap (shared piiRedaction.js
+    // `wrapLogger`). Production: redactArgs spread minden args-on. Dev opt-out:
+    // raw referenciák (LOG_REDACT_DISABLE env flag).
+    const { log, error } = wrapLogger(rawLog, rawError);
 
     try {
         // ── 1. Payload parse + alap validáció ──

@@ -244,3 +244,25 @@ export function isRedactionDisabled() {
     if (process.env.NODE_ENV === 'production') return false;
     return process.env.LOG_REDACT_DISABLE === 'true';
 }
+
+/**
+ * S.13.3 Phase 2.1 — centralized logger wrap helper. A CF main.js-ek
+ * `module.exports = async ({ log: rawLog, error: rawError }) => {...}`
+ * signature-en belül 5-soros per-CF wrap-pattern (Phase 2.0a/b/c) helyett
+ * egyetlen helper-call:
+ *
+ *     const { log, error } = wrapLogger(rawLog, rawError);
+ *
+ * Production (`isRedactionDisabled() === false` — default): a redactArgs
+ * spread-pattern wrap-eli mindkét függvényt. Dev opt-out flag esetén
+ * a raw referenciákat adja vissza (perf-friendly no-op).
+ */
+export function wrapLogger(rawLog, rawError) {
+    if (isRedactionDisabled()) {
+        return { log: rawLog, error: rawError };
+    }
+    return {
+        log: (...args) => rawLog(...redactArgs(args)),
+        error: (...args) => rawError(...redactArgs(args))
+    };
+}

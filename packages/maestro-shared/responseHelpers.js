@@ -39,7 +39,7 @@ const SENSITIVE_RESPONSE_FIELDS = new Set(['error', 'message', 'details', 'stack
  * (WeakSet) UTÁNA fut, de a `stripSensitive` SELF infinite loop-ot okozhatott
  * volna ciklikus `extra`-n (Codex S.13.3 adversarial A4 fix).
  */
-function stripSensitive(value, seen) {
+export function stripSensitive(value, seen) {
     if (Array.isArray(value)) {
         if (!seen) seen = new WeakSet();
         if (seen.has(value)) return '[circular]';
@@ -64,7 +64,7 @@ function stripSensitive(value, seen) {
 // Codex S.13.3 adversarial A5 fix: dynamic reason bypass elleni védelem.
 const REASON_REGEX = /^[A-Za-z0-9_]+$/;
 
-function normalizeReason(reason) {
+export function normalizeReason(reason) {
     if (typeof reason === 'string' && REASON_REGEX.test(reason)) return reason;
     return 'invalid_error_code';
 }
@@ -120,4 +120,3 @@ export function createRecordError(stats, maxErrors) {
     };
 }
 
-export { stripSensitive, normalizeReason };

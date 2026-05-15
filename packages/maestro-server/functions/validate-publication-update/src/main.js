@@ -5,7 +5,7 @@ const sdk = require("node-appwrite");
 // **DRIFT KOCKÁZAT**: a `_generated_*.js` logikai-portolt másolatok a kanonikus
 // shared `maestro-shared/{piiRedaction,responseHelpers}.js`-ből. Phase 2.1:
 // build-generator (S.7.7b precedens) automatikusan generálja + drift-guard.
-const { redactArgs, isRedactionDisabled } = require('./_generated_piiRedaction.js');
+const { wrapLogger } = require('./_generated_piiRedaction.js');
 const { fail } = require('./_generated_responseHelpers.js');
 
 /**
@@ -223,10 +223,8 @@ function validatePublicationActivationInline(publication, deadlines) {
 }
 
 module.exports = async function ({ req, res, log: rawLog, error: rawError }) {
-    // S.13.2 Phase 2 PII-redaction wrap. KRITIKUS: spread (redactArgs egy
-    // array-t ad vissza). Részletek: shared `maestro-shared/piiRedaction.js`.
-    const log = (...args) => isRedactionDisabled() ? rawLog(...args) : rawLog(...redactArgs(args));
-    const error = (...args) => isRedactionDisabled() ? rawError(...args) : rawError(...redactArgs(args));
+    // S.13.2+S.13.3 Phase 2.1 — centralized wrapLogger (shared piiRedaction.js).
+    const { log, error } = wrapLogger(rawLog, rawError);
 
     try {
         // Event payload feldolgozása
