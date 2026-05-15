@@ -154,7 +154,11 @@ Maradék `success: true` body leak-ek a Codex verifying #2 alapján:
 - Line 344 `stats.verificationFailures.push({...error: err.message})` (last_owner) → drop
 - S.13.2 PII-redaction log wrap (arrow signature)
 - Codex stop-time MAJOR (`a1a797faee8d7e3a3`) → fix → CLEAN
-**Phase 2.1** — Build-generator (S.7.7b precedens) automatikusan generálja `_generated_*.js` minden CF-be + drift-guard `--check` mód. Plus `wrapLogger(rawLog, rawError)` shared helper a per-CF DRY-violation csökkentésére (S.13.2 wrap).
+**Phase 2.1 (2026-05-15 close)** — Build-generator + `wrapLogger` shared helper + 3 demo CF refactor:
+- [scripts/build-cf-response-helpers.mjs](../../scripts/build-cf-response-helpers.mjs) (~200 sor): S.7.7b precedens-szerű minta, 2 shared modul × 3 target CF = 6 generated fájl. ESM `import` → CommonJS `require` path-rewrite (`./piiRedaction.js` → `./_generated_piiRedaction.js`). Post-transform fail-closed lingering-ESM check.
+- Yarn scripts: `build:cf-response-helpers` + `check:cf-response-helpers` (drift-guard `--check` mód, CI-mentes local)
+- `wrapLogger(rawLog, rawError)` új helper a shared `piiRedaction.js`-ben — `isRedactionDisabled() ? raw : redact-spread`. 3 demo CF main.js refactor: 5-soros wrap → 1-soros `const { log, error } = wrapLogger(rawLog, rawError);`
+- Codex stop-time+adversarial MINOR/CLEAN (`a5f7f9f1422eac5f1`): 3 design-follow-up Phase 2.2-re halasztott (CI integration, regex fragility, auto-discovery).
 **Phase 2.2** — Maradék 8+ CF (`set-publication-root-path`, `resend-webhook`, `orphan-sweeper`, `cleanup-orphaned-locks`, `cleanup-rate-limits`, `cleanup-archived-workflows`, `migrate-legacy-paths`, `cascade-delete`, `validate-article-creation`).
 
 **Phase 2.x hidden risks (Codex Phase 2.0a)**:
