@@ -70,19 +70,33 @@ FIX: drop `.error` field a `membershipsCleanup`-ból — csak `{ found: null, de
 
 Minta: `stats.errors.push({ kind: '...', orgId: ..., message: err.message })`. FIX: drop `.message` field — domain-kód + ID-k elegek support-triage-hez.
 
-### Alternatív minta — `okJson(res, body)` helper
+### Alternatív minta — per-action response contract (Codex adversarial #A2/A6)
 
-Megfontolandó egy centralized helper:
+A naív `okJson(res, body) { stripSensitive(body); }` minta **PROBLEMÁS**: a `success: true` body sokféle adat-szerkezet, és a `message` kulcs lehet legitim üzleti adat (pl. `customMessage` az invite üzenete user-intent-tel). Globális blacklist generic strip false-positive-ot okozna.
+
+**Helyesebb minta** (Codex adversarial A2/A6):
 
 ```javascript
-function okJson(res, body) {
-    const cleaned = stripSensitive(body);
-    const redacted = redactValue(cleaned, 0);
-    return res.json(redacted, 200);
+// Per-action response contract — explicit allowlist + sensitive-tilalom
+function okJson(res, contractName, body) {
+    const contract = RESPONSE_CONTRACTS[contractName];
+    if (!contract) throw new Error(`Unknown response contract: ${contractName}`);
+    const projected = pickByContract(body, contract);  // csak engedélyezett mezők
+    return res.json(projected, 200);
 }
+
+// RESPONSE_CONTRACTS = {
+//   'batch_created': { allowed: ['action', 'total', 'successCount', 'failCount', 'results'],
+//                       resultFields: ['email', 'status', 'reason', 'action', 'inviteId', 'expiresAt'] },
+//   'org_deleted': { allowed: ['action', 'organizationId', 'deletedOffices', 'officeStats', 'orgCleanup'],
+//                    orgCleanupFields: ['invites', 'memberships'] },
+//   ...
+// }
 ```
 
-A `success: true` callsite-okat `okJson`-ra cserélve (~9 hely a CF-ben), MINDEN body-on belüli leak AUTOMATIKUSAN javul. **Trade-off**: a `res.json` direkt használat dispersed (50+ hely a teljes CF-ben) — alternatív minta: csak a 4-5 érintett action-okban a `success: true` callsite-ot cseréljük.
+Trade-off: per-action contract karbantartási költséget jelent (új action → új contract entry), de **scalable a Phase 2-höz** (maradék 10-15 CF). A jelenlegi success-response shape-ek a meglévő frontend-kontrakthoz vannak igazítva — a contract-list ezt rendszerben tartja.
+
+**Alternatíva (egyszerűbb)**: csak a 3 leak-pattern manuális fix-elése (drop `_finalizeOrgIfProvisioning.error`, `orgCleanup.error`, `schemas.js` stats.errors[].message), és az `okJson` Phase 2-re halasztva. Kevesebb scope, de a `success: true` body-szintű védelem rendszerbeli minta-hiányos marad.
 
 ## Codex pre-review Q-k
 
@@ -96,10 +110,21 @@ Default: **okJson helper** — konzisztens a `fail()`-szintű mintával, scalabl
 **Q4**: Phase 2 előkészítés: érdemes-e a `okJson` + `fail()` helpereket egy shared `maestro-shared/responseHelpers.js`-be tenni, hogy a maradék CF-ek (update-article, validate-publication-update, stb.) ugyanazt használhassák? Vagy hagyjuk per-CF helpers/util.js-ben?
 Default: **shared maestro-shared/responseHelpers.js** Phase 2-re — build-generator (S.7.7b precedens) automatikusan generálja a CF-eknek.
 
+### Codex adversarial watchlist (Phase 1.5 előfeltétel-checklist)
+
+A Phase 1.0 utólag-futtatott adversarial review (`a8d1bb0cc15b3e71b`) findings, amelyeket Phase 1.5 zárhat le:
+
+- **A2/A6 — per-action response contract**: NEM globális blacklist `stripSensitive(body)`. Domain `customMessage` user-intent vs `_finalizeOrgIfProvisioning.error` raw err.message megkülönböztetése.
+- **A4 — `stripSensitive` cycle-safety**: Phase 1.0-ban már alkalmazva (WeakSet). Phase 1.5 verify a fix valid maradását.
+- **A5 — `reason` regex-normalize**: Phase 1.0-ban már alkalmazva (`/^[A-Za-z0-9_]+$/`). Phase 1.5 verify a meglévő reason-okra.
+- **A7 — `executionId` spoofing verify**: curl-lel manual teszt — `x-appwrite-execution-id` header spoof-elhető-e proxy-szinten? Ha igen, a Phase 1.5-ben átírjuk `requestCorrelationId`-ra (server-side generált UUID).
+- **A3 — CommonJS cycle defense**: a `helpers/util.js` require-eli a `piiRedaction.js`-t. Phase 1.5: új sanitizer modul ha kell, dependency-leaf marad. CI guard (CommonJS cycle-detect) tervezett.
+
 ## STOP feltételek
 
 - Phase 1.5 + Phase 2 audit > 60 perc → split.
 - Frontend `_handleCFError` backward-compat tör → user-task flag.
+- Per-action response contract maintenance overhead → DESIGN-Q user-decision.
 
 ## Becsült időtartam
 

@@ -147,31 +147,63 @@ const { redactValue } = require('./piiRedaction.js');
 
 const SENSITIVE_RESPONSE_FIELDS = new Set(['error', 'message', 'details', 'stack', 'cause']);
 
-function stripSensitive(value) {
-    if (Array.isArray(value)) return value.map(stripSensitive);
+// S.13.3 Codex adversarial A4 fix: cycle-safe stripSensitive. A `redactValue`
+// cycle-safe (WeakSet) UTÁNA fut, de a `stripSensitive` SELF infinite loop-ot
+// okozna egy ciklikus `extra` (pl. `failures.push(extra)`-bug) esetén.
+function stripSensitive(value, seen) {
+    if (Array.isArray(value)) {
+        if (!seen) seen = new WeakSet();
+        if (seen.has(value)) return '[circular]';
+        seen.add(value);
+        return value.map(v => stripSensitive(v, seen));
+    }
     if (value !== null && typeof value === 'object') {
+        if (!seen) seen = new WeakSet();
+        if (seen.has(value)) return '[circular]';
+        seen.add(value);
         const out = {};
         for (const key of Object.keys(value)) {
             if (SENSITIVE_RESPONSE_FIELDS.has(key)) continue;
-            out[key] = stripSensitive(value[key]);
+            out[key] = stripSensitive(value[key], seen);
         }
         return out;
     }
     return value;
 }
 
+// S.13.3 Codex adversarial A5 fix: reason regex-normalize. A jelenlegi
+// callsite-ok DOMÉN-CODE-szerű string-konstansok (`'misconfigured'`,
+// `'forbidden'`, `'invalid_archivedAt'` camelCase variánsok), DE már van
+// változó reason átadás (orgs.js:1779 rate-limit `reason: rateResult.reason`).
+// Future-bug: `fail(res, 500, \`error_${err.code}\`)` minta bypassolná a
+// védelmet. Whitelist regex: alfanumerikus + underscore (camelCase OK).
+const REASON_REGEX = /^[A-Za-z0-9_]+$/;
+
+function normalizeReason(reason) {
+    if (typeof reason === 'string' && REASON_REGEX.test(reason)) return reason;
+    return 'invalid_error_code';
+}
+
 /**
- * JSON válasz hibakóddal — sensitive-field strip + PII deep-redact.
+ * JSON válasz hibakóddal — reason normalize + sensitive-field strip + PII deep-redact.
  *
- * 1. `stripSensitive(extra)` — minden nested `error`/`message`/`details`/
- *    `stack`/`cause` kulcs törlése (top-level és array/object minden mélységben).
- * 2. `redactValue(...)` — a többi mezőből email/JWT/Bearer/long-token deep-
+ * 1. `normalizeReason(reason)` — whitelist regex `/^[A-Za-z0-9_]+$/`, különben
+ *    `'invalid_error_code'` (defense-in-depth dynamic reason bypass ellen).
+ * 2. `stripSensitive(extra)` — minden nested `error`/`message`/`details`/
+ *    `stack`/`cause` kulcs törlése (cycle-safe WeakSet, top-level és
+ *    array/object minden mélységben).
+ * 3. `redactValue(...)` — a többi mezőből email/JWT/Bearer/long-token deep-
  *    redact (Phase 1 PII-redaction — `_docs/Komponensek/LoggingMonitoring.md`).
+ *
+ * **Spread-order fix** (Codex verifying #2 B5.1): a `reason: safeReason`
+ * a `...redacted` spread UTÁN, hogy az `extra.reason` (ha valaha is
+ * accidentally átadva) NE tudja overwrite-olni a normalized reason-t.
  */
 function fail(res, statusCode, reason, extra = {}) {
+    const safeReason = normalizeReason(reason);
     const cleaned = stripSensitive(extra);
     const redacted = redactValue(cleaned, 0);
-    return res.json({ success: false, reason, ...redacted }, statusCode);
+    return res.json({ success: false, ...redacted, reason: safeReason }, statusCode);
 }
 
 /**
