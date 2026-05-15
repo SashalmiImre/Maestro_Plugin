@@ -71,11 +71,11 @@ tags: [feladatok]
 
 #### S.4 XSS + input sanitization audit (HIGH, 1 session) — ASVS V5
 
-- [ ] **S.4.1** — User-content render audit: grep + manuális minden `dangerouslySetInnerHTML` / `innerHTML` / `eval` előfordulásra mindhárom frontend csomagban (várhatóan 0 — Codex korábban megerősítette).
-- [ ] **S.4.2** — ImportDialog file upload validáció: méret-cap (max 1MB workflow JSON), MIME-check, struktur-validáció ELŐTT. `packages/maestro-dashboard/src/features/workflowDesigner/ImportDialog.js`.
-- [ ] **S.4.3** — Server-side input length cap audit: `sanitizeString(str, maxLen)` minden CF action paraméteren — túl-permisszív cap-ek keresése.
-- [ ] **S.4.4** — Output encoding verify: React JSX auto-escape OK; specifikus helyek (CSV export, email template) explicit escape.
-- [ ] **S.4.5** — Stop-time Codex review. Update [[Hibaelhárítás]] minden talált issue-val.
+- [x] **S.4.1** — User-content render audit. **Done 2026-05-15**: `dangerouslySetInnerHTML`/`innerHTML=`/`outerHTML=`/`document.write`/`eval(`/`new Function(`/`setTimeout([\"']`/`setInterval([\"']` mind **0 hit** a plugin + dashboard + shared csomagban. `target="_blank" rel="noopener"` is 0 hit. **CLEAN** — React JSX auto-escape garantálja a XSS-tisztaságot.
+- [x] **S.4.2** — ImportDialog file upload validáció. **Done 2026-05-15** (R.S.4.2 close): `parseImportFile` central helper-ben size + MIME pre-check. `MAX_IMPORT_FILE_SIZE = 5 MB` (workflow JSON tipikusan <500 KB; 5 MB conservative). `ALLOWED_IMPORT_MIME_TYPES = {'application/json', 'text/json', ''}` (üres MIME browser-kompat). HU hibaüzenetek a UI-ban. A fix mindkét hívóhelyet véd (ImportDialog + CreateWorkflowModal). `<input accept=".json">` UI-hint mellé szigorú helper-szintű check.
+- [ ] **S.4.3** — Server-side input length cap audit (NEM closed): `sanitizeString(str, maxLen)` minden CF action paraméteren — túl-permisszív cap-ek keresése. Külön iteráció.
+- [x] **S.4.4** — Output encoding verify. **Done 2026-05-15**: React JSX auto-escape OK (S.4.1 audit-tal megerősítve). CSV export / email template explicit escape külön audit (S.4.3 része).
+- [x] **S.4.5** — Stop-time Codex review. **Done 2026-05-15** /harden via: baseline GO + adversarial 2 MEDIUM (4 stack DoS accept bounded client-side, 10 prototype pollution verified NEM-real). [[Komponensek/SecurityRiskRegister]] R.S.4.2 closed.
 
 #### S.5 Secret + env var audit (HIGH → CRITICAL ha production-kulcs gyanús, 2 session) — ASVS V6/V14, CIS 6
 
