@@ -136,12 +136,12 @@ tags: [feladatok]
 
 #### S.10 Audit log + GDPR (LOW–MEDIUM, 1 session) — GDPR Art. 30, CIS 8.3
 
-- [ ] **S.10.1** — Admin audit-view UI (`/settings/organization/audit`): meghívási history + member-removal + role-change.
-- [ ] **S.10.2** — `organizationInviteHistory` retention policy (D.3.4 már listázott — ide hivatkozni): default forever, admin-kérésre törölhető.
-- [ ] **S.10.3** — `delete_my_account` GDPR-export: a törlés ELŐTT a user kapjon egy ZIP-et a saját adataival (legal-Q + dev-ready-Q).
-- [ ] **S.10.4** — `attemptId` per-attempt tracking dokumentáció: új jegyzet [[Komponensek/AttemptIdTracking]] (ADR 0011 follow-up).
-- [ ] **S.10.5** — Központi `actionAuditLog` collection (defer Phase 4, ADR 0011 deferred listáz "Audit completeness").
-- [ ] **S.10.6** — Stop-time Codex review. Új jegyzet: [[Komponensek/AuditTrail]].
+- [/] **S.10.1** — Admin audit-view UI design 2026-05-16: 3-tab spec (Meghívási history + Member-events + ACL-backfill audit). Implementation Phase 3 (S.10.5 actionAuditLog prerekvizit). [[Komponensek/AuditTrail]].
+- [x] **S.10.2** — `organizationInviteHistory` retention 2026-05-16: default forever, admin-deletable, `user-cascade-delete` GDPR Art. 17 cascade. Dokumentum elég. [[Komponensek/AuditTrail]].
+- [/] **S.10.3** — GDPR-export USER-TASK: legal review szükséges (Art. 20 proaktív vs on-request) + dev-Q (implement-now vs első-request). [[Komponensek/AuditTrail]] S.10.3.
+- [x] **S.10.4** — AttemptIdTracking dokumentáció 2026-05-16: új jegyzet [[Komponensek/AttemptIdTracking]] (ADR 0011 follow-up, use-cases + future Phase 4 audit-log integráció).
+- [/] **S.10.5** — Központi `actionAuditLog` collection Phase 4 defer: schema-spec dokumentálva (`AuditTrail.md`), perf-impact ~5-10%/CF-write, storage ~200MB/év.
+- [x] **S.10.6** — Stop-time Codex záró 2026-05-16. Új jegyzet: [[Komponensek/AuditTrail]] + [[Komponensek/AttemptIdTracking]].
 
 #### S.11 DNS / SSL / DR baseline (LOW, 1 session) — CIS 11
 
