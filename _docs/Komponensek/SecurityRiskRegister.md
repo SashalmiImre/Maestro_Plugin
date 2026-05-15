@@ -81,8 +81,8 @@ created: 2026-05-11
 | R.S.12.1 | Password policy audit (Appwrite Console settings) | HIGH | Low | V2 | Codex review | USER-TASK | TBD | Open |
 | R.S.12.2 | MFA admin-szerepre nem kötelező | HIGH | Med | V2 | Codex review | USER-TASK | TBD | Open |
 | R.S.12.4 | `localStorage.maestro.*` logout/login cleanup gap | MEDIUM | Low | V3 | Frontend explorer | 2026-05-15 | 2026-05-15 | **Closed** (UX-grade DiD, helper + 3 wire-pont) |
-| R.S.13.2 | `log()` helper nincs PII-redaction | HIGH | Med | V7, CIS 8 | Codex review | 2026-05-15 | TBD | **Phase 1 partial close** (helper + Plugin + 1 CF; Phase 2: maradék CF + generator + coverage) |
-| R.S.13.3 | CF error → kliens info-disclosure (raw error message) | HIGH | Med | V7 | Codex review | 2026-05-15 | TBD | **Phase 1.0+1.5 partial close** (invite-to-organization TELESEN strip-elve: fail() + cycle-safe + reason-normalize + recordError helper + _finalizeOrgIfProvisioning + cleanupFailed + ~13 direct push fix; Phase 2: maradék 10-15 CF) |
+| R.S.13.2 | `log()` helper nincs PII-redaction | HIGH | Med | V7, CIS 8 | Codex review | 2026-05-15 | 2026-05-15 | **Closed** (Plugin + 14 CF: `invite-to-organization` Phase 1 inline + 13 CF Phase 2.0a/b/c+2.2 `wrapLogger` mintán; build-generator automatizál) |
+| R.S.13.3 | CF error → kliens info-disclosure (raw error message) | HIGH | Med | V7 | Codex review | 2026-05-15 | 2026-05-15 | **Closed** (14 CF: invite-to-organization Phase 1.0+1.5 inline + 13 CF Phase 2.0+2.1+2.2 shared `responseHelpers.js` `fail()` strip+redact mintán) |
 | R.S.13.4 | Monitoring alert nincs (CF failure, rate-limit spike) | MEDIUM | High | CIS 8 | Codex review | TBD | TBD | Open |
 | R.S.14.0 | Groq/Anthropic SDK production-adat audit (CONDITIONAL) | TBD | TBD | V5, V8 | Codex review | TBD | defer | Open |
 

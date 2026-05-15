@@ -159,7 +159,19 @@ Maradék `success: true` body leak-ek a Codex verifying #2 alapján:
 - Yarn scripts: `build:cf-response-helpers` + `check:cf-response-helpers` (drift-guard `--check` mód, CI-mentes local)
 - `wrapLogger(rawLog, rawError)` új helper a shared `piiRedaction.js`-ben — `isRedactionDisabled() ? raw : redact-spread`. 3 demo CF main.js refactor: 5-soros wrap → 1-soros `const { log, error } = wrapLogger(rawLog, rawError);`
 - Codex stop-time+adversarial MINOR/CLEAN (`a5f7f9f1422eac5f1`): 3 design-follow-up Phase 2.2-re halasztott (CI integration, regex fragility, auto-discovery).
-**Phase 2.2** — Maradék 8+ CF (`set-publication-root-path`, `resend-webhook`, `orphan-sweeper`, `cleanup-orphaned-locks`, `cleanup-rate-limits`, `cleanup-archived-workflows`, `migrate-legacy-paths`, `cascade-delete`, `validate-article-creation`).
+**Phase 2.2 (2026-05-15 close)** — Maradék 11 CF wrap MIND kész. TARGET_CFS 3→14 expanded (`scripts/build-cf-response-helpers.mjs`); 22 új generated `_generated_*.js`; mind 11 CF main.js wrap `wrapLogger`-rel + top-level catch `fail()` strip.
+
+Érintett CF-ek (Phase 2.2): `article-update-guard`, `cascade-delete`, `cleanup-archived-workflows`, `cleanup-orphaned-locks`, `cleanup-orphaned-thumbnails`, `cleanup-rate-limits`, `migrate-legacy-paths`, `orphan-sweeper`, `resend-webhook`, `set-publication-root-path`, `validate-article-creation`.
+
+Per-CF extra leak fix:
+- `orphan-sweeper`: `stats.collectionScanFailed.push({...error: err.message})` → drop
+- `cleanup-rate-limits`: `collectionScanFailed.push({...error: err.message})` → drop
+- `validate-article-creation`: `error: e.message` `membership_lookup_failed` → `fail()` + `executionId`
+- `set-publication-root-path`: inline `fail()` definíció törölve, shared importtal
+
+Codex stop-time MINOR (`a3f81651c40a6f6fc`): csak stilisztikai inkonzisztencia (`resend-webhook` arrow vs function), NEM-leak.
+
+**R.S.13.2 + R.S.13.3 → Closed 2026-05-15. STOP-condition (a) teljesül.**
 
 **Phase 2.x hidden risks (Codex Phase 2.0a)**:
 - `permissionDenied()` bypassolja a `fail()`-et (future dynamic reason leak)
