@@ -90,10 +90,10 @@ tags: [feladatok]
 
 #### S.12 Auth / Session / Access Control (HIGH, 1 session) — ASVS V2/V3/V4
 
-- [ ] **S.12.1** — Password policy audit (Appwrite Console: min length, complexity, password-history, breached-password check).
-- [ ] **S.12.2** — MFA enforcement: kötelező admin szerepre (`org.admin` permission slug), opcionális member-re. UI flow.
+- [ ] **S.12.1** — Password policy audit (Appwrite Console: min length, complexity, password-history, breached-password check). **USER-TASK** — Appwrite Console settings.
+- [ ] **S.12.2** — MFA enforcement: kötelező admin szerepre (`org.admin` permission slug), opcionális member-re. UI flow. **USER-TASK** — Appwrite Console + admin label-bind.
 - [ ] **S.12.3** — Session lifetime + idle timeout audit (Appwrite Console alapértelmezett — dokumentálni vagy szigorítani).
-- [ ] **S.12.4** — Token revocation: logout cleanup teljesség (ADR 0010 fix után), `localStorage.maestro.activeEditorialOfficeId` cleanup, session-list view ("Sign out other devices").
+- [x] **S.12.4** — Token revocation: logout cleanup teljesség. `localStorage.maestro.*` kulcsok (kiv. `pendingInviteToken` whitelist) törlése a logout VÉGÉN, login és JWT auto-login flow ELEJÉN (defense-in-depth). Új helper: [packages/maestro-dashboard/src/utils/localStorageCleanup.js](../packages/maestro-dashboard/src/utils/localStorageCleanup.js). Plugin (UserContext.jsx:847-849) MÁR rendelkezik ekvivalens cleanup-pal — plugin-szintű al-pont nem szükséges. ✅ 2026-05-15 (Codex pre + stop-time + adversarial + verifying CLEAN). Session-list view ("Sign out other devices") külön al-ponton (S.12.8) halasztva.
 - [ ] **S.12.5** — Account recovery flow audit: Appwrite password reset email rate-limit, token entropy, expire.
 - [ ] **S.12.6** — Role/permission matrix dokumentáció: `PermissionTaxonomy.md` 38 slug + role-mapping-leltár (member / admin / owner mit lát/csinál).
 - [ ] **S.12.7** — Stop-time Codex review. Új jegyzet: [[Komponensek/AuthSessionAccess]].

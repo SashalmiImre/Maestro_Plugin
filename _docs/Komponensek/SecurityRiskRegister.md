@@ -78,9 +78,9 @@ created: 2026-05-11
 | R.S.10.1 | Admin audit-view UI hiányzik (forensics) | LOW | Low | V7, CIS 8 | Backend explorer | TBD | TBD | Open |
 | R.S.11.1 | DNS CAA record nincs | LOW | Low | V9, CIS 11 | Infra explorer | TBD | TBD | Open |
 | R.S.11.5 | Recovery-runbook hiányzik | LOW | Low | CIS 11 | Codex review | TBD | TBD | Open |
-| R.S.12.1 | Password policy audit (Appwrite Console settings) | HIGH | Low | V2 | Codex review | TBD | TBD | Open |
-| R.S.12.2 | MFA admin-szerepre nem kötelező | HIGH | Med | V2 | Codex review | TBD | TBD | Open |
-| R.S.12.4 | `localStorage.maestro.activeEditorialOfficeId` logout cleanup gap | MEDIUM | Low | V3 | Frontend explorer | TBD | TBD | Open |
+| R.S.12.1 | Password policy audit (Appwrite Console settings) | HIGH | Low | V2 | Codex review | USER-TASK | TBD | Open |
+| R.S.12.2 | MFA admin-szerepre nem kötelező | HIGH | Med | V2 | Codex review | USER-TASK | TBD | Open |
+| R.S.12.4 | `localStorage.maestro.*` logout/login cleanup gap | MEDIUM | Low | V3 | Frontend explorer | 2026-05-15 | 2026-05-15 | **Closed** (UX-grade DiD, helper + 3 wire-pont) |
 | R.S.13.2 | `log()` helper nincs PII-redaction | HIGH | Med | V7, CIS 8 | Codex review | TBD | TBD | Open |
 | R.S.13.3 | CF error → kliens info-disclosure (raw error message) | HIGH | Med | V7 | Codex review | TBD | TBD | Open |
 | R.S.13.4 | Monitoring alert nincs (CF failure, rate-limit spike) | MEDIUM | High | CIS 8 | Codex review | TBD | TBD | Open |
