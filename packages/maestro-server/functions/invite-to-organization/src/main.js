@@ -56,6 +56,16 @@ const {
     sanitizeString
 } = require("./helpers/util.js");
 
+// S.13.2 (2026-05-15, R.S.13.2 Phase 1 partial close) — PII-redaction wrapper
+// a runtime-injected `log` és `error` köré. ASVS V7 + CIS 8. Részletek:
+// `_docs/Komponensek/LoggingMonitoring.md`. **PHASE 1 PARTIAL ROLLOUT**: csak
+// ez a CF wrap-elve, a maradék CF-ek (user-cascade-delete, validate-publication-
+// update, update-article, resend-webhook, stb.) RAW log-olnak — Phase 2 zárja le.
+// **DRIFT KOCKÁZAT**: a `helpers/piiRedaction.js` logikai (CommonJS-portolt)
+// másolat a kanonikus shared modulból (`packages/maestro-shared/piiRedaction.js`).
+// Phase 2: build-generator + drift-guard a S.7.7b precedensen.
+const { redactArgs, isRedactionDisabled } = require("./helpers/piiRedaction.js");
+
 // B.0.3.a-h (2026-05-04) — inkrementális CF action-bontás (Codex (C) opció).
 // A `main.js`-ben csak az action-router maradt e szekciókhoz; a logika az
 // `actions/*.js` modulokban él.
@@ -414,7 +424,16 @@ const ACTION_HANDLERS = {
 // létre a `groups` doc-okat aktiváláskor / hozzárendeléskor.
 
 
-module.exports = async function ({ req, res, log, error }) {
+module.exports = async function ({ req, res, log: rawLog, error: rawError }) {
+    // S.13.2 PII-redaction wrapper. A function body MINDEN `log()` / `error()`
+    // hívása ezt használja — a `ctx.log` / `ctx.error` az action-modulokba is
+    // a wrappolt verziót adja át. KRITIKUS (Codex pre-review hidden risk #1):
+    // a `redactArgs` egy array-t ad vissza, így spread-szel kell behívni a
+    // runtime-injected log()-ba (NEM `rawLog(redactArgs(args))`, ami egyetlen
+    // array argumentummal logolna).
+    const log = (...args) => isRedactionDisabled() ? rawLog(...args) : rawLog(...redactArgs(args));
+    const error = (...args) => isRedactionDisabled() ? rawError(...args) : rawError(...redactArgs(args));
+
     try {
         // ── Payload feldolgozása ──
         let payload = {};
