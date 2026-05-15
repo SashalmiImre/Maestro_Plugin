@@ -42,6 +42,7 @@ import {
 } from '../config.js';
 import { resolveGroupSlugs } from '@shared/groups.js';
 import { subscribeRealtime, collectionChannel } from './realtimeBus.js';
+import { clearMaestroLocalStorage } from '../utils/localStorageCleanup.js';
 
 const AuthContext = createContext(null);
 
@@ -527,6 +528,14 @@ export function AuthProvider({ children }) {
                     } catch {
                         // Nincs aktív session, nem baj
                     }
+                    // S.12.4 UI-hygiene: stale `maestro.*` localStorage
+                    // kulcsok (előző browser-user scope-jából) törlése a
+                    // JWT-vel érkező új user előtt. NEM extra security
+                    // boundary (ha A JWT-jét B birtokolja, a token-leak
+                    // a parent-incident); a lentebbi `fetchGroupSlugs`
+                    // (line ~82) így nem A `activeEditorialOfficeId`-jét
+                    // olvassa. `setJWT` ELŐTT.
+                    clearMaestroLocalStorage();
                     client.setJWT(jwt);
                     // URL takarítás — fragment eltávolítása a címsorból
                     window.history.replaceState({}, '', window.location.pathname + window.location.search);
@@ -560,6 +569,15 @@ export function AuthProvider({ children }) {
         } catch {
             // Nincs aktív session, nem baj
         }
+        // S.12.4 UX-grade defense-in-depth: a server-side tenant ACL
+        // (ADR 0003 + 0014) MELLETT, az előző browser-user
+        // `maestro.activeEditorialOfficeId` (+ más `maestro.*`, kiv.
+        // whitelist `pendingInviteToken`) NE örökölődjön az új user-re.
+        // KRITIKUS itt: a "logout-bypass" scenario (A bezárta a tab-ot
+        // logout nélkül, B most loginol) CSAK ezen az ágon fogható.
+        // `fetchGroupSlugs` (line ~82) különben az előző scope-ot olvasná.
+        // `createEmailPasswordSession` ELŐTT kell takarítani.
+        clearMaestroLocalStorage();
         await account.createEmailPasswordSession({ email, password });
         const userData = await account.get();
         // groupSlugs és memberships paralel. A memberships hiba a state-ben él
@@ -594,6 +612,14 @@ export function AuthProvider({ children }) {
         setEditorialOffices([]);
         setOrgMemberships([]);
         setMembershipsError(null);
+        // S.12.4 cross-tenant UI-cleanup: az `activeOrganizationId` /
+        // `activeEditorialOfficeId` és más `maestro.*` UI-state kulcsok
+        // törlése, hogy a következő browser-user (B) NE örökölje. A
+        // `maestro.pendingInviteToken` whitelist-en van (re-register /
+        // email-mismatch recovery flow, Codex review #2). State-cleanup
+        // UTÁN: a helper try/catch elnyeli a localStorage hibákat, így
+        // a logout alap-garanciája (state üres, session zárva) sértetlen.
+        clearMaestroLocalStorage();
     }, []);
 
     /**
