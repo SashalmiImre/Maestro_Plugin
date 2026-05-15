@@ -101,7 +101,7 @@ tags: [feladatok]
 #### S.13 Logging / Monitoring / Error-disclosure (HIGH, 1 session) — ASVS V7, CIS 8
 
 - [ ] **S.13.1** — Central log aggregation tervezés (Sentry / Better Stack / Grafana Loki). Trigger: első incident vagy compliance-kérés.
-- [ ] **S.13.2** — PII-redaction sablonok: `log()` helper bővítés email-maszkolás, token-elhúzás, session-id-cut funkciókkal.
+- [/] **S.13.2** — PII-redaction sablonok: `log()` helper bővítés email-maszkolás, token-elhúzás, session-id-cut funkciókkal. **Phase 1 partial close 2026-05-15** (Codex pre + stop-time + adversarial + 2 verifying iteráció): kanonikus shared modul [packages/maestro-shared/piiRedaction.js](../packages/maestro-shared/piiRedaction.js) + Plugin `logger.js` wire + 1 demo CF (`invite-to-organization`) wrap. Phase 2 (külön iter): maradék 10-15 CF wrap + build-generator (S.7.7b precedens) + coverage-check script + LONG_TOKEN_REGEX key-aware mode. Részletek: [[Komponensek/LoggingMonitoring]].
 - [ ] **S.13.3** — Error message info-disclosure audit: CF 500 → kliens, mit lát a frontend (stack trace? internal error code? `partial_cleanup_failed` üzenet?). Defensive: minden user-facing error code-os, NEM szöveges.
 - [ ] **S.13.4** — Monitoring alert-ek tervezése: CF failure rate, WebSocket disconnect rate, rate-limit-trigger spike, login-fail spike.
 - [ ] **S.13.5** — Audit-log retention CIS 8.3: minimum 90 nap (ASVS L2 elegendő). Appwrite Cloud + Railway logs verify.
