@@ -464,10 +464,92 @@ ASVS V4.1.3 + ownership enforcement: kategória-2-ben NINCS user-read inference 
 - **`articlesList` pre-load Map**: nagy orgon 100k+ article = ~2MB (projection-szel). Memory-pressure → admin abort + streaming refactor escalation.
 - **Operator-supervised only** — NEM autonóm batch. A `scope` paraméter MINDIG explicit (NE futtass `all`-t scriptből nagy orgon).
 
+## S.7.9 `anonymize_user_acl` action (2026-05-15, R.S.7.5 close code-only)
+
+GDPR Art. 17 stale `withCreator` user-read cleanup. A user kilépésekor vagy fiók-törlésekor a `Permission.read(user:X)` perm a meglévő tenant doc-okon megmarad (`removeTeamMembership` NEM törli a doc-szintű perm-et). Az új action retroaktívan eltávolítja a target user `read("user:X")` (és minden ACL-művelet) perm-jét a 12-collection scope-ban.
+
+### Architektúra
+
+| Modul | Cél |
+|---|---|
+| `actions/schemas.js` `anonymizeUserAclCore(ctx, params)` | Core helper, NEM hív `res.json`-t. Self-service flow + public action közös. Params: `{organizationId, targetUserId, dryRun, callerId, maxRunMs}` |
+| `actions/schemas.js` `anonymizeUserAcl(ctx)` | Thin wrapper, **ADMIN-ONLY** (self-path public auth-gap zárva). Auth: `requireOrgOwner(ctx, organizationId)`. Hiba self-path: `403 self_anonymize_disallowed` |
+| `actions/offices.js` `leaveOrganization` (3.6 lépés) | Self-anonymize a team-cleanup UTÁN, DB-delete ELŐTT. `maxRunMs: 30_000` |
+| `actions/orgs.js` `deleteMyAccount` (4d.5 lépés) | Self-anonymize per-org a team-cleanup UTÁN. `maxRunMs: 10_000` (10 org × 10s) |
+
+### Scope (12 collection)
+
+1. `organizations` (single-doc getDocument)
+2. `organizationMemberships`, `editorialOffices`, `editorialOfficeMemberships`, `publications`, `articles`, `layouts`, `deadlines` — `Query.equal('organizationId', orgId)`
+3. `userValidations`, `systemValidations` — `Query.equal('articleId', batch)` az `articles` target-org id-listából (BATCH=25, Codex BLOCKER scope-szűkítés)
+4. `organizationInvites`, `organizationInviteHistory` — `Query.equal('organizationId', orgId)`, opcionális env-var (`skippedCollections[]` audit)
+
+### Filter algoritmus
+
+```js
+const escapeRegex = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const PERM_PATTERN = new RegExp(`^[a-z]+\\("user:${escapeRegex(targetUserId)}"\\)$`);
+const filteredPerms = currentPerms.filter(p => !PERM_PATTERN.test(p));
+// Idempotens: ha length === currentPerms.length → skipped++ (no-op).
+// Ha csökken: Array.from(new Set(filteredPerms)) dedupe + updateDocument.
+```
+
+### Auth modell (kettős)
+
+| Path | Caller | Engedett | Auth-check |
+|---|---|---|---|
+| Public admin-anonymize | org owner | `targetUserId !== callerId` | `requireOrgOwner(ctx, organizationId)` |
+| Public self-anonymize | bármely user | **TILOS** (Harden HIGH fix) | `403 self_anonymize_disallowed` |
+| Self-service flow | `leaveOrganization` / `deleteMyAccount` | mindenkire (`callerId === targetUserId`) | A flow saját security guard-jai (org-membership, last-owner, confirm) |
+
+### Time-budget (Harden Verifying P1 fix)
+
+A platform 60s CF timeout NEM catch-elhető `try/catch`-szel — split-brain veszély a self-flow-n. A `maxRunMs` paraméter partial-return-rel garantálja a flow-folytatást. `stats.timeBudgetExceeded: true` jelez partial-cleanup-ot.
+
+- `leaveOrganization`: 30s budget (a flow többi része ~5-10s)
+- `deleteMyAccount`: 10s per-org × max 10 org = ~100s combined
+
+### Audit
+
+- `stats.organizations` / `stats.articles` / etc.: per-collection `{scanned, anonymized, skipped}`
+- `stats.errorCount` / `errorsTruncated` / `errors[]` cap 100
+- `stats.skippedCollections[]` — env-var-missing collection-ök (NEM silent)
+- `stats.timeBudgetExceeded` — partial-cleanup jelölés
+- `stats.partialFailure: errorCount > 0`
+- `success: errorCount === 0`
+
+### Re-anonymize fallback path
+
+A self-service flow-n a partial-cleanup admin re-anonymize-cal pótolható:
+
+```bash
+appwrite functions createExecution --function-id <fid> --body '{
+  "action": "anonymize_user_acl",
+  "organizationId": "<orgId>",
+  "targetUserId": "<userId>",
+  "dryRun": false
+}'
+```
+
+(A caller org owner kell legyen az admin-path engedélyezéséhez.)
+
+### Codex pipeline + Harden
+
+| Iteráció | Eredmény |
+|---|---|
+| Pre-review | 8/8 GO + 1 BLOCKER (validation scope) + 1 MAJOR (regex escape) — javítva |
+| Stop-time | NEEDS-WORK 3 MAJOR (CF timeout op-bound + re-anonymize op + partial sem) + 1 MINOR — mind javítva (kódfix + doku) |
+| Verifying | C1+C2+C3 GO CLEAN |
+| Harden Baseline | 1 P1 (`callerId` undef-ref) — javítva (params-ban explicit) |
+| Harden Adversarial | 1 HIGH (self-path public auth-gap) + 1 medium (duplikált P1) — javítva (public ADMIN-ONLY) |
+| Harden Simplify | **HALASZTOTT** (/loop context-fogyás) |
+| Harden Verifying iter 1 | 2 P1 (sync-anonymize timeout-risk a self-flow-n) — javítva (`maxRunMs` time-budget) |
+| Harden Verifying iter 2 | **HALASZTOTT** (/loop context-fogyás, manuálisan futtatható) |
+
 ## Kapcsolódó
 
 - [[SecurityBaseline]] — STRIDE per komponens (V4, V5, CIS 3)
-- [[SecurityRiskRegister]] — R.S.7.1 + R.S.7.2 closed, R.S.7.3 closed (code-only 2026-05-14), R.S.7.6 closed (code-only 2026-05-15), R.S.7.7 closed (code-only 2026-05-15), R.S.7.4 + R.S.7.5 open
+- [[SecurityRiskRegister]] — R.S.7.1 + R.S.7.2 closed, R.S.7.3 closed (code-only 2026-05-14), R.S.7.6 + R.S.7.7 + R.S.7.5 closed (code-only 2026-05-15), R.S.7.4 open
 - [[Döntések/0003-tenant-team-acl]] — ADR per-tenant Team ACL alapja
 - [[Komponensek/Permissions]] — server-side permission guards (S.7 sorrendileg utáni layer)
 - `packages/maestro-server/functions/invite-to-organization/src/teamHelpers.js` — minden ACL helper
