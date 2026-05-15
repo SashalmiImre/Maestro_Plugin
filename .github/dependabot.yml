@@ -1,0 +1,91 @@
+# Maestro Plugin — Dependabot S.9.3 (2026-05-15)
+# CIS Controls 7 + 16 dependency monitoring.
+#
+# Heti scan: minden package.json (yarn workspace + CF-ek). Group-update minor
+# + patch szinten (auto-merge candidate, ha CI passing). Major-version manual
+# review (breaking change kockázat).
+version: 2
+updates:
+  # Yarn workspace root
+  - package-ecosystem: "npm"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Budapest"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+      - "security"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Dashboard (Vite + React)
+  - package-ecosystem: "npm"
+    directory: "/packages/maestro-dashboard"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Budapest"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "dashboard"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Plugin (UXP + webpack + React)
+  - package-ecosystem: "npm"
+    directory: "/packages/maestro-indesign"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Budapest"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "plugin"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # Proxy (Express + http-proxy-middleware)
+  - package-ecosystem: "npm"
+    directory: "/packages/maestro-proxy"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Budapest"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "proxy"
+    groups:
+      minor-patch:
+        update-types:
+          - "minor"
+          - "patch"
+
+  # GitHub Actions (workflow-deps)
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+      time: "06:00"
+      timezone: "Europe/Budapest"
+    labels:
+      - "dependencies"
+      - "ci"

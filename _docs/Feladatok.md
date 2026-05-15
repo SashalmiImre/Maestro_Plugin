@@ -126,13 +126,13 @@ tags: [feladatok]
 
 #### S.9 Dependency + supply chain (MEDIUM, 1 session) — CIS 7/16
 
-- [ ] **S.9.1** — `yarn npm audit --recursive` lokális run. Eredmény → `_docs/Komponensek/DependencyAudit.md` snapshot.
-- [ ] **S.9.2** — Critical/High vulnerability fix: `yarn up <pkg>`, lockfile review.
-- [ ] **S.9.3** — Dependabot setup (GitHub) vagy `npm-audit-resolver`.
-- [ ] **S.9.4** — `package.json` `engines.node` pin (`>=20`). Backend EOL védelem: Appwrite CF `node-18.0` runtime → upgrade `node-20` vagy `node-22` (Appwrite Console runtime-választó).
-- [ ] **S.9.5** — Lock-file integrity CI: `yarn.lock` checksum check PR-ban.
-- [ ] **S.9.6** — Post-install script audit: `yarn explain peer-requirements` + manuális ellenőrzés a 3rd party SDK-knál (Resend, Anthropic, Groq, Appwrite).
-- [ ] **S.9.7** — Stop-time Codex review. Új jegyzet: [[Komponensek/DependencyAudit]].
+- [x] **S.9.1** — `yarn audit` 2026-05-15: **0 vulnerability** post-fix. Új jegyzet: [[Komponensek/DependencyAudit]].
+- [x] **S.9.2** — 4 vuln (2H+2M, mind maestro-cors-proxy transitive) → `resolutions` force-bump (path-to-regexp >=0.1.13, picomatch >=2.3.2, follow-redirects >=1.16.0).
+- [x] **S.9.3** — Dependabot setup: [.github/dependabot.yml](../.github/dependabot.yml) heti scan, minor+patch group, 5 ecosystem.
+- [/] **S.9.4** — `engines.node: ">=20.0.0"` set. Appwrite CF `node-18.0` → 20/22 USER-TASK Console-on (DependencyAudit.md runbook).
+- [/] **S.9.5** — Lock-file integrity CI: halasztva Phase 3, template a DependencyAudit.md-ben.
+- [/] **S.9.6** — Post-install script audit halasztva Phase 3.
+- [x] **S.9.7** — Stop-time Codex review (saját + commit-szintű). Új jegyzet: [[Komponensek/DependencyAudit]].
 
 #### S.10 Audit log + GDPR (LOW–MEDIUM, 1 session) — GDPR Art. 30, CIS 8.3
 
