@@ -546,10 +546,70 @@ appwrite functions createExecution --function-id <fid> --body '{
 | Harden Verifying iter 1 | 2 P1 (sync-anonymize timeout-risk a self-flow-n) — javítva (`maxRunMs` time-budget) |
 | Harden Verifying iter 2 | **HALASZTOTT** (/loop context-fogyás, manuálisan futtatható) |
 
+## S.7.8 Phase 1 phantom-org window (2026-05-15, R.S.7.4 partial close)
+
+Phantom-org window: a `bootstrap_organization` `createDocument(organizations)` SIKER UTÁN + flow VÉGE ELŐTT ~10-100ms-ig a creator látja a doc-ot a `withCreator` `Permission.read(user(callerId))` azonnali hatása miatt. Ha a frontend ebben az ablakban lekér a doc-ról (Realtime push vagy REST list), fantom-org megjelenik a UI-ban.
+
+### Phase 1: Backend mitigáció (env-flag-feltételes)
+
+Új OPCIONÁLIS env-var `ENABLE_PROVISIONING_GUARD` (default `false` visszafelé kompatibilis). Ha `'true'`:
+
+1. **Schema-bővítés**: `bootstrap_organization_status_schema` action enum `['provisioning', 'active', 'orphaned', 'archived']`. Idempotens `updateEnumAttribute` ha létezik a 3-elem enum (Appwrite SDK NEM tudja BŐVÍTENI a meglévő enum-ot, csak update-elni).
+2. **Bootstrap flow**: `createDocument(organizations)` data-objektum `status: 'provisioning'`. Flow VÉGÉN (minden child-write OK) `_finalizeOrgIfProvisioning(ctx, orgId)` helper-rel `'active'`-ra finalize-eli (best-effort).
+3. **Permission write-block**: `permissions.ORG_STATUS.PROVISIONING: 'provisioning'` enum-bővítés. `isOrgWriteBlocked('provisioning')` true — minden CRUD action `userHasOrgPermission`-on át 403-mal blokkol a phantom-doc-on (fail-closed). A `bootstrap_organization` saját child write-jai admin API-key-vel mennek (Codex BLOCKER verify: NEM hív `userHasOrgPermission`-t), így NEM self-deadlock.
+
+### Finalize fail-soft + audit
+
+A `_finalizeOrgIfProvisioning` visszaad `{finalized, error?}`. Ha bukik, a doc `'provisioning'`-on marad, és a return-ben:
+
+```json
+{
+  "success": true,
+  "provisioningStuck": true,
+  "provisioningStuckReason": "<error message>",
+  "recoveryHint": "Admin manuálisan futtathat `update_organization`-t a status: \"active\"-ra állításhoz."
+}
+```
+
+Frontend észreveheti és figyelmeztetheti a usert / retry-zhet. Pre-existing re-bootstrap path (idempotens) is hív self-heal `_finalizeOrgIfProvisioning`-ot (Codex MINOR fix).
+
+### Phase 2 PENDING (frontend filter)
+
+A backend Phase 1 önmagában **deploy-olható** (Codex Q6 GO), DE az S.7.8 acceptance csak Phase 2 után. A `provisioning` doc backend-write-blocked, de a frontend még listázhatja (Realtime push + REST). **Phase 2**:
+
+- Plugin + dashboard MINDEN org-list query: `Query.equal('status', 'active')`
+- Realtime `subscribeRealtime` callback szűrés `status === 'active'`-ra
+- `user-cascade-delete` CF: `provisioning`-okat NEM törli rekurzívan
+
+### Codex pipeline
+
+| Iteráció | Eredmény |
+|---|---|
+| Pre-review | 6/6 GO + 1 MAJOR (enum migration sorrend) + 1 MINOR (`archived` skip — már be van vezetve) — javítva |
+| Stop-time | NEEDS-WORK: 1 BLOCKER conditional (bootstrap önmaga userHasOrgPermission? — verify: NEM, admin API-key-vel) + 1 MAJOR (finalize fail-soft → `provisioningStuck` flag) + 1 MINOR (pre-existing re-bootstrap self-heal) — mind javítva |
+| Verifying + /harden | **HALASZTOTT** (/loop context-fogyás, manuálisan futtatható). Phase 2 külön iterációba. |
+
+### Deploy steps (Phase 1)
+
+1. CF redeploy az új `permissions.js` + `actions/schemas.js` + `actions/orgs.js` + `main.js`-szel
+2. Új env-var `ENABLE_PROVISIONING_GUARD=true` Appwrite Console-on
+3. `bootstrap_organization_status_schema` action futtatása **MINDEN orgra** (idempotens enum-bővítés)
+4. Smoke: új org bootstrap → return `success: true` + `provisioningStuck` flag = false (várt)
+5. Phase 2 frontend filter — külön iteráció
+
+### Affected fájlok
+
+| Fájl | Változás |
+|---|---|
+| `actions/schemas.js bootstrapOrganizationStatusSchema` | Enum-bővítés `STATUS_ENUM` 4-elem + idempotens `updateEnumAttribute` ág |
+| `permissions.js ORG_STATUS` | `PROVISIONING: 'provisioning'` + `isOrgWriteBlocked` bővítés |
+| `main.js` | `ENABLE_PROVISIONING_GUARD` env-var + ctx.env propag |
+| `actions/orgs.js` | Új helper `_finalizeOrgIfProvisioning(ctx, orgId)` + `bootstrapOrCreateOrganization` `createDocument` data status + flow-vég finalize 3 helyen (early-no-office return + happy-path + pre-existing-re-bootstrap self-heal) |
+
 ## Kapcsolódó
 
 - [[SecurityBaseline]] — STRIDE per komponens (V4, V5, CIS 3)
-- [[SecurityRiskRegister]] — R.S.7.1 + R.S.7.2 closed, R.S.7.3 closed (code-only 2026-05-14), R.S.7.6 + R.S.7.7 + R.S.7.5 closed (code-only 2026-05-15), R.S.7.4 open
+- [[SecurityRiskRegister]] — R.S.7.1 + R.S.7.2 closed, R.S.7.3 closed (code-only 2026-05-14), R.S.7.6 + R.S.7.7 + R.S.7.5 closed (code-only 2026-05-15), **R.S.7.4 Phase 1 backend done** (code-only 2026-05-15, Phase 2 PENDING)
 - [[Döntések/0003-tenant-team-acl]] — ADR per-tenant Team ACL alapja
 - [[Komponensek/Permissions]] — server-side permission guards (S.7 sorrendileg utáni layer)
 - `packages/maestro-server/functions/invite-to-organization/src/teamHelpers.js` — minden ACL helper
