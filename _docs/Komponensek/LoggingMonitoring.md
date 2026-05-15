@@ -147,7 +147,13 @@ Maradék `success: true` body leak-ek a Codex verifying #2 alapján:
 - Line 726 catch raw `err.message` → `fail(res, 500, 'internal_error', { executionId })`
 - S.13.2 PII-redaction log wrap (module.exports signature + body első 2 során)
 - Codex stop-time CLEAN (`a797475f388de51e1`)
-**Phase 2.0c** — `user-cascade-delete` CF (~6 leak, line 113/214/220/226 stb.).
+**Phase 2.0c (2026-05-15 close)** — `user-cascade-delete` CF (5 leak fixed):
+- Line 113 helper return `{ ..., error: err.message }` → drop (defense-in-depth, NEM kerül kliens-response-be)
+- Line 215/221/227 `stats.listFailures.push({...error: err.message})` → drop `.error` (`organizationMemberships` / `editorialOfficeMemberships` / `groupMemberships`)
+- Line 331 `stats.verificationFailures.push({...error: markErr.message})` (orphan_marker_write) → drop
+- Line 344 `stats.verificationFailures.push({...error: err.message})` (last_owner) → drop
+- S.13.2 PII-redaction log wrap (arrow signature)
+- Codex stop-time MAJOR (`a1a797faee8d7e3a3`) → fix → CLEAN
 **Phase 2.1** — Build-generator (S.7.7b precedens) automatikusan generálja `_generated_*.js` minden CF-be + drift-guard `--check` mód. Plus `wrapLogger(rawLog, rawError)` shared helper a per-CF DRY-violation csökkentésére (S.13.2 wrap).
 **Phase 2.2** — Maradék 8+ CF (`set-publication-root-path`, `resend-webhook`, `orphan-sweeper`, `cleanup-orphaned-locks`, `cleanup-rate-limits`, `cleanup-archived-workflows`, `migrate-legacy-paths`, `cascade-delete`, `validate-article-creation`).
 
