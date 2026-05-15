@@ -5,9 +5,16 @@
   "main": "index.html",
   "manifestVersion": 5,
   "requiredPermissions": {
-    "localFileSystem": "fullAccess",
+    "localFileSystem": "request",
     "network": {
-      "domains": "all"
+      "domains": [
+        "https://gallant-balance-production-b513.up.railway.app",
+        "wss://gallant-balance-production-b513.up.railway.app",
+        "https://emago.hu",
+        "wss://emago.hu",
+        "https://*.emago.hu",
+        "wss://*.emago.hu"
+      ]
     },
     "launchProcess": {
       "extensions": [],

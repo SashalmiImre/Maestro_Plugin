@@ -110,11 +110,11 @@ tags: [feladatok]
 
 #### S.6 UXP plugin sandbox (MEDIUM, 1 session) — ASVS V14
 
-- [ ] **S.6.1** — `manifest.json` network domain whitelist: Railway primary + emago.hu fallback + Appwrite + webhook subdomain. `"domains": "all"` → konkrét lista.
-- [ ] **S.6.2** — localFileSystem szűkítés: `pluginData` + `documents` write, `userDocuments` csak read ha CF-en keresztül megy a write.
-- [ ] **S.6.3** — `launchProcess.schemes`: csak `https` (verify).
-- [ ] **S.6.4** — UXP auto-update review (Adobe ExMan-szintű).
-- [ ] **S.6.5** — Stop-time Codex review.
+- [x] **S.6.1** — `manifest.json` network domain whitelist: scheme-qualified `https://`+`wss://` Railway primary + emago.hu fallback + `*.emago.hu` wildcard. Closed 2026-05-15.
+- [x] **S.6.2** — localFileSystem szűkítés: `"fullAccess"` → `"request"` (picker-mediated). Closed 2026-05-15.
+- [x] **S.6.3** — `launchProcess.schemes`: `["https"]` verify — már OK, NEM-changed.
+- [/] **S.6.4** — UXP auto-update review: doku-szintű (Maestro NEM-Adobe Marketplace, manual `.ccx` distribution). Future-work ha Marketplace-bemutatkozik.
+- [x] **S.6.5** — Stop-time Codex MINOR/CLEAN (`a77cca7c88b3fce84`). Új jegyzet: [[Komponensek/UXPSandbox]].
 
 #### S.8 Webhook + 3rd party trust (MEDIUM, 1 session)
 
