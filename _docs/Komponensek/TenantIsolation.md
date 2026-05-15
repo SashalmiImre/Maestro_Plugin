@@ -573,13 +573,33 @@ A `_finalizeOrgIfProvisioning` visszaad `{finalized, error?}`. Ha bukik, a doc `
 
 Frontend észreveheti és figyelmeztetheti a usert / retry-zhet. Pre-existing re-bootstrap path (idempotens) is hív self-heal `_finalizeOrgIfProvisioning`-ot (Codex MINOR fix).
 
-### Phase 2 PENDING (frontend filter)
+### Phase 2 DONE 2026-05-15 (frontend filter)
 
-A backend Phase 1 önmagában **deploy-olható** (Codex Q6 GO), DE az S.7.8 acceptance csak Phase 2 után. A `provisioning` doc backend-write-blocked, de a frontend még listázhatja (Realtime push + REST). **Phase 2**:
+Plugin + dashboard org-list query null-tolerant filter (Codex stop-time NO-GO Q1 fix):
 
-- Plugin + dashboard MINDEN org-list query: `Query.equal('status', 'active')`
-- Realtime `subscribeRealtime` callback szűrés `status === 'active'`-ra
-- `user-cascade-delete` CF: `provisioning`-okat NEM törli rekurzívan
+```js
+queries: [
+    Query.equal('$id', orgIds),
+    Query.or([Query.equal('status', 'active'), Query.isNull('status')]),
+    Query.limit(100)
+]
+```
+
+Null-tolerant a legacy doc-okra (a `backfill_organization_status` ELŐTT létrejött org-ok `status: null` mezővel). A `provisioning` szigorúan NEM-null érték → szűrve.
+
+Dashboard Realtime callback (`classify` helper a `AuthContext.jsx`-ben) defense-in-depth:
+
+```js
+if (payload?.status === 'provisioning') {
+    return { relevant: false, destructive: false };
+}
+```
+
+A push-race-protect: ha egy `provisioning`-os create event érkezik a kliens-cache invalidálás ELŐTT, a callback szűr.
+
+**`user-cascade-delete` CF NEM érintett**: a `bootstrap_organization` rollback `deleteDocument(organizations)`-szal direkt törli a phantom-doc-ot, NEM trigger `account.delete` event-en át.
+
+Plugin Realtime NEM iratkozik fel a `organizations` collection-re (grep verify). Csak a dashboard-on van kettős védelem.
 
 ### Codex pipeline
 
