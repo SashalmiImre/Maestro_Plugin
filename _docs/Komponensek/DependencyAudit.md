@@ -33,13 +33,20 @@ Mind a 4 a **maestro-cors-proxy transitive** deps-en. Saját kód NEM-érintett.
 `package.json` workspace-root:
 ```json
 "resolutions": {
-    "path-to-regexp": ">=0.1.13",
-    "picomatch": ">=2.3.2",
-    "follow-redirects": ">=1.16.0"
+    "path-to-regexp": "0.1.13",
+    "picomatch": "^2.3.2",
+    "follow-redirects": "^1.16.0"
 }
 ```
 
+**Verzió-pin minta** (Codex BLOCKER fix 2026-05-16):
+- **`path-to-regexp: "0.1.13"` exact** — a `>=0.1.13` minta silent major-bump-ot okozott (`path-to-regexp@8.4.2`-re), Express 4 NEM-kompatibilis (`TypeError: pathRegexp is not a function`)
+- **`picomatch: "^2.3.2"` major-bounded** — csak 2.x szériák auto-bump (3.0+ blokkolt)
+- **`follow-redirects: "^1.16.0"` major-bounded** — csak 1.x szériák
+
 `yarn install` regenerálja a lockfile-t → `yarn audit` 0 vuln.
+
+**Tanulság**: a yarn 1.x `resolutions` mezőben a `>=X.Y.Z` minta NEM-major-blokkoló — caret `^X.Y.Z` vagy exact-pin kell ahhoz, hogy a major-jump elkerülhető legyen.
 
 ## Monitoring policy
 

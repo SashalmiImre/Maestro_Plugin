@@ -13,9 +13,9 @@
     "node": ">=20.0.0"
   },
   "resolutions": {
-    "path-to-regexp": ">=0.1.13",
-    "picomatch": ">=2.3.2",
-    "follow-redirects": ">=1.16.0"
+    "path-to-regexp": "0.1.13",
+    "picomatch": "^2.3.2",
+    "follow-redirects": "^1.16.0"
   },
   "scripts": {
     "build:cf-validator": "node scripts/build-cf-validator.mjs",
