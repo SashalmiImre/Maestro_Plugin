@@ -8,141 +8,88 @@ created: 2026-05-15
 
 > Az autonóm /loop NEM tudja végrehajtani ezeket — Console-akciók, secret-rotation, manual test, legal review. Te a háttérben végzed őket.
 
-## ⚠️ KRITIKUS PRE-REQUIREMENT — Deploy
+## 📍 Deploy állapot — 2026-05-16 PM (Iter 32-ig)
 
-A teljes S blokk audit-munka (2026-05-15, 17 /loop iter) **KÓDOLDALON KÉSZ**, **NEM-DEPLOYOLVA MÉG**. A USER-TASK-ok többsége (különösen az adversarial-test) HAMIS eredményt adna a production deploy nélkül.
+| Komponens | State | Részlet |
+|---|---|---|
+| **Dashboard** (`maestro.emago.hu`) | ✅ **ÉLŐ** | Commit `b4fd389` deployed 2026-05-16 PM (S.3 headers + S.4 ImportDialog + S.12.4 cleanup + S.3.1 önhost Inter + cookieFallback cleanup). `deploy.sh` SSH+SCP működik. Chrome MCP verify: 6 security header OK, no CSP violation, no third-party CDN |
+| **12 Appwrite CF** | ✅ **DEPLOYED** | 2026-05-15 reggel MCP batch (`invite-to-organization` `69ffab43e9419f53f525`, `update-article`, `validate-publication-update`, `user-cascade-delete`, `validate-article-creation`, `article-update-guard`, `cascade-delete`, `cleanup-archived-workflows`, `cleanup-orphaned-locks`, `migrate-legacy-paths`, `orphan-sweeper`, `resend-webhook`, `set-publication-root-path`) — S.13.2 PII + S.13.3 info-disclosure binary |
+| **`invite-to-organization` (S.7.10+11 redeploy)** | ⚠️ **USER-TASK 17** | `c11f8f5` (S.7.11 enum) + `c2177d2` (S.7.10 DRY) friss kód NEM-deployolva. Funkcionálisan ekvivalens a deployedtel (helper-extract + enum), de a binary stale. Console redeploy szükséges a kód-source-truth-truth-hoz |
+| **2 Phase 3 CF Console-create** | ⚠️ **USER-TASK 14** | `cleanup-rate-limits` + `cleanup-orphaned-thumbnails` Console-on **MÉG NEM létezik** (MCP classifier blokkolta). Forráskód kész |
+| **Plugin (`maestro-indesign`)** | ⚠️ **USER-TASK 18** | `yarn build` ✅ (`bundle.js` 7.13MiB), UXP Developer Tool reload **NEM-MCP-elérhető** — manuál |
+| **Proxy (`maestro-proxy`)** | ✅ **AKTÍV** | Railway, no kódváltozás (csak env-rotate ha USER-TASK 4-en át rotate-elsz) |
+| **`actionAuditLog` collection** | ⚠️ **USER-TASK 15** | Schema-create Console-on (MCP classifier blokk) |
+| **`SDK Compatibility Check` required-check** | ⚠️ **USER-TASK 16** | GitHub branch protection rule beállítás |
 
-### Deploy sorrend (kötelező USER-TASK-ok ELŐTT)
+### USER-TASK 17 — `invite-to-organization` CF redeploy (S.7.10+11)
 
-#### A) 15 Appwrite CF deploy
+**Cél**: a friss S.7.10 (`_tryEnsureMembershipNonBlocking` helper) + S.7.11 (`TEAM_SKIP_REASONS` enum) refactor binary élesítése. **Codex stop-time review GO** (commit `c11f8f5` + `c2177d2`, NO regression).
 
-A `claude/zealous-euler-00c483` branch összes CF-változtatása **NEM-deployolt**:
-- **S.7.x ACL fixes**: `invite-to-organization` (Phase 1.0+1.5 fail() strip + 14 leak fix), `backfill_acl_phase3`, `verify_collection_document_security`, `anonymize_user_acl`
-- **S.7.8 phantom-org window**: `bootstrap_organization` flow + `status: 'provisioning'` enum
-- **S.13.2 PII-redaction wrap**: 14 CF (`invite-to-organization` inline + 13 CF `_generated_piiRedaction.js` + `wrapLogger`)
-- **S.13.3 info-disclosure fix**: 14 CF `fail()` strip + executionId
+**Lépések**:
 
-**Deploy módszer**:
-
-**B-opció: Appwrite Console manuális** (egyszerű, lassú):
-1. Console > Functions > `<function-name>` > Deployments > Create deployment
-2. **Source**: Git repository — minden CF saját Deployment
-3. Beállítások:
-   - Source code: `packages/maestro-server/functions/<function-name>` (path-on belül `src/main.js`)
-   - Branch: `claude/zealous-euler-00c483` (vagy merged `main` ha mar mergeled)
+1. **Console UI** → Functions → `invite-to-organization` → Deployments → Create deployment
+2. **Source**: Git repository
+   - Branch: `claude/zealous-euler-00c483` (vagy `main` post-merge)
+   - Path: `packages/maestro-server/functions/invite-to-organization`
    - Entry point: `src/main.js`
-4. Wait ~30-60 sec per CF
-5. Ismételd mind 15 CF-en (invite-to-organization, update-article, validate-publication-update, user-cascade-delete, validate-article-creation, article-update-guard, cascade-delete, cleanup-archived-workflows, cleanup-orphaned-locks, cleanup-orphaned-thumbnails, cleanup-rate-limits, migrate-legacy-paths, orphan-sweeper, resend-webhook, set-publication-root-path)
+3. Activate after build (~30-60s)
+4. **Verify**:
+   - Latest deployment: friss `$createdAt`
+   - Smoke test: invite-create flow (Dashboard → User × → Meghívás új tag) → success ✅
+   - CF Executions log: `[Accept]` log entries `'team_not_found'` keyword még megjelennek (NEM-control-flow-bug, csak log szöveg)
 
-**A-opció: Appwrite CLI** (gyorsabb, ha be van konfigurálva):
-```bash
-cd packages/maestro-server
-for fn in functions/*/; do
-    fnName=$(basename "$fn")
-    echo "Deploying $fnName..."
-    appwrite deploy function --functionId "$fnName" --code "./functions/$fnName" --activate
-done
-```
+**Time**: ~3 perc.
 
-**Verify**:
-- Console > Functions > minden CF > "Latest deployment" → `<friss-timestamp>` és "Active"
-- Smoke test: login, invite-create, publication-create
-- Console > Functions > `invite-to-organization` > Executions: új request → success: true
-
-**Time**: 15-30 perc (Console manuális) vagy ~5 perc (CLI batch).
+**Alternatíva (MCP-vel, ha a classifier engedi explicit per-action go-val)**:
+- `mcp__appwrite-api__appwrite_call_tool` `functions_create_deployment` tarball-tal — Claude megpróbálja per-action approval-lel
 
 ---
 
-#### B) Dashboard deploy
+### USER-TASK 18 — Plugin UXP rebuild + reload InDesign-on
 
-`packages/maestro-dashboard` változások (NEM-deployolt):
-- **S.3 security headers** (`.htaccess`): HSTS, X-Frame-Options, CSP report-only, Permissions-Policy
-- **S.4 ImportDialog validation**: file size + MIME pre-check
-- **S.12.4 localStorage cleanup**: `clearMaestroLocalStorage` helper + 3 wire-pont (`logout`, `login`, JWT auto-login)
-- **S.13.2 PII-redaction**: dashboard CSAK skip-elve (CLAUDE.md `console.*` policy-elfogadott), DE a `.htaccess`-en új headers vannak.
+**Cél**: a már built `packages/maestro-indesign/dist/`-et betölteni a Adobe InDesign-be (UXP Developer Tool).
 
-**Deploy módszer** (LiteSpeed/Apache shared hosting — NEM Next.js):
+**Lépések**:
 
-```bash
-cd packages/maestro-dashboard
-yarn build
-# A dist/ mappa tartalmát fel kell tölteni a shared hosting-ra
-# (LiteSpeed/Apache, NEM Vercel/Netlify)
-```
+1. **Build** (már megtörtént Iter 31-ben, de re-runnable):
+   ```bash
+   cd packages/maestro-indesign && yarn build
+   ```
+2. **UXP Developer Tool (UDT)**:
+   - Adobe Creative Cloud → UXP Developer Tool → indít
+   - "Load Plugin..." gomb → válaszd: `packages/maestro-indesign/dist/`
+   - InDesign-be reload, NEM-restart kell (csak ha plugin manifest változott — most VÁLTOZOTT, S.6 sandbox + scheme-qualified domains)
+3. **Manifest változás miatt InDesign teljes restart kell** (S.6 manifest network whitelist + localFileSystem "request"):
+   - InDesign Quit → relaunch
+   - File → Open... → tetszőleges dokumentum
+   - Plugins menu → Maestro → Open → login + connect verify
+4. **Verify**:
+   - Login form megjelenik
+   - Sikeres login → szerkesztőség-list + cikk-list
+   - Realtime channel subscribe (a Plugin DevTools console-on figyelhetők)
 
-**FTP/SFTP upload** (ha ez a hosting-flow):
-- Source: `packages/maestro-dashboard/dist/*` (build output)
-- Destination: shared hosting `/var/www/maestro.emago.hu/htdocs/` (vagy hasonló path)
-- **KÖTELEZŐ**: `.htaccess` fájl is upload-eljen (a `public/.htaccess`-ből bekerül a `dist/`-be)
+**Time**: ~10 perc.
 
-**Verify**:
-1. `curl -I https://maestro.emago.hu/` — response headers:
-   - `Strict-Transport-Security: max-age=31536000`
-   - `X-Frame-Options: DENY`
-   - `Content-Security-Policy-Report-Only: ...`
-   - `Permissions-Policy: ...`
-2. Login flow: `localStorage.maestro.activeEditorialOfficeId` NEM-szivárog logout után (DevTools Application > Local Storage)
-
-**Time**: ~10-15 perc.
-
----
-
-#### C) Plugin rebuild + UXP deploy
-
-`packages/maestro-indesign` változások (NEM-deployolt):
-- **S.13.2 logger wrap**: `core/utils/logger.js` redactArgs + lazy callConsole
-
-**Build**:
-```bash
-cd packages/maestro-indesign
-yarn build
-# Plugin distribution: dist/ vagy a UXP-konfig szerint
-```
-
-**UXP deploy módszer**:
-
-**1. Fejlesztői env (UXP Developer Tool)**:
-- UDT > "Load Plugin..." → `packages/maestro-indesign/dist/`
-- InDesign restart vagy plugin reload
-- Test login + Realtime + article-edit
-
-**2. Adobe Exchange (production distribution)**:
-- ExMan package (`.ccx` fájl) csomagolás
-- Adobe Exchange > Submit New Version
+**Adobe Exchange (production distribution, OPTIONAL post-internal-test)**:
+- ExMan package csomagolás (`.ccx` fájl) → Adobe Exchange Portal submit
 - Review + approval ~24-48 óra
-- User-side update: Adobe ExMan auto-update
-
-**3. Belső team distribution** (ha ExMan-en kívüli):
-- `.ccx` fájl megosztása (`mediaserver` vagy Slack)
-- Manual install minden client-en
-
-**Time**: ~10 perc build + variable distribution.
+- User-side: Adobe ExMan auto-update
 
 ---
 
-#### D) Proxy redeploy (Railway)
+### Deploy CHECKLIST (Iter 32-állapot)
 
-`packages/maestro-proxy` változások (ha vannak — most NEM kritikus, csak audit):
-- **S.5 audit**: secret keys frissítése (NEM kódváltozás, csak env-update — Railway dashboard)
+- [x] **Dashboard** deploy ✅ — `b4fd389` ÉLŐ `https://maestro.emago.hu/`
+- [x] **12 CF** deploy ✅ — 2026-05-15 MCP batch
+- [ ] **USER-TASK 17**: `invite-to-organization` CF redeploy (S.7.10+11) — Console-on
+- [ ] **USER-TASK 14**: 2 Phase 3 CF Console-create
+- [ ] **USER-TASK 15**: `actionAuditLog` collection schema-create
+- [ ] **USER-TASK 16**: SDK Compatibility branch protect rule
+- [ ] **USER-TASK 18**: Plugin UXP rebuild + reload InDesign-on
+- [ ] **Smoke test post-CF-deploy**: invite-create + publication-create + login (Plugin)
+- [ ] **Codex stop-time deploy review** (külön iter, opcionális — minta `5ce596e` post-deploy verify 2026-05-09)
 
-**Deploy módszer**:
-- Railway dashboard > Maestro proxy > Deployments > Trigger deploy (vagy auto-deploy-on-push)
-- Env-update: Variables tab > frissítés > Redeploy
-
-**Time**: ~5 perc.
-
----
-
-### Deploy CHECKLIST
-
-- [ ] **A**: 15 Appwrite CF deploy (Console vagy CLI) — minden új feature production-on
-- [ ] **B**: Dashboard deploy (build + upload, `.htaccess` mellékelve)
-- [ ] **C**: Plugin rebuild + UXP Developer Tool reload (fejlesztői env) vagy ExMan package (production)
-- [ ] **D**: Proxy redeploy (csak env-update most, NEM kódváltozás)
-- [ ] **Smoke test**: login, invite-create, publication-create (mind 3 platform)
-- [ ] **Codex stop-time deploy review** (külön iter, opcionális — minta: 2026-05-09 commit `5ce596e` után)
-
-**Deploy után**: a USER-TASK-ok (különösen S.7.5 adversarial-test) **valid eredményeket** ad. Anélkül a régi-ACL marad production-on és a test HIBÁS.
+**Funkcionális teszt**: USER-TASK 3 (S.7.5 adversarial 2-tab) **MOST futtatható** a deployed Dashboard-on (Iter 31 verifikálta a 6 security header + logout cleanup). Az USER-TASK 14-15-17-18 deploy után a Plugin-flow is teljes körű.
 
 ---
 
