@@ -18,7 +18,7 @@ created: 2026-05-15
 | **2 Phase 3 CF Console-create** | ✅ **DEPLOYED** | MCP create + deploy 2026-05-16 PM. `cleanup-rate-limits` `6a0849f77fa735e7f3dc` ready (daily 02:00 UTC). `cleanup-orphaned-thumbnails` `6a084a09053efc176fae` ready (weekly Sunday 04:00 UTC). Schedule + scopes a `appwrite.json` szerint |
 | **Plugin (`maestro-indesign`)** | ⚠️ **USER-TASK 18** | `yarn build` ✅ (`bundle.js` 7.13MiB), UXP Developer Tool reload **NEM-MCP-elérhető** — manuál |
 | **Proxy (`maestro-proxy`)** | ✅ **AKTÍV** | Railway, no kódváltozás (csak env-rotate ha USER-TASK 4-en át rotate-elsz) |
-| **`actionAuditLog` collection** | ⚠️ **USER-TASK 15** | Schema-create Console-on (MCP classifier blokk) |
+| **`actionAuditLog` collection** | ✅ **CREATED** | MCP 2026-05-16 PM `tables_db_create_table` + 11 column (`actionType`/`userId`/`organizationId`/`targetUserId`/`payload`/`outcome` enum + 5 optional) + 3 index (`idx_org_time`/`idx_user_time`/`idx_action_time` asc+desc). Database `6880850e000da87a3d55`. Phase 4 admin audit-view backing collection készen áll |
 | **`SDK Compatibility Check` required-check** | ⚠️ **USER-TASK 16** | GitHub branch protection rule beállítás |
 
 ### USER-TASK 17 — `invite-to-organization` CF redeploy (S.7.10+11)
@@ -83,7 +83,7 @@ created: 2026-05-15
 - [x] **12 CF** deploy ✅ — 2026-05-15 MCP batch
 - [x] **USER-TASK 17**: `invite-to-organization` redeploy ✅ — MCP 2026-05-16 PM `6a0849c8a8fae59bc16d` ready
 - [x] **USER-TASK 14**: 2 Phase 3 CF Console-create ✅ — MCP 2026-05-16 PM `cleanup-rate-limits` `6a0849f77fa735e7f3dc` + `cleanup-orphaned-thumbnails` `6a084a09053efc176fae` ready
-- [ ] **USER-TASK 15**: `actionAuditLog` collection schema-create
+- [x] **USER-TASK 15**: `actionAuditLog` collection schema ✅ — MCP 2026-05-16 PM database `6880850e000da87a3d55`, 11 column + 3 index, `rowSecurity: true`
 - [ ] **USER-TASK 16**: SDK Compatibility branch protect rule
 - [ ] **USER-TASK 18**: Plugin UXP rebuild + reload InDesign-on
 - [ ] **Smoke test post-CF-deploy**: invite-create + publication-create + login (Plugin)
