@@ -23,14 +23,18 @@ const {
     buildOfficeTeamId,
     buildOrgTeamId,
     buildOrgAdminTeamId,
+    buildOrgAclPerms,
     buildOfficeAclPerms,
     buildWorkflowAclPerms,
+    withCreator,
     ensureTeam,
     ensureTeamMembership,
     removeTeamMembership,
     deleteTeamIfExists
 } = require('../teamHelpers.js');
 const permissions = require('../permissions.js');
+// S.7.9 Phase 4b (2026-05-15) — self-anonymize integrate a `leaveOrganization`-ban.
+const { anonymizeUserAclCore } = require('./schemas.js');
 
 /**
  * ACTION='leave_organization' (#41).
@@ -169,6 +173,37 @@ async function leaveOrganization(ctx) {
         return fail(res, 500, 'team_cleanup_failed', { message: teamErr.message });
     }
 
+    // 3.6) S.7.9 (2026-05-15) — GDPR Art. 17 self-anonymize. A team cleanup
+    //      UTÁN (Codex Q7 GO sorrend), a DB-delete ELŐTT, hogy a stale
+    //      `Permission.read(user:X)` perm-ek se maradjanak a tenant doc-okon.
+    //      Best-effort: partial-failure NEM blokkolja a kilépési flow-t —
+    //      a tag már a team-ekből kívül van, a stale perm csendben marad
+    //      és admin manuálisan futtathat re-anonymize-ot. Self-anonymize,
+    //      callerId === targetUserId, NEM kér extra auth-ot a core-tól.
+    let anonStats = null;
+    try {
+        // Time-budget 30s (Harden Phase 6 verifying P1): a self-service flow
+        // garantáltan a CF 60s timeout-on belül lefut. Ha exceed → partial,
+        // a flow folytatódik, és admin re-anonymize a fallback path.
+        const r = await anonymizeUserAclCore(ctx, {
+            organizationId,
+            targetUserId: callerId,
+            dryRun: false,
+            callerId,
+            maxRunMs: 30_000
+        });
+        if (r.orgNotFound || r.orgFetchFailed) {
+            error(`[LeaveOrg] anonymize_user_acl preflight hiba (NEM blokkol, kilépés folytatódik): orgNotFound=${!!r.orgNotFound} orgFetchFailed=${!!r.orgFetchFailed}`);
+        } else if (r.stats) {
+            anonStats = r.stats;
+            if (r.stats.errorCount > 0) {
+                error(`[LeaveOrg] anonymize_user_acl partial-failure: errorCount=${r.stats.errorCount} (NEM blokkol; admin re-anonymize ajánlott)`);
+            }
+        }
+    } catch (anonErr) {
+        error(`[LeaveOrg] anonymize_user_acl hiba (NEM blokkol): ${anonErr.message}`);
+    }
+
     // 4) Caller saját office membership-ek törlése. Az
     //    `editorialOfficeMemberships` collection a `(officeId, userId)`
     //    composite indexen unique, de egy user több office-ban is lehet
@@ -261,7 +296,7 @@ async function leaveOrganization(ctx) {
         return fail(res, 500, 'membership_delete_failed');
     }
 
-    log(`[LeaveOrg] User ${callerId} kilépett org ${organizationId}-ból — office=${officeMembershipsRemoved}, groupMemberships=${groupMembershipsRemoved}, teams.office=${teamCleanup.officeTeams}, teams.org=${teamCleanup.orgTeam}`);
+    log(`[LeaveOrg] User ${callerId} kilépett org ${organizationId}-ból — office=${officeMembershipsRemoved}, groupMemberships=${groupMembershipsRemoved}, teams.office=${teamCleanup.officeTeams}, teams.org=${teamCleanup.orgTeam}, anonymizeErrors=${anonStats ? anonStats.errorCount : 'skipped'}`);
 
     return res.json({
         success: true,
@@ -272,7 +307,10 @@ async function leaveOrganization(ctx) {
             editorialOfficeMemberships: officeMembershipsRemoved,
             groupMemberships: groupMembershipsRemoved
         },
-        teamCleanup
+        teamCleanup,
+        // S.7.9 audit — anonymize stats (null ha preflight failed, NEM-null
+        // ha a flow lefutott akár partial-failure-rel).
+        anonymizeStats: anonStats
     });
 }
 
@@ -367,6 +405,9 @@ async function createEditorialOffice(ctx) {
     // 3. Office létrehozás — slug auto-generálás + ütközéskor retry
     //    random suffix-szel. Max 3 próba.
     const baseSlug = slugifyName(sanitizedName);
+    // S.7.1 fix (2026-05-12): doc-szintű ACL `Permission.read(team:org_${orgId})`.
+    // **Org-scope**: minden org-tag látja az office-listát (admin UI dropdown stb.).
+    // Office-tagság a per-office membershipek-en dől el, NEM az office doc read-jogán.
     let newOfficeId = null;
     let usedSlug = null;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -382,7 +423,12 @@ async function createEditorialOffice(ctx) {
                     organizationId,
                     name: sanitizedName,
                     slug: candidateSlug
-                }
+                },
+                // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
+                // A caller már `org_${organizationId}` team-tag (a permission check
+                // ELŐRE fut), így a `buildOrgAclPerms` ACL hat. A `user(callerId)`
+                // explicit védelem redundáns de robust.
+                withCreator(buildOrgAclPerms(organizationId), callerId)
             );
             newOfficeId = officeDoc.$id;
             usedSlug = candidateSlug;
@@ -415,6 +461,9 @@ async function createEditorialOffice(ctx) {
     //    mezőkre. A `fetchUserIdentity` failure-tolerant (404 / hálózati hiba
     //    esetén `null` marad), és a per-request cache idempotens.
     const callerIdentity = await fetchUserIdentity(usersApi, callerId, userIdentityCache, log);
+    // S.7.1 fix (2026-05-12): doc-szintű ACL `Permission.read(team:office_${officeId})`.
+    // Office-scope: a membership doc CSAK az adott office tagjainak releváns
+    // (más office-tagok NEM látják ki tag az adott office-ban).
     let newOfficeMembershipId = null;
     try {
         const memDoc = await databases.createDocument(
@@ -428,7 +477,11 @@ async function createEditorialOffice(ctx) {
                 role: 'admin',
                 userName: callerIdentity.userName,
                 userEmail: callerIdentity.userEmail
-            }
+            },
+            // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
+            // A `ensureTeamMembership(officeTeamId)` lentebb, az office-create action végén fut — a
+            // `createDocument` időpontban a creator MÉG NEM office-team-tag.
+            withCreator(buildOfficeAclPerms(newOfficeId), callerId)
         );
         newOfficeMembershipId = memDoc.$id;
         rollbackSteps.push(() => databases.deleteDocument(env.databaseId, env.officeMembershipsCollectionId, newOfficeMembershipId));

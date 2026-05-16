@@ -15,16 +15,22 @@ const {
     fetchUserIdentity,
     listOfficeIdsForOrg
 } = require('../helpers/util.js');
+// S.7.9 Phase 4b (2026-05-15) — self-anonymize integrate a `deleteMyAccount`-ban.
+const { anonymizeUserAclCore } = require('./schemas.js');
 const { CASCADE_BATCH_LIMIT, WORKFLOW_VISIBILITY_DEFAULT } = require('../helpers/constants.js');
 const { deleteByQuery, cascadeDeleteOffice } = require('../helpers/cascade.js');
+const { evaluateAndConsume } = require('../helpers/rateLimit.js');
 const { createWorkflowDoc } = require('../helpers/workflowDoc.js');
 const { seedDefaultPermissionSets } = require('../helpers/groupSeed.js');
 const {
+    TEAM_SKIP_REASONS,
     buildOrgTeamId,
     buildOrgAdminTeamId,
     buildOfficeTeamId,
+    buildOrgAclPerms,
     buildOfficeAclPerms,
     buildWorkflowAclPerms,
+    withCreator,
     ensureTeam,
     ensureTeamMembership,
     removeTeamMembership,
@@ -49,6 +55,67 @@ async function _setOrgStatusActive(databases, env, organizationId) {
         organizationId,
         { status: permissions.ORG_STATUS.ACTIVE }
     );
+}
+
+/**
+ * S.7.8 Phase 1 (2026-05-15) — phantom-org window finalize helper.
+ *
+ * Csak akkor finalize-eli a doc-ot (`status: 'provisioning' → 'active'`), ha az
+ * `env.enableProvisioningGuard` env-flag bekapcsolt. Fail-soft: a hibát NEM
+ * dobja, csak loggolja — a phantom-doc 'provisioning'-on marad, és a frontend
+ * filter Phase 2 NEM listázza. Admin a `_setOrgStatusActive`-szal manuálisan
+ * finalize-elheti (pl. `update_organization` action-en át).
+ *
+ * @param {Object} ctx - handler context
+ * @param {string} organizationId - frissen létrejött org $id
+ * @returns {Promise<void>}
+ */
+async function _finalizeOrgIfProvisioning(ctx, organizationId) {
+    if (!ctx.env.enableProvisioningGuard) {
+        return { finalized: true, skipped: true };
+    }
+    // Harden adversarial HIGH 5 fix (2026-05-15): a finalize CSAK akkor írja
+    // a status-t `'active'`-ra, ha a current status === `'provisioning'`. Ezzel
+    // megelőzzük a következő hibákat:
+    //   - **Archive-bypass** (HIGH 5): egy `archived` orgon idempotens re-bootstrap
+    //     ELŐSZÖR detektálja a meglévő membership-et → pre-existing ág →
+    //     `_finalizeOrgIfProvisioning` hívás → vakon `'active'`-ra állítana
+    //     egy archive-olt orgot. **Ez most NEM lehet** — a status-check elszűri.
+    //   - **Orphaned status overwrite** (Codex adversarial-derived): ugyanaz a
+    //     védés a `'orphaned'` állapotra is. Az org-ot CSAK a recovery flow
+    //     (`transfer_orphaned_org_ownership`) állíthatja vissza `'active'`-ra.
+    let currentDoc;
+    try {
+        currentDoc = await ctx.databases.getDocument(
+            ctx.env.databaseId,
+            ctx.env.organizationsCollectionId,
+            organizationId
+        );
+    } catch (e) {
+        ctx.error(`[Bootstrap] finalize pre-check hiba (org=${organizationId}): ${e.message}`);
+        // S.13.3 Phase 1.5: NE raw e.message a kliens-response-ba (a hívó
+        // `provisioningStuckReason: finalizeResult.error` mezőbe tette).
+        // Domain-code: a precheck-bukás eltérő recovery-flow-t igényel mint
+        // a status-update bukás → `finalize_precheck_failed` distinctív.
+        return { finalized: false, errorCode: 'finalize_precheck_failed' };
+    }
+    if (currentDoc.status !== permissions.ORG_STATUS.PROVISIONING) {
+        // NEM 'provisioning' → semmi tennivaló. archived/orphaned/active marad.
+        return { finalized: true, skipped: true, reason: `current_status_${currentDoc.status || 'null'}` };
+    }
+    try {
+        await _setOrgStatusActive(ctx.databases, ctx.env, organizationId);
+        return { finalized: true };
+    } catch (e) {
+        // Codex stop-time MAJOR fix (2026-05-15): a finalize bukás esetén
+        // explicit jelez a caller-nek. A doc 'provisioning'-on marad, és a
+        // `isOrgWriteBlocked('provisioning')` minden CRUD action-t 403-mal
+        // blokkol. A return-ben `provisioningStuck: true` + `recoveryHint`
+        // → frontend észreveheti és figyelmeztetheti a usert / retry-zhet.
+        ctx.error(`[Bootstrap] status finalize hiba (org=${organizationId}, doc 'provisioning'-on marad): ${e.message}`);
+        // S.13.3 Phase 1.5: domain-code, NEM raw e.message.
+        return { finalized: false, errorCode: 'finalize_status_update_failed' };
+    }
 }
 
 /**
@@ -147,6 +214,19 @@ async function bootstrapOrCreateOrganization(ctx) {
                 log(`[Bootstrap] Office membership lookup (idempotens ág) hiba: ${err.message}`);
             }
 
+            // Harden adversarial HIGH 6 fix (2026-05-15): a pre-existing
+            // re-bootstrap ágon NINCS self-heal `_finalizeOrgIfProvisioning`
+            // hívás. Indok: **concurrent premature-activation race**. Két
+            // párhuzamos bootstrap CF-call esetén az 1. instance létrehozza a
+            // `provisioning` org-ot + membership-et, és még épít (offices,
+            // workflow, etc.). A 2. instance pre-existing ágra téved (mert a
+            // membership már létezik), és ha self-heal-szel finalize-elné a
+            // status-t `'active'`-ra → a child-doc-építés race-window-ban a
+            // user `'active'` org-ot lát, de a child-doc-ok még nem készek.
+            //
+            // A self-heal funkció admin-manuális marad: `update_organization`
+            // action-en át `status: 'active'` set, vagy a `_finalizeOrgIfProvisioning`-t
+            // helyettesítő dedicated cleanup action (S.7.x al-pont).
             log(`[Bootstrap] Idempotens — caller ${callerId} már tagja az org ${existingOrgId}-nak, új rekord nem jött létre`);
             return res.json({
                 success: true,
@@ -170,17 +250,34 @@ async function bootstrapOrCreateOrganization(ctx) {
     };
 
     // 1. organizations
-    let newOrgId = null;
+    // S.7.1 fix (2026-05-12): doc-szintű ACL `Permission.read(team:org_${orgId})`.
+    // Az ID-t előre generáljuk, hogy a `buildOrgAclPerms(newOrgId)` a `createDocument`
+    // paraméterében felhasználható legyen (egy API-hívás, atomikus).
+    //
+    // S.7.8 Phase 1 (2026-05-15): phantom-org window mitigáció. Ha az
+    // `enableProvisioningGuard` env-flag bekapcsolt, a doc `status: 'provisioning'`-szel
+    // jön létre — a frontend filter (Phase 2) `Query.equal('status', 'active')`-szel
+    // szűri ki, és a `userHasOrgPermission()` `isOrgWriteBlocked('provisioning')`-szel
+    // fail-closed. A flow-vég finalize-eli `'active'`-ra. Rollback ágon a status
+    // `provisioning`-on marad (admin törölheti / recovery-zheti).
+    let newOrgId = sdk.ID.unique();
     try {
         const newOrg = await databases.createDocument(
             env.databaseId,
             env.organizationsCollectionId,
-            sdk.ID.unique(),
+            newOrgId,
             {
                 name: orgName,
                 slug: orgSlug,
-                ownerUserId: callerId
-            }
+                ownerUserId: callerId,
+                status: env.enableProvisioningGuard ? permissions.ORG_STATUS.PROVISIONING : permissions.ORG_STATUS.ACTIVE
+            },
+            // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
+            // A `Permission.read(team:org_${orgId})` ACL még NEM hat a creator-ra,
+            // mert az `org_${orgId}` team létrejön (204) ÉS a `ensureTeamMembership`
+            // (247) csak később fut. Az explicit `Permission.read(user(callerId))`
+            // azonnali read jogot ad — a team-szintű read a többi tagra is.
+            withCreator(buildOrgAclPerms(newOrgId), callerId)
         );
         newOrgId = newOrg.$id;
         rollbackSteps.push(() => databases.deleteDocument(env.databaseId, env.organizationsCollectionId, newOrgId));
@@ -206,6 +303,11 @@ async function bootstrapOrCreateOrganization(ctx) {
     }
 
     // 2. organizationMemberships — owner role
+    // S.7.1 fix (2026-05-12): doc-szintű ACL `Permission.read(team:org_${orgId})`.
+    // Korábban üres permission-paraméter → collection-szintű `read("users")`
+    // örökölt → cross-tenant Realtime push szivárgás. A doc most csak az
+    // `org_${orgId}` team tagjainak olvasható (server-szintű REST + Realtime
+    // filter), write-joga továbbra is kizárólag a CF API key-jé.
     let newMembershipId = null;
     try {
         const membership = await databases.createDocument(
@@ -220,7 +322,12 @@ async function bootstrapOrCreateOrganization(ctx) {
                 // 2026-05-07 denormalizáció (snapshot-at-join)
                 userName: callerIdentity.userName,
                 userEmail: callerIdentity.userEmail
-            }
+            },
+            // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
+            // A `ensureTeamMembership(orgTeamId)` 247. sorban fut le — a `createDocument`
+            // időpontban a creator még NEM team-tag. Az explicit `user(callerId)` Role
+            // azonnali read jogot ad a saját membership doc-jára.
+            withCreator(buildOrgAclPerms(newOrgId), callerId)
         );
         newMembershipId = membership.$id;
         rollbackSteps.push(() => databases.deleteDocument(env.databaseId, env.membershipsCollectionId, newMembershipId));
@@ -271,7 +378,11 @@ async function bootstrapOrCreateOrganization(ctx) {
     // szerkesztőség létrehozásához.
     // ─────────────────────────────────────────────────────────────
     if (!hasOffice) {
-        log(`[Bootstrap] User ${callerId} új szervezetet hozott létre (action=${action}, office=none): org=${newOrgId}`);
+        // S.7.8 Phase 1 (2026-05-15): phantom-org window finalize — a doc
+        // 'provisioning' → 'active'. Codex stop-time MAJOR fix: explicit
+        // `provisioningStuck` flag a return-ben, ha a finalize bukott.
+        const finalizeResult = await _finalizeOrgIfProvisioning(ctx, newOrgId);
+        log(`[Bootstrap] User ${callerId} új szervezetet hozott létre (action=${action}, office=none): org=${newOrgId}, finalized=${finalizeResult.finalized}`);
         return res.json({
             success: true,
             action: action === 'bootstrap_organization' ? 'bootstrapped' : 'created',
@@ -282,23 +393,40 @@ async function bootstrapOrCreateOrganization(ctx) {
             // A.3.2 — office-scope permission set-eket nem tudunk
             // seedelni office nélkül; a `create_editorial_office`
             // hívás majd seedeli az új office-ra.
-            permissionSetsSeeded: 0
+            permissionSetsSeeded: 0,
+            // S.7.8 Phase 1: phantom-org finalize státusz. Ha `provisioningStuck`,
+            // a frontend retry-zhet vagy admin-flag-et tehet ki a usernek.
+            ...(finalizeResult.finalized === false && {
+                provisioningStuck: true,
+                provisioningStuckReason: finalizeResult.errorCode,
+                recoveryHint: 'Admin manuálisan futtathat `update_organization`-t a status: "active"-ra állításhoz.'
+            })
         });
     }
 
     // 3. editorialOffices
-    let newOfficeId = null;
+    // S.7.1 fix (2026-05-12): doc-szintű ACL `Permission.read(team:org_${orgId})`.
+    // **Org-scope** (NEM office-scope) — minden org-tag látja az office-listát
+    // (admin UI office-választó dropdown stb.). Office-tagság a per-office
+    // membershipekben dől el, NEM az office doc read-jogán.
+    let newOfficeId = sdk.ID.unique();
     try {
         const office = await databases.createDocument(
             env.databaseId,
             env.officesCollectionId,
-            sdk.ID.unique(),
+            newOfficeId,
             {
                 organizationId: newOrgId,
                 name: officeName,
                 slug: officeSlug
                 // workflowId: a 7. lépésben (workflow seeding) töltjük ki
-            }
+            },
+            // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
+            // Az `ensureTeamMembership(orgTeamId)` előbb (org-membership lépés végén) már lefutott (a creator
+            // org-team-tag), de a `Permission.read(user)` explicit redundáns
+            // védelmet ad arra az esetre, ha az org-team membership add-ja
+            // valamilyen race-en bukna.
+            withCreator(buildOrgAclPerms(newOrgId), callerId)
         );
         newOfficeId = office.$id;
         rollbackSteps.push(() => databases.deleteDocument(env.databaseId, env.officesCollectionId, newOfficeId));
@@ -325,6 +453,10 @@ async function bootstrapOrCreateOrganization(ctx) {
     }
 
     // 4. editorialOfficeMemberships — admin role
+    // S.7.1 fix (2026-05-12): doc-szintű ACL `Permission.read(team:office_${officeId})`.
+    // Korábban üres permission-paraméter → collection-szintű `read("users")`
+    // örökölt → cross-office szivárgás. Office-scope a logikusabb (a membership
+    // CSAK az adott office tagjainak releváns).
     let newOfficeMembershipId;
     try {
         const officeMembershipDoc = await databases.createDocument(
@@ -340,7 +472,11 @@ async function bootstrapOrCreateOrganization(ctx) {
                 // ugyanaz a `callerIdentity` cache-ből, nincs 2. usersApi.get
                 userName: callerIdentity.userName,
                 userEmail: callerIdentity.userEmail
-            }
+            },
+            // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
+            // A `ensureTeamMembership(officeTeamId)` lentebb, az office-flow végén fut —
+            // a `createDocument` időpontban a creator NEM office-team-tag.
+            withCreator(buildOfficeAclPerms(newOfficeId), callerId)
         );
         newOfficeMembershipId = officeMembershipDoc.$id;
         rollbackSteps.push(() => databases.deleteDocument(env.databaseId, env.officeMembershipsCollectionId, newOfficeMembershipId));
@@ -427,10 +563,19 @@ async function bootstrapOrCreateOrganization(ctx) {
         error(`[Bootstrap] workflow seed hiba: ${err.message}`);
     }
 
-    log(`[Bootstrap] User ${callerId} új szervezetet hozott létre (action=${action}): org=${newOrgId}, office=${newOfficeId}, workflow=${newWorkflowId || 'FAILED'}`);
+    // S.7.8 Phase 1 (2026-05-15): phantom-org window finalize — a doc
+    // 'provisioning' → 'active'. Codex stop-time MAJOR fix: explicit jelzés.
+    const finalizeResult = await _finalizeOrgIfProvisioning(ctx, newOrgId);
+
+    log(`[Bootstrap] User ${callerId} új szervezetet hozott létre (action=${action}): org=${newOrgId}, office=${newOfficeId}, workflow=${newWorkflowId || 'FAILED'}, finalized=${finalizeResult.finalized}`);
 
     return res.json({
         success: true,
+        ...(finalizeResult.finalized === false && {
+            provisioningStuck: true,
+            provisioningStuckReason: finalizeResult.errorCode,
+            recoveryHint: 'Admin manuálisan futtathat `update_organization`-t a status: "active"-ra állításhoz.'
+        }),
         action: action === 'bootstrap_organization' ? 'bootstrapped' : 'created',
         organizationId: newOrgId,
         editorialOfficeId: newOfficeId,
@@ -708,7 +853,11 @@ async function deleteOrganization(ctx) {
         // Ponton a szervezet már törölve van — a user-nek nem dobunk
         // hibát, csak hard log-ba tesszük a failure-t, hogy az ops
         // oldalon észrevehető legyen.
-        membershipsCleanup = { found: null, deleted: null, error: cleanupErr.message };
+        // S.13.3 Phase 1.5: NE raw cleanupErr.message a kliens-response-ba.
+        // A null `found`/`deleted` + `cleanupFailed: true` flag elég
+        // a frontend-detektáláshoz, a részletes hiba az error log-ban
+        // marad (S.13.2 piiRedaction.js Phase 1 wrap).
+        membershipsCleanup = { found: null, deleted: null, cleanupFailed: true };
     }
     const orgCleanup = { invites: invitesCleanup, memberships: membershipsCleanup };
 
@@ -964,13 +1113,13 @@ async function changeOrganizationMemberRole(ctx) {
             try {
                 if (isPrivileged(role)) {
                     const r = await ensureTeamMembership(teamsApi, orgAdminTeamId, targetUserId, [role]);
-                    if (r.skipped === 'team_not_found') {
+                    if (r.skipped === TEAM_SKIP_REASONS.TEAM_NOT_FOUND) {
                         error(`[ChangeOrgMemberRole] admin-team membership team_not_found az ensureTeam után — race`);
                         adminTeamSyncSkipped = true;
                     }
                 } else if (isPrivileged(currentRole)) {
                     const r = await removeTeamMembership(teamsApi, orgAdminTeamId, targetUserId);
-                    if (r.skipped === 'team_not_found') {
+                    if (r.skipped === TEAM_SKIP_REASONS.TEAM_NOT_FOUND) {
                         // Demote-on a missing-team egy log-only állapot — a user
                         // úgyse lát ACL-t, ami nincs.
                         log(`[ChangeOrgMemberRole] admin-team remove team_not_found — log-only`);
@@ -1628,6 +1777,18 @@ async function deleteMyAccount(ctx) {
         return fail(res, 500, 'preflight_failed', { message: e.message });
     }
 
+    // 3.6. S.2.3 (2026-05-11) — `delete_my_account` attempt-throttle rate-limit.
+    //      Codex Q7: semantic pre-checks (confirm/too_many_orgs/last_owner/users.write
+    //      scope) UTÁN, cleanup ELŐTT — a 400/409/503 ágak NEM bumpolják a counter-t.
+    //      5 perc window / max 3 attempt / 5 perc block (Codex stop-time MAJOR 3 fix):
+    //      partial cleanup után a self-heal retry megengedhető (NEM 24h hard cooldown).
+    {
+        const rateLimited = await evaluateAndConsume(ctx, [
+            { endpoint: 'delete_my_account', options: { subject: callerId }, tag: 'user' }
+        ]);
+        if (rateLimited) return fail(res, rateLimited.code, rateLimited.reason, rateLimited.payload);
+    }
+
     // 4. Per-org sequential cleanup (Codex baseline P1 #2 / adversarial high #1, 2026-05-10).
     //    Sorrend: office-IDs → CAS owner re-check → ORG MEMBERSHIP DELETE ELSŐKÉNT
     //    → team cleanup → office/group cascade. Az org-membership ELSŐ delete-je
@@ -1638,7 +1799,7 @@ async function deleteMyAccount(ctx) {
     const cleanupStats = [];
     for (const m of callerMemberships) {
         const orgId = m.organizationId;
-        const stat = { organizationId: orgId, officeMemberships: 0, groupMemberships: 0, teams: { officeTeams: 0, orgTeam: false, orgAdminTeam: false } };
+        const stat = { organizationId: orgId, officeMemberships: 0, groupMemberships: 0, teams: { officeTeams: 0, orgTeam: false, orgAdminTeam: false }, anonymizeErrors: null };
 
         // 4a. Office-IDs listing — helper-extracted.
         let officeIds;
@@ -1699,6 +1860,35 @@ async function deleteMyAccount(ctx) {
         } catch (teamErr) {
             error(`[DeleteMyAccount] team cleanup hiba (${orgId}, org-membership már törölve): ${teamErr.message}`);
             return fail(res, 500, 'partial_cleanup', { stage: 'team_cleanup', organizationId: orgId, message: teamErr.message, completedOrgs: cleanupStats });
+        }
+
+        // 4d.5) S.7.9 (2026-05-15) — GDPR Art. 17 self-anonymize a target-org-on.
+        //       Best-effort: partial-failure NEM blokkolja a flow-t (a user már
+        //       team-en kívül + org-membership törölve). Self-anonymize, NEM
+        //       kér extra auth-ot a core-tól. NEM minősül `partial_cleanup`-nak,
+        //       mert a tag-eltávolítás cél már elérve — csak a stale `read("user:X")`
+        //       perm marad, ami admin re-anonymize-cal pótolható.
+        try {
+            // Time-budget 10s per-org (deleteMyAccount = up to 10 org × 10s
+            // = 100s budget; reszervált a flow közben az `usersApi.delete` +
+            // 4e/4f cascade-delete-hez). Harden Phase 6 verifying P1 fix.
+            const r = await anonymizeUserAclCore(ctx, {
+                organizationId: orgId,
+                targetUserId: callerId,
+                dryRun: false,
+                callerId,
+                maxRunMs: 10_000
+            });
+            if (r.orgNotFound || r.orgFetchFailed) {
+                error(`[DeleteMyAccount] anonymize preflight hiba (${orgId}, NEM blokkol): orgNotFound=${!!r.orgNotFound} orgFetchFailed=${!!r.orgFetchFailed}`);
+            } else if (r.stats) {
+                stat.anonymizeErrors = r.stats.errorCount;
+                if (r.stats.errorCount > 0) {
+                    error(`[DeleteMyAccount] anonymize partial-failure (${orgId}): errorCount=${r.stats.errorCount} (NEM blokkol)`);
+                }
+            }
+        } catch (anonErr) {
+            error(`[DeleteMyAccount] anonymize hiba (${orgId}, NEM blokkol): ${anonErr.message}`);
         }
 
         // 4e. Office memberships cascade (callerId + org-szűrt, paginált)

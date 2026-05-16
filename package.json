@@ -9,10 +9,20 @@
       "**/Maestro/**"
     ]
   },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "resolutions": {
+    "path-to-regexp": "0.1.13",
+    "picomatch": "^2.3.2",
+    "follow-redirects": "^1.16.0"
+  },
   "scripts": {
     "build:cf-validator": "node scripts/build-cf-validator.mjs",
     "check:cf-validator": "node scripts/build-cf-validator.mjs --check",
     "build:cf-orphan-guard": "node scripts/build-cf-orphan-guard.mjs",
-    "check:cf-orphan-guard": "node scripts/build-cf-orphan-guard.mjs --check"
+    "check:cf-orphan-guard": "node scripts/build-cf-orphan-guard.mjs --check",
+    "build:cf-response-helpers": "node scripts/build-cf-response-helpers.mjs",
+    "check:cf-response-helpers": "node scripts/build-cf-response-helpers.mjs --check"
   }
 }

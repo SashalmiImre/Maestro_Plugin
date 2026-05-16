@@ -94,7 +94,23 @@ const VALID_ACTIONS = new Set([
     'bootstrap_organization_invite_history_schema', // D.3.1 — audit-trail collection schema
     // E (2026-05-09 follow-up) — Q1 ACL refactor: admin-team scoped backfill.
     // (Korábbi drift-fix 2026-05-10: a router-ben már szerepelt, a VALID_ACTIONS-ból hiányzott.)
-    'backfill_admin_team_acl'
+    'backfill_admin_team_acl',
+    // S.7.2 (2026-05-12) — R.S.7.2 close: legacy üres-permission doc backfill
+    // a S.7.1 fix-csomag 5 collection-én (organizations, organizationMemberships,
+    // editorialOffices, editorialOfficeMemberships, publications). Scope-paraméteres,
+    // user-read preserve, target-org-owner auth. Codex pre-review fix-ekkel.
+    'backfill_acl_phase2',
+    // S.7.7b (2026-05-15) — R.S.7.6 close: collection-meta `documentSecurity`
+    // flag verify a 6 user-data collection-en (ADR 0014 Layer 1 prerequisite).
+    // Read-only deploy-gate. Target-org-owner auth.
+    'verify_collection_document_security',
+    // S.7.7c (2026-05-15) — R.S.7.7 close: legacy ACL backfill a 6 user-data
+    // collection-en. Scope-paraméteres + kategória 1/2 fallback + audit log.
+    'backfill_acl_phase3',
+    // S.7.9 (2026-05-15) — R.S.7.5 close: GDPR Art. 17 stale `withCreator`
+    // user-read cleanup. Self + admin auth. Hívja a leave_organization +
+    // delete_my_account self-service flow is.
+    'anonymize_user_acl'
 ]);
 
 // Slug formátum: kisbetű, szám, kötőjel. A frontend is ugyanezt alkalmazza.
@@ -102,11 +118,92 @@ const SLUG_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const SLUG_MAX_LENGTH = 64;
 const NAME_MAX_LENGTH = 128;
 
+// S.13.3 (2026-05-15, R.S.13.3 Phase 1.0 partial close) — info-disclosure
+// védelem a `fail()`-szintű kliens-response-okra. A `fail(res, statusCode,
+// reason, extra)` hívók (~30 hely az action-okban) gyakran beletesznek
+// `error: err.message`, `message: cleanupErr.message`, `details`, `stack`,
+// `cause` mezőt — a `extra.failures.push({ docId, message: err.message })`
+// typed mintán is. ASVS V7 + V13: a kliens-response NE szivárogtasson belső
+// error-message-t, stack-trace-t, internal code-path-t.
+//
+// **Centralized strip**: `fail()` előbb deep-strip-eli a sensitive mezőket
+// (top-level + nested array/object szinten), majd a piiRedaction.js
+// `redactValue`-jén deep-redact-elve továbbítja (PII catch a nem-sensitive
+// mezőkben is, pl. `domain: 'user@example.com'`-szerű mezők). A reason ad
+// domain-szintű kontextust, az `executionId` ad support-csatornát.
+//
+// **Phase 1.0 SCOPE** (jelenlegi): `fail()` helper minden ~30 callsite-ra
+// + main.js top-level catch + 2 ad-hoc `success: true` fix (invites.js:837
+// `results[].reason`, schemas.js:3414 `stats.errors[].error`).
+//
+// **Phase 1.5 (külön iter)** scope: a `success: true` response-okban
+// MARADÉK leak-ek — `stats.errors[].message` minta minden bootstrap/backfill
+// schema action-ben (~12 hely), `orgCleanup.memberships.error = cleanupErr.message`
+// (orgs.js:850), és `_finalizeOrgIfProvisioning` `error: e.message`
+// (orgs.js:95-111) propagálva `provisioningStuckReason`-be a callsite-okon.
+// **Phase 2 (külön iter)**: maradék 10-15 CF (update-article, validate-
+// publication-update, user-cascade-delete, set-publication-root-path, stb.).
+const { redactValue } = require('./piiRedaction.js');
+
+const SENSITIVE_RESPONSE_FIELDS = new Set(['error', 'message', 'details', 'stack', 'cause']);
+
+// S.13.3 Codex adversarial A4 fix: cycle-safe stripSensitive. A `redactValue`
+// cycle-safe (WeakSet) UTÁNA fut, de a `stripSensitive` SELF infinite loop-ot
+// okozna egy ciklikus `extra` (pl. `failures.push(extra)`-bug) esetén.
+function stripSensitive(value, seen) {
+    if (Array.isArray(value)) {
+        if (!seen) seen = new WeakSet();
+        if (seen.has(value)) return '[circular]';
+        seen.add(value);
+        return value.map(v => stripSensitive(v, seen));
+    }
+    if (value !== null && typeof value === 'object') {
+        if (!seen) seen = new WeakSet();
+        if (seen.has(value)) return '[circular]';
+        seen.add(value);
+        const out = {};
+        for (const key of Object.keys(value)) {
+            if (SENSITIVE_RESPONSE_FIELDS.has(key)) continue;
+            out[key] = stripSensitive(value[key], seen);
+        }
+        return out;
+    }
+    return value;
+}
+
+// S.13.3 Codex adversarial A5 fix: reason regex-normalize. A jelenlegi
+// callsite-ok DOMÉN-CODE-szerű string-konstansok (`'misconfigured'`,
+// `'forbidden'`, `'invalid_archivedAt'` camelCase variánsok), DE már van
+// változó reason átadás (orgs.js:1779 rate-limit `reason: rateResult.reason`).
+// Future-bug: `fail(res, 500, \`error_${err.code}\`)` minta bypassolná a
+// védelmet. Whitelist regex: alfanumerikus + underscore (camelCase OK).
+const REASON_REGEX = /^[A-Za-z0-9_]+$/;
+
+function normalizeReason(reason) {
+    if (typeof reason === 'string' && REASON_REGEX.test(reason)) return reason;
+    return 'invalid_error_code';
+}
+
 /**
- * JSON válasz hibakóddal — egyszerű wrapper a `res.json` köré.
+ * JSON válasz hibakóddal — reason normalize + sensitive-field strip + PII deep-redact.
+ *
+ * 1. `normalizeReason(reason)` — whitelist regex `/^[A-Za-z0-9_]+$/`, különben
+ *    `'invalid_error_code'` (defense-in-depth dynamic reason bypass ellen).
+ * 2. `stripSensitive(extra)` — minden nested `error`/`message`/`details`/
+ *    `stack`/`cause` kulcs törlése (cycle-safe WeakSet, top-level és
+ *    array/object minden mélységben).
+ * 3. `redactValue(...)` — a többi mezőből email/JWT/Bearer/long-token deep-
+ *    redact (Phase 1 PII-redaction — `_docs/Komponensek/LoggingMonitoring.md`).
+ *
+ * **Spread-order fix** (Codex verifying #2 B5.1): a `reason: safeReason`
+ * a `...redacted` spread UTÁN, hogy az `extra.reason` (ha valaha is
+ * accidentally átadva) NE tudja overwrite-olni a normalized reason-t.
  */
 function fail(res, statusCode, reason, extra = {}) {
-    return res.json({ success: false, reason, ...extra }, statusCode);
+    const safeReason = normalizeReason(reason);
+    const cleaned = stripSensitive(extra);
+    const redacted = redactValue(cleaned, 0);
+    return res.json({ success: false, ...redacted, reason: safeReason }, statusCode);
 }
 
 /**
@@ -185,6 +282,63 @@ async function requireOwnerAnywhere(ctx) {
     );
     if (ownerships.documents.length === 0) {
         return failFn(res, 403, 'insufficient_role', { requiredRole: 'owner' });
+    }
+    return null;
+}
+
+/**
+ * Org-scope-szűkített owner-only auth check a 3 backfill action-höz
+ * (`backfill_tenant_acl`, `backfill_admin_team_acl`, `backfill_acl_phase2`) és
+ * minden jövőbeli target-org-scope-os action-höz. Az "owner-anywhere"-rel
+ * szemben itt a `(organizationId, userId)` páros membership-jét nézzük, és
+ * elvárjuk, hogy `role === 'owner'`.
+ *
+ * **Indok**: a target-org-owner-szűkítés tisztább per-org-backfill action-ön —
+ * az owner csak a saját org-jain végezhet ACL-rewrite-ot, NEM más org-okon
+ * (a `requireOwnerAnywhere` minta a globális schema-bootstrap action-öknek
+ * megfelelő).
+ *
+ * **Hibakezelés** (3 ág):
+ *  - 5xx `membership_lookup_failed` — lookup-bukás (network/SDK error)
+ *  - 403 `not_a_member` — nincs membership a target orgban
+ *  - 403 `insufficient_role` — van membership, de `role !== 'owner'`
+ *
+ * **Visszatérés** (idiomatikus minta a `requireOwnerAnywhere` mintáján):
+ *  - `null` — caller jogosult, folytasd
+ *  - `failFn(res, ...)` response — adj `return denied;`-vel vissza
+ *
+ * @param {Object} ctx — handler-context (`databases`, `env`, `callerId`, `sdk`,
+ *   `res`, `fail`, `error`).
+ * @param {string} organizationId — target org $id
+ * @returns {Promise<Object|null>}
+ */
+async function requireOrgOwner(ctx, organizationId) {
+    const { databases, env, callerId, sdk, res, fail: failFn, error } = ctx;
+    let membership;
+    try {
+        membership = await databases.listDocuments(
+            env.databaseId, env.membershipsCollectionId,
+            [
+                sdk.Query.equal('organizationId', organizationId),
+                sdk.Query.equal('userId', callerId),
+                sdk.Query.select(['role']),
+                sdk.Query.limit(1)
+            ]
+        );
+    } catch (err) {
+        if (typeof error === 'function') {
+            error(`[requireOrgOwner] membership lookup hiba (org=${organizationId}): ${err.message}`);
+        }
+        return failFn(res, 500, 'membership_lookup_failed');
+    }
+    if (membership.documents.length === 0) {
+        return failFn(res, 403, 'not_a_member');
+    }
+    if (membership.documents[0].role !== 'owner') {
+        return failFn(res, 403, 'insufficient_role', {
+            yourRole: membership.documents[0].role,
+            required: 'owner'
+        });
     }
     return null;
 }
@@ -275,6 +429,22 @@ async function listOfficeIdsForOrg(databases, env, sdk, organizationId, batchLim
     return officeIds;
 }
 
+/**
+ * Doc-szintű `read("user:X")` permission-ok preserve-elése (ADR 0014 defense-in-depth).
+ *
+ * A `backfill_acl_phase2` és `backfill_acl_phase3` action-ök közös helpere
+ * (Harden Phase 5 Reuse #1 fix, 2026-05-15). Csak a `read("user:*")` formát
+ * preserve-eli — `write`/`update`/`delete` user perm-eket NEM (Codex S.7.7c
+ * pre-review MAJOR 2).
+ *
+ * @param {unknown} currentPermissions — Appwrite `$permissions` tömb a doc-on
+ * @returns {string[]} csak a `read("user:X")` perm-ek (üres tömb ha nincs)
+ */
+function preserveUserReadPermissions(currentPermissions) {
+    if (!Array.isArray(currentPermissions)) return [];
+    return currentPermissions.filter(p => typeof p === 'string' && /^read\("user:/.test(p));
+}
+
 module.exports = {
     DEFAULT_WORKFLOW,
     INVITE_VALIDITY_DAYS,
@@ -283,10 +453,12 @@ module.exports = {
     TOKEN_BYTES,
     EMAIL_REGEX,
     VALID_ACTIONS,
+    requireOrgOwner,
     SLUG_REGEX,
     SLUG_MAX_LENGTH,
     NAME_MAX_LENGTH,
     fetchUserIdentity,
+    preserveUserReadPermissions,
     HUN_ACCENT_MAP,
     fail,
     slugifyName,

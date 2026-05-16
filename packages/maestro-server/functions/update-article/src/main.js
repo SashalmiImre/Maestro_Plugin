@@ -231,12 +231,13 @@ async function findOfficeMembership(databases, databaseId, collectionId, userId,
 // kontextus, más invariánsok.
 const { getOrgStatus, isOrgWriteBlocked } = require('./_generated_orphanGuard.js');
 
-/**
- * JSON válasz hibakóddal — egyszerű wrapper a `res.json` köré.
- */
-function fail(res, statusCode, reason, extra = {}) {
-    return res.json({ success: false, reason, ...extra }, statusCode);
-}
+// S.13.2 Phase 2 + S.13.3 Phase 2 (2026-05-15) — PII-redaction log wrap +
+// response info-disclosure védelem. Részletek: `_docs/Komponensek/LoggingMonitoring.md`.
+// **DRIFT KOCKÁZAT**: a `_generated_piiRedaction.js` és `_generated_responseHelpers.js`
+// logikai-portolt másolatok a kanonikus shared modulokból. Phase 2.1: build-
+// generator (S.7.7b precedens) automatikusan generálja + drift-guard.
+const { wrapLogger } = require('./_generated_piiRedaction.js');
+const { fail } = require('./_generated_responseHelpers.js');
 
 /**
  * Jogosultság-megtagadás válasz (403) strukturált payloaddal, amit a kliens
@@ -251,7 +252,12 @@ function permissionDenied(res, reason, requiredGroups = []) {
     }, 403);
 }
 
-module.exports = async function ({ req, res, log, error }) {
+module.exports = async function ({ req, res, log: rawLog, error: rawError }) {
+    // S.13.2+S.13.3 Phase 2.1 — centralized logger wrap (shared piiRedaction.js
+    // `wrapLogger`). Production: redactArgs spread minden args-on. Dev opt-out:
+    // raw referenciák (LOG_REDACT_DISABLE env flag).
+    const { log, error } = wrapLogger(rawLog, rawError);
+
     try {
         // ── 1. Payload parse + alap validáció ──
         let payload = {};
@@ -560,6 +566,12 @@ module.exports = async function ({ req, res, log, error }) {
     } catch (err) {
         error(`Function hiba: ${err.message}`);
         error(`Stack: ${err.stack}`);
-        return res.json({ success: false, reason: 'internal_error', message: err.message }, 500);
+        // S.13.3 Phase 2 — kliens-response NEM tartalmazhat raw err.message-et.
+        // A `fail()` strip-eli a sensitive mezőket. Az `executionId` az
+        // Appwrite runtime-tól érkezik — support-jegy korreláció a Console
+        // execution log-okkal.
+        return fail(res, 500, 'internal_error', {
+            executionId: req?.headers?.['x-appwrite-execution-id']
+        });
     }
 };

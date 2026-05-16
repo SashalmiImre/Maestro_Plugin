@@ -13,9 +13,12 @@ const {
     TOKEN_BYTES
 } = require('../helpers/util.js');
 const {
+    TEAM_SKIP_REASONS,
+    buildOrgAclPerms,
     buildOrgAdminAclPerms,
     buildOrgTeamId,
     buildOrgAdminTeamId,
+    withCreator,
     ensureTeam,
     ensureTeamMembership
 } = require('../teamHelpers.js');
@@ -24,10 +27,62 @@ const permissions = require('../permissions.js');
 //   - sendOneInviteEmail: auto-send a sikeres createInvite után (best-effort)
 //   - checkRateLimit: brute-force védelem az acceptInvite-on (IP-rate-limit)
 const { sendOneInviteEmail, RESEND_COOLDOWN_MS } = require('./sendEmail.js');
-const { checkRateLimit } = require('../helpers/rateLimit.js');
+const { checkRateLimit, evaluateAndConsume } = require('../helpers/rateLimit.js');
+const { inviteSendScopes } = require('../helpers/inviteRateLimits.js');
 
 const MAX_BATCH_INVITES = 20;
 const MAX_CUSTOM_MESSAGE_LENGTH = 500;
+
+/**
+ * S.7.10 (2026-05-16) — non-blocking team-membership pótlás közös helper.
+ *
+ * Az `acceptInvite` flow 3 hívóhelyén (idempotens admin-team retry, race
+ * admin-team retry, race org-team retry) ugyanaz a try/catch + ensureTeam
+ * (opcionális) + ensureTeamMembership + skipped-log minta ismétlődött.
+ * A helper kifaktorálja a duplikált logikát; a hívóhely csak a paraméterek
+ * (teamId, roles, contextLabel) átadásával választ ági-specifikus log-szöveget.
+ *
+ * **Non-blocking szemantika**: a 404 (team_not_found) és minden catch-elhető
+ * hiba CSAK loggolódik — a `backfill_tenant_acl` / `backfill_admin_team_acl`
+ * action-ök pótolják a hiányzó membership-et. A flow-t soha nem szakítja meg.
+ *
+ * **ensureTeamName paraméter**:
+ *   - Jelen → `ensureTeam(teamId, ensureTeamName)` előhívás (admin-team flow).
+ *   - Hiányzik → kihagyja (base org-team flow; a team a `bootstrap_organization`
+ *     futása óta létezik, ha nincs, az legacy / pre-backfill jel).
+ *
+ * @param {Object} options
+ * @param {sdk.Teams} options.teamsApi
+ * @param {string} options.teamId
+ * @param {string} options.userId
+ * @param {string[]} options.roles
+ * @param {Function} options.log
+ * @param {string} options.contextLabel — log-üzenet prefix (pl. "[Accept] Idempotens admin-team retry")
+ * @param {string} [options.ensureTeamName] — ha jelen, ensureTeam előhívás ezzel a névvel
+ * @param {string} [options.teamNotFoundReason='az ensureTeam után'] — log-szöveg a 404 ágon
+ */
+async function _tryEnsureMembershipNonBlocking({
+    teamsApi,
+    teamId,
+    userId,
+    roles,
+    log,
+    contextLabel,
+    ensureTeamName,
+    teamNotFoundReason = 'az ensureTeam után'
+}) {
+    try {
+        if (ensureTeamName) {
+            await ensureTeam(teamsApi, teamId, ensureTeamName);
+        }
+        const r = await ensureTeamMembership(teamsApi, teamId, userId, roles);
+        if (r.skipped === TEAM_SKIP_REASONS.TEAM_NOT_FOUND) {
+            log(`${contextLabel}: team_not_found ${teamNotFoundReason} — backfill pótolja`);
+        }
+    } catch (err) {
+        log(`${contextLabel} hiba (non-blocking — backfill pótolja): ${err.message}`);
+    }
+}
 
 /**
  * D.3 (2026-05-09) — invite audit-trail helper, Codex Konstrukció C CAS-gate
@@ -621,6 +676,13 @@ async function createInvite(ctx) {
         });
     }
 
+    // S.2.2/S.2.6 — multi-scope rate-limit. Codex M1: evaluate all → consume after
+    // all-pass (lockout-amplifikáció elkerülése). Codex M2: permission/validation
+    // UTÁN, expensive work (createCore + email-send) ELŐTT.
+    // S.2.7 harden HIGH-2: storage-down → 503 fail-closed (NEM email-küldés).
+    const rateLimited = await evaluateAndConsume(ctx, inviteSendScopes(callerId, organizationId, 1));
+    if (rateLimited) return fail(res, rateLimited.code, rateLimited.reason, rateLimited.payload);
+
     // Core create
     const result = await _createInviteCore(ctx, {
         organizationId, email, role, expiryDays, customMessage
@@ -735,7 +797,40 @@ async function createBatchInvites(ctx) {
         });
     }
 
-    // Org + inviter cache (egy fetch per batch — lookup költség minimalizálás)
+    // S.2.2/S.2.6 (2026-05-11, Codex stop-time MAJOR 2 fix) — a rate-limit ELŐTT
+    // CSAK in-memory pre-filter (dedup + email-regex), drága DB/user-API lookup
+    // (org + inviter) UTÁN. Így a 429 ágon NEM ég el a `getDocument`/`users.get`
+    // cost.
+    //
+    // Normalize + dedup emaileket
+    const normalizedEmails = [];
+    const seen = new Set();
+    for (const raw of emails) {
+        if (typeof raw !== 'string') continue;
+        const normalized = raw.trim().toLowerCase();
+        if (!normalized || seen.has(normalized)) continue;
+        seen.add(normalized);
+        normalizedEmails.push(normalized);
+    }
+
+    // Email-regex single-pass split (simplify Efficiency F7) — valid/invalid külön
+    // gyűjtés, a Promise.all CSAK validEmails-en fut (NEM kell redundáns regex-test).
+    // Rate-limit weight = validEmails.length (Codex M2: malformed email NE égesse
+    // az org-day quota-t).
+    const validEmails = [];
+    const earlyResults = [];
+    for (const email of normalizedEmails) {
+        if (EMAIL_REGEX.test(email)) validEmails.push(email);
+        else earlyResults.push({ email, status: 'error', reason: 'invalid_email' });
+    }
+    if (validEmails.length === 0) {
+        return fail(res, 400, 'no_valid_emails', { total: normalizedEmails.length });
+    }
+    const rateLimited = await evaluateAndConsume(ctx, inviteSendScopes(callerId, organizationId, validEmails.length));
+    if (rateLimited) return fail(res, rateLimited.code, rateLimited.reason, rateLimited.payload);
+
+    // Org + inviter cache (egy fetch per batch — lookup költség minimalizálás).
+    // Rate-limit UTÁN: a 429 ág NEM fizet érte.
     let organizationName = 'a szervezeted';
     let inviterName = null;
     let inviterEmail = null;
@@ -758,26 +853,14 @@ async function createBatchInvites(ctx) {
         }
     }
 
-    // Normalize + dedup emaileket
-    const normalizedEmails = [];
-    const seen = new Set();
-    for (const raw of emails) {
-        if (typeof raw !== 'string') continue;
-        const normalized = raw.trim().toLowerCase();
-        if (!normalized || seen.has(normalized)) continue;
-        seen.add(normalized);
-        normalizedEmails.push(normalized);
-    }
-
-    // 10-es Promise.all batchekben
+    // 10-es Promise.all batchekben — CSAK validEmails-en (invalid eredmények
+    // earlyResults-ben). Simplify Efficiency F7: NEM kell redundáns EMAIL_REGEX
+    // teszt a per-email Promise-on belül.
     const BATCH_SIZE = 10;
-    const results = [];
-    for (let i = 0; i < normalizedEmails.length; i += BATCH_SIZE) {
-        const slice = normalizedEmails.slice(i, i + BATCH_SIZE);
+    const results = [...earlyResults];
+    for (let i = 0; i < validEmails.length; i += BATCH_SIZE) {
+        const slice = validEmails.slice(i, i + BATCH_SIZE);
         const sliceResults = await Promise.all(slice.map(async (email) => {
-            if (!EMAIL_REGEX.test(email)) {
-                return { email, status: 'error', reason: 'invalid_email' };
-            }
             try {
                 const result = await _createInviteCore(ctx, {
                     organizationId, email, role, expiryDays, customMessage
@@ -803,7 +886,12 @@ async function createBatchInvites(ctx) {
                 };
             } catch (err) {
                 ctx.error?.(`[CreateBatch] ${email} hiba: ${err.message}`);
-                return { email, status: 'error', reason: err.message || 'create_failed' };
+                // S.13.3 (R.S.13.3 close, Phase 1): NE szivárogtassunk raw
+                // err.message-et a `success: true` response `results[].reason`
+                // mezőbe sem. A `reason`-nek domain-kódot adunk; a részletes
+                // hiba a `ctx.error` log-ban marad (PII-redacted Phase 1 wrap).
+                const code = typeof err?.code === 'string' ? err.code : 'create_failed';
+                return { email, status: 'error', reason: code };
             }
         }));
         results.push(...sliceResults);
@@ -935,16 +1023,15 @@ async function acceptInvite(ctx) {
         // pótolja — különben az idempotent ág végtelenül 500-at adna a usernek).
         const existingRole = existingMembership.documents[0].role;
         if (existingRole === 'owner' || existingRole === 'admin') {
-            const adminTeamId = buildOrgAdminTeamId(invite.organizationId);
-            try {
-                await ensureTeam(teamsApi, adminTeamId, `Org admins: ${invite.organizationId}`);
-                const r = await ensureTeamMembership(teamsApi, adminTeamId, callerId, [existingRole]);
-                if (r.skipped === 'team_not_found') {
-                    log(`[Accept] Idempotens admin-team retry: team_not_found az ensureTeam után — backfill pótolja`);
-                }
-            } catch (err) {
-                log(`[Accept] Idempotens admin-team retry hiba (non-blocking — backfill pótolja): ${err.message}`);
-            }
+            await _tryEnsureMembershipNonBlocking({
+                teamsApi,
+                teamId: buildOrgAdminTeamId(invite.organizationId),
+                userId: callerId,
+                roles: [existingRole],
+                log,
+                contextLabel: '[Accept] Idempotens admin-team retry',
+                ensureTeamName: `Org admins: ${invite.organizationId}`
+            });
         }
 
         try {
@@ -972,6 +1059,10 @@ async function acceptInvite(ctx) {
     // fenti duplikátum check mindkét esetben 0-t adhat vissza, de a
     // DB insert ütközni fog. Ilyenkor újraolvassuk a membershipet és
     // idempotens `already_member` választ adunk vissza.
+    // S.7.1 fix (2026-05-12): doc-szintű ACL `Permission.read(team:org_${orgId})`.
+    // Korábban üres permission-paraméter → collection-szintű `read("users")`
+    // örökölt → cross-tenant Realtime push szivárgás. A doc most csak az
+    // `org_${invite.organizationId}` team tagjainak olvasható.
     let membership;
     try {
         membership = await databases.createDocument(
@@ -989,7 +1080,14 @@ async function acceptInvite(ctx) {
                 // `usersApi.get` hívás.
                 userName: callerUserDoc.name || null,
                 userEmail: callerUserDoc.email || null
-            }
+            },
+            // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
+            // A meghívott (`callerId`) a `createDocument` időpontban MÉG NEM
+            // `org_${orgId}` team-tag — az `ensureTeamMembership` lentebb,
+            // ezen action végén fut. Az explicit `user(callerId)` Role azonnali read jogot
+            // ad a saját membership doc-jára (különben a meghívott NEM látja a
+            // saját elfogadását, amíg az ensureTeamMembership le nem fut).
+            withCreator(buildOrgAclPerms(invite.organizationId), callerId)
         );
     } catch (err) {
         if (err?.type === 'document_already_exists' || /unique/i.test(err?.message || '')) {
@@ -1016,17 +1114,33 @@ async function acceptInvite(ctx) {
                 // role esetén az admin-team add idempotens retry — a Q1 ACL
                 // beállítása race-winner ágon is futnia kell.
                 if (existing.role === 'owner' || existing.role === 'admin') {
-                    const adminTeamId = buildOrgAdminTeamId(invite.organizationId);
-                    try {
-                        await ensureTeam(teamsApi, adminTeamId, `Org admins: ${invite.organizationId}`);
-                        const r = await ensureTeamMembership(teamsApi, adminTeamId, callerId, [existing.role]);
-                        if (r.skipped === 'team_not_found') {
-                            log(`[Accept] Race admin-team retry: team_not_found az ensureTeam után — backfill pótolja`);
-                        }
-                    } catch (adminErr) {
-                        log(`[Accept] Race admin-team retry hiba (non-blocking — backfill pótolja): ${adminErr.message}`);
-                    }
+                    await _tryEnsureMembershipNonBlocking({
+                        teamsApi,
+                        teamId: buildOrgAdminTeamId(invite.organizationId),
+                        userId: callerId,
+                        roles: [existing.role],
+                        log,
+                        contextLabel: '[Accept] Race admin-team retry',
+                        ensureTeamName: `Org admins: ${invite.organizationId}`
+                    });
                 }
+
+                // Harden Phase 2 adversarial P2 fix (2026-05-12): a fallback ágon is
+                // ensureTeamMembership(orgTeamId) — különben a legacy/race-winner ágon
+                // a meghívott NEM kerül be az `org_${orgId}` base team-be, és NEM látja
+                // a tenant-szintű doc-okat (groups, publications stb.). Non-blocking:
+                // a base org-team NEM kap `ensureTeam`-et (a `bootstrap_organization`
+                // futása óta létezik, ha nincs, az legacy / pre-backfill jel — a
+                // `backfill_tenant_acl` action pótolja).
+                await _tryEnsureMembershipNonBlocking({
+                    teamsApi,
+                    teamId: buildOrgTeamId(invite.organizationId),
+                    userId: callerId,
+                    roles: [existing.role],
+                    log,
+                    contextLabel: '[Accept] Race org-team retry',
+                    teamNotFoundReason: '(org-team nem létezik)'
+                });
 
                 try {
                     await databases.deleteDocument(env.databaseId, env.invitesCollectionId, invite.$id);
@@ -1080,7 +1194,7 @@ async function acceptInvite(ctx) {
         }
         try {
             const r = await ensureTeamMembership(teamsApi, adminTeamId, callerId, ['admin']);
-            if (r.skipped === 'team_not_found') {
+            if (r.skipped === TEAM_SKIP_REASONS.TEAM_NOT_FOUND) {
                 // Az ensureTeam fent sikerült, mégis 404 — párhuzamos törlés
                 // vagy belső hiba. Fail-closed.
                 error(`[Accept] org admin-team membership team_not_found az ensureTeam után — race`);

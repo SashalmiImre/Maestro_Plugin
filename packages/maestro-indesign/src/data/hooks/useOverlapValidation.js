@@ -28,6 +28,7 @@ import { log, logError } from "../../core/utils/logger.js";
 import { withRetry } from "../../core/utils/promiseUtils.js";
 import { fetchAllValidationRows, queuePersist } from "../../core/utils/validationPersist.js";
 import { TOAST_TYPES } from "../../core/utils/constants.js";
+import { useTenantAclSnapshot } from "./useTenantAclSnapshot.js";
 
 // Egyetlen megosztott példány
 const structureValidator = new PublicationStructureValidator();
@@ -42,8 +43,15 @@ const LAYOUT_CHANGED_DEBOUNCE_MS = 250;
  * A struktúra-validációs eredmények upsert-je egy publikációra.
  * Belül Promise.allSettled + withRetry — részleges hiba esetén throw-ol
  * (a hívó queuePersist wrapper logolja).
+ *
+ * @param {string} publicationId
+ * @param {Map} resultsMap
+ * @param {string[]} permissions — előre kiszámolt doc-szintű ACL (S.7.7, ADR 0014).
+ *   `tables.createRow` 5. paramétereként megy; a hívó hook snapshot-eli az
+ *   officeId + userId-t és a `withCreator(buildOfficeAclPerms(officeId), userId)`
+ *   mintán építi.
  */
-async function persistStructureValidation(publicationId, resultsMap) {
+async function persistStructureValidation(publicationId, resultsMap, permissions) {
     // 1. Meglévő validációs dokumentumok lekérése ehhez a publikációhoz
     const existingRows = await fetchAllValidationRows(
         [
@@ -99,7 +107,8 @@ async function persistStructureValidation(publicationId, resultsMap) {
                             publicationId,
                             source: VALIDATION_SOURCES.STRUCTURE,
                             ...data
-                        }
+                        },
+                        permissions
                     }),
                     { operationName: `createValidation(${articleId})` }
                 )
@@ -156,6 +165,8 @@ export const useOverlapValidation = () => {
     const { articles, publications, layouts } = useData();
     const { updatePublicationValidation, updateArticleValidation, clearArticleValidation } = useValidation();
     const { showToast } = useToast();
+    // Tenant doc-szintű ACL snapshot — ADR 0014 (`withCreator` defense-in-depth).
+    const buildPermissions = useTenantAclSnapshot('useOverlapValidation');
 
     // Ref-ek, hogy az event handler mindig a friss adatot lássa
     const articlesRef = useRef(articles);
@@ -242,14 +253,16 @@ export const useOverlapValidation = () => {
      * Fire-and-forget hívásoknak szánva — a belső hiba ide nem dob tovább, csak logol.
      */
     const persistToDatabase = useCallback((publicationId, resultsMap) => {
+        const permissions = buildPermissions();
+        if (!permissions) return Promise.resolve();
         return queuePersist(`structure::${publicationId}`, async () => {
             try {
-                return await persistStructureValidation(publicationId, resultsMap);
+                return await persistStructureValidation(publicationId, resultsMap, permissions);
             } catch (error) {
                 logError('[useOverlapValidation] Appwrite mentés sikertelen:', error);
             }
         });
-    }, []);
+    }, [buildPermissions]);
 
     /**
      * Segédfüggvény: Validációs eredmény térkép átalakítása (ValidationContext számára).

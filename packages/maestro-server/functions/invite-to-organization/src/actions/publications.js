@@ -10,7 +10,7 @@ const {
 const { validateDeadlinesInline } = require('../helpers/deadlineValidator.js');
 const { buildExtensionSnapshot } = require('../helpers/extensionSnapshot.js');
 const { matchesWorkflowVisibility } = require('../helpers/workflowScope.js');
-const { buildOfficeAclPerms } = require('../teamHelpers.js');
+const { buildOfficeAclPerms, withCreator } = require('../teamHelpers.js');
 const permissions = require('../permissions.js');
 
 /**
@@ -162,13 +162,24 @@ async function createPublicationWithWorkflow(ctx) {
     if (typeof excludeWeekends === 'boolean') docPayload.excludeWeekends = excludeWeekends;
     if (typeof rootPath === 'string' && rootPath.trim() !== '') docPayload.rootPath = rootPath.trim();
 
+    // S.7.1 fix (2026-05-12): doc-szintű ACL `Permission.read(team:office_${officeId})`.
+    // Korábban üres permission-paraméter → collection-szintű `read("users")`
+    // örökölt → cross-office Realtime push szivárgás. A publication a hozzátartozó
+    // editorial office team-jének olvasható (a workflow visibility scope-tól
+    // függetlenül — a publication MAGA office-scopeú, csak a workflow lehet
+    // `organization` vagy `public` visibility-vel).
     let pubDoc;
     try {
         pubDoc = await databases.createDocument(
             env.databaseId,
             env.publicationsCollectionId,
             sdk.ID.unique(),
-            docPayload
+            docPayload,
+            // S.7 stop-time MAJOR fix (2026-05-12): `withCreator` defense-in-depth.
+            // A caller már `office_${editorialOfficeId}` team-tag (permission check
+            // ELŐRE fut), így a `buildOfficeAclPerms` ACL azonnal hat. A `user`
+            // Role redundáns de konzisztens minta az S.7 fix-ek között.
+            withCreator(buildOfficeAclPerms(editorialOfficeId), callerId)
         );
     } catch (err) {
         error(`[CreatePubWithWorkflow] publikáció create hiba: ${err.message}`);

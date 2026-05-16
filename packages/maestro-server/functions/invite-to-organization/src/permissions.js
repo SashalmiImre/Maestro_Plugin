@@ -316,6 +316,7 @@ async function getOrgRole(databases, env, userId, organizationId, orgRoleByOrg) 
  * kezeli (Codex MAJOR fix), ezért tagja az `isOrgWriteBlocked()` halmaznak.
  */
 const ORG_STATUS = Object.freeze({
+    PROVISIONING: 'provisioning',
     ACTIVE: 'active',
     ORPHANED: 'orphaned',
     ARCHIVED: 'archived'
@@ -323,7 +324,13 @@ const ORG_STATUS = Object.freeze({
 const ORG_STATUS_LOOKUP_FAILED = 'lookup_failed';
 
 function isOrgWriteBlocked(status) {
-    return status === ORG_STATUS.ORPHANED
+    // S.7.8 Phase 1 (2026-05-15): a `provisioning` is write-blocked — phantom-org
+    // window-ban a doc NEM kéne hogy aktívan használható legyen sem read-en
+    // (frontend filter Phase 2), sem write-on. A write-blocked-szal a permission
+    // helpers fail-closed-szal kezeli a `userHasOrgPermission` ágat — ezzel
+    // a phantom-doc-ra NEM lehet API hívást indítani.
+    return status === ORG_STATUS.PROVISIONING
+        || status === ORG_STATUS.ORPHANED
         || status === ORG_STATUS.ARCHIVED
         || status === ORG_STATUS_LOOKUP_FAILED;
 }

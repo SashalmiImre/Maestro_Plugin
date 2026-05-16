@@ -1,5 +1,13 @@
 const sdk = require("node-appwrite");
 
+// S.13.2 Phase 2 + S.13.3 Phase 2.0b (2026-05-15) — PII-redaction log wrap +
+// response info-disclosure védelem. Részletek: `_docs/Komponensek/LoggingMonitoring.md`.
+// **DRIFT KOCKÁZAT**: a `_generated_*.js` logikai-portolt másolatok a kanonikus
+// shared `maestro-shared/{piiRedaction,responseHelpers}.js`-ből. Phase 2.1:
+// build-generator (S.7.7b precedens) automatikusan generálja + drift-guard.
+const { wrapLogger } = require('./_generated_piiRedaction.js');
+const { fail } = require('./_generated_responseHelpers.js');
+
 /**
  * Appwrite Function: Validate Publication Update
  *
@@ -214,7 +222,10 @@ function validatePublicationActivationInline(publication, deadlines) {
     return { isValid: errors.length === 0, errors };
 }
 
-module.exports = async function ({ req, res, log, error }) {
+module.exports = async function ({ req, res, log: rawLog, error: rawError }) {
+    // S.13.2+S.13.3 Phase 2.1 — centralized wrapLogger (shared piiRedaction.js).
+    const { log, error } = wrapLogger(rawLog, rawError);
+
     try {
         // Event payload feldolgozása
         let payload = {};
@@ -367,7 +378,11 @@ module.exports = async function ({ req, res, log, error }) {
             } catch (e) {
                 if (isCreate) {
                     error(`[Scope] Membership lookup hiba (${callerId}, ${freshDoc.editorialOfficeId}): ${e.message} — fail-fast 500, publikáció NEM törölhető`);
-                    return res.json({ success: false, reason: 'membership_lookup_failed', error: e.message }, 500);
+                    // S.13.3 Phase 2.0b: a shared fail() strip-eli az error mezőt
+                    // (sensitive). reason: domain-code, executionId: support-csatorna.
+                    return fail(res, 500, 'membership_lookup_failed', {
+                        executionId: req?.headers?.['x-appwrite-execution-id']
+                    });
                 }
                 error(`[Scope] Membership lookup hiba (${callerId}, ${freshDoc.editorialOfficeId}): ${e.message} — update path, scope check kihagyva`);
                 lookupFailed = true;
@@ -706,6 +721,9 @@ module.exports = async function ({ req, res, log, error }) {
     } catch (err) {
         error(`Function hiba: ${err.message}`);
         error(`Stack: ${err.stack}`);
-        return res.json({ success: false, error: err.message }, 500);
+        // S.13.3 Phase 2.0b — kliens-response NEM tartalmazhat raw err.message-et.
+        return fail(res, 500, 'internal_error', {
+            executionId: req?.headers?.['x-appwrite-execution-id']
+        });
     }
 };

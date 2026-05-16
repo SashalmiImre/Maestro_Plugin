@@ -26,6 +26,20 @@
 
 const sdk = require('node-appwrite');
 
+// ── Skip-reason enum (S.7.11) ──────────────────────────────────────────────
+//
+// `ensureTeamMembership` és `removeTeamMembership` `skipped` mezője
+// control-flow-érzékeny — a hívóhelyek 25+ helyen `=== 'team_not_found'`
+// comparison-t csinálnak. A stringly-typed mintát const-objektummal váltjuk,
+// hogy egyetlen forrás legyen, és a typo (`'team_no_found'`) compile-time
+// hiba (TypeError: undefined) legyen, ne silent-false-equal.
+
+const TEAM_SKIP_REASONS = Object.freeze({
+    ALREADY_MEMBER: 'already_member',
+    TEAM_NOT_FOUND: 'team_not_found',
+    NOT_A_MEMBER: 'not_a_member'
+});
+
 // ── Team ID builders ────────────────────────────────────────────────────────
 
 function buildOrgTeamId(organizationId) {
@@ -73,6 +87,38 @@ function buildOrgAdminAclPerms(organizationId) {
  */
 function buildOfficeAclPerms(editorialOfficeId) {
     return [sdk.Permission.read(sdk.Role.team(buildOfficeTeamId(editorialOfficeId)))];
+}
+
+/**
+ * Defense-in-depth wrapper: a callerId-re explicit `Permission.read(user)` perm
+ * pótlása az alap ACL-hez (S.7 stop-time MAJOR 2026-05-12 fix).
+ *
+ * **Indok**: a `bootstrap_organization` és `acceptOrganizationInvite` action-ök
+ * a doc-ot a `createDocument` 5. paraméterén át team-szintű ACL-lel
+ * `read(team:org_${orgId})` látják el. A creator (vagy meghívott elfogadó) a
+ * `createDocument` időpontban MÉG NEM team-tag — az `ensureTeamMembership`
+ * vagy a team létrehozása csak később fut. Emiatt a creator a saját doc-ját
+ * NEM látja, amíg a team-tagság lefut.
+ *
+ * A `Permission.read(user(callerId))` Role azonnal hat (independent of
+ * team-membership timing), így a creator a doc-ot rögtön látja. A team-szintű
+ * read a többi tagra továbbra is alkalmazódik (defense-in-depth, redundáns
+ * de korrekt).
+ *
+ * @param {string[]} perms — alap ACL (pl. `buildOrgAclPerms(orgId)` eredménye)
+ * @param {string} callerId — Appwrite user ID, akinek azonnali read jogot adunk
+ * @returns {string[]} — kombinált perm-array
+ */
+function withCreator(perms, callerId) {
+    // Codex NIT + Harden P6 fix (2026-05-12): explicit string + non-empty +
+    // trim-equality guard. Üres/whitespace-only/leading-trailing-space callerId
+    // érvénytelen ACL-t (`user:undefined` / `user:  `) generálna — throw,
+    // NEM csendben normalizálunk.
+    const trimmed = typeof callerId === 'string' ? callerId.trim() : '';
+    if (!trimmed || trimmed !== callerId) {
+        throw new Error('withCreator: callerId required (non-empty, non-whitespace, no leading/trailing space)');
+    }
+    return [...perms, sdk.Permission.read(sdk.Role.user(callerId))];
 }
 
 /**
@@ -189,8 +235,8 @@ async function ensureTeamMembership(teams, teamId, userId, roles = ['member']) {
         );
         return { added: true };
     } catch (err) {
-        if (err?.code === 409) return { added: false, skipped: 'already_member' };
-        if (err?.code === 404) return { added: false, skipped: 'team_not_found' };
+        if (err?.code === 409) return { added: false, skipped: TEAM_SKIP_REASONS.ALREADY_MEMBER };
+        if (err?.code === 404) return { added: false, skipped: TEAM_SKIP_REASONS.TEAM_NOT_FOUND };
         throw err;
     }
 }
@@ -236,12 +282,12 @@ async function removeTeamMembership(teams, teamId, userId) {
             sdk.Query.limit(10)
         ]);
     } catch (err) {
-        if (err?.code === 404) return { removed: 0, skipped: 'team_not_found' };
+        if (err?.code === 404) return { removed: 0, skipped: TEAM_SKIP_REASONS.TEAM_NOT_FOUND };
         throw err;
     }
 
     if (!memberships?.memberships?.length) {
-        return { removed: 0, skipped: 'not_a_member' };
+        return { removed: 0, skipped: TEAM_SKIP_REASONS.NOT_A_MEMBER };
     }
 
     let removed = 0;
@@ -260,6 +306,7 @@ async function removeTeamMembership(teams, teamId, userId) {
 // ── Exports ─────────────────────────────────────────────────────────────────
 
 module.exports = {
+    TEAM_SKIP_REASONS,
     buildOrgTeamId,
     buildOrgAdminTeamId,
     buildOfficeTeamId,
@@ -268,6 +315,7 @@ module.exports = {
     buildOfficeAclPerms,
     buildWorkflowAclPerms,
     buildExtensionAclPerms,
+    withCreator,
     ensureTeam,
     ensureTeamMembership,
     removeTeamMembership,

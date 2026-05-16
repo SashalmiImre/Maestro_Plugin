@@ -62,7 +62,18 @@ async function fetchMemberships(userId) {
             ? listWithResilience({
                 databaseId: DATABASE_ID,
                 collectionId: COLLECTIONS.ORGANIZATIONS,
-                queries: [Query.equal('$id', orgIds), Query.limit(100)]
+                // S.7.8 Phase 2 (2026-05-15) — phantom-org window filter.
+                // A `bootstrap_organization` flow `status: 'provisioning'`-szel
+                // hozza létre a doc-ot, és a flow VÉGÉN finalize-eli `'active'`-ra.
+                // Codex stop-time NO-GO Q1 fix: null-tolerant — legacy doc-ok
+                // (status null mező a backfill_organization_status ELŐTT) NEM
+                // tűnnek el a UI-ból. A `provisioning` szigorúan NEM-null érték,
+                // így a phantom doc-ot a filter szűri.
+                queries: [
+                    Query.equal('$id', orgIds),
+                    Query.or([Query.equal('status', 'active'), Query.isNull('status')]),
+                    Query.limit(100)
+                ]
             }, 'fetchOrganizations')
             : Promise.resolve({ documents: [] }),
         officeIds.length > 0

@@ -6,7 +6,13 @@ dist/
 build/
 
 # Environment
+# S.5.6 (2026-05-15): `*.env` glob — a `.env` pattern NEM matches `environments.env`,
+# `.env.production` vagy más `<prefix>.env` variánsokat. A 7474619 init-commit
+# `appwrite_functions/<fn>/environments.env` konvencióval kerülte ki a `.env`-only
+# szabályt és committed-ben végezte (S.5.1 finding, revoked).
 .env
+*.env
+.env.*
 .mcp.json
 
 # Generated

@@ -26,6 +26,7 @@ import { log, logError } from "../../core/utils/logger.js";
 import { withRetry } from "../../core/utils/promiseUtils.js";
 import { fetchAllValidationRows, queuePersist } from "../../core/utils/validationPersist.js";
 import { TOAST_TYPES } from "../../core/utils/constants.js";
+import { useTenantAclSnapshot } from "./useTenantAclSnapshot.js";
 
 /**
  * Hook a preflight validációs eredmények kezeléséhez.
@@ -40,6 +41,8 @@ export const useWorkflowValidation = () => {
     const { articles, publications, workflow } = useData();
     const { updateArticleValidation, clearArticleValidation } = useValidation();
     const { showToast } = useToast();
+    // Tenant doc-szintű ACL snapshot — ADR 0014 (`withCreator` defense-in-depth).
+    const buildPermissions = useTenantAclSnapshot('useWorkflowValidation');
 
     const articlesRef = useRef(articles);
     const publicationsRef = useRef(publications);
@@ -96,6 +99,8 @@ export const useWorkflowValidation = () => {
      * hogy a fetch+write párok ne keveredjenek.
      */
     const persistToDatabase = useCallback((articleId, publicationId, source, result) => {
+        const permissions = buildPermissions();
+        if (!permissions) return Promise.resolve();
         return queuePersist(`${source}::${articleId}`, async () => {
             try {
                 // 1. Meglévő sor keresése ehhez a cikkhez és forráshoz
@@ -134,7 +139,8 @@ export const useWorkflowValidation = () => {
                                     publicationId,
                                     source,
                                     ...data
-                                }
+                                },
+                                permissions
                             }),
                             { operationName: `createPreflight(${articleId})` }
                         );
@@ -155,7 +161,7 @@ export const useWorkflowValidation = () => {
                 logError('[useWorkflowValidation] DB mentés sikertelen:', error);
             }
         });
-    }, []);
+    }, [buildPermissions]);
 
     /**
      * Futtat egy specifikus validációt egy cikkre, menti az eredményt és frissíti a UI-t.

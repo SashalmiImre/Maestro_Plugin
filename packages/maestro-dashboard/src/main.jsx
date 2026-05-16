@@ -10,6 +10,11 @@ import ReactDOM from 'react-dom/client';
 import { RouterProvider } from 'react-router-dom';
 import { router } from './App.jsx';
 import { THEME_STORAGE_KEY } from './hooks/useTheme.js';
+// S.3.1 (2026-05-16) — önhostolt Inter variable font (300-800 weight).
+// A korábbi `<link href="https://fonts.googleapis.com/...">` CDN-link a CSP
+// `style-src 'self' 'unsafe-inline'`-en violation-t adott; az önhostolt
+// változat NEM-third-party CDN, NEM-tracking, NEM-CSP-bővítés szükséges.
+import '@fontsource-variable/inter';
 import '../css/index.css';
 
 // Korai téma bootstrap — még a React hidratálás ELŐTT, hogy ne villanjon

@@ -56,6 +56,16 @@ const {
     sanitizeString
 } = require("./helpers/util.js");
 
+// S.13.2 (2026-05-15, R.S.13.2 Phase 1 partial close) — PII-redaction wrapper
+// a runtime-injected `log` és `error` köré. ASVS V7 + CIS 8. Részletek:
+// `_docs/Komponensek/LoggingMonitoring.md`. **PHASE 1 PARTIAL ROLLOUT**: csak
+// ez a CF wrap-elve, a maradék CF-ek (user-cascade-delete, validate-publication-
+// update, update-article, resend-webhook, stb.) RAW log-olnak — Phase 2 zárja le.
+// **DRIFT KOCKÁZAT**: a `helpers/piiRedaction.js` logikai (CommonJS-portolt)
+// másolat a kanonikus shared modulból (`packages/maestro-shared/piiRedaction.js`).
+// Phase 2: build-generator + drift-guard a S.7.7b precedensen.
+const { redactArgs, isRedactionDisabled } = require("./helpers/piiRedaction.js");
+
 // B.0.3.a-h (2026-05-04) — inkrementális CF action-bontás (Codex (C) opció).
 // A `main.js`-ben csak az action-router maradt e szekciókhoz; a logika az
 // `actions/*.js` modulokban él.
@@ -135,6 +145,22 @@ const ACTION_HANDLERS = {
     'bootstrap_organization_invite_history_schema': schemaActions.bootstrapOrganizationInviteHistorySchema,
     // E (2026-05-09 follow-up) — Q1 ACL refactor: admin-team scoped backfill
     'backfill_admin_team_acl': schemaActions.backfillAdminTeamAcl,
+    // S.7.2 (2026-05-12) — R.S.7.2 close: legacy ACL backfill 5 collection-én.
+    // Target-org-owner auth + scope-paraméter (multi-call, kerüli a CF 60s
+    // timeout-ot egy nagy orgon) + user-read preserve (ADR 0014).
+    'backfill_acl_phase2': schemaActions.backfillAclPhase2,
+    // S.7.7b (2026-05-15) — R.S.7.6 close: collection-meta `documentSecurity`
+    // flag verify a 6 user-data collection-en. Read-only deploy-gate
+    // (ADR 0014 Layer 1 prerequisite). Target-org-owner auth.
+    'verify_collection_document_security': schemaActions.verifyCollectionDocumentSecurity,
+    // S.7.7c (2026-05-15) — R.S.7.7 close: legacy ACL backfill a 6 user-data
+    // collection-en (publications + articles + layouts + deadlines + 2 validation).
+    // Kategória 1/2 fallback policy + `fallbackUsedDocs` audit + 2-step JOIN.
+    'backfill_acl_phase3': schemaActions.backfillAclPhase3,
+    // S.7.9 (2026-05-15) — R.S.7.5 close: GDPR Art. 17 stale withCreator
+    // user-read cleanup. 12 collection scan, self-anonymize + admin-anonymize
+    // kettős auth. Auto-trigger a leave_organization + delete_my_account flow-ban.
+    'anonymize_user_acl': schemaActions.anonymizeUserAcl,
 
     // Permission set CRUD (A.3 + A.3.6)
     'create_permission_set': permissionSetActions.createPermissionSet,
@@ -398,7 +424,16 @@ const ACTION_HANDLERS = {
 // létre a `groups` doc-okat aktiváláskor / hozzárendeléskor.
 
 
-module.exports = async function ({ req, res, log, error }) {
+module.exports = async function ({ req, res, log: rawLog, error: rawError }) {
+    // S.13.2 PII-redaction wrapper. A function body MINDEN `log()` / `error()`
+    // hívása ezt használja — a `ctx.log` / `ctx.error` az action-modulokba is
+    // a wrappolt verziót adja át. KRITIKUS (Codex pre-review hidden risk #1):
+    // a `redactArgs` egy array-t ad vissza, így spread-szel kell behívni a
+    // runtime-injected log()-ba (NEM `rawLog(redactArgs(args))`, ami egyetlen
+    // array argumentummal logolna).
+    const log = (...args) => isRedactionDisabled() ? rawLog(...args) : rawLog(...redactArgs(args));
+    const error = (...args) => isRedactionDisabled() ? rawError(...args) : rawError(...redactArgs(args));
+
     try {
         // ── Payload feldolgozása ──
         let payload = {};
@@ -499,6 +534,27 @@ module.exports = async function ({ req, res, log, error }) {
         // accept/decline flow nem blokkolódik). A `bootstrap_organization_invite_history_schema`
         // action-höz kötelező.
         const organizationInviteHistoryCollectionId = process.env.ORGANIZATION_INVITE_HISTORY_COLLECTION_ID || '';
+
+        // S.7.7b (2026-05-15) — `verify_collection_document_security` action env varok.
+        // OPCIONÁLISAK (NEM fail-fast): csak az új RO action használja, így a meglévő
+        // CF deploy-okat NEM töri. Hiányuk az action stats-ban `missingEnv: true`
+        // jelzéssel megjelenik + `criticalFail: true` (a 6 required user-data
+        // collection-re hat). A 2 új CF env var (`LAYOUTS_COLLECTION_ID`,
+        // `DEADLINES_COLLECTION_ID`, `USER_VALIDATIONS_COLLECTION_ID`,
+        // `SYSTEM_VALIDATIONS_COLLECTION_ID`) a deploy-trigger user-task része.
+        const layoutsCollectionId = process.env.LAYOUTS_COLLECTION_ID || '';
+        const deadlinesCollectionId = process.env.DEADLINES_COLLECTION_ID || '';
+        const userValidationsCollectionId = process.env.USER_VALIDATIONS_COLLECTION_ID || '';
+        const systemValidationsCollectionId = process.env.SYSTEM_VALIDATIONS_COLLECTION_ID || '';
+
+        // S.7.8 Phase 1 (2026-05-15) — phantom-org window mitigáció feature-flag.
+        // OPCIONÁLIS env-var, default `false` (visszafelé kompatibilis). Ha `'true'`,
+        // a `bootstrap_organization` flow `status: 'provisioning'`-szel indítja a
+        // doc-ot, és a flow VÉGÉN `updateDocument(status: 'active')`-szel finalize-el.
+        // A frontend filter (Phase 2) `Query.equal('status', 'active')`-szel szűri
+        // a phantom doc-okat. Deploy-sorrend: ELŐSZÖR `bootstrap_organization_status_schema`
+        // futtatás (idempotens enum-bővítés `provisioning`-szel), AZTÁN a flag bekapcsolása.
+        const enableProvisioningGuard = (process.env.ENABLE_PROVISIONING_GUARD || '').toLowerCase() === 'true';
 
         // ── Fail-fast env var guard ──
         const missingEnvVars = [];
@@ -614,7 +670,15 @@ module.exports = async function ({ req, res, log, error }) {
             ipRateLimitCountersCollectionId,
             ipRateLimitBlocksCollectionId,
             // D.3 (2026-05-09) — invite audit-trail (opcionális, ld. fent)
-            organizationInviteHistoryCollectionId
+            organizationInviteHistoryCollectionId,
+            // S.7.7b (2026-05-15) — opcionális collection ID-k a
+            // `verify_collection_document_security` action számára.
+            layoutsCollectionId,
+            deadlinesCollectionId,
+            userValidationsCollectionId,
+            systemValidationsCollectionId,
+            // S.7.8 Phase 1 (2026-05-15) — phantom-org window guard feature-flag.
+            enableProvisioningGuard
         };
         const ctx = {
             databases,
@@ -659,6 +723,14 @@ module.exports = async function ({ req, res, log, error }) {
     } catch (err) {
         error(`Function hiba: ${err.message}`);
         error(`Stack: ${err.stack}`);
-        return res.json({ success: false, error: err.message }, 500);
+        // S.13.3 (R.S.13.3 Phase 1.0 partial close) — kliens-response NEM
+        // tartalmazhat raw `err.message`-et. A `fail()` helper a sensitive
+        // mezőket strip-eli és PII-redact-eli (a piiRedaction.js-en át). Az
+        // `executionId` az Appwrite runtime-tól érkezik (NEM kliens-spoofable,
+        // szigorúan platform-generated) — support-jegy korreláció a Console
+        // execution log-okkal.
+        return fail(res, 500, 'internal_error', {
+            executionId: req?.headers?.['x-appwrite-execution-id']
+        });
     }
 };

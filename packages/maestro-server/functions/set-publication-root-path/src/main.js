@@ -99,9 +99,9 @@ async function findSingleMembership(databases, databaseId, collectionId, queries
 // kontextus, más invariánsok.
 const { getOrgStatus, isOrgWriteBlocked } = require('./_generated_orphanGuard.js');
 
-function fail(res, statusCode, reason, extra = {}) {
-    return res.json({ success: false, reason, ...extra }, statusCode);
-}
+// S.13.2+S.13.3 Phase 2.2 — PII-redaction log wrap + response info-disclosure védelem.
+const { wrapLogger } = require('./_generated_piiRedaction.js');
+const { fail } = require('./_generated_responseHelpers.js');
 
 /**
  * Jogosultság-megtagadás válasz (403) strukturált payload-dal, amit a kliens
@@ -116,7 +116,8 @@ function permissionDenied(res, reason) {
     }, 403);
 }
 
-module.exports = async function ({ req, res, log, error }) {
+module.exports = async function ({ req, res, log: rawLog, error: rawError }) {
+    const { log, error } = wrapLogger(rawLog, rawError);
     try {
         // ── 1. Payload parse ──
         let payload = {};
@@ -289,6 +290,8 @@ module.exports = async function ({ req, res, log, error }) {
     } catch (err) {
         error(`Function hiba: ${err.message}`);
         error(`Stack: ${err.stack}`);
-        return res.json({ success: false, reason: 'internal_error', message: err.message }, 500);
+        return fail(res, 500, 'internal_error', {
+            executionId: req?.headers?.['x-appwrite-execution-id']
+        });
     }
 };

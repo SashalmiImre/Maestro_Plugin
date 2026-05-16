@@ -48,4 +48,9 @@ Egy fájl = egy domain fogalom. Mély, lefelé linkel a kódra (`fájl:sor`), ol
 - [[SessionPreflight]] — kötelező infra-check minden új session elején (deploy-mechanizmus, Codex stop-time gate)
 - [[CFTemplate]] — Appwrite CF boilerplate (`setEndpoint` + env var-ok + fail-closed) — drift-megelőzés
 
+## Biztonság (S blokk, 2026-05-11 óta)
+- [[SecurityBaseline]] — STRIDE per komponens, ASVS L2 + CIS IG1 mapping, trust boundary, defense-in-depth (kanonikus referencia minden security-érintő implementációhoz)
+- [[SecurityRiskRegister]] — minden ismert biztonsági gap egy táblában (severity × likelihood × ASVS/CIS × owner × target × status)
+- [[ProxyHardening]] — S.1 proxy CORS allowlist, null-origin guard, rate-limit, PII-redact, fallback-cookie validáció (Implemented 2026-05-11)
+
 > A felület-szintű képért lásd a témakör-MOC-okat: [[Architektúra]], [[Hálózat]], [[Munkafolyamat]].

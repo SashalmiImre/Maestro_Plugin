@@ -21,6 +21,7 @@ Sorrend = időbeli (`NNNN` szekvencia).
 | 0011 | [[0011-cas-gate-and-orphan-guard-invariants]] | 2026-05-09 | Accepted |
 | 0012 | [[0012-org-member-removal-cascade]] | 2026-05-10 | Accepted |
 | 0013 | [[0013-self-service-account-management]] | 2026-05-10 | Accepted |
+| 0014 | [[0014-tenant-doc-acl-with-creator]] | 2026-05-12 | Accepted |
 
 ## Új ADR
 1. Másold a [[Templates/decision-template]] tartalmát.

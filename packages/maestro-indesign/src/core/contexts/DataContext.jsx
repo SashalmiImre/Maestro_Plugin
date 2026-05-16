@@ -25,6 +25,7 @@ import { callUpdateArticleCF } from "../utils/updateArticleClient.js";
 import { realtime } from "../config/realtimeClient.js";
 import { useConnection } from "./ConnectionContext.jsx";
 import { useScope } from "./ScopeContext.jsx";
+import { useUser } from "./UserContext.jsx";
 import { useToast } from "../../ui/common/Toast/ToastContext.jsx";
 import { log, logWarn, logError, logDebug } from "../utils/logger.js";
 import { withTimeout, withRetry } from "../utils/promiseUtils.js";
@@ -32,6 +33,7 @@ import { isNetworkError, isAuthError } from "../utils/errorUtils.js";
 import { buildExtensionRegistry } from "../utils/extensions/extensionRegistry.js";
 import { MaestroEvent, dispatchMaestroEvent } from "../config/maestroEvents.js";
 import { FETCH_TIMEOUT_CONFIG, TOAST_TYPES } from "../utils/constants.js";
+import { buildOfficeAclPerms, withCreator } from "maestro-shared/teamHelpers.client.js";
 
 /** Név szerinti komparátor rendezéshez. */
 const compareByName = (a, b) => (a?.name ?? '').localeCompare(b?.name ?? '');
@@ -72,6 +74,14 @@ export const DataProvider = ({ children }) => {
     const { showToast } = useToast();
     // Aktív scope (ScopeContext) — Fázis 1 / B.7
     const { activeOrganizationId, activeEditorialOfficeId, isScopeValidated } = useScope();
+    // Tenant-doc ACL `withCreator` perm-jéhez szükséges (ADR 0014, 3. réteg).
+    // Hangos throw a DataProvider-mounted-outside-UserProvider hibára — a
+    // destructure-on-undefined TypeError helyett intentional invariant (ASVS V14.2.1).
+    const userValue = useUser();
+    if (!userValue) {
+        throw new Error('DataProvider must be mounted inside UserProvider (S.7.7 ACL invariant).');
+    }
+    const { user } = userValue;
 
     // --- State (Állapot) ---
     // 1. Globális adatok
@@ -129,6 +139,11 @@ export const DataProvider = ({ children }) => {
     useEffect(() => {
         activeEditorialOfficeIdRef.current = activeEditorialOfficeId;
     }, [activeEditorialOfficeId]);
+
+    const userRef = useRef(user);
+    useEffect(() => {
+        userRef.current = user;
+    }, [user]);
 
     // ═══════════════════════════════════════════════════════════════════════════
     // Adatlekérés (Fetch)
@@ -651,25 +666,37 @@ export const DataProvider = ({ children }) => {
     }, [isScopeValidated, activePublicationId, activeEditorialOfficeId]); // eslint-disable-line react-hooks/exhaustive-deps
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // Write-Through API — közös scope injection helper
+    // Write-Through API — közös scope + ACL helper
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * Hozzáfűzi a `createX` payloadhoz a scope mezőket (organizationId +
-     * editorialOfficeId), és dob, ha hiányzik. A happy path-ban nem tüzelhet
-     * (a UI a ScopeMissingPlaceholder mögött zárolva), de védi a recovery alatti
-     * race-t és a CF guard előtti köztes időszakot.
+     * Tenant-érintő `createRow` / `createDocument` hívásokhoz scope+ACL builder:
+     * snapshot orgId+officeId+userId, scope-os data, doc-szintű ACL (ADR 0014:
+     * `team:office_X` + `user:creatorId` defense-in-depth).
+     *
+     * Single snapshot per call — a `data` és `permissions` ugyanazt az officeId-t
+     * használja, így ref-update és request között nincs interleaving race.
+     *
+     * Fail-closed: hiányzó scope/user → throw (NEM csendben `team:office_undefined`).
+     * Happy path-ban nem tüzelhet (ScopeMissingPlaceholder mögött), de védi a
+     * recovery alatti race-t és a CF guard előtti köztes időszakot.
+     *
+     * @param {Object} data — a hívó write-through payloadja
+     * @returns {{data: Object, permissions: string[]}}
      */
-    const withScope = useCallback((data) => {
+    const buildTenantDocOptions = useCallback((data) => {
         const orgId = activeOrganizationIdRef.current;
         const officeId = activeEditorialOfficeIdRef.current;
+        const userId = userRef.current?.$id;
         if (!orgId || !officeId) {
             throw new Error('Nincs aktív szerkesztőség — a művelet nem hajtható végre.');
         }
+        if (!userId) {
+            throw new Error('Nincs bejelentkezett felhasználó — a művelet nem hajtható végre.');
+        }
         return {
-            ...data,
-            organizationId: orgId,
-            editorialOfficeId: officeId
+            data: { ...data, organizationId: orgId, editorialOfficeId: officeId },
+            permissions: withCreator(buildOfficeAclPerms(officeId), userId)
         };
     }, []);
 
@@ -684,12 +711,14 @@ export const DataProvider = ({ children }) => {
      * @returns {Promise<Object>} A létrehozott dokumentum.
      */
     const createArticle = useCallback(async (data) => {
+        const { data: scopedData, permissions } = buildTenantDocOptions(data);
         const result = await withTimeout(
             tables.createRow({
                 databaseId: DATABASE_ID,
                 tableId: COLLECTIONS.ARTICLES,
                 rowId: ID.unique(),
-                data: withScope(data)
+                data: scopedData,
+                permissions
             }),
             FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: createArticle"
@@ -699,7 +728,7 @@ export const DataProvider = ({ children }) => {
             return [...prev, result].sort(compareByName);
         });
         return result;
-    }, [withScope]);
+    }, [buildTenantDocOptions]);
 
     /**
      * Helyi cikk-state frissítése egy szerver-válasz dokumentummal, DB hívás nélkül.
@@ -796,12 +825,14 @@ export const DataProvider = ({ children }) => {
      * @returns {Promise<Object>} A létrehozott dokumentum.
      */
     const createValidation = useCallback(async (data) => {
+        const { data: scopedData, permissions } = buildTenantDocOptions(data);
         const result = await withTimeout(
             tables.createRow({
                 databaseId: DATABASE_ID,
                 tableId: COLLECTIONS.USER_VALIDATIONS,
                 rowId: ID.unique(),
-                data: withScope(data)
+                data: scopedData,
+                permissions
             }),
             FETCH_TIMEOUT_CONFIG.CRITICAL_DATA_MS,
             "DataContext: createValidation"
@@ -812,7 +843,7 @@ export const DataProvider = ({ children }) => {
             return [normalized, ...prev];
         });
         return result;
-    }, [withScope]);
+    }, [buildTenantDocOptions]);
 
     /**
      * Validációs bejegyzés frissítése.

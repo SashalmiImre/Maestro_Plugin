@@ -1,0 +1,82 @@
+# S.7.7d (2026-05-16) — Appwrite SDK major-version regression-guard.
+#
+# Cél: ha a Dependabot (S.9.3) egy `appwrite` vagy `node-appwrite` major-bump
+# PR-t nyit, a CI ezen a workflow-on át fail-eli, ha a kódbázis NEM-build-el
+# (CF syntax-check, Plugin webpack lint, Dashboard build).
+#
+# Trigger-ek:
+#   - `package.json` vagy `yarn.lock` változás (workspace-root vagy bármely package)
+#   - `packages/maestro-server/functions/*/package.json` per-CF dep update
+#
+# A jobs FAIL → block merge a default branch protection rule szerint.
+
+name: SDK Compatibility Check
+
+on:
+  pull_request:
+    paths:
+      - 'package.json'
+      - 'yarn.lock'
+      - 'packages/*/package.json'
+      - 'packages/maestro-server/functions/*/package.json'
+  workflow_dispatch:
+
+jobs:
+  cf-syntax-check:
+    name: CF main.js syntax-check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 20
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+
+      - name: Install dependencies (workspace-root)
+        run: yarn install --frozen-lockfile
+
+      - name: Syntax check minden CF main.js + helpers
+        shell: bash
+        run: |
+          set -e
+          shopt -s globstar nullglob
+          for cf in packages/maestro-server/functions/*/src/main.js; do
+            echo "📋 Checking $cf..."
+            node --check "$cf"
+          done
+          for js in packages/maestro-server/functions/invite-to-organization/src/**/*.js; do
+            echo "📋 Checking $js..."
+            node --check "$js"
+          done
+        # `set -e` az első `node --check` hibán fail-eli a job-ot.
+        # `globstar nullglob` a `**` rekurzív glob + üres-eredmény-tolerancia.
+
+      - name: Shared modul build drift check (S.13.3 + S.7.7b precedens)
+        run: |
+          yarn check:cf-validator
+          yarn check:cf-orphan-guard
+          yarn check:cf-response-helpers
+        # Ha a build-generator drift-et detektál, FAIL — a shared modul kihúzott
+        # ESM→CJS port-ja NEM-up-to-date. A fejlesztőnek `yarn build:cf-*` futtatás
+        # kell, hogy szinkronba hozza, mielőtt mergelne.
+
+  yarn-audit-info:
+    name: yarn audit (info-only)
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'yarn'
+      - run: yarn install --frozen-lockfile
+      - name: Audit non-blocking
+        run: yarn audit --level moderate
+        # NEM blokkoló (Dependabot heti scan a fő alert-forrás S.9.3 szerint).
+        # Itt csak információs PR-comment-be jut.
