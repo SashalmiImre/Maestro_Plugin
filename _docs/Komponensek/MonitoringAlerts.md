@@ -90,6 +90,173 @@ ASVS V7 + CIS Controls 8. A jelenlegi log-flow (Appwrite CF executions + Railway
 2. **True positive**: incident-channel-be eskalálódik, on-call developer reagál
 3. **Post-incident**: `_docs/Naplók/YYYY-MM-DD.md` incident-entry + lessons-learned
 
+## Implementation pseudocode (S.13.4 Phase 3 trigger)
+
+> **Platform-agnostic JSON-DSL** — adaptálható Better Stack alert-rule YAML-ra, Grafana Loki LogQL + Alertmanager YAML-ra, vagy custom webhook-listener Node.js handler-re. A `query.fields` Appwrite CF execution + Realtime payload + proxy log struktúrákat tükrözi.
+
+### Common source-config
+
+```jsonc
+{
+    "sources": [
+        {
+            "id": "appwrite-cf-executions",
+            "type": "appwrite-webhook",
+            "url": "https://webhook.maestro.emago.hu/cf-exec",
+            "fields": ["functionId", "status", "duration", "trigger", "$createdAt"]
+        },
+        {
+            "id": "appwrite-auth-events",
+            "type": "appwrite-realtime",
+            "channel": "users",
+            "fields": ["userId", "event", "ipAddress", "$createdAt"]
+        },
+        {
+            "id": "appwrite-realtime-blocks",
+            "type": "appwrite-realtime",
+            "channel": "databases.<id>.collections.ipRateLimitBlocks.documents",
+            "fields": ["ip", "scope", "blockedAt", "$createdAt"]
+        },
+        {
+            "id": "railway-proxy-logs",
+            "type": "log-tail",
+            "url": "https://gallant-balance-production-b513.up.railway.app/logs",
+            "fields": ["timestamp", "level", "event", "wsClientId"]
+        },
+        {
+            "id": "appwrite-invite-events",
+            "type": "appwrite-realtime",
+            "channel": "databases.<id>.collections.organizationInvites.documents",
+            "fields": ["organizationId", "email", "$createdAt"]
+        }
+    ]
+}
+```
+
+### A1 — CF failure rate
+
+```jsonc
+{
+    "id": "alert-a1-cf-failure-rate",
+    "name": "A1: CF failure rate >5% / 5min",
+    "source_id": "appwrite-cf-executions",
+    "window": "5m",
+    "min_sample_size": 50,
+    "threshold": {
+        "type": "ratio",
+        "numerator_filter": "status == 'failed'",
+        "denominator_filter": "*",
+        "operator": ">",
+        "value": 0.05
+    },
+    "actions": [
+        { "type": "slack", "channel": "#maestro-incidents" },
+        { "type": "pagerduty", "service_key": "${PD_L2_KEY}" }
+    ]
+}
+```
+
+### A2 — Login-fail spike
+
+```jsonc
+{
+    "id": "alert-a2-login-fail",
+    "name": "A2: Login fail >50 / 5min",
+    "source_id": "appwrite-auth-events",
+    "window": "5m",
+    "filter": "event == 'session.create.failed' OR event == 'session.create' AND status == 401",
+    "threshold": {
+        "type": "count",
+        "operator": ">",
+        "value": 50
+    },
+    "actions": [
+        { "type": "slack", "channel": "#maestro-incidents" }
+    ],
+    "notes": "NEM PagerDuty — user-elfelejtett-jelszó false-positive risk."
+}
+```
+
+### A3 — Rate-limit block spike
+
+```jsonc
+{
+    "id": "alert-a3-rate-limit-block",
+    "name": "A3: ipRateLimitBlocks create >5 / perc 3 window",
+    "source_id": "appwrite-realtime-blocks",
+    "filter": "event == 'document.create'",
+    "window": "1m",
+    "threshold": {
+        "type": "count",
+        "operator": ">",
+        "value": 5
+    },
+    "persistence": "3-of-3",
+    "actions": [
+        { "type": "slack", "channel": "#maestro-incidents", "tags": ["R.S.2.x"] }
+    ]
+}
+```
+
+### A4 — WS disconnect rate
+
+```jsonc
+{
+    "id": "alert-a4-ws-disconnect",
+    "name": "A4: WS disconnect rate >30% / 10min",
+    "source_id": "railway-proxy-logs",
+    "window": "10m",
+    "min_sample_size": 100,
+    "threshold": {
+        "type": "ratio",
+        "numerator_filter": "event == 'ws.close' AND code != 1000",
+        "denominator_filter": "event == 'ws.close' OR event == 'ws.open'",
+        "operator": ">",
+        "value": 0.30
+    },
+    "actions": [
+        { "type": "slack", "channel": "#maestro-incidents" },
+        { "type": "webhook", "url": "https://internal.maestro.emago.hu/cdn-log-scan" }
+    ]
+}
+```
+
+### A5 — Invite-send anomaly
+
+```jsonc
+{
+    "id": "alert-a5-invite-anomaly",
+    "name": "A5: Invite create >50 / org / nap (7d baseline outlier)",
+    "source_id": "appwrite-invite-events",
+    "filter": "event == 'document.create'",
+    "window": "1d",
+    "group_by": "organizationId",
+    "threshold": {
+        "type": "anomaly",
+        "baseline_window": "7d",
+        "operator": ">",
+        "value": 50,
+        "stddev_multiplier": 2.0
+    },
+    "actions": [
+        { "type": "slack", "channel": "#maestro-incidents", "manual_review": true }
+    ],
+    "notes": "Phase 2 ML-based anomaly detection (S.13.6 defer)."
+}
+```
+
+### Webhook-receiver implementation skeleton (Node.js, ha custom)
+
+```js
+// packages/maestro-server/functions/monitoring-alert-receiver/src/main.js (NEM-implementált)
+// Trigger: HTTP POST {alertId, threshold, samples, firedAt}
+// Verify HMAC: req.headers['x-bs-signature'] vs HMAC_SECRET (S.8 minta)
+// Dispatch: Slack webhook + (opt) PagerDuty Events API
+// Audit: createDocument(monitoringAlertHistory) — actionAuditLog (S.10.5) integrate
+```
+
+**Phase 3 trigger**: első incident vagy Better Stack paid plan upgrade (USER-TASK 13).
+
 ## Kapcsolódó
 
 - [[Feladatok#S.13]]
