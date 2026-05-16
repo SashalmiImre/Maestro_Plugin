@@ -14,8 +14,8 @@ created: 2026-05-15
 |---|---|---|
 | **Dashboard** (`maestro.emago.hu`) | ✅ **ÉLŐ** | Commit `b4fd389` deployed 2026-05-16 PM (S.3 headers + S.4 ImportDialog + S.12.4 cleanup + S.3.1 önhost Inter + cookieFallback cleanup). `deploy.sh` SSH+SCP működik. Chrome MCP verify: 6 security header OK, no CSP violation, no third-party CDN |
 | **12 Appwrite CF** | ✅ **DEPLOYED** | 2026-05-15 reggel MCP batch (`invite-to-organization` `69ffab43e9419f53f525`, `update-article`, `validate-publication-update`, `user-cascade-delete`, `validate-article-creation`, `article-update-guard`, `cascade-delete`, `cleanup-archived-workflows`, `cleanup-orphaned-locks`, `migrate-legacy-paths`, `orphan-sweeper`, `resend-webhook`, `set-publication-root-path`) — S.13.2 PII + S.13.3 info-disclosure binary |
-| **`invite-to-organization` (S.7.10+11 redeploy)** | ⚠️ **USER-TASK 17** | `c11f8f5` (S.7.11 enum) + `c2177d2` (S.7.10 DRY) friss kód NEM-deployolva. Funkcionálisan ekvivalens a deployedtel (helper-extract + enum), de a binary stale. Console redeploy szükséges a kód-source-truth-truth-hoz |
-| **2 Phase 3 CF Console-create** | ⚠️ **USER-TASK 14** | `cleanup-rate-limits` + `cleanup-orphaned-thumbnails` Console-on **MÉG NEM létezik** (MCP classifier blokkolta). Forráskód kész |
+| **`invite-to-organization` (S.7.10+11 redeploy)** | ✅ **DEPLOYED** | MCP redeploy 2026-05-16 PM `6a0849c8a8fae59bc16d` status ready. S.7.10+11 friss helper-extract + enum binary élesben |
+| **2 Phase 3 CF Console-create** | ✅ **DEPLOYED** | MCP create + deploy 2026-05-16 PM. `cleanup-rate-limits` `6a0849f77fa735e7f3dc` ready (daily 02:00 UTC). `cleanup-orphaned-thumbnails` `6a084a09053efc176fae` ready (weekly Sunday 04:00 UTC). Schedule + scopes a `appwrite.json` szerint |
 | **Plugin (`maestro-indesign`)** | ⚠️ **USER-TASK 18** | `yarn build` ✅ (`bundle.js` 7.13MiB), UXP Developer Tool reload **NEM-MCP-elérhető** — manuál |
 | **Proxy (`maestro-proxy`)** | ✅ **AKTÍV** | Railway, no kódváltozás (csak env-rotate ha USER-TASK 4-en át rotate-elsz) |
 | **`actionAuditLog` collection** | ⚠️ **USER-TASK 15** | Schema-create Console-on (MCP classifier blokk) |
@@ -77,12 +77,12 @@ created: 2026-05-15
 
 ---
 
-### Deploy CHECKLIST (Iter 32-állapot)
+### Deploy CHECKLIST (Iter 33-állapot)
 
 - [x] **Dashboard** deploy ✅ — `b4fd389` ÉLŐ `https://maestro.emago.hu/`
 - [x] **12 CF** deploy ✅ — 2026-05-15 MCP batch
-- [ ] **USER-TASK 17**: `invite-to-organization` CF redeploy (S.7.10+11) — Console-on
-- [ ] **USER-TASK 14**: 2 Phase 3 CF Console-create
+- [x] **USER-TASK 17**: `invite-to-organization` redeploy ✅ — MCP 2026-05-16 PM `6a0849c8a8fae59bc16d` ready
+- [x] **USER-TASK 14**: 2 Phase 3 CF Console-create ✅ — MCP 2026-05-16 PM `cleanup-rate-limits` `6a0849f77fa735e7f3dc` + `cleanup-orphaned-thumbnails` `6a084a09053efc176fae` ready
 - [ ] **USER-TASK 15**: `actionAuditLog` collection schema-create
 - [ ] **USER-TASK 16**: SDK Compatibility branch protect rule
 - [ ] **USER-TASK 18**: Plugin UXP rebuild + reload InDesign-on
