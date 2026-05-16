@@ -48,6 +48,16 @@ const MAESTRO_LOCAL_STORAGE_WHITELIST = new Set([
     'maestro.pendingInviteToken'
 ]);
 
+// S.12.4 finomítás (2026-05-16) — non-`maestro.` prefixű kulcsok, amelyeket
+// MÉG TÖRLÜNK logout/login flow-on. Az Appwrite SDK a `cookieFallback`-en
+// tárolja a session-secret-et plain-text-ben, ÉS NEM törli a `deleteSession`
+// hívás után — Chrome MCP teszt (Iter 31) verify-elte, hogy a stale token
+// megmarad logout után. Nem-exploitable (server revoked), de XSS / shared-PC
+// info-disclosure-szempontból törlendő (ASVS V3.4.2 session-cleanup).
+const APPWRITE_SESSION_KEYS = new Set([
+    'cookieFallback'
+]);
+
 /**
  * Töröl minden `maestro.` prefixű localStorage kulcsot, kivéve a
  * `MAESTRO_LOCAL_STORAGE_WHITELIST`-en szereplőket.
@@ -87,8 +97,10 @@ export function clearMaestroLocalStorage() {
             continue;
         }
         if (!key) continue;
-        if (!key.startsWith(MAESTRO_KEY_PREFIX)) continue;
-        if (MAESTRO_LOCAL_STORAGE_WHITELIST.has(key)) continue;
+        const isMaestro = key.startsWith(MAESTRO_KEY_PREFIX);
+        const isAppwriteSession = APPWRITE_SESSION_KEYS.has(key);
+        if (!isMaestro && !isAppwriteSession) continue;
+        if (isMaestro && MAESTRO_LOCAL_STORAGE_WHITELIST.has(key)) continue;
         keysToRemove.push(key);
     }
 
