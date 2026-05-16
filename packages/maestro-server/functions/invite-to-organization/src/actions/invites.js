@@ -34,6 +34,57 @@ const MAX_BATCH_INVITES = 20;
 const MAX_CUSTOM_MESSAGE_LENGTH = 500;
 
 /**
+ * S.7.10 (2026-05-16) — non-blocking team-membership pótlás közös helper.
+ *
+ * Az `acceptInvite` flow 3 hívóhelyén (idempotens admin-team retry, race
+ * admin-team retry, race org-team retry) ugyanaz a try/catch + ensureTeam
+ * (opcionális) + ensureTeamMembership + skipped-log minta ismétlődött.
+ * A helper kifaktorálja a duplikált logikát; a hívóhely csak a paraméterek
+ * (teamId, roles, contextLabel) átadásával választ ági-specifikus log-szöveget.
+ *
+ * **Non-blocking szemantika**: a 404 (team_not_found) és minden catch-elhető
+ * hiba CSAK loggolódik — a `backfill_tenant_acl` / `backfill_admin_team_acl`
+ * action-ök pótolják a hiányzó membership-et. A flow-t soha nem szakítja meg.
+ *
+ * **ensureTeamName paraméter**:
+ *   - Jelen → `ensureTeam(teamId, ensureTeamName)` előhívás (admin-team flow).
+ *   - Hiányzik → kihagyja (base org-team flow; a team a `bootstrap_organization`
+ *     futása óta létezik, ha nincs, az legacy / pre-backfill jel).
+ *
+ * @param {Object} options
+ * @param {sdk.Teams} options.teamsApi
+ * @param {string} options.teamId
+ * @param {string} options.userId
+ * @param {string[]} options.roles
+ * @param {Function} options.log
+ * @param {string} options.contextLabel — log-üzenet prefix (pl. "[Accept] Idempotens admin-team retry")
+ * @param {string} [options.ensureTeamName] — ha jelen, ensureTeam előhívás ezzel a névvel
+ * @param {string} [options.teamNotFoundReason='az ensureTeam után'] — log-szöveg a 404 ágon
+ */
+async function _tryEnsureMembershipNonBlocking({
+    teamsApi,
+    teamId,
+    userId,
+    roles,
+    log,
+    contextLabel,
+    ensureTeamName,
+    teamNotFoundReason = 'az ensureTeam után'
+}) {
+    try {
+        if (ensureTeamName) {
+            await ensureTeam(teamsApi, teamId, ensureTeamName);
+        }
+        const r = await ensureTeamMembership(teamsApi, teamId, userId, roles);
+        if (r.skipped === TEAM_SKIP_REASONS.TEAM_NOT_FOUND) {
+            log(`${contextLabel}: team_not_found ${teamNotFoundReason} — backfill pótolja`);
+        }
+    } catch (err) {
+        log(`${contextLabel} hiba (non-blocking — backfill pótolja): ${err.message}`);
+    }
+}
+
+/**
  * D.3 (2026-05-09) — invite audit-trail helper, Codex Konstrukció C CAS-gate
  * (G blokk, 2026-05-09 follow-up).
  *
@@ -972,16 +1023,15 @@ async function acceptInvite(ctx) {
         // pótolja — különben az idempotent ág végtelenül 500-at adna a usernek).
         const existingRole = existingMembership.documents[0].role;
         if (existingRole === 'owner' || existingRole === 'admin') {
-            const adminTeamId = buildOrgAdminTeamId(invite.organizationId);
-            try {
-                await ensureTeam(teamsApi, adminTeamId, `Org admins: ${invite.organizationId}`);
-                const r = await ensureTeamMembership(teamsApi, adminTeamId, callerId, [existingRole]);
-                if (r.skipped === TEAM_SKIP_REASONS.TEAM_NOT_FOUND) {
-                    log(`[Accept] Idempotens admin-team retry: team_not_found az ensureTeam után — backfill pótolja`);
-                }
-            } catch (err) {
-                log(`[Accept] Idempotens admin-team retry hiba (non-blocking — backfill pótolja): ${err.message}`);
-            }
+            await _tryEnsureMembershipNonBlocking({
+                teamsApi,
+                teamId: buildOrgAdminTeamId(invite.organizationId),
+                userId: callerId,
+                roles: [existingRole],
+                log,
+                contextLabel: '[Accept] Idempotens admin-team retry',
+                ensureTeamName: `Org admins: ${invite.organizationId}`
+            });
         }
 
         try {
@@ -1064,35 +1114,33 @@ async function acceptInvite(ctx) {
                 // role esetén az admin-team add idempotens retry — a Q1 ACL
                 // beállítása race-winner ágon is futnia kell.
                 if (existing.role === 'owner' || existing.role === 'admin') {
-                    const adminTeamId = buildOrgAdminTeamId(invite.organizationId);
-                    try {
-                        await ensureTeam(teamsApi, adminTeamId, `Org admins: ${invite.organizationId}`);
-                        const r = await ensureTeamMembership(teamsApi, adminTeamId, callerId, [existing.role]);
-                        if (r.skipped === TEAM_SKIP_REASONS.TEAM_NOT_FOUND) {
-                            log(`[Accept] Race admin-team retry: team_not_found az ensureTeam után — backfill pótolja`);
-                        }
-                    } catch (adminErr) {
-                        log(`[Accept] Race admin-team retry hiba (non-blocking — backfill pótolja): ${adminErr.message}`);
-                    }
+                    await _tryEnsureMembershipNonBlocking({
+                        teamsApi,
+                        teamId: buildOrgAdminTeamId(invite.organizationId),
+                        userId: callerId,
+                        roles: [existing.role],
+                        log,
+                        contextLabel: '[Accept] Race admin-team retry',
+                        ensureTeamName: `Org admins: ${invite.organizationId}`
+                    });
                 }
 
                 // Harden Phase 2 adversarial P2 fix (2026-05-12): a fallback ágon is
                 // ensureTeamMembership(orgTeamId) — különben a legacy/race-winner ágon
                 // a meghívott NEM kerül be az `org_${orgId}` base team-be, és NEM látja
                 // a tenant-szintű doc-okat (groups, publications stb.). Non-blocking:
-                // ha a team nem létezik (legacy org backfill előtt), a `team_not_found`
-                // visszajelzést loggoljuk; a `backfill_tenant_acl` action pótolja.
-                try {
-                    const orgTeamId = buildOrgTeamId(invite.organizationId);
-                    const r = await ensureTeamMembership(teamsApi, orgTeamId, callerId, [existing.role]);
-                    if (r.skipped === TEAM_SKIP_REASONS.TEAM_NOT_FOUND) {
-                        // NB: az org-team-blokk NEM hív `ensureTeam`-et (a base org-team
-                        // a `bootstrap_organization`-ban épül) — a not-found legacy / pre-backfill jel.
-                        log(`[Accept] Race org-team retry: team_not_found (org-team nem létezik) — backfill pótolja`);
-                    }
-                } catch (orgTeamErr) {
-                    log(`[Accept] Race org-team retry hiba (non-blocking — backfill pótolja): ${orgTeamErr.message}`);
-                }
+                // a base org-team NEM kap `ensureTeam`-et (a `bootstrap_organization`
+                // futása óta létezik, ha nincs, az legacy / pre-backfill jel — a
+                // `backfill_tenant_acl` action pótolja).
+                await _tryEnsureMembershipNonBlocking({
+                    teamsApi,
+                    teamId: buildOrgTeamId(invite.organizationId),
+                    userId: callerId,
+                    roles: [existing.role],
+                    log,
+                    contextLabel: '[Accept] Race org-team retry',
+                    teamNotFoundReason: '(org-team nem létezik)'
+                });
 
                 try {
                     await databases.deleteDocument(env.databaseId, env.invitesCollectionId, invite.$id);
