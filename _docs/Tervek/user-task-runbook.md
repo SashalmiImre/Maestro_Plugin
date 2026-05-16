@@ -461,9 +461,104 @@ Egyszerű → komplex. A first-3 (Console settings) ~30 perc, secret-rotation ~1
 
 ---
 
+### USER-TASK 14 — Phase 3 CF Console-create (`cleanup-rate-limits` + `cleanup-orphaned-thumbnails`)
+
+**Cél**: 2 cron-only CF létrehozása Appwrite Console-on (a kódbázis kész, csak a Console-on nincs még a function).
+
+**Indok**: MCP-vel auto-deploy a `Production Deploy / Blind Apply` classifier-en blokkolódik (2026-05-16 PM /loop iter). User-explicit deploy szükséges.
+
+**Lépések (mindkét CF-re)**:
+
+1. **Console UI** → Functions → Create function → "Manual" mode.
+2. **`cleanup-rate-limits`** (config a `packages/maestro-server/appwrite.json#180-200` szerint):
+   - Function ID: `cleanup-rate-limits`
+   - Name: `Cleanup Rate Limits`
+   - Runtime: `Node.js 18.0` (vagy 20.0 az S.9.4 USER-TASK migrate után)
+   - Entrypoint: `src/main.js`
+   - Commands: `npm install`
+   - Timeout: 300s
+   - Schedule: `0 2 * * *` (daily 02:00 UTC)
+   - Scopes: `databases.read`, `databases.write`
+   - Spec: `s-0.5vcpu-512mb`
+3. **`cleanup-orphaned-thumbnails`** (config `appwrite.json#135-156`):
+   - Function ID: `cleanup-orphaned-thumbnails`
+   - Name: `Cleanup Orphaned Thumbnails`
+   - Runtime: `Node.js 18.0`
+   - Entrypoint: `src/main.js`
+   - Commands: `npm install`
+   - Timeout: 120s
+   - Schedule: `0 4 * * 0` (weekly Sunday 04:00 UTC)
+   - Scopes: `databases.read`, `files.read`, `files.write`
+   - Spec: `s-0.5vcpu-512mb`
+4. **Deploy** (egyenként):
+   - Tarball: `packages/maestro-server/functions/<cf>` → `tar -czf cf.tar.gz src/ package.json`
+   - Console → Function → Deployments → Create deployment → activate
+5. **Smoke test**: Console → Function → Run → success status
+
+**Time**: 15-20 perc együtt.
+
+**Verifikálás**: Console execution-log nem mutat `function_not_found` 404-et a cron-trigger-en.
+
+---
+
+### USER-TASK 15 — `actionAuditLog` collection schema MCP-create (S.10.5)
+
+**Cél**: Phase 4 admin audit-view backing collection létrehozása (az `_docs/Komponensek/AuditTrail.md` Phase 4 schema-spec szerint).
+
+**Indok**: MCP-vel auto-create a `Production Deploy / Blind Apply` classifier-en blokkolódik (collection-create = production resource).
+
+**Lépések**:
+
+1. **Console UI** → Databases → `maestro` (vagy actual database) → Create collection.
+2. **Collection ID**: `actionAuditLog`
+3. **Document security**: `enabled: true` (S.7.7b ADR 0014 invariáns)
+4. **Attributes** (AuditTrail.md schema-spec szerint):
+   - `actionType` (string, 64) — pl. `accept_invite`, `remove_organization_member`, stb.
+   - `userId` (string, 36) — `who`
+   - `organizationId` (string, 36) — `where`
+   - `targetUserId` (string, 36, optional) — `whom` (admin-kick / role-change esetén)
+   - `payload` (string, 2000) — JSON-serialized arguments (PII-redacted)
+   - `outcome` (enum: `success`/`fail`/`partial`) — `result`
+   - `errorReason` (string, 200, optional) — fail esetén normalized reason
+   - `correlationId` (string, 36, optional) — Plugin-CF call traceability
+   - `attemptId` (string, 36, optional) — ADR 0011 idempotency
+   - `ipAddress` (string, 45, optional) — IPv4 + IPv6
+   - `userAgent` (string, 500, optional)
+   - `$createdAt` (auto)
+5. **Indexes**:
+   - `idx_org_time` (`organizationId` ASC, `$createdAt` DESC) — admin audit-view per-org timeline
+   - `idx_user_time` (`userId` ASC, `$createdAt` DESC) — user-history view
+   - `idx_action_time` (`actionType` ASC, `$createdAt` DESC) — action-frequency stats
+6. **Permissions** (collection-level): `read("team:org_*")` — Phase 4 a per-doc ACL pontosítja
+7. **Env var** Console → Function variables (a 14 CF-en): `ACTION_AUDIT_LOG_COLLECTION_ID=actionAuditLog`
+
+**Time**: ~30 perc.
+
+**Verifikálás**: Console → Database → Collections lista mutatja az `actionAuditLog`-ot 11 attribute-tal, document_security ON, 3 index.
+
+**Phase 4 trigger**: az admin audit-view UI build (S.10.1) — `_docs/Komponensek/AuditTrail.md` szekció.
+
+---
+
+### USER-TASK 16 — `SDK Compatibility Check` GitHub Actions required check (S.7.7d)
+
+**Cél**: a 2026-05-16-án commitelt `.github/workflows/sdk-compatibility-check.yml` workflow-t required-check-ké tenni a `main` branch-en.
+
+**Lépések**:
+
+1. GitHub repo → Settings → Branches → main → Branch protection rule
+2. Required status checks before merging → Add → `SDK Compatibility Check / cf-syntax-check`
+3. Save
+
+**Indok**: a workflow most CSAK PR-en fut, de NEM blokkolja a merge-et, ha fail-el. A required-check beállításával a Dependabot major-bump PR-ek csak akkor mergelődnek, ha a kódbázis kompatibilis.
+
+**Time**: 2 perc.
+
+---
+
 ## 📋 Kapcsolódó
 
 - [[Feladatok#S.12]], [[Feladatok#S.5]], [[Feladatok#S.7]], [[Feladatok#S.10]]
 - [[Komponensek/SecurityRiskRegister]] R.S.12.1, R.S.12.2, R.S.7.5, R.S.5.x
 - [[Komponensek/TenantIsolation]] (S.7.5 adversarial-eredmény dokumentálás)
-- [[Komponensek/SecretsRotation]] (új jegyzet, S.5.3 halasztott — most generálva)
+- [[Komponensek/AuditTrail]] (S.10.5 actionAuditLog schema-spec)
