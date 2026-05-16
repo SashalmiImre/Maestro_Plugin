@@ -23,6 +23,7 @@ const { evaluateAndConsume } = require('../helpers/rateLimit.js');
 const { createWorkflowDoc } = require('../helpers/workflowDoc.js');
 const { seedDefaultPermissionSets } = require('../helpers/groupSeed.js');
 const {
+    TEAM_SKIP_REASONS,
     buildOrgTeamId,
     buildOrgAdminTeamId,
     buildOfficeTeamId,
@@ -1112,13 +1113,13 @@ async function changeOrganizationMemberRole(ctx) {
             try {
                 if (isPrivileged(role)) {
                     const r = await ensureTeamMembership(teamsApi, orgAdminTeamId, targetUserId, [role]);
-                    if (r.skipped === 'team_not_found') {
+                    if (r.skipped === TEAM_SKIP_REASONS.TEAM_NOT_FOUND) {
                         error(`[ChangeOrgMemberRole] admin-team membership team_not_found az ensureTeam után — race`);
                         adminTeamSyncSkipped = true;
                     }
                 } else if (isPrivileged(currentRole)) {
                     const r = await removeTeamMembership(teamsApi, orgAdminTeamId, targetUserId);
-                    if (r.skipped === 'team_not_found') {
+                    if (r.skipped === TEAM_SKIP_REASONS.TEAM_NOT_FOUND) {
                         // Demote-on a missing-team egy log-only állapot — a user
                         // úgyse lát ACL-t, ami nincs.
                         log(`[ChangeOrgMemberRole] admin-team remove team_not_found — log-only`);

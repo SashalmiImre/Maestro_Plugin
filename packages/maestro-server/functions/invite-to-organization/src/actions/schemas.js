@@ -17,6 +17,7 @@ const {
     EXTENSION_SCOPE_DEFAULT
 } = require('../helpers/constants.js');
 const {
+    TEAM_SKIP_REASONS,
     buildOrgTeamId,
     buildOrgAdminTeamId,
     buildOfficeTeamId,
@@ -928,7 +929,7 @@ async function backfillTenantAcl(ctx) {
                 );
                 if (result.added) {
                     stats.organizations.memberships++;
-                } else if (result.skipped === 'team_not_found') {
+                } else if (result.skipped === TEAM_SKIP_REASONS.TEAM_NOT_FOUND) {
                     // A team-et épp most hoztuk létre — ha itt kap 404-et,
                     // a team időközben eltűnt (párhuzamos törlés?). Hard error.
                     stats.errors.push({
@@ -1010,7 +1011,7 @@ async function backfillTenantAcl(ctx) {
                 );
                 if (result.added) {
                     stats.offices.memberships++;
-                } else if (result.skipped === 'team_not_found') {
+                } else if (result.skipped === TEAM_SKIP_REASONS.TEAM_NOT_FOUND) {
                     stats.errors.push({
                         kind: 'office_membership', officeId: office.$id, userId: m.userId,
                         message: 'team_not_found after ensureTeam succeeded'
@@ -1191,7 +1192,7 @@ async function backfillAdminTeamAcl(ctx) {
             );
             if (r.added) {
                 stats.adminTeam.memberships++;
-            } else if (r.skipped === 'team_not_found') {
+            } else if (r.skipped === TEAM_SKIP_REASONS.TEAM_NOT_FOUND) {
                 // Az admin-team-et most hoztuk létre — ha 404, párhuzamos
                 // törlés vagy belső hiba.
                 stats.errors.push({

@@ -13,6 +13,7 @@ const {
     TOKEN_BYTES
 } = require('../helpers/util.js');
 const {
+    TEAM_SKIP_REASONS,
     buildOrgAclPerms,
     buildOrgAdminAclPerms,
     buildOrgTeamId,
@@ -975,7 +976,7 @@ async function acceptInvite(ctx) {
             try {
                 await ensureTeam(teamsApi, adminTeamId, `Org admins: ${invite.organizationId}`);
                 const r = await ensureTeamMembership(teamsApi, adminTeamId, callerId, [existingRole]);
-                if (r.skipped === 'team_not_found') {
+                if (r.skipped === TEAM_SKIP_REASONS.TEAM_NOT_FOUND) {
                     log(`[Accept] Idempotens admin-team retry: team_not_found az ensureTeam után — backfill pótolja`);
                 }
             } catch (err) {
@@ -1067,7 +1068,7 @@ async function acceptInvite(ctx) {
                     try {
                         await ensureTeam(teamsApi, adminTeamId, `Org admins: ${invite.organizationId}`);
                         const r = await ensureTeamMembership(teamsApi, adminTeamId, callerId, [existing.role]);
-                        if (r.skipped === 'team_not_found') {
+                        if (r.skipped === TEAM_SKIP_REASONS.TEAM_NOT_FOUND) {
                             log(`[Accept] Race admin-team retry: team_not_found az ensureTeam után — backfill pótolja`);
                         }
                     } catch (adminErr) {
@@ -1084,7 +1085,7 @@ async function acceptInvite(ctx) {
                 try {
                     const orgTeamId = buildOrgTeamId(invite.organizationId);
                     const r = await ensureTeamMembership(teamsApi, orgTeamId, callerId, [existing.role]);
-                    if (r.skipped === 'team_not_found') {
+                    if (r.skipped === TEAM_SKIP_REASONS.TEAM_NOT_FOUND) {
                         // NB: az org-team-blokk NEM hív `ensureTeam`-et (a base org-team
                         // a `bootstrap_organization`-ban épül) — a not-found legacy / pre-backfill jel.
                         log(`[Accept] Race org-team retry: team_not_found (org-team nem létezik) — backfill pótolja`);
@@ -1145,7 +1146,7 @@ async function acceptInvite(ctx) {
         }
         try {
             const r = await ensureTeamMembership(teamsApi, adminTeamId, callerId, ['admin']);
-            if (r.skipped === 'team_not_found') {
+            if (r.skipped === TEAM_SKIP_REASONS.TEAM_NOT_FOUND) {
                 // Az ensureTeam fent sikerült, mégis 404 — párhuzamos törlés
                 // vagy belső hiba. Fail-closed.
                 error(`[Accept] org admin-team membership team_not_found az ensureTeam után — race`);

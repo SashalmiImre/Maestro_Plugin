@@ -26,6 +26,20 @@
 
 const sdk = require('node-appwrite');
 
+// ── Skip-reason enum (S.7.11) ──────────────────────────────────────────────
+//
+// `ensureTeamMembership` és `removeTeamMembership` `skipped` mezője
+// control-flow-érzékeny — a hívóhelyek 25+ helyen `=== 'team_not_found'`
+// comparison-t csinálnak. A stringly-typed mintát const-objektummal váltjuk,
+// hogy egyetlen forrás legyen, és a typo (`'team_no_found'`) compile-time
+// hiba (TypeError: undefined) legyen, ne silent-false-equal.
+
+const TEAM_SKIP_REASONS = Object.freeze({
+    ALREADY_MEMBER: 'already_member',
+    TEAM_NOT_FOUND: 'team_not_found',
+    NOT_A_MEMBER: 'not_a_member'
+});
+
 // ── Team ID builders ────────────────────────────────────────────────────────
 
 function buildOrgTeamId(organizationId) {
@@ -221,8 +235,8 @@ async function ensureTeamMembership(teams, teamId, userId, roles = ['member']) {
         );
         return { added: true };
     } catch (err) {
-        if (err?.code === 409) return { added: false, skipped: 'already_member' };
-        if (err?.code === 404) return { added: false, skipped: 'team_not_found' };
+        if (err?.code === 409) return { added: false, skipped: TEAM_SKIP_REASONS.ALREADY_MEMBER };
+        if (err?.code === 404) return { added: false, skipped: TEAM_SKIP_REASONS.TEAM_NOT_FOUND };
         throw err;
     }
 }
@@ -268,12 +282,12 @@ async function removeTeamMembership(teams, teamId, userId) {
             sdk.Query.limit(10)
         ]);
     } catch (err) {
-        if (err?.code === 404) return { removed: 0, skipped: 'team_not_found' };
+        if (err?.code === 404) return { removed: 0, skipped: TEAM_SKIP_REASONS.TEAM_NOT_FOUND };
         throw err;
     }
 
     if (!memberships?.memberships?.length) {
-        return { removed: 0, skipped: 'not_a_member' };
+        return { removed: 0, skipped: TEAM_SKIP_REASONS.NOT_A_MEMBER };
     }
 
     let removed = 0;
@@ -292,6 +306,7 @@ async function removeTeamMembership(teams, teamId, userId) {
 // ── Exports ─────────────────────────────────────────────────────────────────
 
 module.exports = {
+    TEAM_SKIP_REASONS,
     buildOrgTeamId,
     buildOrgAdminTeamId,
     buildOfficeTeamId,
