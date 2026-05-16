@@ -35,7 +35,7 @@
     "@swc-uxp-wrappers/utils": "2.0.0",
     "appwrite": "^24.1.1",
     "react": "^18.2.0",
-    "react-dom": "^18.2.0"
+    "react-dom": "^19.2.6"
   },
   "devDependencies": {
     "@babel/core": "^7.21.4",
