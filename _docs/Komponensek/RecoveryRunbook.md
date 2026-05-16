@@ -2,7 +2,7 @@
 tags: [komponens, recovery, runbook, incident-response]
 related:
   - "[[Komponensek/DRPlan]]"
-  - "[[Komponensek/SecretsRotation]]"
+  - "[[Tervek/user-task-runbook]]"
 ---
 
 # RecoveryRunbook — Incident-response runbookok (S.11.5)
@@ -110,5 +110,5 @@ Minden incident-flow után **napló entry** `_docs/Naplók/YYYY-MM-DD.md`:
 
 - [[Feladatok#S.11]]
 - [[Komponensek/DRPlan]] (RTO/RPO)
-- [[Komponensek/SecretsRotation]] (key-rotation precedens)
+- [[Tervek/user-task-runbook]] (key-rotation USER-TASK 7+11+12 precedens)
 - [[Tervek/user-task-runbook]] (USER-TASK-ok)

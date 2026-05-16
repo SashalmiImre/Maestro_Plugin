@@ -110,5 +110,5 @@ Indexes:
 
 - [[Döntések/0010-meghivasi-flow-redesign]] W3 (Resend integration + svix HMAC)
 - [[Komponensek/SecurityRiskRegister]] R.S.8.1-4
-- [[Komponensek/SecretsRotation]] RESEND_WEBHOOK_SECRET rotation
+- [[Tervek/user-task-runbook]] — `RESEND_WEBHOOK_SECRET` rotation (USER-TASK secret-rotation szekció)
 - [[Tervek/autonomous-session-loop]]

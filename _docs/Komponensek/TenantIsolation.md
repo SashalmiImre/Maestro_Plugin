@@ -7,7 +7,7 @@ related:
   - "[[SecurityRiskRegister]]"
   - "[[Döntések/0003-tenant-team-acl]]"
   - "[[Döntések/0014-tenant-doc-acl-with-creator]]"
-  - "[[Komponensek/Permissions]]"
+  - "[[Komponensek/PermissionHelpers]]"
 ---
 
 > **ADR-szintű döntés**: a `withCreator` defense-in-depth minta + 3-réteges ACL [[Döntések/0014-tenant-doc-acl-with-creator|ADR 0014]]-ben rögzítve (Codex Harden P8 GO 2026-05-12). Ez a jegyzet a komponens-szintű aktuális implementáció + 8 fix tábla; az ADR a tradeoff-okat + alternatívákat rögzíti.
@@ -148,7 +148,7 @@ A `document_already_exists` race-fallback ágon (`orgs.js:189-194`, `invites.js:
 
 Mindegyik scope külön CF-call. A jövőbeli admin-UI gomb (`S.7.12` Feladatok.md, alacsony prio) automatizálhatja a teljes szekvenciát. Jelenleg shell-script / curl / Appwrite Console "Execute function" panel.
 
-**Off-peak window (deploy ajánlás)**: Magyar éjszaka **23:00–05:00 UTC+1**, **vasárnap éjszaka preferred** (legalacsonyabb connected kliens-szám). Az `updateDocument` 1000+ Realtime push triggert generál; a kliens-szintű 300ms debounce ([[dashboard tenant Realtime memo, MEMORY 2026-04-18]]) tolerálja, de off-peak window minimalizálja az UX-zavart.
+**Off-peak window (deploy ajánlás)**: Magyar éjszaka **23:00–05:00 UTC+1**, **vasárnap éjszaka preferred** (legalacsonyabb connected kliens-szám). Az `updateDocument` 1000+ Realtime push triggert generál; a kliens-szintű 300ms debounce (`AuthContext` → `loadAndSetMemberships()`, [[Naplók/2026-04-28]] tudástár 1+2+3. fázis) tolerálja, de off-peak window minimalizálja az UX-zavart.
 
 **Worldwide deploy follow-up**: a jelenlegi piac magyar — bővítéskor az off-peak ablak per-tenant timezone-szerű vagy globális "weekend low-traffic" mintával frissítendő. Roadmap: `S.7.13` (Feladatok.md, post-S.7.7+S.7.9).
 
@@ -640,5 +640,5 @@ Plugin Realtime NEM iratkozik fel a `organizations` collection-re (grep verify).
 - [[SecurityBaseline]] — STRIDE per komponens (V4, V5, CIS 3)
 - [[SecurityRiskRegister]] — R.S.7.1 + R.S.7.2 closed, R.S.7.3 closed (code-only 2026-05-14), R.S.7.6 + R.S.7.7 + R.S.7.5 closed (code-only 2026-05-15), **R.S.7.4 Phase 1 backend done** (code-only 2026-05-15, Phase 2 PENDING)
 - [[Döntések/0003-tenant-team-acl]] — ADR per-tenant Team ACL alapja
-- [[Komponensek/Permissions]] — server-side permission guards (S.7 sorrendileg utáni layer)
+- [[Komponensek/PermissionHelpers]] — server-side permission guards (S.7 sorrendileg utáni layer)
 - `packages/maestro-server/functions/invite-to-organization/src/teamHelpers.js` — minden ACL helper
